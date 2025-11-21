@@ -1,0 +1,18 @@
+[package]
+name = "sip-proxy"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+anyhow = { workspace = true }
+sip-core = { path = "../sip-core" }
+sip-transport = { path = "../sip-transport" }
+sip-parse = { path = "../sip-parse" }
+tokio = { workspace = true }
+sip-dns = { path = "../sip-dns" }
+bytes = { workspace = true }
+dashmap = { workspace = true }
+sip-transaction = { path = "../sip-transaction" }
+async-trait = "0.1"
+tracing = { workspace = true }

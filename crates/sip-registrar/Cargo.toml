@@ -1,0 +1,19 @@
+[package]
+name = "sip-registrar"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+anyhow = { workspace = true }
+smol_str = { workspace = true }
+sip-core = { path = "../sip-core" }
+dashmap = { workspace = true }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+bytes = { workspace = true }
+sip-parse = { path = "../sip-parse" }
+sip-auth = { path = "../sip-auth" }
+tracing = { workspace = true }
+
+[dev-dependencies]
+bytes = { workspace = true }

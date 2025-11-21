@@ -1,0 +1,21 @@
+[package]
+name = "sip-parse"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+bytes = { workspace = true }
+smol_str = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }
+sip-core = { path = "../sip-core" }
+httpdate = { workspace = true }
+nom = "7"
+libfuzzer-sys = { version = "0.4", optional = true }
+
+[features]
+fuzzing = ["libfuzzer-sys"]
+
+[dev-dependencies]
+proptest = "1"

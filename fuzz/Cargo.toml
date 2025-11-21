@@ -1,0 +1,21 @@
+[package]
+name = "sip-parse-fuzz"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+sip-parse = { path = "../crates/sip-parse" }
+sip-core = { path = "../crates/sip-core" }
+smol_str = { workspace = true }
+bytes = { workspace = true }
+
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = true

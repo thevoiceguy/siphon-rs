@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo test:*)",
+      "Bash(cargo --list:*)",
+      "Bash(chmod:*)",
+      "Bash(cargo run:*)",
+      "Bash(cargo build:*)",
+      "Bash(RUST_BACKTRACE=1 cargo test:*)",
+      "Bash(find:*)",
+      "Bash(1)",
+      "WebFetch(domain:datatracker.ietf.org)",
+      "WebSearch"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

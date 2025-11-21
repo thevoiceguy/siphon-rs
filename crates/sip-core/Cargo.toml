@@ -1,0 +1,14 @@
+[package]
+name = "sip-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+bytes = { workspace = true }
+smol_str = { workspace = true }
+serde = { workspace = true }
+percent-encoding = "2.3"
+
+[dev-dependencies]
+proptest = "1"

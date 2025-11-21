@@ -1,0 +1,19 @@
+[package]
+name = "sip-uas"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+anyhow = { workspace = true }
+sip-core = { path = "../sip-core" }
+sip-parse = { path = "../sip-parse" }
+sip-dialog = { path = "../sip-dialog" }
+sip-auth = { path = "../sip-auth" }
+bytes = { workspace = true }
+smol_str = { workspace = true }
+tracing = { workspace = true }
+rand = { workspace = true }
+
+[dev-dependencies]
+bytes = { workspace = true }

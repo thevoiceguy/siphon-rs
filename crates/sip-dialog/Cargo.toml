@@ -1,0 +1,13 @@
+[package]
+name = "sip-dialog"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+sip-core = { path = "../sip-core" }
+dashmap = { workspace = true }
+sip-parse = { path = "../sip-parse" }
+smol_str = { workspace = true }
+bytes = { workspace = true }
+tokio = { workspace = true }
