@@ -521,6 +521,9 @@ fn map_transport(kind: sip_transport::TransportKind) -> TransportKind {
         sip_transport::TransportKind::Udp => TransportKind::Udp,
         sip_transport::TransportKind::Tcp => TransportKind::Tcp,
         sip_transport::TransportKind::Tls => TransportKind::Tls,
+        // SCTP not fully supported - map to stream transports for transaction layer
+        sip_transport::TransportKind::Sctp => TransportKind::Tcp,
+        sip_transport::TransportKind::TlsSctp => TransportKind::Tls,
     }
 }
 
@@ -617,6 +620,9 @@ impl TransportDispatcher for SiphonTransportDispatcher {
                         .send_tls(ctx.peer, server_name, cfg, payload)
                         .await?;
                 }
+            }
+            sip_transport::TransportKind::Sctp | sip_transport::TransportKind::TlsSctp => {
+                return Err(anyhow!("SCTP transport not supported"));
             }
         }
         Ok(())

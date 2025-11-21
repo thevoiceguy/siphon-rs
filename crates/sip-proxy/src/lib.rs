@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use dashmap::DashMap;
 use sip_core::{decrement_max_forwards, Header, Headers, Request, SipUri};
-use sip_dns::{DnsEndpoint, Resolver, Transport as DnsTransport};
+use sip_dns::{DnsTarget, Resolver, Transport as DnsTransport};
 use sip_parse::{parse_route_headers, serialize_request};
 use sip_transaction::{generate_branch_id, TransportContext, TransportDispatcher, TransportKind};
 use sip_transport::{send_udp, DefaultTransportPolicy, TransportPolicy};
@@ -84,12 +84,12 @@ impl<R: Resolver> StatefulProxy<R> {
         }
 
         let target_uri = next_hop_uri(&req);
-        let endpoints = self.resolver.resolve(&target_uri)?;
+        let endpoints = self.resolver.resolve(&target_uri).await?;
         let payload = serialize_request(&req);
 
         for ep in endpoints {
             let target_transport = self.choose_transport(&ep, transport, &payload);
-            let addr: SocketAddr = format!("{}:{}", ep.target, ep.port)
+            let addr: SocketAddr = format!("{}:{}", ep.host, ep.port)
                 .parse()
                 .map_err(|e| anyhow!("invalid target addr: {e}"))?;
             let ctx = TransportContext::new(target_transport, addr, None);
@@ -101,19 +101,25 @@ impl<R: Resolver> StatefulProxy<R> {
         Err(anyhow!("no reachable endpoints"))
     }
 
-    fn choose_transport(&self, ep: &DnsEndpoint, _incoming: TransportKind, payload: &Bytes) -> TransportKind {
+    fn choose_transport(&self, ep: &DnsTarget, _incoming: TransportKind, payload: &Bytes) -> TransportKind {
         let requested = match ep.transport {
             DnsTransport::Udp => sip_transport::TransportKind::Udp,
             DnsTransport::Tcp => sip_transport::TransportKind::Tcp,
             DnsTransport::Tls => sip_transport::TransportKind::Tls,
+            DnsTransport::Ws => sip_transport::TransportKind::Tcp,
+            DnsTransport::Wss => sip_transport::TransportKind::Tls,
+            DnsTransport::Sctp => sip_transport::TransportKind::Sctp,
+            DnsTransport::TlsSctp => sip_transport::TransportKind::TlsSctp,
         };
         let selected = self
             .policy
-            .choose(requested, payload.len(), matches!(requested, sip_transport::TransportKind::Tls));
+            .choose(requested, payload.len(), matches!(requested, sip_transport::TransportKind::Tls | sip_transport::TransportKind::TlsSctp));
         match selected {
             sip_transport::TransportKind::Udp => TransportKind::Udp,
             sip_transport::TransportKind::Tcp => TransportKind::Tcp,
             sip_transport::TransportKind::Tls => TransportKind::Tls,
+            sip_transport::TransportKind::Sctp => TransportKind::Tcp,
+            sip_transport::TransportKind::TlsSctp => TransportKind::Tls,
         }
     }
 
@@ -161,12 +167,13 @@ mod tests {
     use tokio::sync::Mutex;
 
     struct StaticResolver {
-        endpoint: DnsEndpoint,
+        target: DnsTarget,
     }
 
+    #[async_trait]
     impl Resolver for StaticResolver {
-        fn resolve(&self, _uri: &SipUri) -> Result<Vec<DnsEndpoint>> {
-            Ok(vec![self.endpoint.clone()])
+        async fn resolve(&self, _uri: &SipUri) -> Result<Vec<DnsTarget>> {
+            Ok(vec![self.target.clone()])
         }
     }
 
@@ -188,11 +195,7 @@ mod tests {
     async fn proxy_inserts_via_and_decrements_max_forwards() {
         let dispatcher = Arc::new(TestDispatcher::default());
         let resolver = StaticResolver {
-            endpoint: DnsEndpoint {
-                target: "127.0.0.1".into(),
-                port: 5060,
-                transport: DnsTransport::Udp,
-            },
+            target: DnsTarget::new("127.0.0.1", 5060, DnsTransport::Udp),
         };
         let proxy = StatefulProxy::new(
             dispatcher.clone(),

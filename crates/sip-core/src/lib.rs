@@ -27,7 +27,9 @@ pub mod replaces;
 pub mod resource_priority;
 pub mod route;
 pub mod rseq;
+pub mod rtp_avp;
 pub mod sdp;
+pub mod sdp_offer_answer;
 pub mod security;
 pub mod service_route;
 pub mod session_timer;
@@ -86,7 +88,14 @@ pub use replaces::ReplacesHeader;
 pub use resource_priority::{ResourcePriorityHeader, ResourcePriorityValue};
 pub use route::RouteHeader;
 pub use rseq::{RAckHeader, RSeqHeader};
-pub use sdp::SdpSession;
+pub use sdp::{
+    Attribute, Bandwidth, BandwidthType, CapabilityDescription, CapabilityParameter,
+    CapabilityParameterType, SdpCapabilitySet, ConfirmStatus, Connection, CurrentStatus,
+    DesiredStatus, Direction, EncryptionKey, Fmtp, GroupSemantics, MediaDescription, MediaGroup,
+    Origin, PreconditionDirection, PreconditionType, RepeatTime, RtcpAttribute, RtpMap, SdpError,
+    SdpSession, StatusType, StrengthTag, TimeZone, Timing,
+};
+pub use sdp_offer_answer::{AnswerOptions, CodecInfo, NegotiationError, OfferAnswerEngine};
 pub use security::{
     parse_security_client, parse_security_server, parse_security_verify,
     SecurityClientHeader, SecurityEntry, SecurityMechanism, SecurityServerHeader,

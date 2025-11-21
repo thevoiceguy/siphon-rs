@@ -395,7 +395,7 @@ mod tests {
     use super::*;
     use proptest::{prelude::*, string::string_regex};
     use sip_core::{
-        Headers, PriorityValue, RefresherRole, Response, StatusLine, SubscriptionState,
+        Headers, PriorityValue, RefresherRole, Response, SipUri, StatusLine, SubscriptionState,
     };
     use smol_str::SmolStr;
 
@@ -449,8 +449,11 @@ Subscription-State: active;expires=10\r\n\
 Reason: Q.850;cause=16;text=\"Normal call clearing\"\r\n\
 SIP-ETag: abc123\r\n\
 Content-Type: application/sdp; charset=utf-8\r\n\
-Content-Length: 11\r\n\r\n\
-v=0\r\ns=call",
+Content-Length: 44\r\n\r\n\
+v=0\r\n\
+o=- 0 0 IN IP4 127.0.0.1\r\n\
+s=call\r\n\
+t=0 0",
         )
     }
 
@@ -724,9 +727,8 @@ l: 0\r\n\r\n",
         assert_eq!(mime.param("charset").map(|c| c.as_str()), Some("utf-8"));
 
         let sdp = parse_sdp(&resp.body).expect("sdp");
-        let mut lines = sdp.lines();
-        assert_eq!(lines.next(), Some("v=0"));
-        assert_eq!(lines.next(), Some("s=call"));
+        assert_eq!(sdp.version, 0);
+        assert_eq!(sdp.session_name, "call");
     }
 
     #[test]

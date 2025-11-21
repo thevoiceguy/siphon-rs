@@ -136,7 +136,7 @@ pub fn parse_mime_type(value: &SmolStr) -> Option<MimeType> {
 
 pub fn parse_sdp(body: &Bytes) -> Option<SdpSession> {
     let text = std::str::from_utf8(body.as_ref()).ok()?;
-    Some(SdpSession::new(SmolStr::new(text.trim().to_owned())))
+    SdpSession::parse(text.trim()).ok()
 }
 
 pub fn parse_allow_header(value: &SmolStr) -> AllowHeader {

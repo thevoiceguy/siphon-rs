@@ -64,6 +64,80 @@ impl DialogId {
 }
 
 /// Complete dialog state tracking per RFC 3261 §12.
+///
+/// # RFC 5057 Multiple Dialog Usages
+///
+/// This implementation supports RFC 5057 "Multiple Dialog Usages in SIP", which
+/// allows multiple methods (INVITE, SUBSCRIBE, REFER) to share a single dialog.
+///
+/// ## Dialog vs Dialog Usage
+///
+/// - **Dialog**: The shared state container identified by Call-ID and tags
+/// - **Dialog Usage**: Individual association created by a specific method
+///
+/// A single dialog can have multiple usages:
+/// - An INVITE usage for the call session
+/// - Multiple SUBSCRIBE usages for different event packages
+/// - REFER usages for call transfer
+///
+/// ## Shared State (RFC 5057 §4)
+///
+/// All usages within a dialog share:
+/// - Dialog ID (Call-ID, local tag, remote tag)
+/// - Remote target URI (updated by target refresh requests)
+/// - Route set (proxy routing information)
+/// - CSeq sequence space (both local and remote)
+/// - Secure flag (SIPS requirement)
+///
+/// ## Usage-Specific State
+///
+/// Each usage type has its own state tracked separately:
+/// - INVITE sessions: Tracked in DialogManager with session timers
+/// - SUBSCRIBE usages: Tracked in SubscriptionManager with event package
+/// - REFER usages: Tracked with refer-to and subscription state
+///
+/// ## Target Refresh (RFC 5057 §5)
+///
+/// Target refresh requests (re-INVITE, UPDATE, or target refresh SUBSCRIBE)
+/// update the `remote_target` for the entire dialog, affecting ALL usages:
+///
+/// ```text
+/// Dialog: Call-ID=abc, tags=1/2
+///   ├─ INVITE usage (session)
+///   ├─ SUBSCRIBE usage (presence)
+///   └─ SUBSCRIBE usage (dialog state)
+///
+/// When re-INVITE updates Contact:
+///   → remote_target changes for entire dialog
+///   → All future requests use new remote_target
+/// ```
+///
+/// ## Dialog Termination (RFC 5057 §6)
+///
+/// A dialog persists until ALL usages are terminated:
+/// - BYE terminates the INVITE usage
+/// - NOTIFY with Subscription-State: terminated ends SUBSCRIBE usages
+/// - REFER implicit subscriptions can be suppressed (RFC 4488)
+///
+/// The dialog is removed from DialogManager when the last usage ends.
+///
+/// ## Implementation Pattern
+///
+/// Applications track multiple usages by maintaining separate managers:
+/// ```text
+/// let dialog_manager = DialogManager::new();
+/// let subscription_manager = SubscriptionManager::new();
+///
+/// // INVITE creates dialog
+/// let dialog = Dialog::new_uac(...);
+/// dialog_manager.insert(dialog.clone());
+///
+/// // SUBSCRIBE on same dialog
+/// let subscription = Subscription::new_subscriber(...);
+/// subscription_manager.insert(subscription);
+///
+/// // Both share dialog.id, but have separate usage state
+/// ```
 #[derive(Debug, Clone)]
 pub struct Dialog {
     /// Dialog identifier
@@ -219,6 +293,20 @@ impl Dialog {
     }
 
     /// Updates dialog state from a received response (target refresh).
+    ///
+    /// # RFC 5057 Target Refresh
+    ///
+    /// When a target refresh response is received (e.g., 2xx to re-INVITE or UPDATE),
+    /// the Contact header updates the `remote_target` for the ENTIRE dialog. This
+    /// affects all usages sharing this dialog, not just the usage that sent the request.
+    ///
+    /// Example:
+    /// ```text
+    /// Dialog has INVITE usage + SUBSCRIBE usage for presence
+    /// → re-INVITE receives 200 OK with new Contact
+    /// → remote_target updates for dialog
+    /// → Future SUBSCRIBE refreshes use new remote_target
+    /// ```
     pub fn update_from_response(&mut self, resp: &Response) {
         // Update remote target if Contact present
         if let Some(contact) = extract_contact_uri(&resp.headers) {
@@ -245,6 +333,17 @@ impl Dialog {
     }
 
     /// Updates dialog state from a received request.
+    ///
+    /// # RFC 5057 Target Refresh
+    ///
+    /// Target refresh requests (re-INVITE, UPDATE, or target refresh SUBSCRIBE)
+    /// update the `remote_target` for the entire dialog when they contain a Contact
+    /// header. This affects all usages sharing the dialog.
+    ///
+    /// # CSeq Validation (RFC 5057 §4.1)
+    ///
+    /// All usages share a single CSeq space. This method validates that incoming
+    /// requests have monotonically increasing CSeq numbers (except ACK).
     pub fn update_from_request(&mut self, req: &Request) -> Result<(), DialogError> {
         // Validate and update remote CSeq
         if let Some(cseq) = parse_cseq_number(&req.headers) {
