@@ -10,7 +10,9 @@
       "Bash(find:*)",
       "Bash(1)",
       "WebFetch(domain:datatracker.ietf.org)",
-      "WebSearch"
+      "WebSearch",
+      "WebFetch(domain:www.rfc-editor.org)",
+      "Bash(cargo search:*)"
     ],
     "deny": [],
     "ask": []

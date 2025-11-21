@@ -293,6 +293,10 @@ pub fn enforce_privacy(headers: &mut crate::Headers, privacy: &PrivacyHeader) {
 ///
 /// This replaces the identity in From and Contact headers with
 /// "anonymous@anonymous.invalid" while preserving tags and parameters.
+///
+/// Per RFC 3325 §9.2, this also removes P-Asserted-Identity and
+/// P-Preferred-Identity headers at trust domain boundaries when
+/// identity privacy is requested.
 fn anonymize_identity_headers(headers: &mut crate::Headers) {
     use smol_str::SmolStr;
 
@@ -309,6 +313,15 @@ fn anonymize_identity_headers(headers: &mut crate::Headers) {
         headers.remove("Contact");
         headers.push(SmolStr::new("Contact"), SmolStr::new(anonymized));
     }
+
+    // Remove P-Asserted-Identity per RFC 3325 §9.2
+    // When Privacy:id is requested, P-Asserted-Identity MUST be removed
+    // at trust domain boundaries
+    headers.remove("P-Asserted-Identity");
+
+    // Remove P-Preferred-Identity per RFC 3325 §9.2
+    // When Privacy:id is requested, P-Preferred-Identity SHOULD be removed
+    headers.remove("P-Preferred-Identity");
 }
 
 /// Anonymizes a single identity header value.
@@ -687,5 +700,58 @@ mod tests {
 
         let headers = Headers::new();
         assert!(!requires_privacy_enforcement(&headers));
+    }
+
+    #[test]
+    fn enforce_privacy_removes_p_asserted_identity() {
+        use crate::Headers;
+        use smol_str::SmolStr;
+
+        let mut headers = Headers::new();
+        headers.push(SmolStr::new("From"), SmolStr::new("<sip:alice@example.com>;tag=123"));
+        headers.push(SmolStr::new("P-Asserted-Identity"), SmolStr::new("<sip:alice@example.com>"));
+        headers.push(SmolStr::new("P-Preferred-Identity"), SmolStr::new("<sip:alice@example.com>"));
+
+        let privacy = PrivacyHeader::single(PrivacyValue::Id);
+        enforce_privacy(&mut headers, &privacy);
+
+        // P-Asserted-Identity should be removed
+        assert!(headers.get("P-Asserted-Identity").is_none());
+
+        // P-Preferred-Identity should be removed
+        assert!(headers.get("P-Preferred-Identity").is_none());
+
+        // From should be anonymized (not removed)
+        assert!(headers.get("From").is_some());
+        assert!(headers.get("From").unwrap().contains("anonymous"));
+    }
+
+    #[test]
+    fn enforce_privacy_with_user_removes_p_headers() {
+        use crate::Headers;
+        use smol_str::SmolStr;
+
+        let mut headers = Headers::new();
+        headers.push(SmolStr::new("From"), SmolStr::new("<sip:alice@example.com>;tag=123"));
+        headers.push(SmolStr::new("Contact"), SmolStr::new("<sip:alice@192.168.1.100>"));
+        headers.push(SmolStr::new("P-Asserted-Identity"), SmolStr::new("<sip:alice@example.com>, <tel:+15551234567>"));
+        headers.push(SmolStr::new("P-Preferred-Identity"), SmolStr::new("<tel:+15551234567>"));
+        headers.push(SmolStr::new("Subject"), SmolStr::new("Test Call"));
+
+        let privacy = PrivacyHeader::new(vec![PrivacyValue::User]);
+        enforce_privacy(&mut headers, &privacy);
+
+        // P-Asserted-Identity should be removed
+        assert!(headers.get("P-Asserted-Identity").is_none());
+
+        // P-Preferred-Identity should be removed
+        assert!(headers.get("P-Preferred-Identity").is_none());
+
+        // Subject should be removed (user = header + session + id)
+        assert!(headers.get("Subject").is_none());
+
+        // From and Contact should be anonymized
+        assert!(headers.get("From").unwrap().contains("anonymous"));
+        assert!(headers.get("Contact").unwrap().contains("anonymous"));
     }
 }

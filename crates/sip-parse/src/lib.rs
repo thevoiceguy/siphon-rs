@@ -1,6 +1,6 @@
 use bytes::{Bytes, BytesMut};
 use sip_core::{
-    is_valid_branch, Headers, Method, Request, RequestLine, Response, SipUri, Uri, SipVersion,
+    is_valid_branch, Headers, Method, Request, RequestLine, Response, Uri, SipVersion,
     StatusLine,
 };
 use smol_str::SmolStr;

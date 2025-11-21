@@ -435,6 +435,7 @@ pub fn parse_p_visited_network_id(value: &SmolStr) -> PVisitedNetworkIdHeader {
     PVisitedNetworkIdHeader { values }
 }
 
+#[allow(dead_code)]
 fn parse_name_addr_list<'a>(header_values: impl Iterator<Item = &'a SmolStr>) -> Vec<NameAddr> {
     let mut out = Vec::new();
     for value in header_values {
@@ -448,13 +449,64 @@ fn parse_name_addr_list<'a>(header_values: impl Iterator<Item = &'a SmolStr>) ->
 }
 
 pub fn parse_p_asserted_identity(headers: &Headers) -> PAssertedIdentityHeader {
-    let identities = parse_name_addr_list(headers.get_all("P-Asserted-Identity"));
+    let identities = parse_p_identity_list(headers.get_all("P-Asserted-Identity"));
     PAssertedIdentityHeader { identities }
 }
 
 pub fn parse_p_preferred_identity(headers: &Headers) -> PPreferredIdentityHeader {
-    let identities = parse_name_addr_list(headers.get_all("P-Preferred-Identity"));
+    let identities = parse_p_identity_list(headers.get_all("P-Preferred-Identity"));
     PPreferredIdentityHeader { identities }
+}
+
+fn parse_p_identity_list<'a, I>(header_values: I) -> Vec<sip_core::PIdentity>
+where
+    I: Iterator<Item = &'a SmolStr>,
+{
+    let mut out = Vec::new();
+    for value in header_values {
+        for part in split_quoted_commas(value.as_str()) {
+            if let Some(identity) = parse_p_identity(&SmolStr::new(part.trim().to_owned())) {
+                out.push(identity);
+            }
+        }
+    }
+    out
+}
+
+fn parse_p_identity(value: &SmolStr) -> Option<sip_core::PIdentity> {
+    use sip_core::{PIdentity, Uri};
+    let input = value.trim();
+    if input.is_empty() {
+        return None;
+    }
+    if let Some(start) = input.find('<') {
+        let end_rel = input[start + 1..].find('>')?;
+        let end = start + 1 + end_rel;
+        let display = input[..start].trim();
+        let uri_str = input[start + 1..end].trim();
+        let params = parse_params(input[end + 1..].trim());
+
+        // Parse as Uri (supports both SIP and Tel)
+        let uri = Uri::parse(uri_str)?;
+
+        Some(PIdentity {
+            display_name: if display.is_empty() {
+                None
+            } else {
+                Some(SmolStr::new(display.trim_matches('"').to_owned()))
+            },
+            uri,
+            params,
+        })
+    } else {
+        let (uri_part, param_part) = input.split_once(';').unwrap_or((input, ""));
+        let uri = Uri::parse(uri_part.trim())?;
+        Some(PIdentity {
+            display_name: None,
+            uri,
+            params: parse_params(param_part),
+        })
+    }
 }
 
 fn parse_name_addr(value: &SmolStr) -> Option<NameAddr> {

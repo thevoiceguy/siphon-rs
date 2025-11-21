@@ -126,6 +126,22 @@ pub enum ServerInviteAction {
 }
 
 /// Implements RFC 3261 Figure 7 for non-INVITE client transactions.
+///
+/// # RFC 4320 Compliance
+///
+/// This implementation follows RFC 4320 "Actions Addressing Identified Issues
+/// with SIP's Non-INVITE Transaction":
+///
+/// - **No 408 Responses**: Timer F expiration does NOT generate a 408 (Request
+///   Timeout) response. RFC 4320 prohibits this because such responses always
+///   arrive too late to be useful.
+///
+/// - **Timer E Exponential Backoff**: Retransmissions double from T1 to T2,
+///   allowing servers time to send 100 Trying responses before blacklisting
+///   occurs (per RFC 4320 recommendation).
+///
+/// - **Timer F Duration**: 64*T1 provides sufficient time for delayed servers
+///   to respond, consistent with RFC 4320's goal of reducing false timeouts.
 pub struct ClientNonInviteFsm {
     pub state: ClientNonInviteState,
     t1: Duration,
@@ -414,6 +430,22 @@ impl ClientNonInviteFsm {
         }
     }
 
+    /// Handles Timer F expiration (non-INVITE transaction timeout).
+    ///
+    /// # RFC 4320 Compliance
+    ///
+    /// RFC 4320 prohibits sending 408 (Request Timeout) responses for non-INVITE
+    /// transactions because "a 408 to non-INVITE will always arrive too late to
+    /// be useful." The client already understands the transaction timed out via
+    /// Timer F expiration.
+    ///
+    /// This implementation correctly:
+    /// - Terminates the transaction without generating a 408 response
+    /// - Cancels Timer E (retransmission timer)
+    /// - Reports timeout to the transaction user via Terminate action
+    ///
+    /// The transaction user receives the timeout notification and can take
+    /// appropriate action (e.g., try alternate destinations, report failure).
     fn handle_timer_f(&mut self) -> Vec<ClientAction> {
         self.state = ClientNonInviteState::Terminated;
         vec![
@@ -438,6 +470,29 @@ impl ClientNonInviteFsm {
 }
 
 /// Simplified server non-INVITE transaction following RFC 3261 Figure 7.
+///
+/// # RFC 4320 Compliance
+///
+/// This implementation follows RFC 4320 "Actions Addressing Identified Issues
+/// with SIP's Non-INVITE Transaction":
+///
+/// - **No 408 Generation**: This FSM never generates 408 (Request Timeout)
+///   responses. RFC 4320 explicitly prohibits servers from sending 408 for
+///   non-INVITE transactions.
+///
+/// - **Transaction Termination**: Timer J expiration moves to Terminated state,
+///   preventing late responses from being forwarded (RFC 4320 §4.1).
+///
+/// - **Strategic 100 Trying**: Applications should send 100 Trying responses
+///   after Timer E reaches T2 to prevent requesters from blacklisting the
+///   server (RFC 4320 §3.2). This is an application-level decision.
+///
+/// # Late Response Absorption
+///
+/// Per RFC 4320 §4.1, proxies must not forward responses unless there's a
+/// matching server transaction that is not in Terminated state. The transaction
+/// manager enforces this by checking transaction state before dispatching
+/// responses.
 pub struct ServerNonInviteFsm {
     pub state: ServerNonInviteState,
     t1: Duration,

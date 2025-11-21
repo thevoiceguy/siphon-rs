@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use sip_auth::{DigestAlgorithm, DigestClient, Qop};
-use sip_core::{Headers, Method, Request, RequestLine, Response, SipUri};
+use sip_core::{Headers, Method, Request, RequestLine, Response, ServiceRouteHeader, SipUri};
 use sip_dialog::{Dialog, DialogManager, Subscription, SubscriptionManager, SubscriptionState};
 use sip_parse::header;
 use smol_str::SmolStr;
@@ -34,6 +34,10 @@ pub struct UserAgentClient {
 
     /// Local tag for From header (generated once)
     local_tag: SmolStr,
+
+    /// Service-Route from REGISTER response (RFC 3608)
+    /// Stored route set to be used as preloaded Route headers in subsequent requests
+    service_route: Option<ServiceRouteHeader>,
 }
 
 impl UserAgentClient {
@@ -49,6 +53,7 @@ impl UserAgentClient {
             subscription_manager: Arc::new(SubscriptionManager::new()),
             digest_client: None,
             local_tag,
+            service_route: None,
         }
     }
 
@@ -113,6 +118,140 @@ impl UserAgentClient {
             headers,
             Bytes::new(),
         )
+    }
+
+    /// Processes a REGISTER response to extract and store Service-Route headers (RFC 3608).
+    ///
+    /// The Service-Route header field is returned by a registrar in a 200 OK response
+    /// to REGISTER to inform the UA of a route set that should be used for subsequent
+    /// requests.
+    ///
+    /// # Arguments
+    /// * `register_response` - The 200 OK response to a REGISTER request
+    ///
+    /// # RFC 3608 Behavior
+    /// - If Service-Route headers are present, they are stored for later use
+    /// - If no Service-Route headers are present, any previously stored routes are cleared
+    /// - The order of multiple Service-Route values is preserved
+    /// - Stored routes are used as preloaded Route headers in subsequent requests
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use sip_uac::UserAgentClient;
+    /// use sip_core::{SipUri, Response, StatusLine, Headers};
+    /// use bytes::Bytes;
+    /// use smol_str::SmolStr;
+    ///
+    /// let mut uac = UserAgentClient::new(
+    ///     SipUri::parse("sip:alice@example.com").unwrap(),
+    ///     SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
+    /// );
+    ///
+    /// // Simulate REGISTER response with Service-Route
+    /// let mut headers = Headers::new();
+    /// headers.push(
+    ///     SmolStr::new("Service-Route"),
+    ///     SmolStr::new("<sip:proxy.example.com;lr>")
+    /// );
+    ///
+    /// let response = Response::new(
+    ///     StatusLine::new(200, SmolStr::new("OK")),
+    ///     headers,
+    ///     Bytes::new()
+    /// );
+    ///
+    /// uac.process_register_response(&response);
+    ///
+    /// // Now subsequent requests will include the service route
+    /// ```
+    pub fn process_register_response(&mut self, register_response: &Response) {
+        use sip_parse::parse_service_route;
+
+        // Only process 200 OK responses
+        if register_response.start.code != 200 {
+            return;
+        }
+
+        // Parse Service-Route headers from response
+        let service_route = parse_service_route(&register_response.headers);
+
+        // Per RFC 3608: If the response contains Service-Route header(s), store them.
+        // If the response does not contain Service-Route header(s), clear any stored routes.
+        if !service_route.is_empty() {
+            info!(
+                "Storing {} Service-Route entries from REGISTER response",
+                service_route.len()
+            );
+            self.service_route = Some(service_route);
+        } else {
+            info!("No Service-Route in REGISTER response, clearing stored routes");
+            self.service_route = None;
+        }
+    }
+
+    /// Returns the currently stored Service-Route, if any.
+    ///
+    /// Service-Route is obtained from REGISTER responses per RFC 3608 and provides
+    /// a route set for subsequent requests.
+    pub fn get_service_route(&self) -> Option<&ServiceRouteHeader> {
+        self.service_route.as_ref()
+    }
+
+    /// Applies the stored Service-Route as preloaded Route headers to a request.
+    ///
+    /// Per RFC 3608, the Service-Route learned during registration should be used
+    /// as a preloaded route set for requests. This method adds Route headers to
+    /// the request based on the stored Service-Route.
+    ///
+    /// # Arguments
+    /// * `request` - The request to add Route headers to
+    ///
+    /// # RFC 3608 Behavior
+    /// - Service-Route entries are added as Route headers in the same order
+    /// - Route headers are added before any existing Route headers
+    /// - If no Service-Route is stored, the request is not modified
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use sip_uac::UserAgentClient;
+    /// use sip_core::SipUri;
+    ///
+    /// let mut uac = UserAgentClient::new(
+    ///     SipUri::parse("sip:alice@example.com").unwrap(),
+    ///     SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
+    /// );
+    ///
+    /// // After processing REGISTER response with Service-Route...
+    /// // Create an outgoing request
+    /// let target_uri = SipUri::parse("sip:bob@example.com").unwrap();
+    /// let mut invite = uac.create_invite(&target_uri, None);
+    ///
+    /// // Apply service route to the request
+    /// uac.apply_service_route(&mut invite);
+    ///
+    /// // Now the INVITE will be routed through the service proxy
+    /// ```
+    pub fn apply_service_route(&self, request: &mut Request) {
+        if let Some(ref service_route) = self.service_route {
+            // Add each Service-Route entry as a Route header
+            // Per RFC 3608, preserve the order
+            for route in &service_route.routes {
+                let route_value = format!("<{}>", route.uri.as_str());
+                // Insert at the beginning to maintain order
+                // (since we iterate forward but want them in order)
+                request.headers.push(
+                    SmolStr::new("Route"),
+                    SmolStr::new(route_value)
+                );
+            }
+
+            info!(
+                "Applied {} Service-Route entries as Route headers",
+                service_route.len()
+            );
+        }
     }
 
     /// Handles a 401/407 challenge and creates an authenticated request.
@@ -523,6 +662,173 @@ impl UserAgentClient {
         request
     }
 
+    /// Adds a Reason header to a request (RFC 3326).
+    ///
+    /// # Arguments
+    /// * `request` - The request to add the Reason header to
+    /// * `reason` - The Reason header to add
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use sip_core::{ReasonHeader, Q850Cause};
+    /// use sip_uac::UserAgentClient;
+    ///
+    /// let uac = UserAgentClient::new(local_uri, contact_uri);
+    /// let mut bye = uac.create_bye(&dialog);
+    ///
+    /// // Add Q.850 reason for normal call clearing
+    /// let reason = ReasonHeader::q850(Q850Cause::NormalCallClearing);
+    /// UserAgentClient::add_reason_header(&mut bye, reason);
+    /// ```
+    pub fn add_reason_header(request: &mut Request, reason: sip_core::ReasonHeader) {
+        request.headers.push(
+            SmolStr::new("Reason"),
+            SmolStr::new(reason.to_string()),
+        );
+    }
+
+    /// Creates a BYE request with a Reason header (RFC 3326).
+    ///
+    /// This is a convenience method for terminating a call with a reason.
+    ///
+    /// # Arguments
+    /// * `dialog` - The dialog to terminate
+    /// * `reason` - The reason for terminating the call
+    ///
+    /// # Returns
+    /// A BYE request with Reason header ready to send
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use sip_core::{ReasonHeader, Q850Cause};
+    /// use sip_uac::UserAgentClient;
+    ///
+    /// let uac = UserAgentClient::new(local_uri, contact_uri);
+    ///
+    /// // Normal call clearing
+    /// let reason = ReasonHeader::q850(Q850Cause::NormalCallClearing);
+    /// let bye = uac.create_bye_with_reason(&dialog, reason);
+    ///
+    /// // User busy
+    /// let reason = ReasonHeader::q850(Q850Cause::UserBusy);
+    /// let bye = uac.create_bye_with_reason(&dialog, reason);
+    ///
+    /// // SIP reason code
+    /// let reason = ReasonHeader::sip(480, None);
+    /// let bye = uac.create_bye_with_reason(&dialog, reason);
+    /// ```
+    pub fn create_bye_with_reason(&self, dialog: &Dialog, reason: sip_core::ReasonHeader) -> Request {
+        let mut bye = self.create_bye(dialog);
+        Self::add_reason_header(&mut bye, reason);
+        bye
+    }
+
+    /// Adds a P-Preferred-Identity header to a request (RFC 3325).
+    ///
+    /// This header is used by a UAC to express a preference about which identity
+    /// should be asserted by a trusted proxy when the user has multiple identities.
+    ///
+    /// # Arguments
+    /// * `request` - The request to add the P-Preferred-Identity header to
+    /// * `header` - The P-Preferred-Identity header to add
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use sip_core::{PPreferredIdentityHeader, SipUri};
+    /// use sip_uac::UserAgentClient;
+    ///
+    /// let uac = UserAgentClient::new(local_uri, contact_uri);
+    /// let mut invite = uac.create_invite(&remote_uri, Some(sdp));
+    ///
+    /// // Prefer a specific SIP identity
+    /// let preferred_uri = SipUri::parse("sip:alice.smith@company.com").unwrap();
+    /// let ppi = PPreferredIdentityHeader::single_sip(preferred_uri);
+    /// UserAgentClient::add_p_preferred_identity_header(&mut invite, ppi);
+    ///
+    /// // Prefer a telephone number
+    /// let ppi = PPreferredIdentityHeader::single_tel("+15551234567");
+    /// UserAgentClient::add_p_preferred_identity_header(&mut invite, ppi);
+    /// ```
+    pub fn add_p_preferred_identity_header(request: &mut Request, header: sip_core::PPreferredIdentityHeader) {
+        request.headers.push(
+            SmolStr::new("P-Preferred-Identity"),
+            SmolStr::new(header.to_string()),
+        );
+    }
+
+    /// Creates a new request with P-Preferred-Identity header (RFC 3325).
+    ///
+    /// This is a convenience method that takes an existing request and returns
+    /// a new request with the P-Preferred-Identity header added.
+    ///
+    /// # Arguments
+    /// * `request` - The base request
+    /// * `header` - The P-Preferred-Identity header to add
+    ///
+    /// # Returns
+    /// A new request with the P-Preferred-Identity header added
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use sip_core::{PPreferredIdentityHeader, SipUri};
+    /// use sip_uac::UserAgentClient;
+    ///
+    /// let uac = UserAgentClient::new(local_uri, contact_uri);
+    /// let invite = uac.create_invite(&remote_uri, Some(sdp));
+    ///
+    /// // Create invite with preferred identity
+    /// let preferred_uri = SipUri::parse("sip:alice.smith@company.com").unwrap();
+    /// let ppi = PPreferredIdentityHeader::single_sip(preferred_uri);
+    /// let invite = UserAgentClient::with_p_preferred_identity(invite, ppi);
+    /// ```
+    pub fn with_p_preferred_identity(mut request: Request, header: sip_core::PPreferredIdentityHeader) -> Request {
+        Self::add_p_preferred_identity_header(&mut request, header);
+        request
+    }
+
+    /// Adds a P-Asserted-Identity header to a request (RFC 3325).
+    ///
+    /// **IMPORTANT**: P-Asserted-Identity should only be added by trusted proxies
+    /// within a trust domain. UACs should typically use P-Preferred-Identity instead.
+    /// This method is provided for testing and special cases where the UAC is acting
+    /// as a trusted element.
+    ///
+    /// # Arguments
+    /// * `request` - The request to add the P-Asserted-Identity header to
+    /// * `header` - The P-Asserted-Identity header to add
+    ///
+    /// # Trust Domain Warning
+    ///
+    /// This header should be removed at trust domain boundaries. Only use this if:
+    /// - You are implementing a trusted proxy
+    /// - You are in a testing/development environment
+    /// - You understand the RFC 3325 trust domain requirements
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use sip_core::{PAssertedIdentityHeader, SipUri};
+    /// use sip_uac::UserAgentClient;
+    ///
+    /// let uac = UserAgentClient::new(local_uri, contact_uri);
+    /// let mut invite = uac.create_invite(&remote_uri, Some(sdp));
+    ///
+    /// // Assert identity (typically done by proxy, not UAC)
+    /// let asserted_uri = SipUri::parse("sip:alice@example.com").unwrap();
+    /// let pai = PAssertedIdentityHeader::single_sip(asserted_uri);
+    /// UserAgentClient::add_p_asserted_identity_header(&mut invite, pai);
+    /// ```
+    pub fn add_p_asserted_identity_header(request: &mut Request, header: sip_core::PAssertedIdentityHeader) {
+        request.headers.push(
+            SmolStr::new("P-Asserted-Identity"),
+            SmolStr::new(header.to_string()),
+        );
+    }
+
     /// Creates a PRACK request to acknowledge a reliable provisional response (RFC 3262).
     ///
     /// # Arguments
@@ -764,6 +1070,159 @@ impl UserAgentClient {
         )
     }
 
+    /// Creates a SUBSCRIBE request for the "reg" event package (RFC 3680).
+    ///
+    /// The "reg" event package allows clients to subscribe to registration state
+    /// changes for an address-of-record. NOTIFY messages contain application/reginfo+xml
+    /// bodies describing the current registration state.
+    ///
+    /// # Arguments
+    /// * `target_uri` - The address-of-record to monitor
+    /// * `expires` - Subscription duration in seconds (default: 3761 per RFC 3680)
+    ///
+    /// # Returns
+    /// A SUBSCRIBE request for registration state
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use sip_uac::UserAgentClient;
+    /// use sip_core::SipUri;
+    ///
+    /// let uac = UserAgentClient::new(
+    ///     SipUri::parse("sip:alice@example.com").unwrap(),
+    ///     SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
+    /// );
+    ///
+    /// // Subscribe to registration state
+    /// let subscribe = uac.create_reg_subscribe(
+    ///     &SipUri::parse("sip:bob@example.com").unwrap(),
+    ///     3761
+    /// );
+    ///
+    /// // Send SUBSCRIBE and receive NOTIFY with reginfo
+    /// ```
+    pub fn create_reg_subscribe(&self, target_uri: &SipUri, expires: u32) -> Request {
+        // Use the generic create_subscribe but ensure proper Accept header
+        let mut request = self.create_subscribe(target_uri, "reg", expires);
+
+        // RFC 3680: Accept header must include application/reginfo+xml
+        request.headers.push(
+            SmolStr::new("Accept"),
+            SmolStr::new("application/reginfo+xml")
+        );
+
+        request
+    }
+
+    /// Creates a NOTIFY request for the "reg" event with RegInfo body (RFC 3680).
+    ///
+    /// Sends registration state information in application/reginfo+xml format.
+    ///
+    /// # Arguments
+    /// * `subscription` - The reg event subscription
+    /// * `state` - Subscription state (active, pending, terminated)
+    /// * `reginfo` - Registration information to include in body
+    ///
+    /// # Returns
+    /// A NOTIFY request with reginfo XML body
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use sip_uac::UserAgentClient;
+    /// use sip_core::{SipUri, RegInfo, RegInfoState, Registration, RegistrationState,
+    ///                Contact, ContactState, ContactEvent};
+    /// use sip_dialog::{Subscription, SubscriptionState};
+    /// use smol_str::SmolStr;
+    ///
+    /// let uac = UserAgentClient::new(
+    ///     SipUri::parse("sip:alice@example.com").unwrap(),
+    ///     SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
+    /// );
+    ///
+    /// // Create registration info
+    /// let mut reginfo = RegInfo::new(1, RegInfoState::Full);
+    ///
+    /// let mut registration = Registration::new(
+    ///     SmolStr::new("sip:bob@example.com"),
+    ///     SmolStr::new("reg1"),
+    ///     RegistrationState::Active
+    /// );
+    ///
+    /// let contact = Contact::new(
+    ///     SmolStr::new("contact1"),
+    ///     ContactState::Active,
+    ///     SmolStr::new("sip:bob@192.168.1.200:5060")
+    /// ).with_event(ContactEvent::Registered)
+    ///   .with_expires(3600);
+    ///
+    /// registration.add_contact(contact);
+    /// reginfo.add_registration(registration);
+    ///
+    /// // Create NOTIFY with reginfo body
+    /// # let subscription = todo!();
+    /// let notify = uac.create_reg_notify(
+    ///     &subscription,
+    ///     SubscriptionState::Active,
+    ///     &reginfo
+    /// );
+    /// ```
+    pub fn create_reg_notify(
+        &self,
+        subscription: &Subscription,
+        state: SubscriptionState,
+        reginfo: &sip_core::RegInfo,
+    ) -> Request {
+        use sip_core::RegInfo;
+
+        let mut headers = Headers::new();
+
+        // Via
+        let branch = generate_branch();
+        headers.push(SmolStr::new("Via"), SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)));
+
+        // From
+        let from = format!("<{}>;tag={}", self.local_uri.as_str(), subscription.id.to_tag.as_str());
+        headers.push(SmolStr::new("From"), SmolStr::new(from));
+
+        // To
+        let to = format!("<{}>;tag={}", subscription.remote_uri.as_str(), subscription.id.from_tag.as_str());
+        headers.push(SmolStr::new("To"), SmolStr::new(to));
+
+        // Call-ID
+        headers.push(SmolStr::new("Call-ID"), subscription.id.call_id.clone());
+
+        // CSeq (use subscription's CSeq)
+        let cseq = subscription.local_cseq + 1;
+        headers.push(SmolStr::new("CSeq"), SmolStr::new(format!("{} NOTIFY", cseq)));
+
+        // Contact
+        headers.push(SmolStr::new("Contact"), SmolStr::new(format!("<{}>", self.contact_uri.as_str())));
+
+        // Event: reg
+        headers.push(SmolStr::new("Event"), SmolStr::new("reg"));
+
+        // Subscription-State
+        headers.push(SmolStr::new("Subscription-State"), SmolStr::new(state.as_str()));
+
+        // Max-Forwards
+        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70".to_owned()));
+
+        // Content-Type: application/reginfo+xml
+        headers.push(SmolStr::new("Content-Type"), SmolStr::new("application/reginfo+xml"));
+
+        // Body (reginfo XML)
+        let body = reginfo.to_string();
+        headers.push(SmolStr::new("Content-Length"), SmolStr::new(body.len().to_string()));
+
+        Request::new(
+            RequestLine::new(Method::Notify, subscription.contact.clone()),
+            headers,
+            Bytes::from(body.into_bytes()),
+        )
+    }
+
     /// Creates a REFER request for call transfer (RFC 3515).
     ///
     /// # Arguments
@@ -886,6 +1345,143 @@ impl UserAgentClient {
             headers,
             Bytes::new(),
         )
+    }
+
+    /// Creates a MESSAGE request for instant messaging (RFC 3428).
+    ///
+    /// MESSAGE requests don't establish dialogs and operate in "pager mode".
+    /// Each message stands alone, similar to SMS/pager messages.
+    ///
+    /// # Arguments
+    /// * `target_uri` - Recipient's URI (Request-URI)
+    /// * `content_type` - MIME type of the message body (typically "text/plain")
+    /// * `body` - Message content
+    ///
+    /// # Size Limitations
+    /// Per RFC 3428, MESSAGE requests MUST NOT exceed 1300 bytes unless you have
+    /// positive knowledge that the path supports larger messages. This implementation
+    /// does NOT enforce the size limit automatically.
+    ///
+    /// # Returns
+    /// A MESSAGE request ready to send
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use sip_uac::UserAgentClient;
+    /// use sip_core::SipUri;
+    ///
+    /// let uac = UserAgentClient::new(
+    ///     SipUri::parse("sip:alice@example.com").unwrap(),
+    ///     SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
+    /// );
+    ///
+    /// let message = uac.create_message(
+    ///     &SipUri::parse("sip:bob@example.com").unwrap(),
+    ///     "text/plain",
+    ///     "Hello Bob!"
+    /// );
+    /// ```
+    pub fn create_message(&self, target_uri: &SipUri, content_type: &str, body: &str) -> Request {
+        let mut headers = Headers::new();
+
+        // Via header (will be filled by transport layer)
+        let branch = generate_branch();
+        headers.push(
+            SmolStr::new("Via"),
+            SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
+        );
+
+        // From header with tag
+        let from = self.format_from_header();
+        headers.push(SmolStr::new("From"), SmolStr::new(from));
+
+        // To header (no tag for out-of-dialog MESSAGE)
+        headers.push(
+            SmolStr::new("To"),
+            SmolStr::new(format!("<{}>", target_uri.as_str())),
+        );
+
+        // Call-ID
+        let call_id = generate_call_id();
+        headers.push(SmolStr::new("Call-ID"), SmolStr::new(call_id));
+
+        // CSeq
+        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 MESSAGE".to_owned()));
+
+        // Max-Forwards
+        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70".to_owned()));
+
+        // Content-Type
+        headers.push(
+            SmolStr::new("Content-Type"),
+            SmolStr::new(content_type.to_owned()),
+        );
+
+        // Content-Length
+        headers.push(
+            SmolStr::new("Content-Length"),
+            SmolStr::new(body.len().to_string()),
+        );
+
+        // NOTE: RFC 3428 explicitly forbids Contact header in MESSAGE requests
+        // "User Agents MUST NOT insert Contact header fields into MESSAGE requests"
+
+        Request::new(
+            RequestLine::new(Method::Message, target_uri.clone()),
+            headers,
+            Bytes::from(body.to_owned()),
+        )
+    }
+
+    /// Creates a MESSAGE request with custom headers.
+    ///
+    /// This allows setting additional headers like Date, Expires, etc.
+    ///
+    /// # Arguments
+    /// * `target_uri` - Recipient's URI
+    /// * `content_type` - MIME type of the message body
+    /// * `body` - Message content
+    /// * `extra_headers` - Additional headers to include
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use sip_uac::UserAgentClient;
+    /// use sip_core::{SipUri, Headers};
+    /// use smol_str::SmolStr;
+    ///
+    /// let uac = UserAgentClient::new(
+    ///     SipUri::parse("sip:alice@example.com").unwrap(),
+    ///     SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
+    /// );
+    ///
+    /// let mut extra_headers = Headers::new();
+    /// extra_headers.push(SmolStr::new("Expires".to_owned()), SmolStr::new("300".to_owned()));
+    /// extra_headers.push(SmolStr::new("Date".to_owned()), SmolStr::new("Wed, 21 Jan 2025 12:00:00 GMT".to_owned()));
+    ///
+    /// let message = uac.create_message_with_headers(
+    ///     &SipUri::parse("sip:bob@example.com").unwrap(),
+    ///     "text/plain",
+    ///     "Hello Bob!",
+    ///     extra_headers
+    /// );
+    /// ```
+    pub fn create_message_with_headers(
+        &self,
+        target_uri: &SipUri,
+        content_type: &str,
+        body: &str,
+        extra_headers: Headers,
+    ) -> Request {
+        let mut request = self.create_message(target_uri, content_type, body);
+
+        // Add extra headers
+        for header in extra_headers.iter() {
+            request.headers.push(header.name.clone(), header.value.clone());
+        }
+
+        request
     }
 
     fn format_from_header(&self) -> String {
@@ -1624,5 +2220,653 @@ mod tests {
         assert_eq!(register.start.method, Method::Register);
         let privacy = register.headers.get("Privacy").unwrap();
         assert_eq!(privacy.as_str(), "id");
+    }
+
+    #[test]
+    fn adds_reason_header_to_bye() {
+        use sip_core::{ReasonHeader, Q850Cause};
+        use sip_dialog::{Dialog, DialogId, DialogStateType};
+
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+
+        let uac = UserAgentClient::new(local_uri.clone(), contact_uri);
+
+        // Mock dialog
+        let remote_uri = SipUri::parse("sip:bob@example.com").unwrap();
+        let dialog = Dialog {
+            id: DialogId {
+                call_id: "test-call-id".into(),
+                local_tag: "alice-tag".into(),
+                remote_tag: "bob-tag".into(),
+            },
+            state: DialogStateType::Confirmed,
+            local_uri: local_uri.clone(),
+            remote_uri: remote_uri.clone(),
+            remote_target: SipUri::parse("sip:bob@192.168.1.200:5060").unwrap(),
+            local_cseq: 1,
+            remote_cseq: 0,
+            route_set: vec![],
+            secure: false,
+            session_expires: None,
+            refresher: None,
+            is_uac: true,
+        };
+
+        let mut bye = uac.create_bye(&dialog);
+
+        // Add Reason header
+        let reason = ReasonHeader::q850(Q850Cause::NormalCallClearing);
+        UserAgentClient::add_reason_header(&mut bye, reason);
+
+        // Verify Reason header
+        let reason_header = bye.headers.get("Reason").unwrap();
+        assert_eq!(reason_header.as_str(), "Q.850;cause=16;text=\"Normal Call Clearing\"");
+    }
+
+    #[test]
+    fn creates_bye_with_reason_q850() {
+        use sip_core::{ReasonHeader, Q850Cause};
+        use sip_dialog::{Dialog, DialogId, DialogStateType};
+
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+
+        let uac = UserAgentClient::new(local_uri.clone(), contact_uri);
+
+        // Mock dialog
+        let remote_uri = SipUri::parse("sip:bob@example.com").unwrap();
+        let dialog = Dialog {
+            id: DialogId {
+                call_id: "test-call-id".into(),
+                local_tag: "alice-tag".into(),
+                remote_tag: "bob-tag".into(),
+            },
+            state: DialogStateType::Confirmed,
+            local_uri: local_uri.clone(),
+            remote_uri: remote_uri.clone(),
+            remote_target: SipUri::parse("sip:bob@192.168.1.200:5060").unwrap(),
+            local_cseq: 5,
+            remote_cseq: 0,
+            route_set: vec![],
+            secure: false,
+            session_expires: None,
+            refresher: None,
+            is_uac: true,
+        };
+
+        // Create BYE with reason
+        let reason = ReasonHeader::q850(Q850Cause::UserBusy);
+        let bye = uac.create_bye_with_reason(&dialog, reason);
+
+        // Verify BYE request
+        assert_eq!(bye.start.method, Method::Bye);
+        assert_eq!(bye.start.uri.as_str(), "sip:bob@192.168.1.200:5060");
+
+        // Verify Reason header
+        let reason_header = bye.headers.get("Reason").unwrap();
+        assert_eq!(reason_header.as_str(), "Q.850;cause=17;text=\"User Busy\"");
+
+        // Verify other headers
+        assert!(bye.headers.get("From").unwrap().contains("alice-tag"));
+        assert!(bye.headers.get("To").unwrap().contains("bob-tag"));
+        assert_eq!(bye.headers.get("Call-ID").unwrap().as_str(), "test-call-id");
+    }
+
+    #[test]
+    fn creates_bye_with_reason_sip() {
+        use sip_core::ReasonHeader;
+        use sip_dialog::{Dialog, DialogId, DialogStateType};
+
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+
+        let uac = UserAgentClient::new(local_uri.clone(), contact_uri);
+
+        // Mock dialog
+        let remote_uri = SipUri::parse("sip:bob@example.com").unwrap();
+        let dialog = Dialog {
+            id: DialogId {
+                call_id: "test-call-id".into(),
+                local_tag: "alice-tag".into(),
+                remote_tag: "bob-tag".into(),
+            },
+            state: DialogStateType::Confirmed,
+            local_uri: local_uri.clone(),
+            remote_uri: remote_uri.clone(),
+            remote_target: SipUri::parse("sip:bob@192.168.1.200:5060").unwrap(),
+            local_cseq: 1,
+            remote_cseq: 0,
+            route_set: vec![],
+            secure: false,
+            session_expires: None,
+            refresher: None,
+            is_uac: true,
+        };
+
+        // Create BYE with SIP reason code
+        let reason = ReasonHeader::sip(480, None);
+        let bye = uac.create_bye_with_reason(&dialog, reason);
+
+        // Verify method
+        assert_eq!(bye.start.method, Method::Bye);
+
+        // Verify Reason header
+        let reason_header = bye.headers.get("Reason").unwrap();
+        assert_eq!(reason_header.as_str(), "SIP;cause=480;text=\"Temporarily Unavailable\"");
+    }
+
+    #[test]
+    fn adds_reason_to_any_request() {
+        use sip_core::{ReasonHeader, Q850Cause};
+
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+        let remote_uri = SipUri::parse("sip:bob@example.com").unwrap();
+
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+        let mut invite = uac.create_invite(&remote_uri, None);
+
+        // Add Reason to INVITE (unusual but possible for forked calls)
+        let reason = ReasonHeader::q850(Q850Cause::CallRejected);
+        UserAgentClient::add_reason_header(&mut invite, reason);
+
+        // Verify
+        assert_eq!(invite.start.method, Method::Invite);
+        let reason_header = invite.headers.get("Reason").unwrap();
+        assert_eq!(reason_header.as_str(), "Q.850;cause=21;text=\"Call Rejected\"");
+    }
+
+    #[test]
+    fn adds_p_preferred_identity_sip() {
+        use sip_core::PPreferredIdentityHeader;
+
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+        let remote_uri = SipUri::parse("sip:bob@example.com").unwrap();
+
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+        let mut invite = uac.create_invite(&remote_uri, None);
+
+        // Add P-Preferred-Identity with SIP URI
+        let preferred_uri = SipUri::parse("sip:alice.smith@company.com").unwrap();
+        let ppi = PPreferredIdentityHeader::single_sip(preferred_uri);
+        UserAgentClient::add_p_preferred_identity_header(&mut invite, ppi);
+
+        // Verify
+        assert_eq!(invite.start.method, Method::Invite);
+        let ppi_header = invite.headers.get("P-Preferred-Identity").unwrap();
+        assert!(ppi_header.as_str().contains("sip:alice.smith@company.com"));
+    }
+
+    #[test]
+    fn adds_p_preferred_identity_tel() {
+        use sip_core::PPreferredIdentityHeader;
+
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+        let remote_uri = SipUri::parse("sip:bob@example.com").unwrap();
+
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+        let mut invite = uac.create_invite(&remote_uri, None);
+
+        // Add P-Preferred-Identity with Tel URI
+        let ppi = PPreferredIdentityHeader::single_tel("+15551234567");
+        UserAgentClient::add_p_preferred_identity_header(&mut invite, ppi);
+
+        // Verify
+        assert_eq!(invite.start.method, Method::Invite);
+        let ppi_header = invite.headers.get("P-Preferred-Identity").unwrap();
+        assert!(ppi_header.as_str().contains("tel:+15551234567"));
+    }
+
+    #[test]
+    fn with_p_preferred_identity() {
+        use sip_core::PPreferredIdentityHeader;
+
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+        let remote_uri = SipUri::parse("sip:bob@example.com").unwrap();
+
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+        let invite = uac.create_invite(&remote_uri, None);
+
+        // Create with P-Preferred-Identity
+        let preferred_uri = SipUri::parse("sip:alice.smith@company.com").unwrap();
+        let ppi = PPreferredIdentityHeader::single_sip(preferred_uri);
+        let invite = UserAgentClient::with_p_preferred_identity(invite, ppi);
+
+        // Verify
+        assert_eq!(invite.start.method, Method::Invite);
+        let ppi_header = invite.headers.get("P-Preferred-Identity").unwrap();
+        assert!(ppi_header.as_str().contains("sip:alice.smith@company.com"));
+    }
+
+    #[test]
+    fn adds_p_asserted_identity() {
+        use sip_core::PAssertedIdentityHeader;
+
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+        let remote_uri = SipUri::parse("sip:bob@example.com").unwrap();
+
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+        let mut invite = uac.create_invite(&remote_uri, None);
+
+        // Add P-Asserted-Identity (for testing/proxy use)
+        let asserted_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let pai = PAssertedIdentityHeader::sip_and_tel(asserted_uri, "+15551234567");
+        UserAgentClient::add_p_asserted_identity_header(&mut invite, pai);
+
+        // Verify
+        assert_eq!(invite.start.method, Method::Invite);
+        let pai_header = invite.headers.get("P-Asserted-Identity").unwrap();
+        assert!(pai_header.as_str().contains("sip:alice@example.com"));
+        assert!(pai_header.as_str().contains("tel:+15551234567"));
+    }
+
+    #[test]
+    fn creates_message_request() {
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+
+        let target_uri = SipUri::parse("sip:bob@example.com").unwrap();
+        let request = uac.create_message(&target_uri, "text/plain", "Hello, Bob!");
+
+        assert_eq!(request.start.method, Method::Message);
+        assert_eq!(request.body.len(), 11); // "Hello, Bob!" length
+        assert!(request.headers.get("From").is_some());
+        assert!(request.headers.get("To").is_some());
+        assert!(request.headers.get("Call-ID").is_some());
+        assert!(request.headers.get("CSeq").is_some());
+        assert_eq!(request.headers.get("CSeq").unwrap().as_str(), "1 MESSAGE");
+        assert_eq!(request.headers.get("Content-Type").unwrap().as_str(), "text/plain");
+        assert_eq!(request.headers.get("Content-Length").unwrap().as_str(), "11");
+    }
+
+    #[test]
+    fn message_has_no_contact_header() {
+        // RFC 3428: User Agents MUST NOT insert Contact header fields into MESSAGE requests
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+
+        let target_uri = SipUri::parse("sip:bob@example.com").unwrap();
+        let request = uac.create_message(&target_uri, "text/plain", "Test message");
+
+        // Verify Contact header is NOT present
+        assert!(request.headers.get("Contact").is_none());
+    }
+
+    #[test]
+    fn creates_message_with_html_content() {
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+
+        let target_uri = SipUri::parse("sip:bob@example.com").unwrap();
+        let html_body = "<html><body><h1>Hello</h1></body></html>";
+        let request = uac.create_message(&target_uri, "text/html", html_body);
+
+        assert_eq!(request.start.method, Method::Message);
+        assert_eq!(request.headers.get("Content-Type").unwrap().as_str(), "text/html");
+        assert_eq!(request.body.len(), html_body.len());
+        assert_eq!(String::from_utf8_lossy(&request.body), html_body);
+    }
+
+    #[test]
+    fn creates_message_with_custom_headers() {
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+
+        let target_uri = SipUri::parse("sip:bob@example.com").unwrap();
+
+        // Create custom headers
+        let mut extra_headers = Headers::new();
+        extra_headers.push(SmolStr::new("Date"), SmolStr::new("Wed, 15 Jan 2025 10:00:00 GMT"));
+        extra_headers.push(SmolStr::new("Expires"), SmolStr::new("3600"));
+
+        let request = uac.create_message_with_headers(
+            &target_uri,
+            "text/plain",
+            "Urgent message",
+            extra_headers
+        );
+
+        assert_eq!(request.start.method, Method::Message);
+        assert!(request.headers.get("Date").is_some());
+        assert_eq!(request.headers.get("Date").unwrap().as_str(), "Wed, 15 Jan 2025 10:00:00 GMT");
+        assert!(request.headers.get("Expires").is_some());
+        assert_eq!(request.headers.get("Expires").unwrap().as_str(), "3600");
+    }
+
+    #[test]
+    fn message_has_required_headers() {
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+
+        let target_uri = SipUri::parse("sip:bob@example.com").unwrap();
+        let request = uac.create_message(&target_uri, "text/plain", "Test");
+
+        // Verify all required headers per RFC 3428
+        assert!(request.headers.get("Via").is_some());
+        assert!(request.headers.get("From").is_some());
+        assert!(request.headers.get("To").is_some());
+        assert!(request.headers.get("Call-ID").is_some());
+        assert!(request.headers.get("CSeq").is_some());
+        assert!(request.headers.get("Max-Forwards").is_some());
+        assert!(request.headers.get("Content-Type").is_some());
+        assert!(request.headers.get("Content-Length").is_some());
+
+        // Verify Max-Forwards value
+        assert_eq!(request.headers.get("Max-Forwards").unwrap().as_str(), "70");
+    }
+
+    #[test]
+    fn message_to_header_has_no_tag() {
+        // MESSAGE is out-of-dialog, so To header should not have a tag
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+
+        let target_uri = SipUri::parse("sip:bob@example.com").unwrap();
+        let request = uac.create_message(&target_uri, "text/plain", "Hello");
+
+        let to_header = request.headers.get("To").unwrap();
+        assert!(to_header.contains("sip:bob@example.com"));
+        assert!(!to_header.contains("tag="));
+    }
+
+    #[test]
+    fn message_from_header_has_tag() {
+        // From header should always have a tag
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+
+        let target_uri = SipUri::parse("sip:bob@example.com").unwrap();
+        let request = uac.create_message(&target_uri, "text/plain", "Hello");
+
+        let from_header = request.headers.get("From").unwrap();
+        assert!(from_header.contains("sip:alice@example.com"));
+        assert!(from_header.contains("tag="));
+    }
+
+    #[test]
+    fn creates_message_with_empty_body() {
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+
+        let target_uri = SipUri::parse("sip:bob@example.com").unwrap();
+        let request = uac.create_message(&target_uri, "text/plain", "");
+
+        assert_eq!(request.body.len(), 0);
+        assert_eq!(request.headers.get("Content-Length").unwrap().as_str(), "0");
+        assert_eq!(request.headers.get("Content-Type").unwrap().as_str(), "text/plain");
+    }
+
+    #[test]
+    fn processes_service_route_from_register_response() {
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+
+        let mut uac = UserAgentClient::new(local_uri, contact_uri);
+
+        // Initially no service route
+        assert!(uac.get_service_route().is_none());
+
+        // Create 200 OK response with Service-Route
+        let mut headers = Headers::new();
+        headers.push(
+            SmolStr::new("Service-Route"),
+            SmolStr::new("<sip:proxy.example.com;lr>")
+        );
+
+        let response = Response::new(
+            StatusLine::new(200, SmolStr::new("OK")),
+            headers,
+            Bytes::new()
+        );
+
+        // Process response
+        uac.process_register_response(&response);
+
+        // Should now have service route stored
+        assert!(uac.get_service_route().is_some());
+        let service_route = uac.get_service_route().unwrap();
+        assert_eq!(service_route.len(), 1);
+        assert!(service_route.routes[0].uri.as_str().contains("proxy.example.com"));
+    }
+
+    #[test]
+    fn processes_multiple_service_routes() {
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+
+        let mut uac = UserAgentClient::new(local_uri, contact_uri);
+
+        // Create 200 OK response with multiple Service-Route entries
+        let mut headers = Headers::new();
+        headers.push(
+            SmolStr::new("Service-Route"),
+            SmolStr::new("<sip:proxy1.example.com;lr>, <sip:proxy2.example.com;lr>")
+        );
+
+        let response = Response::new(
+            StatusLine::new(200, SmolStr::new("OK")),
+            headers,
+            Bytes::new()
+        );
+
+        uac.process_register_response(&response);
+
+        let service_route = uac.get_service_route().unwrap();
+        assert_eq!(service_route.len(), 2);
+        assert!(service_route.routes[0].uri.as_str().contains("proxy1.example.com"));
+        assert!(service_route.routes[1].uri.as_str().contains("proxy2.example.com"));
+    }
+
+    #[test]
+    fn clears_service_route_when_not_present() {
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+
+        let mut uac = UserAgentClient::new(local_uri, contact_uri);
+
+        // First, set a service route
+        let mut headers1 = Headers::new();
+        headers1.push(
+            SmolStr::new("Service-Route"),
+            SmolStr::new("<sip:proxy.example.com;lr>")
+        );
+
+        let response1 = Response::new(
+            StatusLine::new(200, SmolStr::new("OK")),
+            headers1,
+            Bytes::new()
+        );
+
+        uac.process_register_response(&response1);
+        assert!(uac.get_service_route().is_some());
+
+        // Now send response without Service-Route
+        let headers2 = Headers::new();
+        let response2 = Response::new(
+            StatusLine::new(200, SmolStr::new("OK")),
+            headers2,
+            Bytes::new()
+        );
+
+        uac.process_register_response(&response2);
+
+        // Service route should be cleared
+        assert!(uac.get_service_route().is_none());
+    }
+
+    #[test]
+    fn ignores_non_200_responses_for_service_route() {
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+
+        let mut uac = UserAgentClient::new(local_uri, contact_uri);
+
+        // Create 401 response with Service-Route (shouldn't be processed)
+        let mut headers = Headers::new();
+        headers.push(
+            SmolStr::new("Service-Route"),
+            SmolStr::new("<sip:proxy.example.com;lr>")
+        );
+
+        let response = Response::new(
+            StatusLine::new(401, SmolStr::new("Unauthorized")),
+            headers,
+            Bytes::new()
+        );
+
+        uac.process_register_response(&response);
+
+        // Should not store service route from non-200 response
+        assert!(uac.get_service_route().is_none());
+    }
+
+    #[test]
+    fn applies_service_route_to_request() {
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+
+        let mut uac = UserAgentClient::new(local_uri, contact_uri);
+
+        // Set up service route
+        let mut headers = Headers::new();
+        headers.push(
+            SmolStr::new("Service-Route"),
+            SmolStr::new("<sip:proxy.example.com;lr>")
+        );
+
+        let response = Response::new(
+            StatusLine::new(200, SmolStr::new("OK")),
+            headers,
+            Bytes::new()
+        );
+
+        uac.process_register_response(&response);
+
+        // Create a request
+        let target_uri = SipUri::parse("sip:bob@example.com").unwrap();
+        let mut invite = uac.create_invite(&target_uri, None);
+
+        // Initially no Route header
+        assert!(invite.headers.get("Route").is_none());
+
+        // Apply service route
+        uac.apply_service_route(&mut invite);
+
+        // Should now have Route header
+        let route_header = invite.headers.get("Route").unwrap();
+        assert!(route_header.contains("proxy.example.com"));
+        assert!(route_header.contains("lr"));
+    }
+
+    #[test]
+    fn applies_multiple_service_routes_in_order() {
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+
+        let mut uac = UserAgentClient::new(local_uri, contact_uri);
+
+        // Set up multiple service routes
+        let mut headers = Headers::new();
+        headers.push(
+            SmolStr::new("Service-Route"),
+            SmolStr::new("<sip:proxy1.example.com;lr>, <sip:proxy2.example.com;lr>")
+        );
+
+        let response = Response::new(
+            StatusLine::new(200, SmolStr::new("OK")),
+            headers,
+            Bytes::new()
+        );
+
+        uac.process_register_response(&response);
+
+        // Create a request
+        let target_uri = SipUri::parse("sip:bob@example.com").unwrap();
+        let mut invite = uac.create_invite(&target_uri, None);
+
+        // Apply service route
+        uac.apply_service_route(&mut invite);
+
+        // Should have multiple Route headers in order
+        let routes: Vec<_> = invite.headers.get_all("Route").collect();
+        assert_eq!(routes.len(), 2);
+        assert!(routes[0].contains("proxy1.example.com"));
+        assert!(routes[1].contains("proxy2.example.com"));
+    }
+
+    #[test]
+    fn apply_service_route_does_nothing_when_not_set() {
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+
+        // No service route set
+        assert!(uac.get_service_route().is_none());
+
+        // Create a request
+        let target_uri = SipUri::parse("sip:bob@example.com").unwrap();
+        let mut invite = uac.create_invite(&target_uri, None);
+
+        // Apply service route (should do nothing)
+        uac.apply_service_route(&mut invite);
+
+        // Should still have no Route header
+        assert!(invite.headers.get("Route").is_none());
+    }
+
+    #[test]
+    fn service_route_with_message_request() {
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+
+        let mut uac = UserAgentClient::new(local_uri, contact_uri);
+
+        // Set up service route
+        let mut headers = Headers::new();
+        headers.push(
+            SmolStr::new("Service-Route"),
+            SmolStr::new("<sip:im-proxy.example.com;lr>")
+        );
+
+        let response = Response::new(
+            StatusLine::new(200, SmolStr::new("OK")),
+            headers,
+            Bytes::new()
+        );
+
+        uac.process_register_response(&response);
+
+        // Create MESSAGE request
+        let target_uri = SipUri::parse("sip:bob@example.com").unwrap();
+        let mut message = uac.create_message(&target_uri, "text/plain", "Hello!");
+
+        // Apply service route
+        uac.apply_service_route(&mut message);
+
+        // Should have Route header for IM proxy
+        let route_header = message.headers.get("Route").unwrap();
+        assert!(route_header.contains("im-proxy.example.com"));
     }
 }

@@ -10,20 +10,123 @@ use tokio::sync::mpsc;
 use tracing::{error, info};
 
 /// Indicates which transport carried an inbound or outbound message.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// # SCTP Support (RFC 4168)
+///
+/// SCTP and TLS-SCTP variants are included for protocol completeness per RFC 4168,
+/// but actual SCTP socket implementations (run_sctp/send_sctp) are not provided.
+/// SCTP requires kernel support and is not universally available across platforms.
+///
+/// Applications requiring SCTP transport should implement custom handlers using
+/// crates like `sctp-rs` or `tokio-sctp` and integrate with the packet routing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TransportKind {
     Udp,
     Tcp,
     Tls,
+    /// SCTP transport (RFC 4168)
+    Sctp,
+    /// TLS over SCTP transport (RFC 4168)
+    TlsSctp,
 }
 
 impl TransportKind {
-    fn as_str(&self) -> &'static str {
+    /// Returns the lowercase transport string for metrics and logging.
+    pub fn as_str(&self) -> &'static str {
         match self {
             TransportKind::Udp => "udp",
             TransportKind::Tcp => "tcp",
             TransportKind::Tls => "tls",
+            TransportKind::Sctp => "sctp",
+            TransportKind::TlsSctp => "tls-sctp",
         }
+    }
+
+    /// Returns the Via header transport parameter value per RFC 3261 and RFC 4168.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use sip_transport::TransportKind;
+    ///
+    /// assert_eq!(TransportKind::Udp.via_transport(), "UDP");
+    /// assert_eq!(TransportKind::Tcp.via_transport(), "TCP");
+    /// assert_eq!(TransportKind::Tls.via_transport(), "TLS");
+    /// assert_eq!(TransportKind::Sctp.via_transport(), "SCTP");
+    /// assert_eq!(TransportKind::TlsSctp.via_transport(), "TLS-SCTP");
+    /// ```
+    pub fn via_transport(&self) -> &'static str {
+        match self {
+            TransportKind::Udp => "UDP",
+            TransportKind::Tcp => "TCP",
+            TransportKind::Tls => "TLS",
+            TransportKind::Sctp => "SCTP",
+            TransportKind::TlsSctp => "TLS-SCTP",
+        }
+    }
+
+    /// Parses a transport string (case-insensitive) into a TransportKind.
+    ///
+    /// Accepts strings from Via headers or URI transport parameters.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use sip_transport::TransportKind;
+    ///
+    /// assert_eq!(TransportKind::parse("UDP"), Some(TransportKind::Udp));
+    /// assert_eq!(TransportKind::parse("tcp"), Some(TransportKind::Tcp));
+    /// assert_eq!(TransportKind::parse("TLS"), Some(TransportKind::Tls));
+    /// assert_eq!(TransportKind::parse("SCTP"), Some(TransportKind::Sctp));
+    /// assert_eq!(TransportKind::parse("tls-sctp"), Some(TransportKind::TlsSctp));
+    /// assert_eq!(TransportKind::parse("invalid"), None);
+    /// ```
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "udp" => Some(TransportKind::Udp),
+            "tcp" => Some(TransportKind::Tcp),
+            "tls" => Some(TransportKind::Tls),
+            "sctp" => Some(TransportKind::Sctp),
+            "tls-sctp" => Some(TransportKind::TlsSctp),
+            _ => None,
+        }
+    }
+
+    /// Returns true if this transport requires a persistent connection (TCP, TLS, SCTP, TLS-SCTP).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use sip_transport::TransportKind;
+    ///
+    /// assert!(!TransportKind::Udp.is_stream_based());
+    /// assert!(TransportKind::Tcp.is_stream_based());
+    /// assert!(TransportKind::Tls.is_stream_based());
+    /// assert!(TransportKind::Sctp.is_stream_based());
+    /// assert!(TransportKind::TlsSctp.is_stream_based());
+    /// ```
+    pub fn is_stream_based(&self) -> bool {
+        matches!(
+            self,
+            TransportKind::Tcp | TransportKind::Tls | TransportKind::Sctp | TransportKind::TlsSctp
+        )
+    }
+
+    /// Returns true if this transport uses TLS encryption.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use sip_transport::TransportKind;
+    ///
+    /// assert!(!TransportKind::Udp.is_secure());
+    /// assert!(!TransportKind::Tcp.is_secure());
+    /// assert!(TransportKind::Tls.is_secure());
+    /// assert!(!TransportKind::Sctp.is_secure());
+    /// assert!(TransportKind::TlsSctp.is_secure());
+    /// ```
+    pub fn is_secure(&self) -> bool {
+        matches!(self, TransportKind::Tls | TransportKind::TlsSctp)
     }
 }
 
@@ -418,5 +521,103 @@ mod tests {
         let frames = drain_sip_frames(&mut buf);
         assert!(frames.is_empty());
         assert!(buf.is_empty());
+    }
+
+    // TransportKind tests
+
+    #[test]
+    fn transport_kind_as_str() {
+        assert_eq!(TransportKind::Udp.as_str(), "udp");
+        assert_eq!(TransportKind::Tcp.as_str(), "tcp");
+        assert_eq!(TransportKind::Tls.as_str(), "tls");
+        assert_eq!(TransportKind::Sctp.as_str(), "sctp");
+        assert_eq!(TransportKind::TlsSctp.as_str(), "tls-sctp");
+    }
+
+    #[test]
+    fn transport_kind_via_transport() {
+        assert_eq!(TransportKind::Udp.via_transport(), "UDP");
+        assert_eq!(TransportKind::Tcp.via_transport(), "TCP");
+        assert_eq!(TransportKind::Tls.via_transport(), "TLS");
+        assert_eq!(TransportKind::Sctp.via_transport(), "SCTP");
+        assert_eq!(TransportKind::TlsSctp.via_transport(), "TLS-SCTP");
+    }
+
+    #[test]
+    fn transport_kind_parse() {
+        assert_eq!(TransportKind::parse("UDP"), Some(TransportKind::Udp));
+        assert_eq!(TransportKind::parse("tcp"), Some(TransportKind::Tcp));
+        assert_eq!(TransportKind::parse("TLS"), Some(TransportKind::Tls));
+        assert_eq!(TransportKind::parse("SCTP"), Some(TransportKind::Sctp));
+        assert_eq!(
+            TransportKind::parse("TLS-SCTP"),
+            Some(TransportKind::TlsSctp)
+        );
+        assert_eq!(
+            TransportKind::parse("tls-sctp"),
+            Some(TransportKind::TlsSctp)
+        );
+    }
+
+    #[test]
+    fn transport_kind_parse_case_insensitive() {
+        assert_eq!(TransportKind::parse("udp"), Some(TransportKind::Udp));
+        assert_eq!(TransportKind::parse("UDP"), Some(TransportKind::Udp));
+        assert_eq!(TransportKind::parse("Udp"), Some(TransportKind::Udp));
+        assert_eq!(TransportKind::parse("sctp"), Some(TransportKind::Sctp));
+        assert_eq!(TransportKind::parse("SCTP"), Some(TransportKind::Sctp));
+        assert_eq!(TransportKind::parse("Sctp"), Some(TransportKind::Sctp));
+    }
+
+    #[test]
+    fn transport_kind_parse_with_whitespace() {
+        assert_eq!(TransportKind::parse("  UDP  "), Some(TransportKind::Udp));
+        assert_eq!(TransportKind::parse("  sctp  "), Some(TransportKind::Sctp));
+        assert_eq!(
+            TransportKind::parse("  tls-sctp  "),
+            Some(TransportKind::TlsSctp)
+        );
+    }
+
+    #[test]
+    fn transport_kind_parse_invalid() {
+        assert_eq!(TransportKind::parse("invalid"), None);
+        assert_eq!(TransportKind::parse(""), None);
+        assert_eq!(TransportKind::parse("ws"), None);
+    }
+
+    #[test]
+    fn transport_kind_is_stream_based() {
+        assert!(!TransportKind::Udp.is_stream_based());
+        assert!(TransportKind::Tcp.is_stream_based());
+        assert!(TransportKind::Tls.is_stream_based());
+        assert!(TransportKind::Sctp.is_stream_based());
+        assert!(TransportKind::TlsSctp.is_stream_based());
+    }
+
+    #[test]
+    fn transport_kind_is_secure() {
+        assert!(!TransportKind::Udp.is_secure());
+        assert!(!TransportKind::Tcp.is_secure());
+        assert!(TransportKind::Tls.is_secure());
+        assert!(!TransportKind::Sctp.is_secure());
+        assert!(TransportKind::TlsSctp.is_secure());
+    }
+
+    #[test]
+    fn transport_kind_round_trip() {
+        let transports = vec![
+            TransportKind::Udp,
+            TransportKind::Tcp,
+            TransportKind::Tls,
+            TransportKind::Sctp,
+            TransportKind::TlsSctp,
+        ];
+
+        for transport in transports {
+            let via_str = transport.via_transport();
+            let parsed = TransportKind::parse(via_str).unwrap();
+            assert_eq!(parsed, transport);
+        }
     }
 }
