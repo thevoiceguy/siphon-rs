@@ -64,6 +64,23 @@ impl Headers {
             .map(|h| &h.value)
     }
 
+    /// Removes all headers with the given name (case-insensitive).
+    ///
+    /// Returns the number of headers removed.
+    pub fn remove(&mut self, name: &str) -> usize {
+        let original_len = self.0.len();
+        self.0.retain(|h| !h.name.eq_ignore_ascii_case(name));
+        original_len - self.0.len()
+    }
+
+    /// Retains only headers for which the predicate returns true.
+    pub fn retain<F>(&mut self, f: F)
+    where
+        F: FnMut(&Header) -> bool,
+    {
+        self.0.retain(f);
+    }
+
     /// Consumes the collection returning the underlying vector.
     pub fn into_inner(self) -> Vec<Header> {
         self.0

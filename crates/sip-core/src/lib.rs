@@ -13,6 +13,7 @@ pub mod msg;
 pub mod name_addr;
 pub mod p_headers;
 pub mod priority;
+pub mod privacy;
 pub mod reason;
 pub mod resource_priority;
 pub mod route;
@@ -47,6 +48,10 @@ pub use p_headers::{
     PAccessNetworkInfo, PAssertedIdentityHeader, PPreferredIdentityHeader, PVisitedNetworkIdHeader,
 };
 pub use priority::PriorityValue;
+pub use privacy::{
+    enforce_privacy, parse_privacy_header, requires_privacy_enforcement, PrivacyHeader,
+    PrivacyValue,
+};
 pub use reason::ReasonHeader;
 pub use resource_priority::{ResourcePriorityHeader, ResourcePriorityValue};
 pub use route::RouteHeader;

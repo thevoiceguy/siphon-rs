@@ -325,6 +325,68 @@ impl UserAgentServer {
         Ok(self.create_ok(request, None))
     }
 
+    /// Handles an INFO request within a dialog (RFC 2976).
+    ///
+    /// # Arguments
+    /// * `request` - The INFO request
+    /// * `dialog` - The dialog the INFO was received in
+    ///
+    /// # Returns
+    /// A 200 OK response
+    ///
+    /// # RFC 2976 INFO Method
+    /// INFO carries session-related control information during an established dialog.
+    /// The application should examine the Content-Type and body to process the information.
+    ///
+    /// # Common Content Types
+    /// - `application/dtmf-relay`: DTMF digit signaling
+    /// - `application/json`: Custom JSON payloads
+    /// - `text/plain`: Plain text information
+    /// - Custom application types
+    ///
+    /// # Example
+    /// ```ignore
+    /// match uas.handle_info(&info_request, &dialog) {
+    ///     Ok(response) => {
+    ///         // Extract and process INFO payload
+    ///         let content_type = header(&info_request.headers, "Content-Type");
+    ///         let body = String::from_utf8_lossy(&info_request.body);
+    ///
+    ///         if content_type == Some(&"application/dtmf-relay") {
+    ///             // Process DTMF: body contains "Signal=1\r\nDuration=100\r\n"
+    ///             process_dtmf(&body);
+    ///         }
+    ///
+    ///         // Send 200 OK response
+    ///         Ok(response)
+    ///     }
+    ///     Err(e) => Err(e)
+    /// }
+    /// ```
+    pub fn handle_info(&self, request: &Request, dialog: &Dialog) -> Result<Response> {
+        if request.start.method != Method::Info {
+            return Err(anyhow!("Not an INFO request"));
+        }
+
+        // Verify the request matches the dialog
+        let call_id = header(&request.headers, "Call-ID")
+            .ok_or_else(|| anyhow!("Missing Call-ID"))?;
+
+        if call_id != dialog.id.call_id.as_str() {
+            return Err(anyhow!("Call-ID mismatch"));
+        }
+
+        info!(
+            call_id = %dialog.id.call_id,
+            content_type = ?header(&request.headers, "Content-Type"),
+            body_len = request.body.len(),
+            "UAS received INFO request"
+        );
+
+        // Create 200 OK response
+        Ok(self.create_ok(request, None))
+    }
+
     /// Handles a CANCEL request.
     ///
     /// # Arguments
@@ -1463,5 +1525,232 @@ mod tests {
         assert!(response.headers.get("To").is_some());
         assert!(response.headers.get("Call-ID").is_some());
         assert!(response.headers.get("CSeq").is_some());
+    }
+
+    #[test]
+    fn handles_info_request() {
+        use sip_dialog::{Dialog, DialogId, DialogStateType};
+
+        let local_uri = SipUri::parse("sip:bob@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:bob@192.168.1.200:5060").unwrap();
+
+        let uas = UserAgentServer::new(local_uri.clone(), contact_uri);
+
+        // Mock dialog
+        let remote_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let dialog = Dialog {
+            id: DialogId {
+                call_id: "test-call-id".into(),
+                local_tag: "bob-tag".into(),
+                remote_tag: "alice-tag".into(),
+            },
+            state: DialogStateType::Confirmed,
+            local_uri: local_uri.clone(),
+            remote_uri,
+            remote_target: SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
+            local_cseq: 0,
+            remote_cseq: 1,
+            route_set: vec![],
+            secure: false,
+            session_expires: None,
+            refresher: None,
+            is_uac: false,
+        };
+
+        // Create INFO request with DTMF payload
+        let mut headers = Headers::new();
+        headers.push(SmolStr::new("Via"), SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK456"));
+        headers.push(SmolStr::new("From"), SmolStr::new("<sip:alice@example.com>;tag=alice-tag"));
+        headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>;tag=bob-tag"));
+        headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"));
+        headers.push(SmolStr::new("CSeq"), SmolStr::new("2 INFO"));
+        headers.push(SmolStr::new("Content-Type"), SmolStr::new("application/dtmf-relay"));
+        headers.push(SmolStr::new("Content-Length"), SmolStr::new("26"));
+
+        let dtmf_body = "Signal=1\r\nDuration=100\r\n";
+        let info_request = Request::new(
+            RequestLine::new(Method::Info, SipUri::parse("sip:bob@example.com").unwrap()),
+            headers,
+            Bytes::from(dtmf_body),
+        );
+
+        // Handle INFO
+        let result = uas.handle_info(&info_request, &dialog);
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+
+        // Verify 200 OK response
+        assert_eq!(response.start.code, 200);
+        assert_eq!(response.start.reason.as_str(), "OK");
+
+        // Verify headers copied
+        assert!(response.headers.get("Via").is_some());
+        assert!(response.headers.get("From").is_some());
+        assert!(response.headers.get("To").is_some());
+        assert_eq!(response.headers.get("Call-ID").unwrap().as_str(), "test-call-id");
+        assert_eq!(response.headers.get("CSeq").unwrap().as_str(), "2 INFO");
+    }
+
+    #[test]
+    fn handles_info_with_json_payload() {
+        use sip_dialog::{Dialog, DialogId, DialogStateType};
+
+        let local_uri = SipUri::parse("sip:bob@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:bob@192.168.1.200:5060").unwrap();
+
+        let uas = UserAgentServer::new(local_uri.clone(), contact_uri);
+
+        // Mock dialog
+        let remote_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let dialog = Dialog {
+            id: DialogId {
+                call_id: "call-123".into(),
+                local_tag: "bob-tag".into(),
+                remote_tag: "alice-tag".into(),
+            },
+            state: DialogStateType::Confirmed,
+            local_uri: local_uri.clone(),
+            remote_uri,
+            remote_target: SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
+            local_cseq: 0,
+            remote_cseq: 5,
+            route_set: vec![],
+            secure: false,
+            session_expires: None,
+            refresher: None,
+            is_uac: false,
+        };
+
+        // Create INFO request with JSON payload
+        let mut headers = Headers::new();
+        headers.push(SmolStr::new("Via"), SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK789"));
+        headers.push(SmolStr::new("From"), SmolStr::new("<sip:alice@example.com>;tag=alice-tag"));
+        headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>;tag=bob-tag"));
+        headers.push(SmolStr::new("Call-ID"), SmolStr::new("call-123"));
+        headers.push(SmolStr::new("CSeq"), SmolStr::new("6 INFO"));
+        headers.push(SmolStr::new("Content-Type"), SmolStr::new("application/json"));
+
+        let json_body = r#"{"action":"mute","value":true}"#;
+        headers.push(SmolStr::new("Content-Length"), SmolStr::new(json_body.len().to_string()));
+
+        let info_request = Request::new(
+            RequestLine::new(Method::Info, SipUri::parse("sip:bob@example.com").unwrap()),
+            headers,
+            Bytes::from(json_body),
+        );
+
+        // Handle INFO
+        let result = uas.handle_info(&info_request, &dialog);
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+
+        // Verify 200 OK response
+        assert_eq!(response.start.code, 200);
+        assert_eq!(response.start.reason.as_str(), "OK");
+    }
+
+    #[test]
+    fn rejects_info_with_wrong_call_id() {
+        use sip_dialog::{Dialog, DialogId, DialogStateType};
+
+        let local_uri = SipUri::parse("sip:bob@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:bob@192.168.1.200:5060").unwrap();
+
+        let uas = UserAgentServer::new(local_uri.clone(), contact_uri);
+
+        // Mock dialog
+        let remote_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let dialog = Dialog {
+            id: DialogId {
+                call_id: "correct-call-id".into(),
+                local_tag: "bob-tag".into(),
+                remote_tag: "alice-tag".into(),
+            },
+            state: DialogStateType::Confirmed,
+            local_uri: local_uri.clone(),
+            remote_uri,
+            remote_target: SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
+            local_cseq: 0,
+            remote_cseq: 1,
+            route_set: vec![],
+            secure: false,
+            session_expires: None,
+            refresher: None,
+            is_uac: false,
+        };
+
+        // Create INFO request with WRONG Call-ID
+        let mut headers = Headers::new();
+        headers.push(SmolStr::new("Via"), SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK456"));
+        headers.push(SmolStr::new("From"), SmolStr::new("<sip:alice@example.com>;tag=alice-tag"));
+        headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>;tag=bob-tag"));
+        headers.push(SmolStr::new("Call-ID"), SmolStr::new("wrong-call-id")); // Wrong!
+        headers.push(SmolStr::new("CSeq"), SmolStr::new("2 INFO"));
+        headers.push(SmolStr::new("Content-Type"), SmolStr::new("text/plain"));
+        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
+
+        let info_request = Request::new(
+            RequestLine::new(Method::Info, SipUri::parse("sip:bob@example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        // Handle INFO - should fail
+        let result = uas.handle_info(&info_request, &dialog);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Call-ID mismatch"));
+    }
+
+    #[test]
+    fn rejects_non_info_request() {
+        use sip_dialog::{Dialog, DialogId, DialogStateType};
+
+        let local_uri = SipUri::parse("sip:bob@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:bob@192.168.1.200:5060").unwrap();
+
+        let uas = UserAgentServer::new(local_uri.clone(), contact_uri);
+
+        // Mock dialog
+        let remote_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let dialog = Dialog {
+            id: DialogId {
+                call_id: "test-call-id".into(),
+                local_tag: "bob-tag".into(),
+                remote_tag: "alice-tag".into(),
+            },
+            state: DialogStateType::Confirmed,
+            local_uri: local_uri.clone(),
+            remote_uri,
+            remote_target: SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
+            local_cseq: 0,
+            remote_cseq: 1,
+            route_set: vec![],
+            secure: false,
+            session_expires: None,
+            refresher: None,
+            is_uac: false,
+        };
+
+        // Create BYE request (not INFO)
+        let mut headers = Headers::new();
+        headers.push(SmolStr::new("Via"), SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK456"));
+        headers.push(SmolStr::new("From"), SmolStr::new("<sip:alice@example.com>;tag=alice-tag"));
+        headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>;tag=bob-tag"));
+        headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"));
+        headers.push(SmolStr::new("CSeq"), SmolStr::new("2 BYE"));
+        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
+
+        let bye_request = Request::new(
+            RequestLine::new(Method::Bye, SipUri::parse("sip:bob@example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        // Try to handle as INFO - should fail
+        let result = uas.handle_info(&bye_request, &dialog);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Not an INFO request"));
     }
 }

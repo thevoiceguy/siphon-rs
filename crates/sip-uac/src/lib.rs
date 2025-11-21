@@ -385,6 +385,144 @@ impl UserAgentClient {
         )
     }
 
+    /// Creates an INFO request to send mid-dialog information (RFC 2976).
+    ///
+    /// # Arguments
+    /// * `dialog` - The dialog to send INFO within
+    /// * `content_type` - MIME type of the body (e.g., "application/dtmf-relay", "application/json")
+    /// * `body` - The information payload
+    ///
+    /// # Returns
+    /// An INFO request ready to send
+    ///
+    /// # RFC 2976 INFO Method
+    /// INFO is used to carry session-related control information generated during a session.
+    /// Common use cases:
+    /// - DTMF relay: Send DTMF digits within an established call
+    /// - Custom application data: Exchange application-specific information
+    /// - Mid-call signaling: Send non-SDP signaling data
+    ///
+    /// # Examples
+    ///
+    /// ## DTMF Relay
+    /// ```ignore
+    /// let dtmf_body = "Signal=1\r\nDuration=100\r\n";
+    /// let info = uac.create_info(&dialog, "application/dtmf-relay", dtmf_body);
+    /// ```
+    ///
+    /// ## Custom Application Data
+    /// ```ignore
+    /// let json_body = r#"{"action":"mute","value":true}"#;
+    /// let info = uac.create_info(&dialog, "application/json", json_body);
+    /// ```
+    pub fn create_info(&self, dialog: &Dialog, content_type: &str, body: &str) -> Request {
+        let mut headers = Headers::new();
+
+        // Via
+        let branch = generate_branch();
+        headers.push(SmolStr::new("Via"), SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)));
+
+        // From (with local tag)
+        let from = format!("<{}>;tag={}", self.local_uri.as_str(), dialog.id.local_tag.as_str());
+        headers.push(SmolStr::new("From"), SmolStr::new(from));
+
+        // To (with remote tag)
+        let to = format!("<{}>;tag={}", dialog.remote_uri.as_str(), dialog.id.remote_tag.as_str());
+        headers.push(SmolStr::new("To"), SmolStr::new(to));
+
+        // Call-ID
+        headers.push(SmolStr::new("Call-ID"), dialog.id.call_id.clone());
+
+        // CSeq (next local CSeq)
+        let mut mutable_dialog = dialog.clone();
+        let cseq = mutable_dialog.next_local_cseq();
+        headers.push(SmolStr::new("CSeq"), SmolStr::new(format!("{} INFO", cseq)));
+
+        // Max-Forwards
+        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70".to_owned()));
+
+        // Content-Type
+        headers.push(SmolStr::new("Content-Type"), SmolStr::new(content_type.to_owned()));
+
+        // Content-Length
+        headers.push(SmolStr::new("Content-Length"), SmolStr::new(body.len().to_string()));
+
+        // Request-URI is the remote target
+        let request_uri = dialog.remote_target.clone();
+
+        Request::new(
+            RequestLine::new(Method::Info, request_uri),
+            headers,
+            Bytes::from(body.as_bytes().to_vec()),
+        )
+    }
+
+    /// Adds a Privacy header to a request (RFC 3323).
+    ///
+    /// # Arguments
+    /// * `request` - The request to add the Privacy header to
+    /// * `privacy_values` - The privacy values to include
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use sip_core::PrivacyValue;
+    /// use sip_uac::UserAgentClient;
+    ///
+    /// let uac = UserAgentClient::new(local_uri, contact_uri);
+    /// let mut invite = uac.create_invite(&remote_uri, Some(sdp));
+    ///
+    /// // Add privacy for identity hiding
+    /// UserAgentClient::add_privacy_header(&mut invite, vec![PrivacyValue::Id]);
+    ///
+    /// // Add critical privacy (must be honored or request fails)
+    /// UserAgentClient::add_privacy_header(&mut invite, vec![
+    ///     PrivacyValue::Id,
+    ///     PrivacyValue::Critical,
+    /// ]);
+    /// ```
+    pub fn add_privacy_header(request: &mut Request, privacy_values: Vec<sip_core::PrivacyValue>) {
+        use sip_core::PrivacyHeader;
+
+        let privacy = PrivacyHeader::new(privacy_values);
+        request.headers.push(
+            SmolStr::new("Privacy"),
+            SmolStr::new(privacy.to_string()),
+        );
+    }
+
+    /// Creates a new request with Privacy header (RFC 3323).
+    ///
+    /// This is a convenience method that takes an existing request and returns
+    /// a new request with the Privacy header added.
+    ///
+    /// # Arguments
+    /// * `request` - The base request
+    /// * `privacy_values` - The privacy values to include
+    ///
+    /// # Returns
+    /// A new request with the Privacy header added
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use sip_core::PrivacyValue;
+    /// use sip_uac::UserAgentClient;
+    ///
+    /// let uac = UserAgentClient::new(local_uri, contact_uri);
+    /// let invite = uac.create_invite(&remote_uri, Some(sdp));
+    ///
+    /// // Create invite with privacy
+    /// let private_invite = UserAgentClient::with_privacy(
+    ///     invite,
+    ///     vec![PrivacyValue::Id, PrivacyValue::Critical],
+    /// );
+    /// ```
+    pub fn with_privacy(mut request: Request, privacy_values: Vec<sip_core::PrivacyValue>) -> Request {
+        Self::add_privacy_header(&mut request, privacy_values);
+        request
+    }
+
     /// Creates a PRACK request to acknowledge a reliable provisional response (RFC 3262).
     ///
     /// # Arguments
@@ -1297,5 +1435,194 @@ mod tests {
         // Verify CSeq is for PRACK
         let cseq = prack.headers.get("CSeq").unwrap();
         assert!(cseq.contains("PRACK"));
+    }
+
+    #[test]
+    fn creates_info_request() {
+        use sip_dialog::{Dialog, DialogId, DialogStateType};
+
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+
+        let uac = UserAgentClient::new(local_uri.clone(), contact_uri);
+
+        // Mock dialog
+        let remote_uri = SipUri::parse("sip:bob@example.com").unwrap();
+        let dialog = Dialog {
+            id: DialogId {
+                call_id: "test-call-id".into(),
+                local_tag: "alice-tag".into(),
+                remote_tag: "bob-tag".into(),
+            },
+            state: DialogStateType::Confirmed,
+            local_uri: local_uri.clone(),
+            remote_uri: remote_uri.clone(),
+            remote_target: SipUri::parse("sip:bob@192.168.1.200:5060").unwrap(),
+            local_cseq: 1,
+            remote_cseq: 0,
+            route_set: vec![],
+            secure: false,
+            session_expires: None,
+            refresher: None,
+            is_uac: true,
+        };
+
+        // Create INFO with DTMF payload
+        let dtmf_body = "Signal=1\r\nDuration=100\r\n";
+        let info = uac.create_info(&dialog, "application/dtmf-relay", dtmf_body);
+
+        // Verify INFO request
+        assert_eq!(info.start.method, Method::Info);
+        assert_eq!(info.start.uri.as_str(), "sip:bob@192.168.1.200:5060");
+
+        // Verify headers
+        assert!(info.headers.get("From").unwrap().contains("alice-tag"));
+        assert!(info.headers.get("To").unwrap().contains("bob-tag"));
+        assert_eq!(info.headers.get("Call-ID").unwrap().as_str(), "test-call-id");
+
+        // Verify CSeq is incremented (was 1, should be 2)
+        let cseq = info.headers.get("CSeq").unwrap();
+        assert!(cseq.contains("2 INFO"));
+
+        // Verify Content-Type
+        assert_eq!(info.headers.get("Content-Type").unwrap().as_str(), "application/dtmf-relay");
+
+        // Verify Content-Length
+        assert_eq!(info.headers.get("Content-Length").unwrap().as_str(), dtmf_body.len().to_string());
+
+        // Verify body
+        assert_eq!(String::from_utf8_lossy(&info.body), dtmf_body);
+    }
+
+    #[test]
+    fn creates_info_with_json_payload() {
+        use sip_dialog::{Dialog, DialogId, DialogStateType};
+
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+
+        let uac = UserAgentClient::new(local_uri.clone(), contact_uri);
+
+        // Mock dialog
+        let remote_uri = SipUri::parse("sip:bob@example.com").unwrap();
+        let dialog = Dialog {
+            id: DialogId {
+                call_id: "test-call-id".into(),
+                local_tag: "alice-tag".into(),
+                remote_tag: "bob-tag".into(),
+            },
+            state: DialogStateType::Confirmed,
+            local_uri: local_uri.clone(),
+            remote_uri: remote_uri.clone(),
+            remote_target: SipUri::parse("sip:bob@192.168.1.200:5060").unwrap(),
+            local_cseq: 5,
+            remote_cseq: 0,
+            route_set: vec![],
+            secure: false,
+            session_expires: None,
+            refresher: None,
+            is_uac: true,
+        };
+
+        // Create INFO with JSON payload
+        let json_body = r#"{"action":"mute","value":true}"#;
+        let info = uac.create_info(&dialog, "application/json", json_body);
+
+        // Verify method
+        assert_eq!(info.start.method, Method::Info);
+
+        // Verify Content-Type
+        assert_eq!(info.headers.get("Content-Type").unwrap().as_str(), "application/json");
+
+        // Verify body
+        assert_eq!(String::from_utf8_lossy(&info.body), json_body);
+
+        // Verify CSeq is incremented (was 5, should be 6)
+        let cseq = info.headers.get("CSeq").unwrap();
+        assert!(cseq.contains("6 INFO"));
+    }
+
+    #[test]
+    fn adds_privacy_header_to_request() {
+        use sip_core::PrivacyValue;
+
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+        let remote_uri = SipUri::parse("sip:bob@example.com").unwrap();
+
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+        let mut invite = uac.create_invite(&remote_uri, None);
+
+        // Add Privacy header
+        UserAgentClient::add_privacy_header(&mut invite, vec![PrivacyValue::Id]);
+
+        // Verify Privacy header is present
+        let privacy = invite.headers.get("Privacy").unwrap();
+        assert_eq!(privacy.as_str(), "id");
+    }
+
+    #[test]
+    fn adds_multiple_privacy_values() {
+        use sip_core::PrivacyValue;
+
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+        let remote_uri = SipUri::parse("sip:bob@example.com").unwrap();
+
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+        let mut invite = uac.create_invite(&remote_uri, None);
+
+        // Add multiple Privacy values
+        UserAgentClient::add_privacy_header(&mut invite, vec![
+            PrivacyValue::Id,
+            PrivacyValue::Critical,
+        ]);
+
+        // Verify Privacy header
+        let privacy = invite.headers.get("Privacy").unwrap();
+        assert_eq!(privacy.as_str(), "id; critical");
+    }
+
+    #[test]
+    fn with_privacy_creates_request_with_header() {
+        use sip_core::PrivacyValue;
+
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+        let remote_uri = SipUri::parse("sip:bob@example.com").unwrap();
+
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+        let invite = uac.create_invite(&remote_uri, None);
+
+        // Create request with Privacy
+        let private_invite = UserAgentClient::with_privacy(
+            invite,
+            vec![PrivacyValue::Header, PrivacyValue::Session],
+        );
+
+        // Verify Privacy header
+        let privacy = private_invite.headers.get("Privacy").unwrap();
+        assert_eq!(privacy.as_str(), "header; session");
+        assert_eq!(private_invite.start.method, Method::Invite);
+    }
+
+    #[test]
+    fn adds_privacy_to_register() {
+        use sip_core::PrivacyValue;
+
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+        let registrar_uri = SipUri::parse("sip:registrar.example.com").unwrap();
+
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+        let mut register = uac.create_register(&registrar_uri, 3600);
+
+        // Add Privacy header to REGISTER
+        UserAgentClient::add_privacy_header(&mut register, vec![PrivacyValue::Id]);
+
+        // Verify
+        assert_eq!(register.start.method, Method::Register);
+        let privacy = register.headers.get("Privacy").unwrap();
+        assert_eq!(privacy.as_str(), "id");
     }
 }
