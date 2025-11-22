@@ -9,10 +9,8 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use sip_core::Request;
-use sip_dialog::SubscriptionState;
 use sip_parse::header;
 use sip_transaction::{ServerTransactionHandle, TransportContext};
-use sip_uac::UserAgentClient;
 use sip_uas::UserAgentServer;
 use tracing::{info, warn};
 

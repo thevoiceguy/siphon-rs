@@ -44,5 +44,6 @@ pub trait RequestHandler: Send + Sync {
     ) -> Result<()>;
 
     /// Returns the SIP method this handler is responsible for.
+    #[allow(dead_code)]
     fn method(&self) -> &str;
 }

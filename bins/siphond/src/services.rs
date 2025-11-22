@@ -24,6 +24,7 @@ pub struct ServiceRegistry {
     pub subscription_mgr: Arc<SubscriptionManager>,
 
     /// RSeq manager for reliable provisional responses (PRACK)
+    #[allow(dead_code)]
     pub rseq_mgr: Arc<RSeqManager>,
 
     /// Optional registrar for REGISTER handling
@@ -116,11 +117,13 @@ impl ServiceRegistry {
     }
 
     /// Check if authentication is required
+    #[allow(dead_code)]
     pub fn requires_auth(&self) -> bool {
         self.config.requires_auth()
     }
 
     /// Check if registrar is available
+    #[allow(dead_code)]
     pub fn has_registrar(&self) -> bool {
         self.registrar.is_some()
     }

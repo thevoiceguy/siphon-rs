@@ -101,12 +101,15 @@ pub struct AuthConfig {
     pub realm: String,
 
     /// Algorithm: MD5, SHA-256, SHA-512
+    #[allow(dead_code)]
     pub algorithm: String,
 
     /// Quality of protection: auth, auth-int
+    #[allow(dead_code)]
     pub qop: String,
 
     /// Nonce TTL in seconds
+    #[allow(dead_code)]
     pub nonce_ttl_secs: u64,
 
     /// Path to users file (JSON: {"username": "password"})

@@ -225,18 +225,6 @@ impl RequestHandler for InviteHandler {
     }
 }
 
-/// Extract tag parameter from header value
-fn extract_tag(header: Option<&smol_str::SmolStr>) -> Option<&str> {
-    let header = header?;
-    for param in header.split(';') {
-        let param = param.trim();
-        if param.to_lowercase().starts_with("tag=") {
-            return Some(&param[4..]);
-        }
-    }
-    None
-}
-
 /// Copy dialog-forming headers from request to response headers
 fn copy_dialog_headers(request: &Request, headers: &mut sip_core::Headers) {
     if let Some(via) = header(&request.headers, "Via") {

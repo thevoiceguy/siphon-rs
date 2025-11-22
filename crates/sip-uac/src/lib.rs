@@ -1174,8 +1174,6 @@ impl UserAgentClient {
         state: SubscriptionState,
         reginfo: &sip_core::RegInfo,
     ) -> Request {
-        use sip_core::RegInfo;
-
         let mut headers = Headers::new();
 
         // Via
