@@ -2,7 +2,7 @@
 ///
 /// A Swiss Army knife SIP server for testing and demonstration.
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use clap::Parser;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -207,27 +207,49 @@ async fn main() -> Result<()> {
     )
     .await?;
 
-    let transaction_mgr = TransactionManager::new(transport_dispatcher);
+    let transaction_mgr = Arc::new(TransactionManager::new(transport_dispatcher));
+
+    // Set transaction manager in service registry for sending requests
+    if let Err(_) = services.set_transaction_manager(transaction_mgr.clone()) {
+        panic!("Failed to set transaction manager - already initialized");
+    }
 
     info!("siphond ready - listening for requests");
 
-    // Main event loop
-    while let Some(packet) = rx.recv().await {
-        handle_packet(&transaction_mgr, &dispatcher, packet).await;
+    // Set up graceful shutdown signal handling
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("Failed to register SIGTERM handler");
+
+    // Main event loop with graceful shutdown
+    loop {
+        tokio::select! {
+            Some(packet) = rx.recv() => {
+                handle_packet(&transaction_mgr, &dispatcher, packet).await;
+            }
+            _ = tokio::signal::ctrl_c() => {
+                info!("Received SIGINT (Ctrl+C), initiating graceful shutdown...");
+                break;
+            }
+            _ = sigterm.recv() => {
+                info!("Received SIGTERM, initiating graceful shutdown...");
+                break;
+            }
+        }
     }
 
+    info!("Shutdown complete");
     Ok(())
 }
 
 /// Handle an incoming packet from the transport layer
 async fn handle_packet(
-    transaction_mgr: &TransactionManager,
+    transaction_mgr: &Arc<TransactionManager>,
     dispatcher: &Arc<RequestDispatcher>,
     packet: InboundPacket,
 ) {
     use sip_core::Method;
     use sip_parse::{parse_request, parse_response};
-    use sip_transaction::{request_branch_id, TransactionKey, TransportContext, TransportKind};
+    use sip_transaction::{request_branch_id, TransactionKey, TransportContext};
 
     // Try parsing as a request
     if let Some(req) = parse_request(&packet.payload) {

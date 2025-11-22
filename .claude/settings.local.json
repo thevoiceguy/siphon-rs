@@ -15,7 +15,11 @@
       "Bash(cargo search:*)",
       "Bash(cargo check:*)",
       "Bash(timeout 3 cargo run:*)",
-      "Bash(timeout:*)"
+      "Bash(timeout:*)",
+      "Bash(cat:*)",
+      "Bash(for mode in minimal full-uas registrar call-server subscription-server)",
+      "Bash(do echo \"=== Testing $mode mode ===\" timeout 2 cargo run --quiet -p siphond -- --mode $mode --udp-bind 127.0.0.1:15060)",
+      "Bash(pkill:*)"
     ],
     "deny": [],
     "ask": []

@@ -10,8 +10,7 @@
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use sip_core::{Method, Request};
-use sip_dialog::Dialog;
+use sip_core::Request;
 use sip_parse::header;
 use sip_transaction::{ServerTransactionHandle, TransportContext};
 use sip_uas::UserAgentServer;

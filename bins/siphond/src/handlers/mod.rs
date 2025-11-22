@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use sip_core::{Request, Response};
+use sip_core::Request;
 use sip_transaction::{ServerTransactionHandle, TransportContext};
 
 use crate::services::ServiceRegistry;

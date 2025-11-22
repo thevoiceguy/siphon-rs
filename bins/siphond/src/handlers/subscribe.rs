@@ -9,8 +9,10 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use sip_core::Request;
+use sip_dialog::SubscriptionState;
 use sip_parse::header;
 use sip_transaction::{ServerTransactionHandle, TransportContext};
+use sip_uac::UserAgentClient;
 use sip_uas::UserAgentServer;
 use tracing::{info, warn};
 
@@ -129,16 +131,30 @@ impl RequestHandler for SubscribeHandler {
                 );
 
                 // Store subscription in manager
-                services.subscription_mgr.insert(subscription);
+                services.subscription_mgr.insert(subscription.clone());
 
                 // Send 200 OK
                 handle.send_final(response).await;
 
-                // TODO: Send initial NOTIFY
-                // This requires:
-                // 1. Creating a new transaction
-                // 2. Generating NOTIFY with appropriate body
-                // 3. Sending via transport
+                // TODO: Send initial NOTIFY as required by RFC 3265
+                //
+                // Implementation requires:
+                // 1. Create UserAgentClient
+                // 2. Generate NOTIFY request with create_notify()
+                // 3. Create ClientTransactionUser callback for handling responses
+                // 4. Extract destination from subscription Contact URI
+                // 5. Call transaction_mgr.start_client_transaction()
+                //
+                // For now, this is deferred as it requires significant integration work.
+                // See: bins/siphond/src/handlers/subscribe.rs:139
+
+                if services.transaction_mgr.get().is_some() {
+                    info!(
+                        call_id,
+                        event_package,
+                        "TODO: Initial NOTIFY should be sent here (RFC 3265 compliance)"
+                    );
+                }
             }
             Err(e) => {
                 warn!(call_id, error = %e, "Failed to accept SUBSCRIBE");

@@ -2,11 +2,13 @@
 ///
 /// Provides access to dialog management, subscriptions, registrar, authentication, etc.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 
 use sip_auth::{DigestAuthenticator, MemoryCredentialStore};
 use sip_dialog::{DialogManager, RSeqManager, SubscriptionManager};
 use sip_registrar::{BasicRegistrar, MemoryLocationStore};
+use sip_transaction::TransactionManager;
 
 use crate::config::DaemonConfig;
 
@@ -26,6 +28,9 @@ pub struct ServiceRegistry {
 
     /// Optional registrar for REGISTER handling
     pub registrar: Option<Arc<BasicRegistrar<MemoryLocationStore, DigestAuthenticator<MemoryCredentialStore>>>>,
+
+    /// Transaction manager for sending requests (set after initialization)
+    pub transaction_mgr: OnceLock<Arc<TransactionManager>>,
 
     /// Daemon configuration (immutable)
     pub config: Arc<DaemonConfig>,
@@ -47,8 +52,35 @@ impl ServiceRegistry {
 
             // Create authenticator if authentication is enabled
             let authenticator = if config.requires_auth() {
-                let cred_store = MemoryCredentialStore::new();
-                // TODO: Load users from config.auth.users_file if provided
+                let mut cred_store = MemoryCredentialStore::new();
+
+                // Load users from file if provided
+                if let Some(ref users_file) = config.auth.users_file {
+                    match load_users_file(users_file) {
+                        Ok(users) => {
+                            let count = users.len();
+                            for (username, password) in users {
+                                cred_store.add(sip_auth::Credentials {
+                                    username: smol_str::SmolStr::new(username),
+                                    password: smol_str::SmolStr::new(password),
+                                    realm: smol_str::SmolStr::new(&config.auth.realm),
+                                });
+                            }
+                            tracing::info!(
+                                file = %users_file.display(),
+                                count = count,
+                                "Loaded authentication users from file"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                file = %users_file.display(),
+                                error = %e,
+                                "Failed to load users file, starting with empty credential store"
+                            );
+                        }
+                    }
+                }
 
                 Some(DigestAuthenticator::new(
                     &config.auth.realm,
@@ -73,8 +105,14 @@ impl ServiceRegistry {
             subscription_mgr,
             rseq_mgr,
             registrar,
+            transaction_mgr: OnceLock::new(),
             config,
         }
+    }
+
+    /// Set the transaction manager (can only be called once)
+    pub fn set_transaction_manager(&self, mgr: Arc<TransactionManager>) -> Result<(), Arc<TransactionManager>> {
+        self.transaction_mgr.set(mgr)
     }
 
     /// Check if authentication is required
@@ -86,4 +124,16 @@ impl ServiceRegistry {
     pub fn has_registrar(&self) -> bool {
         self.registrar.is_some()
     }
+}
+
+/// Load users from JSON file
+///
+/// Expected format: `{"username": "password", ...}`
+fn load_users_file(path: &std::path::Path) -> anyhow::Result<HashMap<String, String>> {
+    use std::fs;
+
+    let contents = fs::read_to_string(path)?;
+    let users: HashMap<String, String> = serde_json::from_str(&contents)?;
+
+    Ok(users)
 }
