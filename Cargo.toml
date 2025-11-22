@@ -18,6 +18,12 @@ members = [
 ]
 resolver = "2"
 
+[workspace.package]
+license = "MIT OR Apache-2.0"
+edition = "2021"
+authors = ["siphon-rs contributors"]
+repository = "https://github.com/yourusername/siphon-rs"
+
 [workspace.dependencies]
 anyhow = "1"
 bytes = "1"
