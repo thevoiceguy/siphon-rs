@@ -15,11 +15,20 @@ cargo build
 # Build with all features (includes TLS)
 cargo build --all-features
 
-# Run the siphond daemon (minimal OPTIONS UAS)
-cargo run -p siphond -- --bind 0.0.0.0:5060
+# Run the siphond daemon (default: minimal mode - OPTIONS only)
+cargo run -p siphond
+
+# Run siphond as full UAS (all SIP methods)
+cargo run -p siphond -- --mode full-uas
+
+# Run siphond as registrar with authentication
+cargo run -p siphond -- --mode registrar --auth --auth-realm example.com
+
+# Run siphond as call server
+cargo run -p siphond -- --mode call-server --sdp-profile audio-only
 
 # Run siphond with TLS support
-cargo run -p siphond --features tls -- --sips-bind 0.0.0.0:5061 --tls-cert cert.pem --tls-key key.pem
+cargo run -p siphond -- --mode full-uas --sips-bind 0.0.0.0:5061 --tls-cert cert.pem --tls-key key.pem
 
 # Run all tests
 cargo test --all
@@ -110,7 +119,15 @@ The project is organized as a Cargo workspace with the following crates:
 - `sip-testkit` - Integration test harness and sipp bindings
 
 **Binaries:**
-- `siphond` - Example daemon that currently implements a minimal OPTIONS UAS responding with 200 OK. Supports UDP, TCP, and TLS transports. Can also act as a simple UAC for testing.
+- `siphond` - Multi-mode SIP testing daemon (Swiss Army knife for SIP testing):
+  - **Minimal Mode**: OPTIONS responder only
+  - **Full UAS Mode**: Complete SIP server (INVITE, REGISTER, SUBSCRIBE, REFER, PRACK)
+  - **Registrar Mode**: Registration server with authentication and location service
+  - **Call Server Mode**: INVITE/BYE handling without registration
+  - **Subscription Server Mode**: SUBSCRIBE/NOTIFY for event packages
+  - Supports UDP, TCP, and TLS transports
+  - Configurable authentication, SDP profiles, and auto-accept behavior
+  - See `bins/siphond/README.md` for comprehensive documentation
 
 ## Key Concepts
 
@@ -468,13 +485,38 @@ The transport layer integrates with the transaction layer via `TransportDispatch
 
 ## Configuration
 
-The `siphond` daemon accepts command-line arguments:
+The `siphond` daemon accepts extensive command-line arguments for configuration:
+
+**Core Options:**
+- `--mode <MODE>` - Operational mode: minimal (default), full-uas, registrar, call-server, subscription-server
 - `--udp-bind` - UDP listen address (default: 0.0.0.0:5060)
 - `--tcp-bind` - TCP listen address (default: 0.0.0.0:5060)
 - `--sips-bind` - TLS listen address (default: 0.0.0.0:5061)
 - `--tls-cert` / `--tls-key` - TLS certificate and key paths (PEM format)
-- `--uac-peer` / `--uac-target` - For UAC mode: send OPTIONS to specified peer
-- `--uac-interval-secs` - Send periodic OPTIONS requests
+- `--local-uri` - Local SIP URI for From/Contact headers (default: sip:siphond@localhost)
+- `--user-agent` - User-Agent header value
+
+**Feature Flags:**
+- `--auto-accept-calls` - Automatically accept INVITE requests (default: true)
+- `--auto-accept-registrations` - Automatically accept REGISTER requests (default: true)
+- `--auto-accept-subscriptions` - Automatically accept SUBSCRIBE requests (default: true)
+- `--enable-prack` - Enable PRACK support (default: true)
+- `--enable-refer` - Enable REFER support (default: true)
+
+**Authentication:**
+- `--auth` - Enable Digest authentication
+- `--auth-realm` - Authentication realm (default: siphond.local)
+- `--auth-users` - Path to users file (JSON format)
+
+**Registrar:**
+- `--reg-default-expiry` - Default registration expiry in seconds (default: 3600)
+- `--reg-min-expiry` - Minimum registration expiry (default: 60)
+- `--reg-max-expiry` - Maximum registration expiry (default: 86400)
+
+**SDP Configuration:**
+- `--sdp-profile` - SDP profile: none, audio-only (default), audio-video, or path to custom SDP file
+
+See `bins/siphond/README.md` for detailed usage examples and troubleshooting.
 
 ## Project Status
 
@@ -492,7 +534,7 @@ This is an **alpha** implementation. Current status:
 - ✅ Registrar with location service and binding management
 - ✅ UAC helpers (REGISTER, INVITE, ACK, BYE, SUBSCRIBE, NOTIFY, REFER, PRACK with auth, dialog, and RFC 3264 offer/answer)
 - ✅ UAS helpers (response builders, dialog creation, request handlers, SUBSCRIBE, REFER, NOTIFY, PRACK, reliable provisionals)
-- ✅ Basic OPTIONS UAS in siphond
+- ✅ Full-featured multi-mode siphond daemon (minimal, full-uas, registrar, call-server, subscription-server)
 - ✅ Comprehensive test coverage (211+ tests across all layers)
 - ✅ Examples: register_with_auth, invite_call_flow, late_offer_flow, blind_transfer, attended_transfer, prack_flow, tel_uri_flow
 - ⏳ Proxy (placeholder)

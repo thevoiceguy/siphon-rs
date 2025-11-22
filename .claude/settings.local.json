@@ -13,7 +13,9 @@
       "WebSearch",
       "WebFetch(domain:www.rfc-editor.org)",
       "Bash(cargo search:*)",
-      "Bash(cargo check:*)"
+      "Bash(cargo check:*)",
+      "Bash(timeout 3 cargo run:*)",
+      "Bash(timeout:*)"
     ],
     "deny": [],
     "ask": []

@@ -15,6 +15,11 @@ sip-parse = { path = "../../crates/sip-parse" }
 sip-core = { path = "../../crates/sip-core" }
 sip-observe = { path = "../../crates/sip-observe" }
 sip-transaction = { path = "../../crates/sip-transaction" }
+sip-dialog = { path = "../../crates/sip-dialog" }
+sip-auth = { path = "../../crates/sip-auth" }
+sip-registrar = { path = "../../crates/sip-registrar" }
+sip-uas = { path = "../../crates/sip-uas" }
+sip-uac = { path = "../../crates/sip-uac" }
 clap = { version = "4", features = ["derive"] }
 smol_str = { workspace = true }
 async-trait = "0.1"
