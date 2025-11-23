@@ -288,11 +288,34 @@ async fn handle_packet(
         return;
     }
 
+    // Check for SIP keep-alive packets (RFC 5626)
+    // Keep-alives are CRLF sequences: single CRLF (2 bytes) or double CRLF (4 bytes)
+    if is_keepalive(&packet.payload) {
+        tracing::trace!(
+            peer = %packet.peer,
+            transport = ?packet.transport,
+            "SIP keep-alive packet received (silently ignored per RFC 5626)"
+        );
+        return;
+    }
+
     tracing::warn!(
         peer = %packet.peer,
         transport = ?packet.transport,
+        len = packet.payload.len(),
         "Unparsable packet received"
     );
+}
+
+/// Check if packet is a SIP keep-alive (CRLF sequence per RFC 5626)
+fn is_keepalive(payload: &[u8]) -> bool {
+    // RFC 5626: Keep-alives are CRLF sequences
+    // Single CRLF: 0x0D 0x0A (2 bytes)
+    // Double CRLF: 0x0D 0x0A 0x0D 0x0A (4 bytes)
+    matches!(
+        payload,
+        b"\r\n" | b"\r\n\r\n"
+    )
 }
 
 fn map_transport(kind: sip_transport::TransportKind) -> sip_transaction::TransportKind {

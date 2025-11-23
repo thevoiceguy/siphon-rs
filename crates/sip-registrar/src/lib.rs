@@ -338,6 +338,24 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
             info!(aor = %aor, "REGISTER removed all bindings (wildcard)");
 
             let mut headers = Headers::new();
+
+            // RFC 3261: Copy required headers from request to response
+            if let Some(via) = request.headers.get("Via") {
+                headers.push(SmolStr::new("Via"), via.clone());
+            }
+            if let Some(from) = request.headers.get("From") {
+                headers.push(SmolStr::new("From"), from.clone());
+            }
+            if let Some(to) = request.headers.get("To") {
+                headers.push(SmolStr::new("To"), to.clone());
+            }
+            if let Some(call_id) = request.headers.get("Call-ID") {
+                headers.push(SmolStr::new("Call-ID"), call_id.clone());
+            }
+            if let Some(cseq) = request.headers.get("CSeq") {
+                headers.push(SmolStr::new("CSeq"), cseq.clone());
+            }
+
             headers.push(SmolStr::new("Contact"), SmolStr::new("*"));
             headers.push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()));
             headers.push(SmolStr::new("Content-Length"), SmolStr::new("0".to_owned()));
@@ -383,6 +401,23 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
 
         // Build response
         let mut headers = Headers::new();
+
+        // RFC 3261: Copy required headers from request to response
+        if let Some(via) = request.headers.get("Via") {
+            headers.push(SmolStr::new("Via"), via.clone());
+        }
+        if let Some(from) = request.headers.get("From") {
+            headers.push(SmolStr::new("From"), from.clone());
+        }
+        if let Some(to) = request.headers.get("To") {
+            headers.push(SmolStr::new("To"), to.clone());
+        }
+        if let Some(call_id) = request.headers.get("Call-ID") {
+            headers.push(SmolStr::new("Call-ID"), call_id.clone());
+        }
+        if let Some(cseq) = request.headers.get("CSeq") {
+            headers.push(SmolStr::new("CSeq"), cseq.clone());
+        }
 
         // Add all processed contacts
         for contact in &processed_contacts {
@@ -769,7 +804,11 @@ mod tests {
         let registrar = BasicRegistrar::new(store, Some(auth));
 
         let mut headers = Headers::new();
+        headers.push("Via".into(), "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8".into());
+        headers.push("From".into(), "<sip:alice@example.com>;tag=1234".into());
         headers.push("To".into(), "<sip:alice@example.com>".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
         headers.push("Contact".into(), "<sip:ua.example.com>".into());
 
         let request = Request::new(
@@ -780,7 +819,31 @@ mod tests {
 
         let response = registrar.handle_register(&request).expect("response");
         assert_eq!(response.start.code, 401);
+
+        // Verify WWW-Authenticate header is present
         assert!(response.headers.get("WWW-Authenticate").is_some());
+
+        // RFC 3261: Verify required headers are copied from request
+        assert_eq!(
+            response.headers.get("Via").map(|v| v.as_str()),
+            Some("SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8")
+        );
+        assert_eq!(
+            response.headers.get("From").map(|v| v.as_str()),
+            Some("<sip:alice@example.com>;tag=1234")
+        );
+        assert_eq!(
+            response.headers.get("To").map(|v| v.as_str()),
+            Some("<sip:alice@example.com>")
+        );
+        assert_eq!(
+            response.headers.get("Call-ID").map(|v| v.as_str()),
+            Some("call123")
+        );
+        assert_eq!(
+            response.headers.get("CSeq").map(|v| v.as_str()),
+            Some("1 REGISTER")
+        );
     }
 
     #[test]

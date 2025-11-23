@@ -297,8 +297,26 @@ impl<S: CredentialStore> DigestAuthenticator<S> {
 }
 
 impl<S: CredentialStore> Authenticator for DigestAuthenticator<S> {
-    fn challenge(&self, _request: &Request) -> Result<Response> {
-        let headers = self.build_challenge();
+    fn challenge(&self, request: &Request) -> Result<Response> {
+        let mut headers = self.build_challenge();
+
+        // RFC 3261: Copy required headers from request to response
+        if let Some(via) = request.headers.get("Via") {
+            headers.push(SmolStr::new("Via"), via.clone());
+        }
+        if let Some(from) = request.headers.get("From") {
+            headers.push(SmolStr::new("From"), from.clone());
+        }
+        if let Some(to) = request.headers.get("To") {
+            headers.push(SmolStr::new("To"), to.clone());
+        }
+        if let Some(call_id) = request.headers.get("Call-ID") {
+            headers.push(SmolStr::new("Call-ID"), call_id.clone());
+        }
+        if let Some(cseq) = request.headers.get("CSeq") {
+            headers.push(SmolStr::new("CSeq"), cseq.clone());
+        }
+
         info!(realm = %self.realm, proxy = self.proxy_auth, "issuing digest challenge");
         Ok(Response::new(
             StatusLine::new(
