@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use chrono::Utc;
 use dashmap::DashMap;
+use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use sip_auth::Authenticator;
 use sip_core::{Headers, Request, Response, StatusLine};
 use sip_parse::{header, parse_to_header};
@@ -346,8 +347,9 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
             if let Some(from) = request.headers.get("From") {
                 headers.push(SmolStr::new("From"), from.clone());
             }
+            // RFC 3261 §8.2.6.2: UAS MUST add tag to To header if not present
             if let Some(to) = request.headers.get("To") {
-                headers.push(SmolStr::new("To"), to.clone());
+                headers.push(SmolStr::new("To"), ensure_to_tag(to.as_str()));
             }
             if let Some(call_id) = request.headers.get("Call-ID") {
                 headers.push(SmolStr::new("Call-ID"), call_id.clone());
@@ -409,8 +411,9 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
         if let Some(from) = request.headers.get("From") {
             headers.push(SmolStr::new("From"), from.clone());
         }
+        // RFC 3261 §8.2.6.2: UAS MUST add tag to To header if not present
         if let Some(to) = request.headers.get("To") {
-            headers.push(SmolStr::new("To"), to.clone());
+            headers.push(SmolStr::new("To"), ensure_to_tag(to.as_str()));
         }
         if let Some(call_id) = request.headers.get("Call-ID") {
             headers.push(SmolStr::new("Call-ID"), call_id.clone());
@@ -438,6 +441,25 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
 /// Collects all Contact header values from the provided headers.
 pub fn contact_headers(headers: &Headers) -> Vec<SmolStr> {
     headers.get_all("Contact").map(|v| v.clone()).collect()
+}
+
+/// Ensures To header has a tag parameter (RFC 3261 §8.2.6.2)
+/// If the To header doesn't have a tag, generates and adds one
+fn ensure_to_tag(to_header: &str) -> SmolStr {
+    // Check if tag already exists
+    if to_header.contains(";tag=") {
+        return SmolStr::new(to_header.to_owned());
+    }
+
+    // Generate random tag (8 characters)
+    let tag: String = thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(8)
+        .map(char::from)
+        .collect();
+
+    // Append tag to To header
+    SmolStr::new(format!("{};tag={}", to_header, tag))
 }
 
 #[cfg(test)]
@@ -832,10 +854,10 @@ mod tests {
             response.headers.get("From").map(|v| v.as_str()),
             Some("<sip:alice@example.com>;tag=1234")
         );
-        assert_eq!(
-            response.headers.get("To").map(|v| v.as_str()),
-            Some("<sip:alice@example.com>")
-        );
+        // RFC 3261 §8.2.6.2: Verify To header has tag added
+        let to_header = response.headers.get("To").map(|v| v.as_str()).unwrap();
+        assert!(to_header.starts_with("<sip:alice@example.com>"));
+        assert!(to_header.contains(";tag="));  // Tag should be added
         assert_eq!(
             response.headers.get("Call-ID").map(|v| v.as_str()),
             Some("call123")

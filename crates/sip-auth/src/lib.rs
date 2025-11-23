@@ -307,8 +307,9 @@ impl<S: CredentialStore> Authenticator for DigestAuthenticator<S> {
         if let Some(from) = request.headers.get("From") {
             headers.push(SmolStr::new("From"), from.clone());
         }
+        // RFC 3261 §8.2.6.2: UAS MUST add tag to To header if not present
         if let Some(to) = request.headers.get("To") {
-            headers.push(SmolStr::new("To"), to.clone());
+            headers.push(SmolStr::new("To"), ensure_to_tag(to.as_str()));
         }
         if let Some(call_id) = request.headers.get("Call-ID") {
             headers.push(SmolStr::new("Call-ID"), call_id.clone());
@@ -412,6 +413,25 @@ pub struct DigestClient {
     pub username: SmolStr,
     pub password: SmolStr,
     pub nc: u32,
+}
+
+/// Ensures To header has a tag parameter (RFC 3261 §8.2.6.2)
+/// If the To header doesn't have a tag, generates and adds one
+fn ensure_to_tag(to_header: &str) -> SmolStr {
+    // Check if tag already exists
+    if to_header.contains(";tag=") {
+        return SmolStr::new(to_header.to_owned());
+    }
+
+    // Generate random tag (8 characters)
+    let tag: String = thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(8)
+        .map(char::from)
+        .collect();
+
+    // Append tag to To header
+    SmolStr::new(format!("{};tag={}", to_header, tag))
 }
 
 impl DigestClient {
