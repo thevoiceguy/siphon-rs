@@ -245,6 +245,84 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// Create an ACK request for B2BUA callee leg
+///
+/// Constructs an ACK based on the stored outgoing INVITE, using the callee's To-tag
+/// from the 200 OK response. Preserves any SDP body from caller's ACK (late offer).
+async fn create_b2bua_ack(
+    call_leg: &crate::b2bua_state::CallLegPair,
+    caller_ack: &sip_core::Request,
+) -> sip_core::Request {
+    use sip_core::{Headers, Method, Request, RequestLine};
+    use sip_transaction::generate_branch_id;
+    use smol_str::SmolStr;
+
+    let mut headers = Headers::new();
+
+    // Via - new branch for this ACK
+    let branch = generate_branch_id();
+    headers.push(
+        SmolStr::new("Via"),
+        SmolStr::new(format!("SIP/2.0/TCP placeholder;branch={}", branch)),
+    );
+
+    // From - same as our outgoing INVITE
+    if let Some(from) = call_leg.outgoing_invite.headers.get("From") {
+        headers.push(SmolStr::new("From"), from.clone());
+    }
+
+    // To - with callee's tag from 200 OK
+    if let Some(to_tag) = &call_leg.callee_to_tag {
+        // Extract To header from outgoing INVITE and add tag
+        if let Some(to) = call_leg.outgoing_invite.headers.get("To") {
+            let to_with_tag = format!("{};tag={}", to.as_str(), to_tag);
+            headers.push(SmolStr::new("To"), SmolStr::new(to_with_tag));
+        }
+    } else {
+        // Shouldn't happen - we should have callee_to_tag after 200 OK
+        if let Some(to) = call_leg.outgoing_invite.headers.get("To") {
+            headers.push(SmolStr::new("To"), to.clone());
+        }
+    }
+
+    // Call-ID - same as our outgoing INVITE
+    headers.push(
+        SmolStr::new("Call-ID"),
+        SmolStr::new(&call_leg.outgoing_call_id),
+    );
+
+    // CSeq - same number as INVITE, but ACK method
+    if let Some(cseq) = call_leg.outgoing_invite.headers.get("CSeq") {
+        if let Some((num, _)) = cseq.split_once(' ') {
+            headers.push(SmolStr::new("CSeq"), SmolStr::new(format!("{} ACK", num)));
+        }
+    }
+
+    // Max-Forwards
+    headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
+
+    // Copy SDP body from caller's ACK if present (late offer scenario)
+    let body = if !caller_ack.body.is_empty() {
+        if let Some(content_type) = caller_ack.headers.get("Content-Type") {
+            headers.push(SmolStr::new("Content-Type"), content_type.clone());
+        }
+        let content_length = caller_ack.body.len().to_string();
+        headers.push(SmolStr::new("Content-Length"), SmolStr::new(content_length));
+        caller_ack.body.clone()
+    } else {
+        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
+        bytes::Bytes::new()
+    };
+
+    // Request-URI should be callee's contact (from 200 OK Contact header)
+    // For now, use the callee_contact from call leg
+    Request::new(
+        RequestLine::new(Method::Ack, call_leg.callee_contact.clone()),
+        headers,
+        body,
+    )
+}
+
 /// Handle an incoming packet from the transport layer
 async fn handle_packet(
     transaction_mgr: &Arc<TransactionManager>,
@@ -260,6 +338,54 @@ async fn handle_packet(
     if let Some(req) = parse_request(&packet.payload) {
         // Special handling for ACK (doesn't create a transaction)
         if req.start.method == Method::Ack {
+            // B2BUA MODE: Bridge ACK from caller to callee
+            if services.config.enable_b2bua() {
+                if let Some(call_id_header) = req.headers.get("Call-ID") {
+                    let incoming_call_id = call_id_header.to_string();
+
+                    // Look up call leg by incoming Call-ID (caller's Call-ID)
+                    if let Some(call_leg) = services.b2bua_state.find_call_leg_by_incoming(&incoming_call_id) {
+                        tracing::info!(
+                            incoming_call_id = %incoming_call_id,
+                            outgoing_call_id = %call_leg.outgoing_call_id,
+                            "B2BUA: Bridging ACK from caller to callee"
+                        );
+
+                        // Create ACK for callee using stored outgoing INVITE
+                        let callee_ack = create_b2bua_ack(&call_leg, &req).await;
+
+                        // Send ACK to callee
+                        let callee_addr = format!(
+                            "{}:{}",
+                            call_leg.callee_contact.host,
+                            call_leg.callee_contact.port.unwrap_or(5060)
+                        );
+
+                        if let Ok(addr) = callee_addr.parse::<std::net::SocketAddr>() {
+                            let payload = sip_parse::serialize_request(&callee_ack);
+                            if let Err(e) = sip_transport::send_tcp(&addr, &payload).await {
+                                tracing::error!(
+                                    error = %e,
+                                    callee = %callee_addr,
+                                    "B2BUA: Failed to send ACK to callee"
+                                );
+                            } else {
+                                tracing::info!(
+                                    callee = %callee_addr,
+                                    "B2BUA: ACK sent to callee successfully"
+                                );
+                            }
+                        } else {
+                            tracing::error!(
+                                callee = %callee_addr,
+                                "B2BUA: Invalid callee address"
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Always notify transaction manager about ACK
             if let Some(branch) = request_branch_id(&req) {
                 let key = TransactionKey {
                     branch,
@@ -317,14 +443,8 @@ async fn handle_packet(
                         );
                     }
 
-                    // Remove call leg after final response
-                    if response.start.code >= 200 {
-                        services.b2bua_state.remove_call_leg(&call_id);
-                        tracing::debug!(
-                            outgoing_call_id = %call_id,
-                            "B2BUA: Removed call leg pair after final response"
-                        );
-                    }
+                    // Note: Call leg cleanup is handled by the spawned task after transformation
+                    // to avoid race conditions
 
                     // Also pass to transaction manager for UAC transaction state management
                     transaction_mgr.receive_response(response).await;

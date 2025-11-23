@@ -23,6 +23,273 @@ impl ByeHandler {
     pub fn new() -> Self {
         Self
     }
+
+    /// Handle BYE in B2BUA mode - bridge to the other call leg
+    async fn handle_b2bua_bye(
+        &self,
+        request: &Request,
+        handle: ServerTransactionHandle,
+        services: &ServiceRegistry,
+        call_id: &str,
+    ) -> Result<()> {
+        use sip_core::{Headers, Method, RequestLine};
+        use sip_transaction::generate_branch_id;
+        use smol_str::SmolStr;
+
+        info!(call_id, "B2BUA MODE: Processing BYE for bridging");
+
+        // Look up call leg by incoming Call-ID
+        let call_leg = services.b2bua_state.find_call_leg_by_incoming(call_id);
+
+        if call_leg.is_none() {
+            // Try looking up by outgoing Call-ID (BYE might be from callee)
+            if let Some(leg) = services.b2bua_state.find_call_leg(call_id) {
+                // BYE from callee to caller
+                info!(
+                    outgoing_call_id = %leg.outgoing_call_id,
+                    incoming_call_id = %leg.incoming_call_id,
+                    "B2BUA: BYE from callee, sending 200 OK and bridging to caller"
+                );
+
+                // Send 200 OK to callee
+                let response = UserAgentServer::create_response(request, 200, "OK");
+                handle.send_final(response).await;
+
+                // Create BYE for caller
+                // Extract caller's contact from original INVITE
+                let caller_contact = if let Some(contact_header) = header(&leg.caller_request.headers, "Contact") {
+                    // Parse contact URI from Contact header (may have angle brackets)
+                    let contact_str = contact_header.as_str();
+                    if let Some(start) = contact_str.find('<') {
+                        if let Some(end) = contact_str.find('>') {
+                            &contact_str[start + 1..end]
+                        } else {
+                            contact_str
+                        }
+                    } else {
+                        contact_str
+                    }
+                } else {
+                    warn!(call_id, "B2BUA: No Contact header in caller's INVITE, cannot send BYE");
+                    services.b2bua_state.remove_call_leg(&leg.outgoing_call_id);
+                    return Ok(());
+                };
+
+                // Parse caller's contact URI
+                let caller_contact_uri = match sip_core::Uri::parse(caller_contact) {
+                    Some(uri) => uri,
+                    None => {
+                        warn!(
+                            call_id,
+                            contact = caller_contact,
+                            "B2BUA: Failed to parse caller's contact URI"
+                        );
+                        services.b2bua_state.remove_call_leg(&leg.outgoing_call_id);
+                        return Ok(());
+                    }
+                };
+
+                // Extract SipUri from Uri (we expect SIP URIs for contacts)
+                let caller_sip_uri = match caller_contact_uri.as_sip() {
+                    Some(sip_uri) => sip_uri,
+                    None => {
+                        warn!(
+                            call_id,
+                            "B2BUA: Caller contact is not a SIP URI (tel URI not supported for BYE)"
+                        );
+                        services.b2bua_state.remove_call_leg(&leg.outgoing_call_id);
+                        return Ok(());
+                    }
+                };
+
+                let mut bye_headers = Headers::new();
+
+                // Via
+                let branch = generate_branch_id();
+                bye_headers.push(
+                    SmolStr::new("Via"),
+                    SmolStr::new(format!("SIP/2.0/TCP placeholder;branch={}", branch)),
+                );
+
+                // From - swap: use To from caller's INVITE (this is us)
+                if let Some(to) = leg.caller_request.headers.get("To") {
+                    bye_headers.push(SmolStr::new("From"), to.clone());
+                }
+
+                // To - use From from caller's INVITE (this is Bob with his tag)
+                if let Some(from) = leg.caller_request.headers.get("From") {
+                    bye_headers.push(SmolStr::new("To"), from.clone());
+                }
+
+                // Call-ID - incoming call leg
+                bye_headers.push(
+                    SmolStr::new("Call-ID"),
+                    SmolStr::new(&leg.incoming_call_id),
+                );
+
+                // CSeq - increment from caller's INVITE CSeq
+                if let Some(cseq) = leg.caller_request.headers.get("CSeq") {
+                    if let Some((num, _)) = cseq.split_once(' ') {
+                        if let Ok(cseq_num) = num.parse::<u32>() {
+                            bye_headers.push(
+                                SmolStr::new("CSeq"),
+                                SmolStr::new(format!("{} BYE", cseq_num + 1)),
+                            );
+                        }
+                    }
+                }
+
+                // Max-Forwards
+                bye_headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
+
+                // Content-Length
+                bye_headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
+
+                // Create BYE request - send to caller's contact
+                let bye_request = sip_core::Request::new(
+                    RequestLine::new(Method::Bye, caller_sip_uri.clone()),
+                    bye_headers,
+                    bytes::Bytes::new(),
+                );
+
+                // Send BYE to caller
+                let caller_addr = format!(
+                    "{}:{}",
+                    caller_sip_uri.host,
+                    caller_sip_uri.port.unwrap_or(5060)
+                );
+
+                if let Ok(addr) = caller_addr.parse::<std::net::SocketAddr>() {
+                    let payload = sip_parse::serialize_request(&bye_request);
+                    if let Err(e) = sip_transport::send_tcp(&addr, &payload).await {
+                        warn!(
+                            error = %e,
+                            caller = %caller_addr,
+                            "B2BUA: Failed to send BYE to caller"
+                        );
+                    } else {
+                        info!(
+                            caller = %caller_addr,
+                            "B2BUA: BYE sent to caller successfully"
+                        );
+                    }
+                }
+
+                // Clean up call leg
+                services.b2bua_state.remove_call_leg(&leg.outgoing_call_id);
+                info!(call_id, "B2BUA: Call leg removed, BYE bridging complete");
+
+                return Ok(());
+            }
+
+            // Call leg not found
+            warn!(call_id, "B2BUA: BYE received for unknown call leg");
+            let mut headers = sip_core::Headers::new();
+            copy_headers(request, &mut headers);
+            let response = sip_core::Response::new(
+                sip_core::StatusLine::new(481, "Call/Transaction Does Not Exist".into()),
+                headers,
+                bytes::Bytes::new(),
+            );
+            handle.send_final(response).await;
+            return Ok(());
+        }
+
+        let call_leg = call_leg.unwrap();
+
+        info!(
+            incoming_call_id = %call_leg.incoming_call_id,
+            outgoing_call_id = %call_leg.outgoing_call_id,
+            "B2BUA: BYE from caller, sending 200 OK and bridging to callee"
+        );
+
+        // Send 200 OK to caller
+        let response = UserAgentServer::create_response(request, 200, "OK");
+        handle.send_final(response).await;
+
+        // Create BYE for callee
+        let mut bye_headers = Headers::new();
+
+        // Via
+        let branch = generate_branch_id();
+        bye_headers.push(
+            SmolStr::new("Via"),
+            SmolStr::new(format!("SIP/2.0/TCP placeholder;branch={}", branch)),
+        );
+
+        // From - same as our outgoing INVITE
+        if let Some(from) = call_leg.outgoing_invite.headers.get("From") {
+            bye_headers.push(SmolStr::new("From"), from.clone());
+        }
+
+        // To - with callee's tag
+        if let Some(to_tag) = &call_leg.callee_to_tag {
+            if let Some(to) = call_leg.outgoing_invite.headers.get("To") {
+                let to_with_tag = format!("{};tag={}", to.as_str(), to_tag);
+                bye_headers.push(SmolStr::new("To"), SmolStr::new(to_with_tag));
+            }
+        }
+
+        // Call-ID - outgoing call leg
+        bye_headers.push(
+            SmolStr::new("Call-ID"),
+            SmolStr::new(&call_leg.outgoing_call_id),
+        );
+
+        // CSeq - increment from INVITE CSeq
+        if let Some(cseq) = call_leg.outgoing_invite.headers.get("CSeq") {
+            if let Some((num, _)) = cseq.split_once(' ') {
+                if let Ok(cseq_num) = num.parse::<u32>() {
+                    bye_headers.push(
+                        SmolStr::new("CSeq"),
+                        SmolStr::new(format!("{} BYE", cseq_num + 1)),
+                    );
+                }
+            }
+        }
+
+        // Max-Forwards
+        bye_headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
+
+        // Content-Length
+        bye_headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
+
+        // Create BYE request
+        let bye_request = sip_core::Request::new(
+            RequestLine::new(Method::Bye, call_leg.callee_contact.clone()),
+            bye_headers,
+            bytes::Bytes::new(),
+        );
+
+        // Send BYE to callee
+        let callee_addr = format!(
+            "{}:{}",
+            call_leg.callee_contact.host,
+            call_leg.callee_contact.port.unwrap_or(5060)
+        );
+
+        if let Ok(addr) = callee_addr.parse::<std::net::SocketAddr>() {
+            let payload = sip_parse::serialize_request(&bye_request);
+            if let Err(e) = sip_transport::send_tcp(&addr, &payload).await {
+                warn!(
+                    error = %e,
+                    callee = %callee_addr,
+                    "B2BUA: Failed to send BYE to callee"
+                );
+            } else {
+                info!(
+                    callee = %callee_addr,
+                    "B2BUA: BYE sent to callee successfully"
+                );
+            }
+        }
+
+        // Clean up call leg
+        services.b2bua_state.remove_call_leg(&call_leg.outgoing_call_id);
+        info!(call_id, "B2BUA: Call leg removed, BYE bridging complete");
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -38,6 +305,12 @@ impl RequestHandler for ByeHandler {
             .map(|s| s.as_str())
             .unwrap_or("unknown");
 
+        // B2BUA MODE: Bridge BYE to the other call leg
+        if services.config.enable_b2bua() {
+            return self.handle_b2bua_bye(request, handle, services, call_id).await;
+        }
+
+        // UAS MODE: Normal BYE handling
         // Look up dialog using request
         let dialog = services.dialog_mgr.find_by_request(request);
 

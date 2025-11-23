@@ -18,6 +18,7 @@ use crate::proxy_state::ProxyStateManager;
 ///
 /// Services are created based on the daemon configuration mode.
 /// Optional services (registrar, authenticator) are only created if enabled.
+#[derive(Clone)]
 pub struct ServiceRegistry {
     /// Dialog manager for tracking call state
     pub dialog_mgr: Arc<DialogManager>,

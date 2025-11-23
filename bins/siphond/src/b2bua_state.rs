@@ -6,7 +6,7 @@
 /// - Enables proper B2BUA behavior with response relay
 
 use dashmap::DashMap;
-use sip_core::Response;
+use sip_core::{Request, Response, SipUri};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -23,13 +23,17 @@ pub struct CallLegPair {
     /// Call-ID of the incoming leg (from caller)
     pub incoming_call_id: String,
 
-    /// From URI of the caller
-    #[allow(dead_code)]
-    pub caller_uri: String,
+    /// Caller's original request (for constructing matching responses)
+    pub caller_request: Request,
 
-    /// To URI of the callee
-    #[allow(dead_code)]
-    pub callee_uri: String,
+    /// Outgoing INVITE request to callee (for constructing ACK)
+    pub outgoing_invite: Request,
+
+    /// Callee's contact URI (for sending ACK and BYE)
+    pub callee_contact: SipUri,
+
+    /// To-tag from callee (extracted from 200 OK To header)
+    pub callee_to_tag: Option<String>,
 
     /// When this call leg pair was created
     #[allow(dead_code)]
@@ -60,9 +64,25 @@ impl B2BUAStateManager {
         self.call_legs.get(outgoing_call_id).map(|entry| entry.clone())
     }
 
+    /// Look up a call leg pair by incoming Call-ID (caller's Call-ID)
+    /// Used for ACK and BYE bridging from caller to callee
+    pub fn find_call_leg_by_incoming(&self, incoming_call_id: &str) -> Option<CallLegPair> {
+        self.call_legs
+            .iter()
+            .find(|entry| entry.value().incoming_call_id == incoming_call_id)
+            .map(|entry| entry.value().clone())
+    }
+
     /// Remove a call leg pair (after final response)
     pub fn remove_call_leg(&self, outgoing_call_id: &str) {
         self.call_legs.remove(outgoing_call_id);
+    }
+
+    /// Update the callee's To-tag (after receiving 200 OK from callee)
+    pub fn update_callee_to_tag(&self, outgoing_call_id: &str, to_tag: String) {
+        if let Some(mut pair) = self.call_legs.get_mut(outgoing_call_id) {
+            pair.callee_to_tag = Some(to_tag);
+        }
     }
 
     /// Clean up old call legs (older than 5 minutes)

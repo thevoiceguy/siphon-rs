@@ -128,13 +128,50 @@ impl InviteHandler {
         let target_uri = request.start.uri.as_sip()
             .ok_or_else(|| anyhow!("Request-URI must be SIP URI for B2BUA"))?;
 
-        info!(call_id, target = %target_uri.as_str(), "Looking up callee in location service");
+        // Normalize lookup key - strip parameters to match registration AOR format
+        // The registrar stores: sip:user@host;transport=X
+        // But phones may call with different transport, so we need to try multiple lookups
+        let user = target_uri.user.as_deref().unwrap_or("");
+        let host = &target_uri.host;
+
+        info!(call_id, target = %target_uri.as_str(), user = %user, host = %host, "Looking up callee in location service");
 
         // Look up callee in location service
         let registrar = services.registrar.as_ref()
             .ok_or_else(|| anyhow!("Registrar not available in B2BUA mode"))?;
 
-        let bindings = registrar.location_store().lookup(target_uri.as_str())?;
+        // Try multiple lookup strategies to find the user
+        let mut bindings = vec![];
+
+        // Strategy 1: Try exact match with full URI (includes transport)
+        bindings = registrar.location_store().lookup(target_uri.as_str()).unwrap_or_default();
+
+        // Strategy 2: Try with UDP transport if not found
+        if bindings.is_empty() {
+            let lookup_udp = format!("sip:{}@{};transport=UDP", user, host);
+            bindings = registrar.location_store().lookup(&lookup_udp).unwrap_or_default();
+            if !bindings.is_empty() {
+                info!(call_id, "Found callee with UDP transport");
+            }
+        }
+
+        // Strategy 3: Try with TCP transport if not found
+        if bindings.is_empty() {
+            let lookup_tcp = format!("sip:{}@{};transport=TCP", user, host);
+            bindings = registrar.location_store().lookup(&lookup_tcp).unwrap_or_default();
+            if !bindings.is_empty() {
+                info!(call_id, "Found callee with TCP transport");
+            }
+        }
+
+        // Strategy 4: Try without any transport parameter
+        if bindings.is_empty() {
+            let lookup_base = format!("sip:{}@{}", user, host);
+            bindings = registrar.location_store().lookup(&lookup_base).unwrap_or_default();
+            if !bindings.is_empty() {
+                info!(call_id, "Found callee without transport parameter");
+            }
+        }
 
         if bindings.is_empty() {
             warn!(call_id, target = %target_uri.as_str(), "Callee not found");
@@ -191,23 +228,66 @@ impl InviteHandler {
             outgoing_call_id: outgoing_call_id.clone(),
             response_tx,
             incoming_call_id: call_id.to_string(),
-            caller_uri: request.headers.get("From")
-                .map(|v| v.to_string())
-                .unwrap_or_default(),
-            callee_uri: target_uri.as_str().to_string(),
+            caller_request: request.clone(),
+            outgoing_invite: outgoing_invite.clone(),
+            callee_contact: callee_contact.clone(),
+            callee_to_tag: None,
             created_at: std::time::Instant::now(),
         });
 
-        // Spawn task to relay responses from callee to caller
+        // Spawn task to transform and relay responses from callee to caller
+        let services_clone = services.clone();
+        let outgoing_call_id_clone = outgoing_call_id.clone();
         tokio::spawn(async move {
-            while let Some(response) = response_rx.recv().await {
-                if response.start.code >= 100 && response.start.code < 200 {
-                    // Provisional response (1xx)
-                    handle.send_provisional(response).await;
+            while let Some(callee_response) = response_rx.recv().await {
+                let status_code = callee_response.start.code;
+
+                // Transform callee's response to match caller's call leg
+                let transformed = Self::transform_response_for_caller(
+                    &services_clone,
+                    &outgoing_call_id_clone,
+                    &callee_response,
+                ).await;
+
+                if let Some(caller_response) = transformed {
+                    if caller_response.start.code >= 100 && caller_response.start.code < 200 {
+                        // Provisional response (1xx)
+                        handle.send_provisional(caller_response).await;
+                    } else if caller_response.start.code >= 200 && caller_response.start.code < 300 {
+                        // 2xx response - call established
+                        handle.send_final(caller_response).await;
+
+                        // DON'T remove call leg - we need it for ACK and BYE bridging
+                        // Call leg will be removed when BYE is received
+                        tracing::info!(
+                            outgoing_call_id = %outgoing_call_id_clone,
+                            status_code,
+                            "B2BUA: 200 OK sent to caller - call established, keeping leg for ACK/BYE"
+                        );
+                        break; // Stop after final response
+                    } else {
+                        // Error response (3xx-6xx) - call failed
+                        handle.send_final(caller_response).await;
+
+                        // Clean up call leg after error response
+                        services_clone.b2bua_state.remove_call_leg(&outgoing_call_id_clone);
+                        tracing::info!(
+                            outgoing_call_id = %outgoing_call_id_clone,
+                            status_code,
+                            "B2BUA: Call leg removed after error response"
+                        );
+                        break;
+                    }
                 } else {
-                    // Final response (2xx-6xx)
-                    handle.send_final(response).await;
-                    break; // Stop after final response
+                    tracing::error!(
+                        outgoing_call_id = %outgoing_call_id_clone,
+                        status_code,
+                        "Failed to transform response for caller"
+                    );
+
+                    // Clean up call leg on error
+                    services_clone.b2bua_state.remove_call_leg(&outgoing_call_id_clone);
+                    break;
                 }
             }
         });
@@ -231,6 +311,112 @@ impl InviteHandler {
         // which will be handled in main.rs packet loop and relayed back
 
         Ok(())
+    }
+
+    /// Transform a response from the callee to match the caller's call leg
+    /// This is the heart of B2BUA operation - we receive responses from Alice
+    /// and transform them to look like they came from Bob's original INVITE dialog
+    async fn transform_response_for_caller(
+        services: &ServiceRegistry,
+        outgoing_call_id: &str,
+        callee_response: &sip_core::Response,
+    ) -> Option<sip_core::Response> {
+        use sip_parse::header;
+
+        // Look up the call leg pair
+        let call_leg = services.b2bua_state.find_call_leg(outgoing_call_id)?;
+
+        tracing::info!(
+            outgoing_call_id,
+            incoming_call_id = %call_leg.incoming_call_id,
+            status_code = callee_response.start.code,
+            "Transforming response from callee to caller"
+        );
+
+        // Extract headers from caller's original request
+        let caller_call_id = header(&call_leg.caller_request.headers, "Call-ID")?;
+        let caller_from = header(&call_leg.caller_request.headers, "From")?;
+        let caller_to = header(&call_leg.caller_request.headers, "To")?;
+        let caller_cseq = header(&call_leg.caller_request.headers, "CSeq")?;
+
+        // Build transformed response headers
+        let mut new_headers = sip_core::Headers::new();
+
+        // Copy all Via headers from caller's original request (critical for routing)
+        for via in call_leg.caller_request.headers.iter().filter(|h| h.name.as_str().eq_ignore_ascii_case("Via")) {
+            new_headers.push("Via".into(), via.value.clone());
+        }
+
+        // Use caller's dialog identifiers
+        new_headers.push("Call-ID".into(), caller_call_id.clone());
+        new_headers.push("From".into(), caller_from.clone());
+        new_headers.push("CSeq".into(), caller_cseq.clone());
+
+        // Handle To header - add callee's To-tag if present (from 200 OK)
+        if let Some(callee_to_tag) = header(&callee_response.headers, "To")
+            .and_then(|to_hdr| {
+                // Extract tag parameter from To header
+                to_hdr.split(';')
+                    .find(|part| part.trim().starts_with("tag="))
+                    .map(|tag_part| tag_part.trim().strip_prefix("tag=").unwrap_or("").to_string())
+            })
+        {
+            // Add tag to caller's To header
+            let to_with_tag = format!("{};tag={}", caller_to.as_str(), callee_to_tag);
+            new_headers.push("To".into(), to_with_tag.into());
+
+            // Store the callee's To-tag for future ACK/BYE (only for 2xx responses)
+            if callee_response.start.code >= 200 && callee_response.start.code < 300 {
+                tracing::info!(
+                    outgoing_call_id,
+                    callee_to_tag = %callee_to_tag,
+                    "Storing callee To-tag from 200 OK for future ACK/BYE"
+                );
+                services.b2bua_state.update_callee_to_tag(outgoing_call_id, callee_to_tag);
+            }
+        } else {
+            // No To-tag in callee's response (provisional responses may not have it)
+            new_headers.push("To".into(), caller_to.clone());
+        }
+
+        // IMPORTANT: Replace Contact with B2BUA's own contact
+        // This ensures ACK and BYE come through the B2BUA, not directly to callee
+        // Use the local_uri from config as our contact
+        let b2bua_contact = format!("<{}>", services.config.local_uri);
+        new_headers.push("Contact".into(), b2bua_contact.into());
+
+        // Copy Content-Type and Content-Length if body is present
+        if !callee_response.body.is_empty() {
+            if let Some(content_type) = header(&callee_response.headers, "Content-Type") {
+                new_headers.push("Content-Type".into(), content_type.clone());
+            }
+            let content_length = callee_response.body.len().to_string();
+            new_headers.push("Content-Length".into(), content_length.into());
+        } else {
+            new_headers.push("Content-Length".into(), "0".into());
+        }
+
+        // Copy other useful headers
+        for header_name in &["Allow", "Supported", "Server", "User-Agent", "RSeq", "Require"] {
+            if let Some(value) = header(&callee_response.headers, header_name) {
+                new_headers.push((*header_name).into(), value.clone());
+            }
+        }
+
+        // Create transformed response
+        let transformed = sip_core::Response::new(
+            callee_response.start.clone(),
+            new_headers,
+            callee_response.body.clone(), // Preserve SDP from callee
+        );
+
+        tracing::debug!(
+            outgoing_call_id,
+            status_code = callee_response.start.code,
+            "Response transformation complete"
+        );
+
+        Some(transformed)
     }
 
     /// Generate simple SDP for testing
@@ -312,13 +498,39 @@ impl InviteHandler {
         let target_uri = proxied_req.start.uri.as_sip()
             .ok_or_else(|| anyhow!("Request-URI must be SIP URI for proxy"))?;
 
-        info!(call_id, target = %target_uri.as_str(), "Looking up target in location service");
+        // Normalize lookup key - try multiple transport variants
+        let user = target_uri.user.as_deref().unwrap_or("");
+        let host = &target_uri.host;
+
+        info!(call_id, target = %target_uri.as_str(), user = %user, host = %host, "Looking up target in location service");
 
         // Access location store through registrar
         let registrar = services.registrar.as_ref()
             .ok_or_else(|| anyhow!("Registrar not available in proxy mode"))?;
 
-        let bindings = registrar.location_store().lookup(target_uri.as_str())?;
+        // Try multiple lookup strategies to find the user
+        let mut bindings = vec![];
+
+        // Strategy 1: Try exact match with full URI (includes transport)
+        bindings = registrar.location_store().lookup(target_uri.as_str()).unwrap_or_default();
+
+        // Strategy 2: Try with UDP transport if not found
+        if bindings.is_empty() {
+            let lookup_udp = format!("sip:{}@{};transport=UDP", user, host);
+            bindings = registrar.location_store().lookup(&lookup_udp).unwrap_or_default();
+        }
+
+        // Strategy 3: Try with TCP transport if not found
+        if bindings.is_empty() {
+            let lookup_tcp = format!("sip:{}@{};transport=TCP", user, host);
+            bindings = registrar.location_store().lookup(&lookup_tcp).unwrap_or_default();
+        }
+
+        // Strategy 4: Try without any transport parameter
+        if bindings.is_empty() {
+            let lookup_base = format!("sip:{}@{}", user, host);
+            bindings = registrar.location_store().lookup(&lookup_base).unwrap_or_default();
+        }
 
         if bindings.is_empty() {
             warn!(call_id, target = %target_uri.as_str(), "User not found in location service");

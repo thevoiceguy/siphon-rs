@@ -213,7 +213,7 @@ impl DaemonConfig {
     pub fn enable_calls(&self) -> bool {
         matches!(
             self.mode,
-            DaemonMode::FullUas | DaemonMode::CallServer | DaemonMode::Interactive
+            DaemonMode::FullUas | DaemonMode::CallServer | DaemonMode::Interactive | DaemonMode::Proxy | DaemonMode::B2bua
         )
     }
 
