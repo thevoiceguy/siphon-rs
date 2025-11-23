@@ -24,12 +24,15 @@ pub struct CallLegPair {
     pub incoming_call_id: String,
 
     /// From URI of the caller
+    #[allow(dead_code)]
     pub caller_uri: String,
 
     /// To URI of the callee
+    #[allow(dead_code)]
     pub callee_uri: String,
 
     /// When this call leg pair was created
+    #[allow(dead_code)]
     pub created_at: Instant,
 }
 
@@ -63,6 +66,7 @@ impl B2BUAStateManager {
     }
 
     /// Clean up old call legs (older than 5 minutes)
+    #[allow(dead_code)]
     pub fn cleanup_old(&self, max_age: Duration) {
         let now = Instant::now();
         self.call_legs.retain(|_, pair| {
@@ -71,6 +75,7 @@ impl B2BUAStateManager {
     }
 
     /// Get count of active call leg pairs
+    #[allow(dead_code)]
     pub fn count(&self) -> usize {
         self.call_legs.len()
     }
@@ -83,4 +88,5 @@ impl Default for B2BUAStateManager {
 }
 
 /// Shared B2BUA state (can be cloned cheaply)
+#[allow(dead_code)]
 pub type SharedB2BUAState = Arc<B2BUAStateManager>;

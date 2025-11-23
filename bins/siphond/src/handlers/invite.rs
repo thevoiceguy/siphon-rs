@@ -112,7 +112,7 @@ impl InviteHandler {
         &self,
         request: &Request,
         handle: ServerTransactionHandle,
-        ctx: &TransportContext,
+        _ctx: &TransportContext,
         services: &ServiceRegistry,
         call_id: &str,
     ) -> Result<()> {
@@ -234,6 +234,7 @@ impl InviteHandler {
     }
 
     /// Generate simple SDP for testing
+    #[allow(dead_code)]
     fn generate_simple_sdp(local_uri: &str) -> String {
         let host = local_uri.split('@').nth(1).unwrap_or("127.0.0.1");
         format!(

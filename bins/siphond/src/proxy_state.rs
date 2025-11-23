@@ -18,15 +18,19 @@ pub struct ProxyTransaction {
     pub branch: String,
 
     /// Original sender's address (where to forward responses)
+    #[allow(dead_code)]
     pub sender_addr: SocketAddr,
 
     /// Transport to use for response
+    #[allow(dead_code)]
     pub sender_transport: TransportKind,
 
     /// Call-ID for logging
+    #[allow(dead_code)]
     pub call_id: String,
 
     /// When this transaction was created
+    #[allow(dead_code)]
     pub created_at: Instant,
 }
 
@@ -50,16 +54,19 @@ impl ProxyStateManager {
     }
 
     /// Look up a transaction by branch ID
+    #[allow(dead_code)]
     pub fn find_transaction(&self, branch: &str) -> Option<ProxyTransaction> {
         self.transactions.get(branch).map(|entry| entry.clone())
     }
 
     /// Remove a transaction (after final response)
+    #[allow(dead_code)]
     pub fn remove_transaction(&self, branch: &str) {
         self.transactions.remove(branch);
     }
 
     /// Clean up old transactions (older than 5 minutes)
+    #[allow(dead_code)]
     pub fn cleanup_old(&self, max_age: Duration) {
         let now = Instant::now();
         self.transactions.retain(|_, tx| {
@@ -68,6 +75,7 @@ impl ProxyStateManager {
     }
 
     /// Get count of active transactions
+    #[allow(dead_code)]
     pub fn count(&self) -> usize {
         self.transactions.len()
     }
@@ -80,4 +88,5 @@ impl Default for ProxyStateManager {
 }
 
 /// Shared proxy state (can be cloned cheaply)
+#[allow(dead_code)]
 pub type SharedProxyState = Arc<ProxyStateManager>;

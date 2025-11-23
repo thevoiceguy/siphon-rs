@@ -1,8 +1,6 @@
 use anyhow::{anyhow, Result};
-use bytes::Bytes;
 use sip_core::{decrement_max_forwards, Header, Headers, Request, SipUri};
 use sip_transaction::generate_branch_id;
-use std::sync::Arc;
 
 /// Stateless proxy helpers for RFC 3261 proxy operations.
 ///
