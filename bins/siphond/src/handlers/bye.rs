@@ -102,27 +102,34 @@ impl ByeHandler {
                     }
                 };
 
-                let mut bye_headers = Headers::new();
-
-                // Via
+                // Generate branch for this BYE transaction
                 let branch = generate_branch_id();
-                bye_headers.push(
-                    SmolStr::new("Via"),
-                    SmolStr::new(format!("SIP/2.0/TCP placeholder;branch={}", branch)),
-                );
 
-                // From - swap: use To from caller's INVITE (this is us)
-                if let Some(to) = leg.caller_request.headers.get("To") {
-                    bye_headers.push(SmolStr::new("From"), to.clone());
+                // Build headers (we'll add Via later when we know the transport)
+                let mut bye_headers_base = Headers::new();
+
+                // From - use To from caller's INVITE + callee's to-tag (established dialog)
+                // This is the remote side from Bob's perspective
+                if let Some(to_tag) = &leg.callee_to_tag {
+                    if let Some(to) = leg.caller_request.headers.get("To") {
+                        let from_with_tag = format!("{};tag={}", to.as_str().trim_end_matches(';'), to_tag);
+                        bye_headers_base.push(SmolStr::new("From"), SmolStr::new(from_with_tag));
+                    }
+                } else {
+                    warn!(call_id, "B2BUA: No callee to-tag stored, BYE may be rejected");
+                    if let Some(to) = leg.caller_request.headers.get("To") {
+                        bye_headers_base.push(SmolStr::new("From"), to.clone());
+                    }
                 }
 
                 // To - use From from caller's INVITE (this is Bob with his tag)
+                // This is Bob's local side
                 if let Some(from) = leg.caller_request.headers.get("From") {
-                    bye_headers.push(SmolStr::new("To"), from.clone());
+                    bye_headers_base.push(SmolStr::new("To"), from.clone());
                 }
 
                 // Call-ID - incoming call leg
-                bye_headers.push(
+                bye_headers_base.push(
                     SmolStr::new("Call-ID"),
                     SmolStr::new(&leg.incoming_call_id),
                 );
@@ -131,7 +138,7 @@ impl ByeHandler {
                 if let Some(cseq) = leg.caller_request.headers.get("CSeq") {
                     if let Some((num, _)) = cseq.split_once(' ') {
                         if let Ok(cseq_num) = num.parse::<u32>() {
-                            bye_headers.push(
+                            bye_headers_base.push(
                                 SmolStr::new("CSeq"),
                                 SmolStr::new(format!("{} BYE", cseq_num + 1)),
                             );
@@ -140,17 +147,10 @@ impl ByeHandler {
                 }
 
                 // Max-Forwards
-                bye_headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
+                bye_headers_base.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
 
                 // Content-Length
-                bye_headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
-
-                // Create BYE request - send to caller's contact
-                let bye_request = sip_core::Request::new(
-                    RequestLine::new(Method::Bye, caller_sip_uri.clone()),
-                    bye_headers,
-                    bytes::Bytes::new(),
-                );
+                bye_headers_base.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
 
                 // Send BYE to caller
                 let caller_addr = format!(
@@ -160,18 +160,128 @@ impl ByeHandler {
                 );
 
                 if let Ok(addr) = caller_addr.parse::<std::net::SocketAddr>() {
-                    let payload = sip_parse::serialize_request(&bye_request);
-                    if let Err(e) = sip_transport::send_tcp(&addr, &payload).await {
-                        warn!(
-                            error = %e,
-                            caller = %caller_addr,
-                            "B2BUA: Failed to send BYE to caller"
-                        );
-                    } else {
-                        info!(
-                            caller = %caller_addr,
-                            "B2BUA: BYE sent to caller successfully"
-                        );
+                    // For B2BUA, prefer UDP for BYE to avoid TCP connection issues
+                    // Many SIP clients send INVITE via TCP but mid-dialog requests via UDP
+                    // UDP is stateless and doesn't require connection establishment
+
+                    // Try UDP first - create headers with UDP Via
+                    let via_udp = format!(
+                        "SIP/2.0/UDP {};branch={}",
+                        services.config.local_uri.as_str().trim_start_matches("sip:"),
+                        branch
+                    );
+                    let mut bye_headers_udp = Headers::new();
+                    bye_headers_udp.push(SmolStr::new("Via"), SmolStr::new(via_udp));
+
+                    // Copy base headers
+                    for header in bye_headers_base.iter() {
+                        bye_headers_udp.push(header.name.clone(), header.value.clone());
+                    }
+
+                    // Now serialize the request with correct Via
+                    let bye_request_udp = sip_core::Request::new(
+                        RequestLine::new(Method::Bye, caller_sip_uri.clone()),
+                        bye_headers_udp,
+                        bytes::Bytes::new(),
+                    );
+                    let payload = sip_parse::serialize_request(&bye_request_udp);
+
+                    info!(
+                        call_id,
+                        caller = %caller_addr,
+                        "B2BUA: Sending BYE to caller via UDP"
+                    );
+
+                    // Create temporary UDP socket for sending
+                    match tokio::net::UdpSocket::bind("0.0.0.0:0").await {
+                        Ok(udp_socket) => {
+                            if let Err(e) = sip_transport::send_udp(&udp_socket, &addr, &payload).await {
+                                warn!(
+                                    error = %e,
+                                    caller = %caller_addr,
+                                    "B2BUA: Failed to send BYE to caller via UDP, trying TCP"
+                                );
+
+                                // Fallback to TCP if UDP fails - create BYE with TCP Via
+                                let via_tcp = format!(
+                                    "SIP/2.0/TCP {};branch={}",
+                                    services.config.local_uri.as_str().trim_start_matches("sip:"),
+                                    generate_branch_id()
+                                );
+                                let mut bye_headers_tcp = Headers::new();
+                                bye_headers_tcp.push(SmolStr::new("Via"), SmolStr::new(via_tcp));
+
+                                // Copy base headers
+                                for header in bye_headers_base.iter() {
+                                    bye_headers_tcp.push(header.name.clone(), header.value.clone());
+                                }
+
+                                let bye_request_tcp = sip_core::Request::new(
+                                    RequestLine::new(Method::Bye, caller_sip_uri.clone()),
+                                    bye_headers_tcp,
+                                    bytes::Bytes::new(),
+                                );
+                                let payload_tcp = sip_parse::serialize_request(&bye_request_tcp);
+
+                                if let Err(e) = sip_transport::send_tcp(&addr, &payload_tcp).await {
+                                    warn!(
+                                        error = %e,
+                                        caller = %caller_addr,
+                                        "B2BUA: Failed to send BYE to caller via TCP"
+                                    );
+                                } else {
+                                    info!(
+                                        caller = %caller_addr,
+                                        "B2BUA: BYE sent to caller successfully via TCP"
+                                    );
+                                }
+                            } else {
+                                info!(
+                                    caller = %caller_addr,
+                                    "B2BUA: BYE sent to caller successfully via UDP"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            warn!(
+                                error = %e,
+                                "B2BUA: Failed to create UDP socket for BYE, trying TCP"
+                            );
+
+                            // Fallback to TCP if we can't create UDP socket - create BYE with TCP Via
+                            let via_tcp = format!(
+                                "SIP/2.0/TCP {};branch={}",
+                                services.config.local_uri.as_str().trim_start_matches("sip:"),
+                                generate_branch_id()
+                            );
+                            let mut bye_headers_tcp = Headers::new();
+                            bye_headers_tcp.push(SmolStr::new("Via"), SmolStr::new(via_tcp));
+
+                            // Copy base headers
+                            for header in bye_headers_base.iter() {
+                                bye_headers_tcp.push(header.name.clone(), header.value.clone());
+                            }
+
+                            let bye_request_tcp = sip_core::Request::new(
+                                RequestLine::new(Method::Bye, caller_sip_uri.clone()),
+                                bye_headers_tcp,
+                                bytes::Bytes::new(),
+                            );
+                            let payload_tcp = sip_parse::serialize_request(&bye_request_tcp);
+
+                            if let Err(e) = sip_transport::send_tcp(&addr, &payload_tcp).await {
+                                warn!(
+                                    error = %e,
+                                    caller = %caller_addr,
+                                    "B2BUA: Failed to send BYE to caller via TCP"
+                                );
+                            } else {
+                                info!(
+                                    caller = %caller_addr,
+                                    "B2BUA: BYE sent to caller successfully via TCP"
+                                );
+                            }
+                        }
                     }
                 }
 

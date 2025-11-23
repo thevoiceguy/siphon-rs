@@ -116,6 +116,7 @@ impl ProxyHelpers {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytes::Bytes;
     use sip_core::{Method, RequestLine};
 
     #[test]

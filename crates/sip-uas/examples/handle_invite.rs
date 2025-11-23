@@ -80,7 +80,7 @@ m=audio 49170 RTP/AVP 0 8
     println!("Status: {} {}", trying_response.start.code, trying_response.start.reason);
 
     // Step 4: Send 180 Ringing (user is being alerted)
-    let ringing_response = UserAgentServer::create_ringing(&invite_request);
+    let ringing_response = uas.create_ringing(&invite_request);
     println!("\n--- Sending 180 Ringing ---");
     println!("Status: {} {}", ringing_response.start.code, ringing_response.start.reason);
 
@@ -126,11 +126,11 @@ a=rtpmap:0 PCMU/8000
     // Alternative: Reject the call
     println!("\n--- Alternative: Rejecting the Call ---");
     println!("If user is busy:");
-    let busy_response = UserAgentServer::create_busy(&invite_request);
+    let busy_response = uas.create_busy(&invite_request);
     println!("  {} {}", busy_response.start.code, busy_response.start.reason);
 
     println!("\nIf user declines:");
-    let decline_response = UserAgentServer::create_decline(&invite_request);
+    let decline_response = uas.create_decline(&invite_request);
     println!("  {} {}", decline_response.start.code, decline_response.start.reason);
 
     // Step 6: Later, handle BYE to terminate the call
