@@ -2,13 +2,15 @@
 
 **A Swiss Army knife SIP server for testing, development, and demonstration.**
 
-siphond is a multi-mode SIP daemon built on the siphon-rs stack, providing comprehensive SIP protocol testing capabilities. It can operate as a minimal OPTIONS responder, full-featured UAS, registrar, call server, or subscription server.
+siphond is a multi-mode SIP daemon built on the siphon-rs stack, providing comprehensive SIP protocol testing capabilities. It can operate as a minimal OPTIONS responder, full-featured UAS, registrar, proxy, B2BUA, call server, or subscription server.
 
 ## Features
 
-- 🎯 **Multiple Operational Modes** - Switch between minimal, full-uas, registrar, call-server, and subscription-server modes
+- 🎯 **Multiple Operational Modes** - Switch between minimal, full-uas, registrar, proxy, b2bua, call-server, and subscription-server modes
 - 📞 **Complete Call Handling** - INVITE/ACK/BYE with dialog management and SDP negotiation
 - 📝 **Registration Server** - RFC 3261 compliant registrar with location service
+- 🔀 **Proxy Mode** - Stateful SIP proxy with Via/Record-Route handling and location service integration
+- 🔗 **B2BUA Mode** - Back-to-Back User Agent for bridging calls between registered users with response relay
 - 🔔 **Event Subscriptions** - SUBSCRIBE/NOTIFY for event packages (RFC 3265)
 - 🔄 **Call Transfer** - REFER support for blind and attended transfers (RFC 3515)
 - ✅ **Reliable Provisionals** - PRACK support for 180/183 responses (RFC 3262)
@@ -30,6 +32,9 @@ cargo build -p siphond
 
 # Run as registrar with authentication
 ./target/debug/siphond --mode registrar --auth --auth-realm example.com
+
+# Run as B2BUA for device-to-device calls
+./target/debug/siphond --mode b2bua --local-uri sip:b2bua@192.168.1.81
 ```
 
 ## Operational Modes
@@ -156,13 +161,96 @@ siphond --mode subscription-server
 
 ---
 
+### 6. Proxy Mode
+
+Acts as a stateful SIP proxy forwarding calls to registered users.
+
+```bash
+siphond --mode proxy --local-uri sip:proxy@192.168.1.81
+```
+
+**Supported Methods:** OPTIONS, REGISTER, INVITE
+
+**Features:**
+- ✅ Stateful proxy with location service integration
+- ✅ Via header insertion with branch ID tracking
+- ✅ Record-Route for staying in signaling path
+- ✅ Max-Forwards checking and decrement
+- ✅ Request-URI rewriting to registered contact
+- ✅ Location service lookup for call routing
+
+**Use Cases:**
+- Testing proxy behavior
+- Call forwarding to registered endpoints
+- Multi-device registration testing
+
+**Configuration:**
+```bash
+siphond --mode proxy \
+  --local-uri sip:proxy@192.168.1.81 \
+  --tcp-bind 0.0.0.0:5060 \
+  --reg-default-expiry 3600
+```
+
+**Note:** Currently supports TCP forwarding only. Response relay not yet implemented - use B2BUA mode for full bidirectional call bridging.
+
+---
+
+### 7. B2BUA Mode
+
+Back-to-Back User Agent that bridges calls between two registered users.
+
+```bash
+siphond --mode b2bua --local-uri sip:b2bua@192.168.1.81
+```
+
+**Supported Methods:** OPTIONS, REGISTER, INVITE, ACK, BYE
+
+**Features:**
+- ✅ Complete call bridging between registered users
+- ✅ Channel-based response relay (180, 200, etc.)
+- ✅ Location service integration
+- ✅ Separate UAC and UAS transaction legs
+- ✅ Automatic response forwarding from callee to caller
+- ✅ SDP pass-through from caller to callee
+
+**Use Cases:**
+- Device-to-device call testing
+- Call bridging demonstrations
+- Multi-party call scenarios
+- Testing call flows with real SIP phones
+
+**Configuration:**
+```bash
+siphond --mode b2bua \
+  --local-uri sip:b2bua@192.168.1.81 \
+  --tcp-bind 0.0.0.0:5060 \
+  --reg-default-expiry 3600
+```
+
+**Example Workflow:**
+1. Alice registers: `REGISTER sip:b2bua@192.168.1.81` with Contact: `sip:alice@192.168.1.100`
+2. Bob registers: `REGISTER sip:b2bua@192.168.1.81` with Contact: `sip:bob@192.168.1.200`
+3. Bob calls Alice: `INVITE sip:alice@192.168.1.81`
+4. B2BUA:
+   - Sends 100 Trying to Bob
+   - Looks up Alice's contact in location service
+   - Creates outgoing INVITE to Alice's registered contact
+   - Relays Alice's 180 Ringing → Bob
+   - Relays Alice's 200 OK → Bob
+5. Call established between Bob and Alice through B2BUA
+
+**Note:** Currently supports TCP transport only. Media (RTP) flows directly between endpoints (not through B2BUA).
+
+---
+
 ## Command-Line Options
 
 ### Core Options
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--mode <MODE>` | Operational mode: minimal, full-uas, registrar, call-server, subscription-server | minimal |
+| `--mode <MODE>` | Operational mode: minimal, full-uas, registrar, proxy, b2bua, call-server, subscription-server | minimal |
 | `--udp-bind <ADDR>` | UDP bind address | 0.0.0.0:5060 |
 | `--tcp-bind <ADDR>` | TCP bind address | 0.0.0.0:5060 |
 | `--sips-bind <ADDR>` | TLS bind address | 0.0.0.0:5061 |

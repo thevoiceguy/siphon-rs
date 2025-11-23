@@ -27,6 +27,12 @@ cargo run -p siphond -- --mode registrar --auth --auth-realm example.com
 # Run siphond as call server
 cargo run -p siphond -- --mode call-server --sdp-profile audio-only
 
+# Run siphond as proxy (forwards calls to registered users)
+cargo run -p siphond -- --mode proxy --local-uri sip:proxy@192.168.1.81
+
+# Run siphond as B2BUA (bridges calls between registered users)
+cargo run -p siphond -- --mode b2bua --local-uri sip:b2bua@192.168.1.81 --tcp-bind 0.0.0.0:5060
+
 # Run siphond with TLS support
 cargo run -p siphond -- --mode full-uas --sips-bind 0.0.0.0:5061 --tls-cert cert.pem --tls-key key.pem
 
@@ -109,7 +115,7 @@ The project is organized as a Cargo workspace with the following crates:
 - `sip-dialog` - RFC 3261 §12 compliant dialog state management with Early/Confirmed/Terminated states, route sets, target refresh, CSeq tracking, and session timers. Also includes RFC 3265 subscription management for event notifications and RFC 3262 RSeq management for reliable provisionals.
 - `sip-auth` - RFC 7616/7617 compliant Digest authentication with MD5/SHA-256/SHA-512, qop (auth/auth-int), nonce management, and Proxy-Authenticate support
 - `sip-registrar` - RFC 3261 §10 compliant REGISTER handling with location service, binding management, wildcard deregistration, q-value support, and expiry tracking
-- `sip-proxy` - Stateful/stateless proxy logic (placeholder)
+- `sip-proxy` - Proxy helper primitives (Via header insertion, Record-Route, Max-Forwards checking, Request-URI modification) for building stateful/stateless proxies
 - `sip-uas` - UAS (User Agent Server) helpers for receiving and responding to requests with dialog management, including REFER/call transfer support
 - `sip-uac` - UAC (User Agent Client) helpers for sending requests with authentication, dialog management, and call transfer capabilities
 
@@ -123,6 +129,8 @@ The project is organized as a Cargo workspace with the following crates:
   - **Minimal Mode**: OPTIONS responder only
   - **Full UAS Mode**: Complete SIP server (INVITE, REGISTER, SUBSCRIBE, REFER, PRACK)
   - **Registrar Mode**: Registration server with authentication and location service
+  - **Proxy Mode**: Stateful proxy that forwards INVITE requests to registered users (RFC 3261 §16)
+  - **B2BUA Mode**: Back-to-Back User Agent that bridges calls between registered users with response relay
   - **Call Server Mode**: INVITE/BYE handling without registration
   - **Subscription Server Mode**: SUBSCRIBE/NOTIFY for event packages
   - Supports UDP, TCP, and TLS transports
@@ -534,9 +542,10 @@ This is an **alpha** implementation. Current status:
 - ✅ Registrar with location service and binding management
 - ✅ UAC helpers (REGISTER, INVITE, ACK, BYE, SUBSCRIBE, NOTIFY, REFER, PRACK with auth, dialog, and RFC 3264 offer/answer)
 - ✅ UAS helpers (response builders, dialog creation, request handlers, SUBSCRIBE, REFER, NOTIFY, PRACK, reliable provisionals)
-- ✅ Full-featured multi-mode siphond daemon (minimal, full-uas, registrar, call-server, subscription-server)
+- ✅ Proxy helper primitives (Via, Record-Route, Max-Forwards, Request-URI modification)
+- ✅ B2BUA implementation with channel-based response bridging for device-to-device calls
+- ✅ Full-featured multi-mode siphond daemon (minimal, full-uas, registrar, proxy, b2bua, call-server, subscription-server)
 - ✅ Comprehensive test coverage (211+ tests across all layers)
 - ✅ Examples: register_with_auth, invite_call_flow, late_offer_flow, blind_transfer, attended_transfer, prack_flow, tel_uri_flow
-- ⏳ Proxy (placeholder)
 
 See `siphon_rs_architecture_kickstart.md` for detailed architecture planning and roadmap.

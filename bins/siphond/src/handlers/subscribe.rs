@@ -106,7 +106,7 @@ impl RequestHandler for SubscribeHandler {
             Some(uri) => uri,
             None => {
                 warn!("Invalid local_uri in config");
-                let error = UserAgentServer::create_decline(request);
+                let error = UserAgentServer::create_response(request, 603, "Decline");
                 handle.send_final(error).await;
                 return Ok(());
             }
@@ -156,7 +156,7 @@ impl RequestHandler for SubscribeHandler {
             }
             Err(e) => {
                 warn!(call_id, error = %e, "Failed to accept SUBSCRIBE");
-                let error = UserAgentServer::create_decline(request);
+                let error = uas.create_decline(request);
                 handle.send_final(error).await;
             }
         }

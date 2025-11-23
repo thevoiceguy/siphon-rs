@@ -232,6 +232,11 @@ impl<S: LocationStore, A: Authenticator> BasicRegistrar<S, A> {
         self
     }
 
+    /// Get a reference to the location store
+    pub fn location_store(&self) -> &S {
+        &self.store
+    }
+
     fn parse_expires(&self, request: &Request, contact_value: &str) -> Duration {
         // Check Contact parameter first
         let contact_expires = contact_value

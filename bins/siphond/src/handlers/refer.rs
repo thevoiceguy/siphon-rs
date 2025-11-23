@@ -106,7 +106,7 @@ impl RequestHandler for ReferHandler {
             Some(uri) => uri,
             None => {
                 warn!("Invalid local_uri in config");
-                let error = UserAgentServer::create_decline(request);
+                let error = UserAgentServer::reject_refer(request, 603, "Decline");
                 handle.send_final(error).await;
                 return Ok(());
             }
@@ -145,7 +145,7 @@ impl RequestHandler for ReferHandler {
             }
             Err(e) => {
                 warn!(call_id, error = %e, "Failed to accept REFER");
-                let error = UserAgentServer::create_decline(request);
+                let error = uas.create_decline(request);
                 handle.send_final(error).await;
             }
         }

@@ -18,6 +18,7 @@ sip-transaction = { path = "../../crates/sip-transaction" }
 sip-dialog = { path = "../../crates/sip-dialog" }
 sip-auth = { path = "../../crates/sip-auth" }
 sip-registrar = { path = "../../crates/sip-registrar" }
+sip-proxy = { path = "../../crates/sip-proxy" }
 sip-uas = { path = "../../crates/sip-uas" }
 sip-uac = { path = "../../crates/sip-uac" }
 clap = { version = "4", features = ["derive"] }

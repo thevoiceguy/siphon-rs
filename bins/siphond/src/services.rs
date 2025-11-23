@@ -10,7 +10,9 @@ use sip_dialog::{DialogManager, RSeqManager, SubscriptionManager};
 use sip_registrar::{BasicRegistrar, MemoryLocationStore};
 use sip_transaction::TransactionManager;
 
+use crate::b2bua_state::B2BUAStateManager;
 use crate::config::DaemonConfig;
+use crate::proxy_state::ProxyStateManager;
 
 /// Registry of shared services used by request handlers.
 ///
@@ -27,6 +29,12 @@ pub struct ServiceRegistry {
     #[allow(dead_code)]
     pub rseq_mgr: Arc<RSeqManager>,
 
+    /// Proxy state manager for tracking forwarded transactions
+    pub proxy_state: Arc<ProxyStateManager>,
+
+    /// B2BUA state manager for tracking call leg pairs
+    pub b2bua_state: Arc<B2BUAStateManager>,
+
     /// Optional registrar for REGISTER handling
     pub registrar: Option<Arc<BasicRegistrar<MemoryLocationStore, DigestAuthenticator<MemoryCredentialStore>>>>,
 
@@ -42,10 +50,12 @@ impl ServiceRegistry {
     pub fn new(config: DaemonConfig) -> Self {
         let config = Arc::new(config);
 
-        // Always create dialog and subscription managers
+        // Always create dialog, subscription, and proxy state managers
         let dialog_mgr = Arc::new(DialogManager::new());
         let subscription_mgr = Arc::new(SubscriptionManager::new());
         let rseq_mgr = Arc::new(RSeqManager::new());
+        let proxy_state = Arc::new(ProxyStateManager::new());
+        let b2bua_state = Arc::new(B2BUAStateManager::new());
 
         // Create registrar if enabled (it includes authenticator)
         let registrar = if config.enable_registrar() {
@@ -105,6 +115,8 @@ impl ServiceRegistry {
             dialog_mgr,
             subscription_mgr,
             rseq_mgr,
+            proxy_state,
+            b2bua_state,
             registrar,
             transaction_mgr: OnceLock::new(),
             config,

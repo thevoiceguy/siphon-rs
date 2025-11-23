@@ -110,8 +110,10 @@ impl UserAgentServer {
     }
 
     /// Creates a 180 Ringing response.
-    pub fn create_ringing(request: &Request) -> Response {
-        Self::create_response(request, 180, "Ringing")
+    pub fn create_ringing(&self, request: &Request) -> Response {
+        let mut response = Self::create_response(request, 180, "Ringing");
+        self.ensure_to_tag(&mut response);
+        response
     }
 
     /// Creates a 200 OK response with optional body.
@@ -165,13 +167,17 @@ impl UserAgentServer {
     }
 
     /// Creates a 486 Busy Here response.
-    pub fn create_busy(request: &Request) -> Response {
-        Self::create_response(request, 486, "Busy Here")
+    pub fn create_busy(&self, request: &Request) -> Response {
+        let mut response = Self::create_response(request, 486, "Busy Here");
+        self.ensure_to_tag(&mut response);
+        response
     }
 
     /// Creates a 603 Decline response.
-    pub fn create_decline(request: &Request) -> Response {
-        Self::create_response(request, 603, "Decline")
+    pub fn create_decline(&self, request: &Request) -> Response {
+        let mut response = Self::create_response(request, 603, "Decline");
+        self.ensure_to_tag(&mut response);
+        response
     }
 
     /// Creates a 487 Request Terminated response (for CANCEL).
@@ -859,6 +865,11 @@ mod tests {
 
     #[test]
     fn creates_ringing_response() {
+        let local_uri = SipUri::parse("sip:bob@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:bob@192.168.1.100:5060").unwrap();
+
+        let uas = UserAgentServer::new(local_uri, contact_uri);
+
         let mut headers = Headers::new();
         headers.push(SmolStr::new("Via"), SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"));
         headers.push(SmolStr::new("From"), SmolStr::new("<sip:alice@example.com>;tag=abc"));
@@ -872,10 +883,14 @@ mod tests {
             Bytes::new(),
         );
 
-        let response = UserAgentServer::create_ringing(&request);
+        let response = uas.create_ringing(&request);
 
         assert_eq!(response.start.code, 180);
         assert_eq!(response.start.reason.as_str(), "Ringing");
+
+        // Verify To tag was added
+        let to_header = response.headers.get("To").unwrap();
+        assert!(to_header.contains(";tag="));
     }
 
     #[test]
@@ -938,6 +953,11 @@ mod tests {
 
     #[test]
     fn creates_busy_response() {
+        let local_uri = SipUri::parse("sip:bob@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:bob@192.168.1.100:5060").unwrap();
+
+        let uas = UserAgentServer::new(local_uri, contact_uri);
+
         let mut headers = Headers::new();
         headers.push(SmolStr::new("Via"), SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"));
         headers.push(SmolStr::new("From"), SmolStr::new("<sip:alice@example.com>;tag=abc"));
@@ -951,14 +971,23 @@ mod tests {
             Bytes::new(),
         );
 
-        let response = UserAgentServer::create_busy(&request);
+        let response = uas.create_busy(&request);
 
         assert_eq!(response.start.code, 486);
         assert_eq!(response.start.reason.as_str(), "Busy Here");
+
+        // Verify To tag was added
+        let to_header = response.headers.get("To").unwrap();
+        assert!(to_header.contains(";tag="));
     }
 
     #[test]
     fn creates_decline_response() {
+        let local_uri = SipUri::parse("sip:bob@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:bob@192.168.1.100:5060").unwrap();
+
+        let uas = UserAgentServer::new(local_uri, contact_uri);
+
         let mut headers = Headers::new();
         headers.push(SmolStr::new("Via"), SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"));
         headers.push(SmolStr::new("From"), SmolStr::new("<sip:alice@example.com>;tag=abc"));
@@ -972,10 +1001,14 @@ mod tests {
             Bytes::new(),
         );
 
-        let response = UserAgentServer::create_decline(&request);
+        let response = uas.create_decline(&request);
 
         assert_eq!(response.start.code, 603);
         assert_eq!(response.start.reason.as_str(), "Decline");
+
+        // Verify To tag was added
+        let to_header = response.headers.get("To").unwrap();
+        assert!(to_header.contains(";tag="));
     }
 
     #[test]

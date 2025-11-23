@@ -15,6 +15,14 @@ pub enum DaemonMode {
     /// Registrar mode: Acts as a registration server with authentication
     Registrar,
 
+    /// Proxy mode: Forward INVITE requests to registered users
+    /// Combines registrar functionality with call forwarding
+    Proxy,
+
+    /// B2BUA mode: Back-to-Back User Agent - bridges calls between registered users
+    /// Acts as both UAC and UAS, creating two separate call legs
+    B2bua,
+
     /// Call server mode: Accept INVITE requests but not registrations
     /// Useful for testing call flows without registration complexity
     CallServer,
@@ -193,20 +201,30 @@ impl Default for DaemonConfig {
 impl DaemonConfig {
     /// Check if authentication is required for this mode
     pub fn requires_auth(&self) -> bool {
-        self.features.authentication && matches!(self.mode, DaemonMode::Registrar | DaemonMode::FullUas)
+        self.features.authentication && matches!(self.mode, DaemonMode::Registrar | DaemonMode::Proxy | DaemonMode::B2bua | DaemonMode::FullUas)
     }
 
     /// Check if registrar should be enabled
     pub fn enable_registrar(&self) -> bool {
-        matches!(self.mode, DaemonMode::Registrar | DaemonMode::FullUas)
+        matches!(self.mode, DaemonMode::Registrar | DaemonMode::Proxy | DaemonMode::B2bua | DaemonMode::FullUas)
     }
 
-    /// Check if call handling should be enabled
+    /// Check if call handling should be enabled (as UAS)
     pub fn enable_calls(&self) -> bool {
         matches!(
             self.mode,
             DaemonMode::FullUas | DaemonMode::CallServer | DaemonMode::Interactive
         )
+    }
+
+    /// Check if proxy mode is enabled (forward calls instead of accepting them)
+    pub fn enable_proxy(&self) -> bool {
+        matches!(self.mode, DaemonMode::Proxy)
+    }
+
+    /// Check if B2BUA mode is enabled (bridge calls between users)
+    pub fn enable_b2bua(&self) -> bool {
+        matches!(self.mode, DaemonMode::B2bua)
     }
 
     /// Check if subscription handling should be enabled

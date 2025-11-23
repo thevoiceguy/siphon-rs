@@ -8,9 +8,11 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::info;
 
+mod b2bua_state;
 mod config;
 mod dispatcher;
 mod handlers;
+mod proxy_state;
 mod services;
 mod transport;
 
@@ -114,13 +116,15 @@ fn parse_mode(s: &str) -> Result<DaemonMode, String> {
         "minimal" => Ok(DaemonMode::Minimal),
         "full-uas" | "fulluas" | "full" => Ok(DaemonMode::FullUas),
         "registrar" => Ok(DaemonMode::Registrar),
+        "proxy" => Ok(DaemonMode::Proxy),
+        "b2bua" => Ok(DaemonMode::B2bua),
         "call-server" | "callserver" | "calls" => Ok(DaemonMode::CallServer),
         "subscription-server" | "subscriptionserver" | "subscriptions" => {
             Ok(DaemonMode::SubscriptionServer)
         }
         "interactive" => Ok(DaemonMode::Interactive),
         _ => Err(format!(
-            "Invalid mode: {}. Valid options: minimal, full-uas, registrar, call-server, subscription-server, interactive",
+            "Invalid mode: {}. Valid options: minimal, full-uas, registrar, proxy, b2bua, call-server, subscription-server, interactive",
             s
         )),
     }
@@ -224,7 +228,7 @@ async fn main() -> Result<()> {
     loop {
         tokio::select! {
             Some(packet) = rx.recv() => {
-                handle_packet(&transaction_mgr, &dispatcher, packet).await;
+                handle_packet(&transaction_mgr, &dispatcher, &services, packet).await;
             }
             _ = tokio::signal::ctrl_c() => {
                 info!("Received SIGINT (Ctrl+C), initiating graceful shutdown...");
@@ -245,6 +249,7 @@ async fn main() -> Result<()> {
 async fn handle_packet(
     transaction_mgr: &Arc<TransactionManager>,
     dispatcher: &Arc<RequestDispatcher>,
+    services: &Arc<ServiceRegistry>,
     packet: InboundPacket,
 ) {
     use sip_core::Method;
@@ -284,6 +289,51 @@ async fn handle_packet(
 
     // Try parsing as a response
     if let Some(response) = parse_response(&packet.payload) {
+        // Check if this response belongs to a B2BUA call leg
+        if services.config.enable_b2bua() {
+            if let Some(call_id_header) = response.headers.get("Call-ID") {
+                let call_id = call_id_header.to_string();
+
+                // Look up B2BUA call leg by outgoing Call-ID
+                if let Some(leg_pair) = services.b2bua_state.find_call_leg(&call_id) {
+                    tracing::info!(
+                        outgoing_call_id = %call_id,
+                        incoming_call_id = %leg_pair.incoming_call_id,
+                        status_code = response.start.code,
+                        "B2BUA: Relaying response from callee to caller"
+                    );
+
+                    // Send response through channel to relay task
+                    if let Err(e) = leg_pair.response_tx.send(response.clone()) {
+                        tracing::error!(
+                            outgoing_call_id = %call_id,
+                            error = %e,
+                            "B2BUA: Failed to send response through channel - receiver dropped"
+                        );
+                    } else {
+                        tracing::debug!(
+                            status_code = response.start.code,
+                            "B2BUA: Response queued for relay to caller"
+                        );
+                    }
+
+                    // Remove call leg after final response
+                    if response.start.code >= 200 {
+                        services.b2bua_state.remove_call_leg(&call_id);
+                        tracing::debug!(
+                            outgoing_call_id = %call_id,
+                            "B2BUA: Removed call leg pair after final response"
+                        );
+                    }
+
+                    // Also pass to transaction manager for UAC transaction state management
+                    transaction_mgr.receive_response(response).await;
+                    return;
+                }
+            }
+        }
+
+        // Not a B2BUA response, handle normally
         transaction_mgr.receive_response(response).await;
         return;
     }
@@ -370,6 +420,34 @@ fn print_mode_info(config: &DaemonConfig) {
             info!("  ├─ Default expiry: {}s", config.registrar.default_expiry);
             info!("  ├─ Min expiry: {}s", config.registrar.min_expiry);
             info!("  ├─ Max expiry: {}s", config.registrar.max_expiry);
+            info!(
+                "  └─ Authentication: {}",
+                if config.features.authentication {
+                    "Enabled"
+                } else {
+                    "Disabled"
+                }
+            );
+        }
+        Proxy => {
+            info!("Mode: PROXY - Stateful proxy with location service");
+            info!("  ├─ Registration: Enabled");
+            info!("  ├─ Call forwarding: Enabled");
+            info!("  ├─ Default expiry: {}s", config.registrar.default_expiry);
+            info!(
+                "  └─ Authentication: {}",
+                if config.features.authentication {
+                    "Enabled"
+                } else {
+                    "Disabled"
+                }
+            );
+        }
+        B2bua => {
+            info!("Mode: B2BUA - Back-to-Back User Agent");
+            info!("  ├─ Registration: Enabled");
+            info!("  ├─ Call bridging: Enabled");
+            info!("  ├─ Default expiry: {}s", config.registrar.default_expiry);
             info!(
                 "  └─ Authentication: {}",
                 if config.features.authentication {

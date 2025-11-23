@@ -1,226 +1,218 @@
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
-use dashmap::DashMap;
 use sip_core::{decrement_max_forwards, Header, Headers, Request, SipUri};
-use sip_dns::{DnsTarget, Resolver, Transport as DnsTransport};
-use sip_parse::{parse_route_headers, serialize_request};
-use sip_transaction::{generate_branch_id, TransportContext, TransportDispatcher, TransportKind};
-use sip_transport::{send_udp, DefaultTransportPolicy, TransportPolicy};
-use std::net::SocketAddr;
+use sip_transaction::generate_branch_id;
 use std::sync::Arc;
-use tokio::net::UdpSocket;
-use tracing::info_span;
 
-/// Configuration for a simple stateless proxy hop.
-#[derive(Debug, Clone)]
-pub struct ProxyConfig {
-    pub next_hop: SocketAddr,
-}
+/// Stateless proxy helpers for RFC 3261 proxy operations.
+///
+/// These are simple helpers that perform the mechanical operations required
+/// by RFC 3261 for proxying requests. The application is responsible for:
+/// - Deciding where to forward requests (routing logic)
+/// - Looking up registered users (location service)
+/// - Authentication and authorization
+/// - Policy decisions
+pub struct ProxyHelpers;
 
-#[derive(Clone)]
-pub struct StatelessProxy {
-    socket: Arc<UdpSocket>,
-    config: ProxyConfig,
-}
-
-impl StatelessProxy {
-    /// Creates a new proxy using the provided socket and configuration.
-    pub fn new(socket: Arc<UdpSocket>, config: ProxyConfig) -> Self {
-        Self { socket, config }
-    }
-
-    /// Forwards a SIP request to the configured next hop.
-    pub async fn forward(&self, request: &Request) -> Result<()> {
-        let bytes = serialize_request(request);
-        send_udp(self.socket.as_ref(), &self.config.next_hop, &bytes).await?;
-        Ok(())
-    }
-}
-
-/// Stateful proxy that maintains branch stamps and rewrites Record-Route/Route.
-pub struct StatefulProxy<R: Resolver> {
-    dispatcher: Arc<dyn TransportDispatcher>,
-    resolver: R,
-    policy: Arc<dyn TransportPolicy>,
-    proxy_uri: SipUri,
-    via_host: String,
-    record_route: bool,
-    branch_map: DashMap<String, String>,
-}
-
-impl<R: Resolver> StatefulProxy<R> {
-    pub fn new(
-        dispatcher: Arc<dyn TransportDispatcher>,
-        resolver: R,
-        proxy_uri: SipUri,
-        via_host: String,
-        record_route: bool,
-    ) -> Self {
-        Self {
-            dispatcher,
-            resolver,
-            policy: Arc::new(DefaultTransportPolicy::default()),
-            proxy_uri,
-            via_host,
-            record_route,
-            branch_map: DashMap::new(),
-        }
-    }
-
-    /// Proxies a request, applying RFC 3263 selection and basic RFC 3261 rewriting.
-    pub async fn proxy(&self, request: &Request, transport: TransportKind) -> Result<()> {
-        let span = info_span!(
-            "proxy_request",
-            method = %request.start.method.as_str(),
-            uri = %request.start.uri.as_str()
-        );
-        let _entered = span.enter();
-        let mut req = request.clone();
-        decrement_max_forwards(&mut req.headers).map_err(|_| anyhow!("Max-Forwards exhausted"))?;
-
-        self.prepend_via(&mut req);
-        if self.record_route {
-            self.insert_record_route(&mut req);
-        }
-
-        let target_uri = next_hop_uri(&req);
-        let endpoints = self.resolver.resolve(&target_uri).await?;
-        let payload = serialize_request(&req);
-
-        for ep in endpoints {
-            let target_transport = self.choose_transport(&ep, transport, &payload);
-            let addr: SocketAddr = format!("{}:{}", ep.host, ep.port)
-                .parse()
-                .map_err(|e| anyhow!("invalid target addr: {e}"))?;
-            let ctx = TransportContext::new(target_transport, addr, None);
-            if let Err(_e) = self.dispatcher.dispatch(&ctx, Bytes::from(payload.clone())).await {
-                continue;
-            }
-            return Ok(());
-        }
-        Err(anyhow!("no reachable endpoints"))
-    }
-
-    fn choose_transport(&self, ep: &DnsTarget, _incoming: TransportKind, payload: &Bytes) -> TransportKind {
-        let requested = match ep.transport {
-            DnsTransport::Udp => sip_transport::TransportKind::Udp,
-            DnsTransport::Tcp => sip_transport::TransportKind::Tcp,
-            DnsTransport::Tls => sip_transport::TransportKind::Tls,
-            DnsTransport::Ws => sip_transport::TransportKind::Tcp,
-            DnsTransport::Wss => sip_transport::TransportKind::Tls,
-            DnsTransport::Sctp => sip_transport::TransportKind::Sctp,
-            DnsTransport::TlsSctp => sip_transport::TransportKind::TlsSctp,
-        };
-        let selected = self
-            .policy
-            .choose(requested, payload.len(), matches!(requested, sip_transport::TransportKind::Tls | sip_transport::TransportKind::TlsSctp));
-        match selected {
-            sip_transport::TransportKind::Udp => TransportKind::Udp,
-            sip_transport::TransportKind::Tcp => TransportKind::Tcp,
-            sip_transport::TransportKind::Tls => TransportKind::Tls,
-            sip_transport::TransportKind::Sctp => TransportKind::Tcp,
-            sip_transport::TransportKind::TlsSctp => TransportKind::Tls,
-        }
-    }
-
-    fn prepend_via(&self, req: &mut Request) {
+impl ProxyHelpers {
+    /// Prepends a Via header to the request with a new branch parameter.
+    ///
+    /// RFC 3261 §16.6 step 1: The proxy MUST insert a Via header field value
+    /// into the copy before the existing Via header field values.
+    ///
+    /// # Arguments
+    /// * `request` - The request to modify
+    /// * `host` - The proxy's hostname or IP address
+    /// * `transport` - Transport protocol (UDP, TCP, TLS)
+    ///
+    /// # Returns
+    /// The generated branch ID for transaction correlation
+    pub fn add_via(request: &mut Request, host: &str, transport: &str) -> String {
         let branch = generate_branch_id();
-        self.branch_map
-            .insert(branch.as_str().to_owned(), branch.as_str().to_owned());
-        let via_value = format!(
-            "SIP/2.0/UDP {};branch={};rport",
-            self.via_host, branch
-        );
-        let mut vec = Vec::new();
-        vec.push(Header {
+        let via_value = format!("SIP/2.0/{} {};branch={};rport", transport, host, branch);
+
+        // Prepend to existing Via headers
+        let mut new_headers = Vec::new();
+        new_headers.push(Header {
             name: "Via".into(),
             value: via_value.into(),
         });
-        vec.extend(req.headers.clone().into_iter());
-        req.headers = Headers::from_vec(vec);
+        new_headers.extend(request.headers.clone().into_iter());
+        request.headers = Headers::from_vec(new_headers);
+
+        branch.to_string()
     }
 
-    fn insert_record_route(&self, req: &mut Request) {
-        let rr = format!("<{}>", self.proxy_uri.as_str());
-        req.headers
-            .push("Record-Route".into(), rr.into());
+    /// Inserts a Record-Route header for dialog routing.
+    ///
+    /// RFC 3261 §16.6 step 4: The proxy MAY insert a Record-Route header
+    /// field value in order to remain on the signaling path for future requests.
+    ///
+    /// # Arguments
+    /// * `request` - The request to modify
+    /// * `proxy_uri` - The proxy's SIP URI (will be in Route headers of future requests)
+    pub fn add_record_route(request: &mut Request, proxy_uri: &SipUri) {
+        let rr_value = format!("<{}>", proxy_uri.as_str());
+        request.headers.push("Record-Route".into(), rr_value.into());
     }
-}
 
-fn next_hop_uri(req: &Request) -> SipUri {
-    if let Some(route) = parse_route_headers(&req.headers, "Route").first() {
-        return route.uri().clone();
+    /// Decrements Max-Forwards header and checks for loop.
+    ///
+    /// RFC 3261 §16.6 step 3: The proxy MUST decrement the Max-Forwards value
+    /// by one. If the Max-Forwards value reaches 0, the proxy MUST NOT forward
+    /// the request and MUST respond with 483 (Too Many Hops).
+    ///
+    /// # Arguments
+    /// * `request` - The request to check and modify
+    ///
+    /// # Returns
+    /// * `Ok(())` - Max-Forwards was decremented successfully
+    /// * `Err(_)` - Max-Forwards exhausted (respond with 483)
+    pub fn check_max_forwards(request: &mut Request) -> Result<()> {
+        decrement_max_forwards(&mut request.headers)
+            .map(|_| ())
+            .map_err(|_| anyhow!("Max-Forwards exhausted - respond with 483 Too Many Hops"))
     }
-    // For proxies, Request-URI should be a SIP URI
-    // tel URIs in Request-URI would typically be handled by gateways, not proxies
-    req.start.uri.as_sip()
-        .expect("Proxy requires SIP URI in Request-URI")
-        .clone()
+
+    /// Removes the top Via header from a response before forwarding upstream.
+    ///
+    /// RFC 3261 §16.7 step 3: The proxy MUST remove the topmost Via header
+    /// field value from the response.
+    ///
+    /// # Arguments
+    /// * `headers` - The response headers to modify
+    pub fn remove_top_via(headers: &mut Headers) {
+        // Find and remove the first Via header
+        let mut found_index = None;
+        for (i, header) in headers.iter().enumerate() {
+            if header.name.as_str().eq_ignore_ascii_case("Via") {
+                found_index = Some(i);
+                break;
+            }
+        }
+
+        if let Some(index) = found_index {
+            let mut new_headers = Vec::new();
+            for (i, header) in headers.clone().into_iter().enumerate() {
+                if i != index {
+                    new_headers.push(header);
+                }
+            }
+            *headers = Headers::from_vec(new_headers);
+        }
+    }
+
+    /// Updates the Request-URI to point to the target.
+    ///
+    /// RFC 3261 §16.6 step 5: The proxy MUST place the Request-URI into
+    /// the Request-URI of the forwarded request.
+    ///
+    /// # Arguments
+    /// * `request` - The request to modify
+    /// * `target_uri` - The URI to forward to (usually from location service)
+    pub fn set_request_uri(request: &mut Request, target_uri: SipUri) {
+        request.start.uri = target_uri.into();
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
-    use sip_core::{RequestLine, Method};
-    use sip_transaction::TransportContext;
-    use tokio::sync::Mutex;
+    use sip_core::{Method, RequestLine};
 
-    struct StaticResolver {
-        target: DnsTarget,
-    }
-
-    #[async_trait]
-    impl Resolver for StaticResolver {
-        async fn resolve(&self, _uri: &SipUri) -> Result<Vec<DnsTarget>> {
-            Ok(vec![self.target.clone()])
-        }
-    }
-
-    #[derive(Default)]
-    struct TestDispatcher {
-        sent: Mutex<Vec<Bytes>>,
-    }
-
-    #[async_trait]
-    impl TransportDispatcher for TestDispatcher {
-        async fn dispatch(&self, _ctx: &TransportContext, payload: Bytes) -> Result<()> {
-            let mut guard = self.sent.lock().await;
-            guard.push(payload);
-            Ok(())
-        }
-    }
-
-    #[tokio::test]
-    async fn proxy_inserts_via_and_decrements_max_forwards() {
-        let dispatcher = Arc::new(TestDispatcher::default());
-        let resolver = StaticResolver {
-            target: DnsTarget::new("127.0.0.1", 5060, DnsTransport::Udp),
-        };
-        let proxy = StatefulProxy::new(
-            dispatcher.clone(),
-            resolver,
-            SipUri::parse("sip:proxy.example.com").unwrap(),
-            "proxy.example.com".to_owned(),
-            true,
-        );
-
+    #[test]
+    fn adds_via_header() {
         let mut headers = Headers::new();
+        headers.push("Via".into(), "SIP/2.0/UDP old;branch=z9hG4bK123".into());
         headers.push("Max-Forwards".into(), "70".into());
-        headers.push("Contact".into(), "<sip:alice@example.com>".into());
-        let req = Request::new(
+
+        let mut req = Request::new(
             RequestLine::new(Method::Invite, SipUri::parse("sip:bob@example.com").unwrap()),
             headers,
             Bytes::new(),
         );
 
-        proxy.proxy(&req, TransportKind::Udp).await.expect("proxy");
+        let branch = ProxyHelpers::add_via(&mut req, "proxy.example.com", "UDP");
 
-        let sent = dispatcher.sent.lock().await;
-        assert_eq!(sent.len(), 1);
-        let text = std::str::from_utf8(&sent[0]).unwrap();
-        assert!(text.contains("Via:"), "via missing");
-        assert!(text.contains("Max-Forwards: 69"), "max forwards not decremented");
-        assert!(text.contains("Record-Route"), "record route missing");
+        // Via should be prepended
+        let vias: Vec<_> = req.headers.iter().filter(|h| h.name == "Via").collect();
+        assert_eq!(vias.len(), 2);
+        assert!(vias[0].value.contains("proxy.example.com"));
+        assert!(vias[0].value.contains(&branch));
+        assert!(vias[1].value.contains("old"));
+    }
+
+    #[test]
+    fn adds_record_route() {
+        let mut headers = Headers::new();
+        let mut req = Request::new(
+            RequestLine::new(Method::Invite, SipUri::parse("sip:bob@example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let proxy_uri = SipUri::parse("sip:proxy.example.com").unwrap();
+        ProxyHelpers::add_record_route(&mut req, &proxy_uri);
+
+        let rr = req.headers.get("Record-Route").unwrap();
+        assert!(rr.contains("sip:proxy.example.com"));
+    }
+
+    #[test]
+    fn decrements_max_forwards() {
+        let mut headers = Headers::new();
+        headers.push("Max-Forwards".into(), "70".into());
+
+        let mut req = Request::new(
+            RequestLine::new(Method::Invite, SipUri::parse("sip:bob@example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        assert!(ProxyHelpers::check_max_forwards(&mut req).is_ok());
+        assert_eq!(req.headers.get("Max-Forwards").unwrap(), "69");
+    }
+
+    #[test]
+    fn rejects_zero_max_forwards() {
+        let mut headers = Headers::new();
+        headers.push("Max-Forwards".into(), "0".into());
+
+        let mut req = Request::new(
+            RequestLine::new(Method::Invite, SipUri::parse("sip:bob@example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        assert!(ProxyHelpers::check_max_forwards(&mut req).is_err());
+    }
+
+    #[test]
+    fn removes_top_via() {
+        let mut headers = Headers::new();
+        headers.push("Via".into(), "SIP/2.0/UDP proxy;branch=z9hG4bK456".into());
+        headers.push("Via".into(), "SIP/2.0/UDP client;branch=z9hG4bK123".into());
+        headers.push("From".into(), "<sip:alice@example.com>".into());
+
+        ProxyHelpers::remove_top_via(&mut headers);
+
+        let vias: Vec<_> = headers.iter().filter(|h| h.name == "Via").collect();
+        assert_eq!(vias.len(), 1);
+        assert!(vias[0].value.contains("client"));
+        assert!(!vias[0].value.contains("proxy"));
+    }
+
+    #[test]
+    fn updates_request_uri() {
+        let mut req = Request::new(
+            RequestLine::new(Method::Invite, SipUri::parse("sip:alice@example.com").unwrap()),
+            Headers::new(),
+            Bytes::new(),
+        );
+
+        let target = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+        ProxyHelpers::set_request_uri(&mut req, target.clone());
+
+        assert_eq!(req.start.uri.as_sip().unwrap().as_str(), target.as_str());
     }
 }
