@@ -178,7 +178,7 @@ struct ManagerInner {
     dispatcher: Arc<dyn TransportDispatcher>,
     server: DashMap<TransactionKey, ServerEntry>,
     client: DashMap<TransactionKey, ClientEntry>,
-    client_index: DashMap<SmolStr, TransactionKey>,
+    // Removed client_index - build TransactionKey directly from response
     t1: Duration,
     t2: Duration,
     t4: Duration,
@@ -218,7 +218,6 @@ impl TransactionManager {
                 dispatcher,
                 server: DashMap::new(),
                 client: DashMap::new(),
-                client_index: DashMap::new(),
                 t1,
                 t2,
                 t4,
@@ -234,6 +233,30 @@ impl TransactionManager {
         let via = headers.get("Via")?;
         let branch = branch_from_via(via)?;
         Some(SmolStr::new(branch.to_owned()))
+    }
+
+    fn extract_cseq_method(headers: &Headers) -> Option<Method> {
+        let cseq = headers.get("CSeq")?;
+        // CSeq format: "123 INVITE" or "456 CANCEL"
+        let method_str = cseq.split_whitespace().nth(1)?;
+        // Parse method string
+        match method_str.to_uppercase().as_str() {
+            "INVITE" => Some(Method::Invite),
+            "ACK" => Some(Method::Ack),
+            "BYE" => Some(Method::Bye),
+            "CANCEL" => Some(Method::Cancel),
+            "REGISTER" => Some(Method::Register),
+            "OPTIONS" => Some(Method::Options),
+            "INFO" => Some(Method::Info),
+            "UPDATE" => Some(Method::Update),
+            "MESSAGE" => Some(Method::Message),
+            "PRACK" => Some(Method::Prack),
+            "REFER" => Some(Method::Refer),
+            "SUBSCRIBE" => Some(Method::Subscribe),
+            "NOTIFY" => Some(Method::Notify),
+            "PUBLISH" => Some(Method::Publish),
+            _ => None,
+        }
     }
 
     fn spawn_command_loop(&self, mut rx: mpsc::Receiver<ManagerCommand>) {
@@ -370,19 +393,34 @@ impl TransactionManager {
         };
 
         self.inner.client.insert(key.clone(), entry);
-        self.inner.client_index.insert(branch, key.clone());
         self.apply_client_actions(&key, actions).await;
         Ok(key)
     }
 
     /// Feeds a network response into the appropriate client transaction.
     pub async fn receive_response(&self, response: Response) {
-        if let Some(branch) = Self::extract_branch(&response.headers) {
-            if let Some(key_entry) = self.inner.client_index.get(&branch) {
-                let key = key_entry.value().clone();
-                drop(key_entry);
-                self.dispatch_response(&key, response).await;
-            }
+        // Extract branch from Via header
+        let branch = match Self::extract_branch(&response.headers) {
+            Some(b) => b,
+            None => return,
+        };
+
+        // Extract method from CSeq header
+        let method = match Self::extract_cseq_method(&response.headers) {
+            Some(m) => m,
+            None => return,
+        };
+
+        // Build transaction key (is_server=false for client transactions)
+        let key = TransactionKey {
+            branch,
+            method,
+            is_server: false,
+        };
+
+        // Look up and dispatch to client transaction
+        if self.inner.client.contains_key(&key) {
+            self.dispatch_response(&key, response).await;
         }
     }
 
@@ -576,10 +614,8 @@ impl TransactionManager {
                     if let Some(mut entry) = self.inner.client.get_mut(key) {
                         entry.cancel_all();
                         let tu = entry.tu.clone();
-                        let branch = entry.branch.clone();
                         drop(entry);
                         tu.on_terminated(key, reason.as_str()).await;
-                        self.inner.client_index.remove(&branch);
                     }
                     self.inner.client.remove(key);
                 }
@@ -632,10 +668,8 @@ impl TransactionManager {
                     if let Some(mut entry) = self.inner.client.get_mut(key) {
                         entry.cancel_all();
                         let tu = entry.tu.clone();
-                        let branch = entry.branch.clone();
                         drop(entry);
                         tu.on_terminated(key, reason.as_str()).await;
-                        self.inner.client_index.remove(&branch);
                     }
                     self.inner.client.remove(key);
                 }
@@ -891,10 +925,13 @@ mod tests {
         )
     }
 
-    fn build_response_with_branch(code: u16, branch: &str) -> Response {
+    fn build_response_with_branch(code: u16, branch: &str, method: Method) -> Response {
         let mut headers = Headers::new();
         let via = format!("SIP/2.0/UDP host.invalid;branch={}", branch);
         headers.push(SmolStr::new("Via"), SmolStr::new(via));
+        // Add CSeq header with method for transaction matching
+        let cseq = format!("1 {}", method.as_str());
+        headers.push(SmolStr::new("CSeq"), SmolStr::new(cseq));
         Response::new(
             StatusLine::new(code, SmolStr::new("OK")),
             headers,
@@ -953,10 +990,10 @@ mod tests {
             .unwrap();
 
         manager
-            .receive_response(build_response_with_branch(180, branch))
+            .receive_response(build_response_with_branch(180, branch, Method::Options))
             .await;
         manager
-            .receive_response(build_response_with_branch(200, branch))
+            .receive_response(build_response_with_branch(200, branch, Method::Options))
             .await;
 
         let provisional = tu.provisional.lock().await;
@@ -985,10 +1022,10 @@ mod tests {
             .unwrap();
 
         manager
-            .receive_response(build_response_with_branch(183, branch))
+            .receive_response(build_response_with_branch(183, branch, Method::Invite))
             .await;
         manager
-            .receive_response(build_response_with_branch(200, branch))
+            .receive_response(build_response_with_branch(200, branch, Method::Invite))
             .await;
 
         let provisional = tu.provisional.lock().await;

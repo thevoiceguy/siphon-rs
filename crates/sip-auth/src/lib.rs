@@ -111,12 +111,16 @@ impl Qop {
     }
 }
 
-/// Nonce with expiry tracking.
+/// Maximum number of nonces to keep in memory to prevent unbounded growth.
+const MAX_NONCE_COUNT: usize = 10_000;
+
+/// Nonce with expiry tracking and usage tracking for replay protection.
 #[derive(Debug, Clone)]
 pub struct Nonce {
     pub value: SmolStr,
     pub created_at: Instant,
     pub ttl: Duration,
+    pub last_nc: u32, // Last nonce-count seen (for replay protection)
 }
 
 impl Nonce {
@@ -130,19 +134,32 @@ impl Nonce {
             value: SmolStr::new(token),
             created_at: Instant::now(),
             ttl,
+            last_nc: 0,
         }
     }
 
     pub fn is_valid(&self) -> bool {
         self.created_at.elapsed() <= self.ttl
     }
+
+    /// Validates that the nonce-count is incrementing (replay protection).
+    /// Returns true if nc is valid (greater than last_nc).
+    pub fn validate_nc(&mut self, nc: u32) -> bool {
+        if nc > self.last_nc {
+            self.last_nc = nc;
+            true
+        } else {
+            false
+        }
+    }
 }
 
-/// Nonce manager with automatic cleanup.
+/// Nonce manager with automatic cleanup and size limits.
 #[derive(Debug)]
 pub struct NonceManager {
     nonces: Arc<DashMap<SmolStr, Nonce>>,
     ttl: Duration,
+    max_nonces: usize,
 }
 
 impl NonceManager {
@@ -150,15 +167,47 @@ impl NonceManager {
         Self {
             nonces: Arc::new(DashMap::new()),
             ttl,
+            max_nonces: MAX_NONCE_COUNT,
         }
     }
 
+    pub fn with_max_nonces(mut self, max: usize) -> Self {
+        self.max_nonces = max;
+        self
+    }
+
     pub fn generate(&self) -> Nonce {
+        // If we're at capacity, run cleanup before generating new nonce
+        if self.nonces.len() >= self.max_nonces {
+            self.cleanup();
+
+            // If still at capacity after cleanup, remove oldest nonces
+            if self.nonces.len() >= self.max_nonces {
+                self.remove_oldest(self.max_nonces / 10); // Remove 10% of capacity
+            }
+        }
+
         let nonce = Nonce::new(self.ttl);
         self.nonces.insert(nonce.value.clone(), nonce.clone());
         nonce
     }
 
+    /// Verifies nonce exists and is valid, and validates nonce-count for replay protection.
+    /// Returns true if nonce is valid and nc is greater than the last nc seen.
+    pub fn verify_with_nc(&self, value: &str, nc: u32) -> bool {
+        if let Some(mut entry) = self.nonces.get_mut(value) {
+            if !entry.is_valid() {
+                return false;
+            }
+            // Validate that nc is incrementing (replay protection)
+            entry.validate_nc(nc)
+        } else {
+            false
+        }
+    }
+
+    /// Basic verification without nonce-count tracking (for backwards compatibility).
+    /// Use verify_with_nc() for proper replay protection.
     pub fn verify(&self, value: &str) -> bool {
         if let Some(entry) = self.nonces.get(value) {
             entry.is_valid()
@@ -167,8 +216,24 @@ impl NonceManager {
         }
     }
 
+    /// Removes expired nonces from the map.
     pub fn cleanup(&self) {
         self.nonces.retain(|_, nonce| nonce.is_valid());
+    }
+
+    /// Removes the oldest nonces up to the specified count.
+    fn remove_oldest(&self, count: usize) {
+        let mut entries: Vec<_> = self.nonces.iter()
+            .map(|entry| (entry.key().clone(), entry.value().created_at))
+            .collect();
+
+        // Sort by creation time (oldest first)
+        entries.sort_by_key(|(_, created_at)| *created_at);
+
+        // Remove oldest entries
+        for (key, _) in entries.iter().take(count) {
+            self.nonces.remove(key);
+        }
     }
 
     pub fn count(&self) -> usize {
@@ -190,10 +255,18 @@ pub struct DigestAuthenticator<S: CredentialStore> {
     pub store: S,
     pub nonce_manager: NonceManager,
     pub proxy_auth: bool,
+    pub opaque: SmolStr, // Opaque session token for additional security
 }
 
 impl<S: CredentialStore> DigestAuthenticator<S> {
     pub fn new(realm: &str, store: S) -> Self {
+        // Generate a random opaque value for this authenticator instance
+        let opaque: String = thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(32)
+            .map(char::from)
+            .collect();
+
         Self {
             realm: SmolStr::new(realm.to_owned()),
             algorithm: DigestAlgorithm::Md5,
@@ -201,6 +274,7 @@ impl<S: CredentialStore> DigestAuthenticator<S> {
             store,
             nonce_manager: NonceManager::default(),
             proxy_auth: false,
+            opaque: SmolStr::new(opaque),
         }
     }
 
@@ -230,11 +304,12 @@ impl<S: CredentialStore> DigestAuthenticator<S> {
         let mut value = String::new();
         let _ = write!(
             value,
-            "Digest realm=\"{}\", nonce=\"{}\", algorithm={}, qop=\"{}\"",
+            "Digest realm=\"{}\", nonce=\"{}\", algorithm={}, qop=\"{}\", opaque=\"{}\"",
             self.realm,
             nonce.value,
             self.algorithm.as_str(),
-            self.qop.as_str()
+            self.qop.as_str(),
+            self.opaque
         );
 
         let header_name = if self.proxy_auth {
@@ -372,15 +447,47 @@ impl<S: CredentialStore> Authenticator for DigestAuthenticator<S> {
         let nc = parsed.param("nc");
         let cnonce = parsed.param("cnonce");
         let qop = parsed.param("qop").and_then(|q| Qop::from_str(q.as_str()));
+        let opaque = parsed.param("opaque");
 
         if realm.as_str() != self.realm.as_str() {
             info!(realm = %realm, "digest realm mismatch");
             return Ok(false);
         }
 
-        if !self.nonce_manager.verify(nonce) {
-            info!("digest nonce invalid/expired");
+        // Validate opaque parameter matches our instance opaque
+        if let Some(client_opaque) = opaque {
+            if client_opaque.as_str() != self.opaque.as_str() {
+                info!("digest opaque mismatch");
+                return Ok(false);
+            }
+        } else {
+            // Opaque is required when we send it in the challenge
+            info!("digest missing opaque parameter");
             return Ok(false);
+        }
+
+        // Parse and validate nonce-count for replay protection
+        if let Some(nc_str) = nc {
+            // Parse nc from hex string (e.g., "00000001")
+            let nc_value = u32::from_str_radix(nc_str.as_str(), 16)
+                .map_err(|_| anyhow!("invalid nc format"))?;
+
+            if !self.nonce_manager.verify_with_nc(nonce, nc_value) {
+                info!("digest nonce invalid/expired or nc not incrementing (replay attack)");
+                return Ok(false);
+            }
+        } else {
+            // If qop is specified, nc is required
+            if qop.is_some() {
+                info!("digest missing nc parameter with qop");
+                return Ok(false);
+            }
+
+            // Fall back to basic verification without nc tracking
+            if !self.nonce_manager.verify(nonce) {
+                info!("digest nonce invalid/expired");
+                return Ok(false);
+            }
         }
 
         let creds = self
@@ -452,6 +559,7 @@ impl DigestClient {
         nonce: &str,
         algorithm: DigestAlgorithm,
         qop: Option<Qop>,
+        opaque: Option<&str>,
         body: &[u8],
     ) -> String {
         self.nc += 1;
@@ -489,6 +597,10 @@ impl DigestClient {
 
         if let Some(qop) = qop {
             auth.push_str(&format!(", qop={}, nc={}, cnonce=\"{}\"", qop.as_str(), nc_str, cnonce));
+        }
+
+        if let Some(opaque_val) = opaque {
+            auth.push_str(&format!(", opaque=\"{}\"", opaque_val));
         }
 
         auth
@@ -632,8 +744,8 @@ mod tests {
         headers.push(
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
-                "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth",
-                creds.username, creds.realm, nonce.value, uri, response, cnonce, nc
+                "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
+                creds.username, creds.realm, nonce.value, uri, response, cnonce, nc, auth.opaque
             )),
         );
 
@@ -679,8 +791,8 @@ mod tests {
         headers.push(
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
-                "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=SHA-256, cnonce=\"{}\", nc={}, qop=auth",
-                creds.username, creds.realm, nonce.value, uri, response, cnonce, nc
+                "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=SHA-256, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
+                creds.username, creds.realm, nonce.value, uri, response, cnonce, nc, auth.opaque
             )),
         );
 
@@ -726,8 +838,8 @@ mod tests {
         headers.push(
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
-                "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=SHA-512, cnonce=\"{}\", nc={}, qop=auth",
-                creds.username, creds.realm, nonce.value, uri, response, cnonce, nc
+                "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=SHA-512, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
+                creds.username, creds.realm, nonce.value, uri, response, cnonce, nc, auth.opaque
             )),
         );
 
@@ -806,6 +918,7 @@ mod tests {
             "testnonce123",
             DigestAlgorithm::Md5,
             Some(Qop::Auth),
+            Some("opaque123"),
             b"",
         );
 
@@ -818,6 +931,7 @@ mod tests {
         assert!(auth.contains("qop=auth"));
         assert!(auth.contains("nc=00000001"));
         assert!(auth.contains("cnonce="));
+        assert!(auth.contains("opaque=\"opaque123\""));
     }
 
     #[test]
@@ -831,6 +945,7 @@ mod tests {
             "nonce1",
             DigestAlgorithm::Md5,
             Some(Qop::Auth),
+            None,
             b"",
         );
         assert!(auth1.contains("nc=00000001"));
@@ -842,6 +957,7 @@ mod tests {
             "nonce1",
             DigestAlgorithm::Md5,
             Some(Qop::Auth),
+            None,
             b"",
         );
         assert!(auth2.contains("nc=00000002"));
@@ -872,6 +988,7 @@ mod tests {
             &nonce.value,
             DigestAlgorithm::Sha256,
             Some(Qop::Auth),
+            Some(&server_auth.opaque),
             b"",
         );
 
@@ -923,8 +1040,8 @@ mod tests {
         headers.push(
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
-                "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth-int",
-                creds.username, creds.realm, nonce.value, uri, response, cnonce, nc
+                "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth-int, opaque=\"{}\"",
+                creds.username, creds.realm, nonce.value, uri, response, cnonce, nc, auth.opaque
             )),
         );
 
@@ -935,5 +1052,193 @@ mod tests {
         );
 
         assert!(auth.verify(&request, &request.headers).unwrap());
+    }
+
+    #[test]
+    fn digest_auth_rejects_replay_attack() {
+        let creds = Credentials {
+            username: SmolStr::new("alice"),
+            password: SmolStr::new("secret"),
+            realm: SmolStr::new("example.com"),
+        };
+        let store = MemoryCredentialStore::with(vec![creds.clone()]);
+        let auth = DigestAuthenticator::new("example.com", store);
+
+        let nonce = auth.nonce_manager.generate();
+        let method = Method::Invite;
+        let uri = "sip:bob@example.com";
+        let nc = "00000001";
+        let cnonce = "abc123";
+
+        let response = auth.compute_response(
+            creds.username.as_str(),
+            creds.password.as_str(),
+            method,
+            uri,
+            &nonce.value,
+            Some(nc),
+            Some(cnonce),
+            Some(Qop::Auth),
+            b"",
+        );
+
+        // First request with nc=00000001 should succeed
+        let mut headers = Headers::new();
+        headers.push(
+            SmolStr::new("Authorization"),
+            SmolStr::new(format!(
+                "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
+                creds.username, creds.realm, nonce.value, uri, response, cnonce, nc, auth.opaque
+            )),
+        );
+
+        let request = Request::new(
+            RequestLine::new(method, SipUri::parse(uri).unwrap()),
+            headers.clone(),
+            Bytes::new(),
+        );
+
+        assert!(auth.verify(&request, &request.headers).unwrap());
+
+        // Second request with same nc=00000001 should be rejected (replay attack)
+        let replay_request = Request::new(
+            RequestLine::new(method, SipUri::parse(uri).unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        assert!(!auth.verify(&replay_request, &replay_request.headers).unwrap());
+    }
+
+    #[test]
+    fn digest_auth_rejects_missing_opaque() {
+        let creds = Credentials {
+            username: SmolStr::new("alice"),
+            password: SmolStr::new("secret"),
+            realm: SmolStr::new("example.com"),
+        };
+        let store = MemoryCredentialStore::with(vec![creds.clone()]);
+        let auth = DigestAuthenticator::new("example.com", store);
+
+        let nonce = auth.nonce_manager.generate();
+        let method = Method::Invite;
+        let uri = "sip:bob@example.com";
+        let nc = "00000001";
+        let cnonce = "abc123";
+
+        let response = auth.compute_response(
+            creds.username.as_str(),
+            creds.password.as_str(),
+            method,
+            uri,
+            &nonce.value,
+            Some(nc),
+            Some(cnonce),
+            Some(Qop::Auth),
+            b"",
+        );
+
+        // Authorization without opaque parameter
+        let mut headers = Headers::new();
+        headers.push(
+            SmolStr::new("Authorization"),
+            SmolStr::new(format!(
+                "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth",
+                creds.username, creds.realm, nonce.value, uri, response, cnonce, nc
+            )),
+        );
+
+        let request = Request::new(
+            RequestLine::new(method, SipUri::parse(uri).unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        assert!(!auth.verify(&request, &request.headers).unwrap());
+    }
+
+    #[test]
+    fn digest_auth_rejects_wrong_opaque() {
+        let creds = Credentials {
+            username: SmolStr::new("alice"),
+            password: SmolStr::new("secret"),
+            realm: SmolStr::new("example.com"),
+        };
+        let store = MemoryCredentialStore::with(vec![creds.clone()]);
+        let auth = DigestAuthenticator::new("example.com", store);
+
+        let nonce = auth.nonce_manager.generate();
+        let method = Method::Invite;
+        let uri = "sip:bob@example.com";
+        let nc = "00000001";
+        let cnonce = "abc123";
+
+        let response = auth.compute_response(
+            creds.username.as_str(),
+            creds.password.as_str(),
+            method,
+            uri,
+            &nonce.value,
+            Some(nc),
+            Some(cnonce),
+            Some(Qop::Auth),
+            b"",
+        );
+
+        // Authorization with wrong opaque parameter
+        let mut headers = Headers::new();
+        headers.push(
+            SmolStr::new("Authorization"),
+            SmolStr::new(format!(
+                "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth, opaque=\"wrong-opaque\"",
+                creds.username, creds.realm, nonce.value, uri, response, cnonce, nc
+            )),
+        );
+
+        let request = Request::new(
+            RequestLine::new(method, SipUri::parse(uri).unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        assert!(!auth.verify(&request, &request.headers).unwrap());
+    }
+
+    #[test]
+    fn nonce_manager_enforces_max_limit() {
+        let manager = NonceManager::new(Duration::from_secs(60)).with_max_nonces(100);
+
+        // Generate 100 nonces (at limit)
+        for _ in 0..100 {
+            manager.generate();
+        }
+        assert_eq!(manager.count(), 100);
+
+        // Generate one more - should trigger cleanup or removal of oldest
+        manager.generate();
+        assert!(manager.count() <= 100, "Should not exceed max nonce count");
+    }
+
+    #[test]
+    fn nonce_manager_removes_oldest_when_full() {
+        let manager = NonceManager::new(Duration::from_secs(60)).with_max_nonces(10);
+
+        // Generate 10 nonces
+        let mut nonce_values = Vec::new();
+        for _ in 0..10 {
+            let nonce = manager.generate();
+            nonce_values.push(nonce.value.clone());
+            std::thread::sleep(std::time::Duration::from_millis(1)); // Ensure different timestamps
+        }
+
+        // Generate one more - should remove oldest
+        let new_nonce = manager.generate();
+        assert_eq!(manager.count(), 10);
+
+        // First nonce should be removed (oldest)
+        assert!(!manager.verify(&nonce_values[0]));
+        // Last nonces should still be valid
+        assert!(manager.verify(&nonce_values[9]));
+        assert!(manager.verify(&new_nonce.value));
     }
 }

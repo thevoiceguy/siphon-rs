@@ -302,6 +302,8 @@ impl UserAgentClient {
                 }
             });
 
+        let opaque = challenge.get("opaque").map(|s| s.as_str());
+
         // Generate authorization
         let uri = original_request.start.uri.as_str();
         let auth_value = digest_client.generate_authorization(
@@ -311,6 +313,7 @@ impl UserAgentClient {
             nonce,
             algorithm,
             qop,
+            opaque,
             &original_request.body,
         );
 

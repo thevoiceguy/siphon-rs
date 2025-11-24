@@ -7,7 +7,22 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
+
+/// Maximum size of SIP headers before \r\n\r\n (64 KB).
+/// Typical SIP messages have ~2-4 KB of headers. This limit protects against
+/// unbounded header growth from malicious peers that never send \r\n\r\n.
+const MAX_HEADER_SIZE: usize = 64 * 1024;
+
+/// Maximum size of SIP message body based on Content-Length (10 MB).
+/// Typical SIP bodies (SDP) are ~1-2 KB. Some scenarios (multipart MIME,
+/// large presence documents) may need more, but 10 MB is a reasonable limit
+/// to prevent memory exhaustion attacks via huge Content-Length values.
+const MAX_BODY_SIZE: usize = 10 * 1024 * 1024;
+
+/// Maximum total buffer size before we stop reading from peer (16 MB).
+/// Protects against accumulation of multiple large messages in buffer.
+const MAX_BUFFER_SIZE: usize = 16 * 1024 * 1024;
 
 /// Indicates which transport carried an inbound or outbound message.
 ///
@@ -419,20 +434,46 @@ async fn spawn_stream_session<S>(
 
     let mut buf = BytesMut::with_capacity(4096);
     loop {
+        // Check if buffer has grown too large - protects against memory exhaustion
+        if buf.len() >= MAX_BUFFER_SIZE {
+            warn!(
+                peer = %peer,
+                buffer_size = buf.len(),
+                "stream buffer exceeded MAX_BUFFER_SIZE, closing connection"
+            );
+            transport_metrics().on_error(transport.as_str(), "buffer_overflow");
+            break;
+        }
+
         match reader.read_buf(&mut buf).await {
             Ok(0) => break,
             Ok(_) => {
                 transport_metrics().on_packet_received(transport.as_str());
-                for payload in drain_sip_frames(&mut buf) {
-                    let packet = InboundPacket {
-                        transport,
-                        peer,
-                        payload,
-                        stream: Some(writer_tx.clone()),
-                    };
-                    if tx.send(packet).await.is_err() {
-                        error!("receiver dropped; shutting down {:?} session", transport);
-                        transport_metrics().on_error(transport.as_str(), "dispatch");
+
+                // Try to extract complete SIP messages
+                match drain_sip_frames(&mut buf) {
+                    Ok(frames) => {
+                        for payload in frames {
+                            let packet = InboundPacket {
+                                transport,
+                                peer,
+                                payload,
+                                stream: Some(writer_tx.clone()),
+                            };
+                            if tx.send(packet).await.is_err() {
+                                error!("receiver dropped; shutting down {:?} session", transport);
+                                transport_metrics().on_error(transport.as_str(), "dispatch");
+                                break;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            peer = %peer,
+                            error = %e,
+                            "SIP framing error, closing connection"
+                        );
+                        transport_metrics().on_error(transport.as_str(), "framing_error");
                         break;
                     }
                 }
@@ -450,30 +491,67 @@ async fn spawn_stream_session<S>(
 }
 
 /// Splits buffered TCP/TLS data into complete SIP messages using Content-Length or CRLFCRLF.
-fn drain_sip_frames(buf: &mut BytesMut) -> Vec<Bytes> {
+///
+/// # Security
+///
+/// Enforces MAX_HEADER_SIZE and MAX_BODY_SIZE limits to prevent memory exhaustion attacks.
+/// Returns an error if limits are exceeded, causing the connection to be closed.
+fn drain_sip_frames(buf: &mut BytesMut) -> Result<Vec<Bytes>> {
     let mut frames = Vec::new();
     loop {
-        // Handle CRLF keep-alive pings
+        // Handle CRLF keep-alive pings (RFC 5626)
         if buf.len() <= 2 && buf.iter().all(|b| *b == b'\r' || *b == b'\n') {
             buf.clear();
             break;
         }
 
+        // Look for end of headers (\r\n\r\n)
         let head_end = match memchr::memmem::find(buf.as_ref(), b"\r\n\r\n") {
             Some(pos) => pos,
-            None => break,
+            None => {
+                // No complete headers yet - check if buffer is growing too large
+                if buf.len() > MAX_HEADER_SIZE {
+                    return Err(anyhow!(
+                        "SIP headers exceed MAX_HEADER_SIZE ({} bytes), possible attack",
+                        MAX_HEADER_SIZE
+                    ));
+                }
+                break;
+            }
         };
+
+        // Check header size limit
+        if head_end > MAX_HEADER_SIZE {
+            return Err(anyhow!(
+                "SIP headers are {} bytes, exceeds MAX_HEADER_SIZE ({} bytes)",
+                head_end,
+                MAX_HEADER_SIZE
+            ));
+        }
 
         let header_bytes = &buf[..head_end];
         let content_length = parse_content_length(header_bytes);
+
+        // Check body size limit
+        if let Some(cl) = content_length {
+            if cl > MAX_BODY_SIZE {
+                return Err(anyhow!(
+                    "Content-Length {} exceeds MAX_BODY_SIZE ({} bytes)",
+                    cl,
+                    MAX_BODY_SIZE
+                ));
+            }
+        }
+
         let needed = head_end + 4 + content_length.unwrap_or(0);
         if buf.len() < needed {
+            // Don't have complete message yet
             break;
         }
 
         frames.push(buf.split_to(needed).freeze());
     }
-    frames
+    Ok(frames)
 }
 
 fn parse_content_length(headers: &[u8]) -> Option<usize> {
@@ -499,7 +577,7 @@ mod tests {
         let msg2 = b"SIP/2.0 200 OK\r\nContent-Length: 0\r\n\r\n";
         let payload = [msg1.as_slice(), msg2.as_slice()].concat();
         let mut buf = BytesMut::from(&payload[..]);
-        let frames = drain_sip_frames(&mut buf);
+        let frames = drain_sip_frames(&mut buf).unwrap();
         assert_eq!(frames.len(), 2);
         assert!(buf.is_empty());
         assert_eq!(frames[0].as_ref(), msg1);
@@ -510,7 +588,7 @@ mod tests {
     fn leaves_partial_body_in_buffer() {
         let payload = b"OPTIONS sip:a SIP/2.0\r\nContent-Length: 5\r\n\r\nhi";
         let mut buf = BytesMut::from(&payload[..]);
-        let frames = drain_sip_frames(&mut buf);
+        let frames = drain_sip_frames(&mut buf).unwrap();
         assert!(frames.is_empty(), "should not emit incomplete frame");
         assert_eq!(buf.len(), payload.len());
     }
@@ -518,9 +596,77 @@ mod tests {
     #[test]
     fn discards_crlf_keepalive() {
         let mut buf = BytesMut::from(&b"\r\n"[..]);
-        let frames = drain_sip_frames(&mut buf);
+        let frames = drain_sip_frames(&mut buf).unwrap();
         assert!(frames.is_empty());
         assert!(buf.is_empty());
+    }
+
+    // Security tests - memory exhaustion protections
+
+    #[test]
+    fn rejects_headers_exceeding_max_size() {
+        // Create a SIP message with headers larger than MAX_HEADER_SIZE (64 KB)
+        let mut headers = String::from("OPTIONS sip:a SIP/2.0\r\n");
+        // Add a very long header value to exceed 64 KB
+        headers.push_str("X-Large-Header: ");
+        headers.push_str(&"A".repeat(70 * 1024)); // 70 KB header value
+        headers.push_str("\r\n\r\n");
+
+        let mut buf = BytesMut::from(headers.as_bytes());
+        let result = drain_sip_frames(&mut buf);
+
+        assert!(result.is_err(), "should reject oversized headers");
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("MAX_HEADER_SIZE"));
+    }
+
+    #[test]
+    fn rejects_partial_headers_exceeding_max_size() {
+        // Create partial headers (no \r\n\r\n yet) larger than MAX_HEADER_SIZE
+        let mut headers = String::from("OPTIONS sip:a SIP/2.0\r\n");
+        headers.push_str("X-Large-Header: ");
+        headers.push_str(&"B".repeat(70 * 1024)); // 70 KB, no terminator
+
+        let mut buf = BytesMut::from(headers.as_bytes());
+        let result = drain_sip_frames(&mut buf);
+
+        assert!(result.is_err(), "should reject incomplete headers exceeding limit");
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("MAX_HEADER_SIZE"));
+    }
+
+    #[test]
+    fn rejects_content_length_exceeding_max_body_size() {
+        // Create a SIP message with Content-Length larger than MAX_BODY_SIZE (10 MB)
+        let oversized_cl = (11 * 1024 * 1024).to_string(); // 11 MB
+        let msg = format!(
+            "OPTIONS sip:a SIP/2.0\r\nContent-Length: {}\r\n\r\n",
+            oversized_cl
+        );
+
+        let mut buf = BytesMut::from(msg.as_bytes());
+        let result = drain_sip_frames(&mut buf);
+
+        assert!(result.is_err(), "should reject oversized Content-Length");
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("MAX_BODY_SIZE"));
+    }
+
+    #[test]
+    fn accepts_headers_just_under_max_size() {
+        // Create a SIP message with headers just under MAX_HEADER_SIZE (64 KB)
+        let mut headers = String::from("OPTIONS sip:a SIP/2.0\r\n");
+        // Add a header that brings us close to but under 64 KB
+        headers.push_str("X-Large-Header: ");
+        headers.push_str(&"C".repeat(60 * 1024)); // 60 KB header value
+        headers.push_str("\r\nContent-Length: 0\r\n\r\n");
+
+        let mut buf = BytesMut::from(headers.as_bytes());
+        let result = drain_sip_frames(&mut buf);
+
+        assert!(result.is_ok(), "should accept headers under limit");
+        let frames = result.unwrap();
+        assert_eq!(frames.len(), 1);
     }
 
     // TransportKind tests

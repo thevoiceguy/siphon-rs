@@ -307,8 +307,21 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
     fn handle_register(&self, request: &Request) -> Result<Response> {
         // Authenticate if authenticator is configured
         if let Some(auth) = &self.authenticator {
-            if !auth.verify(request, &request.headers)? {
-                return auth.challenge(request);
+            match auth.verify(request, &request.headers) {
+                Ok(true) => {
+                    // Authentication succeeded, continue processing
+                }
+                Ok(false) => {
+                    // Authentication failed - issue challenge
+                    info!("REGISTER authentication failed, issuing challenge");
+                    return auth.challenge(request);
+                }
+                Err(e) => {
+                    // Authentication error (missing/invalid headers, unknown user, etc.)
+                    // Treat as authentication failure and issue challenge instead of 500
+                    warn!("REGISTER authentication error: {}, issuing challenge", e);
+                    return auth.challenge(request);
+                }
             }
         }
 
@@ -910,5 +923,122 @@ mod tests {
 
         let uri = registrar.extract_contact_uri("sip:alice@example.com;expires=3600");
         assert_eq!(uri.as_str(), "sip:alice@example.com");
+    }
+
+    #[test]
+    fn registrar_returns_401_for_unknown_user() {
+        let store = MemoryLocationStore::new();
+        let creds = Credentials {
+            username: "alice".into(),
+            password: "secret".into(),
+            realm: "example.com".into(),
+        };
+        let auth = DigestAuthenticator::new("example.com", MemoryCredentialStore::with(vec![creds]));
+        let registrar = BasicRegistrar::new(store, Some(auth));
+
+        // Build a REGISTER with valid auth headers but unknown user
+        let nonce = registrar.authenticator.as_ref().unwrap().nonce_manager.generate();
+
+        let mut headers = Headers::new();
+        headers.push("Via".into(), "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8".into());
+        headers.push("From".into(), "<sip:bob@example.com>;tag=1234".into());
+        headers.push("To".into(), "<sip:bob@example.com>".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+        headers.push("Contact".into(), "<sip:ua.example.com>".into());
+        headers.push(
+            "Authorization".into(),
+            format!(
+                "Digest username=\"bob\", realm=\"example.com\", nonce=\"{}\", uri=\"sip:example.com\", response=\"invalid\", opaque=\"{}\"",
+                nonce.value,
+                registrar.authenticator.as_ref().unwrap().opaque
+            ).into()
+        );
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        // Should return 401 challenge, not 500 error
+        let response = registrar.handle_register(&request).expect("should return response");
+        assert_eq!(response.start.code, 401, "Unknown user should return 401, not 500");
+        assert!(response.headers.get("WWW-Authenticate").is_some());
+    }
+
+    #[test]
+    fn registrar_returns_401_for_malformed_auth_header() {
+        let store = MemoryLocationStore::new();
+        let creds = Credentials {
+            username: "alice".into(),
+            password: "secret".into(),
+            realm: "example.com".into(),
+        };
+        let auth = DigestAuthenticator::new("example.com", MemoryCredentialStore::with(vec![creds]));
+        let registrar = BasicRegistrar::new(store, Some(auth));
+
+        let mut headers = Headers::new();
+        headers.push("Via".into(), "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8".into());
+        headers.push("From".into(), "<sip:alice@example.com>;tag=1234".into());
+        headers.push("To".into(), "<sip:alice@example.com>".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+        headers.push("Contact".into(), "<sip:ua.example.com>".into());
+        // Malformed Authorization header (missing required fields)
+        headers.push("Authorization".into(), "Digest username=\"alice\"".into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        // Should return 401 challenge, not 500 error
+        let response = registrar.handle_register(&request).expect("should return response");
+        assert_eq!(response.start.code, 401, "Malformed auth should return 401, not 500");
+        assert!(response.headers.get("WWW-Authenticate").is_some());
+    }
+
+    #[test]
+    fn registrar_returns_401_for_invalid_nonce_count() {
+        let store = MemoryLocationStore::new();
+        let creds = Credentials {
+            username: "alice".into(),
+            password: "secret".into(),
+            realm: "example.com".into(),
+        };
+        let auth = DigestAuthenticator::new("example.com", MemoryCredentialStore::with(vec![creds]));
+        let registrar = BasicRegistrar::new(store, Some(auth));
+
+        let nonce = registrar.authenticator.as_ref().unwrap().nonce_manager.generate();
+
+        let mut headers = Headers::new();
+        headers.push("Via".into(), "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8".into());
+        headers.push("From".into(), "<sip:alice@example.com>;tag=1234".into());
+        headers.push("To".into(), "<sip:alice@example.com>".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+        headers.push("Contact".into(), "<sip:ua.example.com>".into());
+        // Invalid nc format (not hex)
+        headers.push(
+            "Authorization".into(),
+            format!(
+                "Digest username=\"alice\", realm=\"example.com\", nonce=\"{}\", uri=\"sip:example.com\", response=\"test\", nc=INVALID, cnonce=\"abc\", qop=auth, opaque=\"{}\"",
+                nonce.value,
+                registrar.authenticator.as_ref().unwrap().opaque
+            ).into()
+        );
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        // Should return 401 challenge, not 500 error
+        let response = registrar.handle_register(&request).expect("should return response");
+        assert_eq!(response.start.code, 401, "Invalid nc format should return 401, not 500");
+        assert!(response.headers.get("WWW-Authenticate").is_some());
     }
 }
