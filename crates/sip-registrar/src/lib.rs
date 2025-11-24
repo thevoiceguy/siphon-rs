@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use bytes::Bytes;
 use chrono::Utc;
 use dashmap::DashMap;
@@ -301,6 +301,37 @@ impl<S: LocationStore, A: Authenticator> BasicRegistrar<S, A> {
             SmolStr::new(trimmed.to_owned())
         }
     }
+
+    /// Builds an error response for malformed REGISTER requests.
+    fn build_error_response(&self, request: &Request, code: u16, reason: &str) -> Result<Response> {
+        let mut headers = Headers::new();
+
+        // RFC 3261: Copy required headers from request to response
+        if let Some(via) = request.headers.get("Via") {
+            headers.push(SmolStr::new("Via"), via.clone());
+        }
+        if let Some(from) = request.headers.get("From") {
+            headers.push(SmolStr::new("From"), from.clone());
+        }
+        // RFC 3261 §8.2.6.2: UAS MUST add tag to To header if not present
+        if let Some(to) = request.headers.get("To") {
+            headers.push(SmolStr::new("To"), ensure_to_tag(to.as_str()));
+        }
+        if let Some(call_id) = request.headers.get("Call-ID") {
+            headers.push(SmolStr::new("Call-ID"), call_id.clone());
+        }
+        if let Some(cseq) = request.headers.get("CSeq") {
+            headers.push(SmolStr::new("CSeq"), cseq.clone());
+        }
+
+        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0".to_owned()));
+
+        Ok(Response::new(
+            StatusLine::new(code, SmolStr::new(reason.to_owned())),
+            headers,
+            Bytes::new(),
+        ))
+    }
 }
 
 impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
@@ -326,8 +357,21 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
         }
 
         // Extract AOR from To header
-        let to_uri = header(&request.headers, "To").ok_or_else(|| anyhow!("missing To"))?;
-        let to_parsed = parse_to_header(to_uri).ok_or_else(|| anyhow!("invalid To"))?;
+        let to_uri = match header(&request.headers, "To") {
+            Some(h) => h,
+            None => {
+                warn!("REGISTER missing To header");
+                return self.build_error_response(request, 400, "Bad Request - Missing To header");
+            }
+        };
+
+        let to_parsed = match parse_to_header(to_uri) {
+            Some(p) => p,
+            None => {
+                warn!("REGISTER invalid To header");
+                return self.build_error_response(request, 400, "Bad Request - Invalid To header");
+            }
+        };
         let aor = to_parsed.inner().uri().as_str().to_owned();
 
         // Extract Call-ID and CSeq
@@ -347,7 +391,7 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
         let contacts = contact_headers(&request.headers);
         if contacts.is_empty() {
             warn!("REGISTER missing Contact header");
-            return Err(anyhow!("REGISTER missing Contact"));
+            return self.build_error_response(request, 400, "Bad Request - Missing Contact header");
         }
 
         // Check for wildcard Contact (*)
@@ -1040,5 +1084,126 @@ mod tests {
         let response = registrar.handle_register(&request).expect("should return response");
         assert_eq!(response.start.code, 401, "Invalid nc format should return 401, not 500");
         assert!(response.headers.get("WWW-Authenticate").is_some());
+    }
+
+    #[test]
+    fn registrar_returns_400_for_missing_to_header() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store, None);
+
+        let mut headers = Headers::new();
+        headers.push("Via".into(), "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8".into());
+        headers.push("From".into(), "<sip:alice@example.com>;tag=1234".into());
+        // Missing To header
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+        headers.push("Contact".into(), "<sip:ua.example.com>".into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar.handle_register(&request).expect("should return response");
+        assert_eq!(response.start.code, 400, "Missing To header should return 400");
+        assert!(response.start.reason.contains("To"));
+    }
+
+    #[test]
+    fn registrar_returns_400_for_invalid_to_header() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store, None);
+
+        let mut headers = Headers::new();
+        headers.push("Via".into(), "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8".into());
+        headers.push("From".into(), "<sip:alice@example.com>;tag=1234".into());
+        headers.push("To".into(), "invalid-header-format".into()); // Invalid To header
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+        headers.push("Contact".into(), "<sip:ua.example.com>".into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar.handle_register(&request).expect("should return response");
+        assert_eq!(response.start.code, 400, "Invalid To header should return 400");
+        assert!(response.start.reason.contains("To"));
+    }
+
+    #[test]
+    fn registrar_returns_400_for_missing_contact_header() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store, None);
+
+        let mut headers = Headers::new();
+        headers.push("Via".into(), "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8".into());
+        headers.push("From".into(), "<sip:alice@example.com>;tag=1234".into());
+        headers.push("To".into(), "<sip:alice@example.com>".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+        // Missing Contact header
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar.handle_register(&request).expect("should return response");
+        assert_eq!(response.start.code, 400, "Missing Contact header should return 400");
+        assert!(response.start.reason.contains("Contact"));
+    }
+
+    #[test]
+    fn registrar_400_response_includes_required_headers() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store, None);
+
+        let mut headers = Headers::new();
+        headers.push("Via".into(), "SIP/2.0/UDP client.example.com;branch=z9hG4bKtest".into());
+        headers.push("From".into(), "<sip:alice@example.com>;tag=from123".into());
+        headers.push("To".into(), "<sip:alice@example.com>".into());
+        headers.push("Call-ID".into(), "callid-test-123".into());
+        headers.push("CSeq".into(), "42 REGISTER".into());
+        // Missing Contact header to trigger 400
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar.handle_register(&request).expect("should return response");
+        assert_eq!(response.start.code, 400);
+
+        // Verify RFC 3261 required headers are present
+        assert_eq!(
+            response.headers.get("Via").map(|v| v.as_str()),
+            Some("SIP/2.0/UDP client.example.com;branch=z9hG4bKtest")
+        );
+        assert_eq!(
+            response.headers.get("From").map(|v| v.as_str()),
+            Some("<sip:alice@example.com>;tag=from123")
+        );
+        assert_eq!(
+            response.headers.get("Call-ID").map(|v| v.as_str()),
+            Some("callid-test-123")
+        );
+        assert_eq!(
+            response.headers.get("CSeq").map(|v| v.as_str()),
+            Some("42 REGISTER")
+        );
+
+        // Verify To header has tag added
+        let to = response.headers.get("To").expect("To header should be present");
+        assert!(to.contains(";tag="), "To header should have tag added");
     }
 }

@@ -142,13 +142,20 @@ impl Nonce {
         self.created_at.elapsed() <= self.ttl
     }
 
-    /// Validates that the nonce-count is incrementing (replay protection).
-    /// Returns true if nc is valid (greater than last_nc).
+    /// Validates that the nonce-count is not decreasing (replay protection).
+    /// Returns true if nc >= last_nc (allows retransmissions with same nc).
+    /// SIP over UDP expects retransmissions to be accepted, so we allow the
+    /// same nc value for legitimate retransmissions while blocking replay
+    /// attacks where nc decreases.
     pub fn validate_nc(&mut self, nc: u32) -> bool {
-        if nc > self.last_nc {
-            self.last_nc = nc;
+        if nc >= self.last_nc {
+            // Update last_nc only if nc is greater (not equal)
+            if nc > self.last_nc {
+                self.last_nc = nc;
+            }
             true
         } else {
+            // nc < last_nc is a replay attack (going backwards)
             false
         }
     }
@@ -473,7 +480,7 @@ impl<S: CredentialStore> Authenticator for DigestAuthenticator<S> {
                 .map_err(|_| anyhow!("invalid nc format"))?;
 
             if !self.nonce_manager.verify_with_nc(nonce, nc_value) {
-                info!("digest nonce invalid/expired or nc not incrementing (replay attack)");
+                info!("digest nonce invalid/expired or nc decreasing (replay attack)");
                 return Ok(false);
             }
         } else {
@@ -1055,7 +1062,7 @@ mod tests {
     }
 
     #[test]
-    fn digest_auth_rejects_replay_attack() {
+    fn digest_auth_accepts_retransmission() {
         let creds = Credentials {
             username: SmolStr::new("alice"),
             password: SmolStr::new("secret"),
@@ -1100,14 +1107,96 @@ mod tests {
 
         assert!(auth.verify(&request, &request.headers).unwrap());
 
-        // Second request with same nc=00000001 should be rejected (replay attack)
-        let replay_request = Request::new(
+        // Retransmission with same nc=00000001 should be accepted (legitimate retransmit over UDP)
+        let retransmit = Request::new(
             RequestLine::new(method, SipUri::parse(uri).unwrap()),
             headers,
             Bytes::new(),
         );
 
-        assert!(!auth.verify(&replay_request, &replay_request.headers).unwrap());
+        assert!(auth.verify(&retransmit, &retransmit.headers).unwrap(),
+                "Retransmission with same nc should be accepted");
+    }
+
+    #[test]
+    fn digest_auth_rejects_replay_with_decreasing_nc() {
+        let creds = Credentials {
+            username: SmolStr::new("alice"),
+            password: SmolStr::new("secret"),
+            realm: SmolStr::new("example.com"),
+        };
+        let store = MemoryCredentialStore::with(vec![creds.clone()]);
+        let auth = DigestAuthenticator::new("example.com", store);
+
+        let nonce = auth.nonce_manager.generate();
+        let method = Method::Invite;
+        let uri = "sip:bob@example.com";
+
+        // First request with nc=00000002
+        let nc2 = "00000002";
+        let cnonce = "abc123";
+
+        let response2 = auth.compute_response(
+            creds.username.as_str(),
+            creds.password.as_str(),
+            method,
+            uri,
+            &nonce.value,
+            Some(nc2),
+            Some(cnonce),
+            Some(Qop::Auth),
+            b"",
+        );
+
+        let mut headers2 = Headers::new();
+        headers2.push(
+            SmolStr::new("Authorization"),
+            SmolStr::new(format!(
+                "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
+                creds.username, creds.realm, nonce.value, uri, response2, cnonce, nc2, auth.opaque
+            )),
+        );
+
+        let request2 = Request::new(
+            RequestLine::new(method, SipUri::parse(uri).unwrap()),
+            headers2,
+            Bytes::new(),
+        );
+
+        assert!(auth.verify(&request2, &request2.headers).unwrap(),
+                "Request with nc=2 should succeed");
+
+        // Replay attack with nc=00000001 (going backwards) should be rejected
+        let nc1 = "00000001";
+        let response1 = auth.compute_response(
+            creds.username.as_str(),
+            creds.password.as_str(),
+            method,
+            uri,
+            &nonce.value,
+            Some(nc1),
+            Some(cnonce),
+            Some(Qop::Auth),
+            b"",
+        );
+
+        let mut headers1 = Headers::new();
+        headers1.push(
+            SmolStr::new("Authorization"),
+            SmolStr::new(format!(
+                "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
+                creds.username, creds.realm, nonce.value, uri, response1, cnonce, nc1, auth.opaque
+            )),
+        );
+
+        let replay_request = Request::new(
+            RequestLine::new(method, SipUri::parse(uri).unwrap()),
+            headers1,
+            Bytes::new(),
+        );
+
+        assert!(!auth.verify(&replay_request, &replay_request.headers).unwrap(),
+                "Replay attack with decreasing nc should be rejected");
     }
 
     #[test]

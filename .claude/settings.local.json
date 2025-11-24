@@ -1,26 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(cargo test:*)",
-      "Bash(cargo --list:*)",
-      "Bash(chmod:*)",
-      "Bash(cargo run:*)",
-      "Bash(cargo build:*)",
-      "Bash(RUST_BACKTRACE=1 cargo test:*)",
-      "Bash(find:*)",
-      "Bash(1)",
-      "WebFetch(domain:datatracker.ietf.org)",
-      "WebSearch",
-      "WebFetch(domain:www.rfc-editor.org)",
-      "Bash(cargo search:*)",
-      "Bash(cargo check:*)",
-      "Bash(timeout 3 cargo run:*)",
-      "Bash(timeout:*)",
-      "Bash(cat:*)",
-      "Bash(for mode in minimal full-uas registrar call-server subscription-server)",
-      "Bash(do echo \"=== Testing $mode mode ===\" timeout 2 cargo run --quiet -p siphond -- --mode $mode --udp-bind 127.0.0.1:15060)",
-      "Bash(pkill:*)",
-      "Bash(./target/debug/siphond:*)"
+      "Bash(git reset:*)",
+      "Bash(git restore:*)"
     ],
     "deny": [],
     "ask": []
