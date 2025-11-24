@@ -121,6 +121,7 @@ pub struct Nonce {
     pub created_at: Instant,
     pub ttl: Duration,
     pub last_nc: u32, // Last nonce-count seen (for replay protection)
+    pub last_request_hash: Option<String>, // Hash of last request (method:uri:body) for retransmission detection
 }
 
 impl Nonce {
@@ -135,6 +136,7 @@ impl Nonce {
             created_at: Instant::now(),
             ttl,
             last_nc: 0,
+            last_request_hash: None,
         }
     }
 
@@ -142,18 +144,33 @@ impl Nonce {
         self.created_at.elapsed() <= self.ttl
     }
 
-    /// Validates that the nonce-count is not decreasing (replay protection).
-    /// Returns true if nc >= last_nc (allows retransmissions with same nc).
-    /// SIP over UDP expects retransmissions to be accepted, so we allow the
-    /// same nc value for legitimate retransmissions while blocking replay
-    /// attacks where nc decreases.
-    pub fn validate_nc(&mut self, nc: u32) -> bool {
-        if nc >= self.last_nc {
-            // Update last_nc only if nc is greater (not equal)
-            if nc > self.last_nc {
-                self.last_nc = nc;
-            }
+    /// Validates that the nonce-count with request hash for replay protection.
+    /// - If nc > last_nc: New request, accept and store hash
+    /// - If nc == last_nc: Retransmission, accept only if request hash matches
+    /// - If nc < last_nc: Replay attack, reject
+    ///
+    /// This allows legitimate UDP retransmissions (same request, same nc) while
+    /// blocking replay attacks (different request with same/old nc).
+    pub fn validate_nc_with_request(&mut self, nc: u32, method: Method, uri: &str, body: &[u8]) -> bool {
+        // Compute hash of request (method:uri:body_len)
+        // We use body length instead of full body to avoid hashing large payloads
+        let request_sig = format!("{}:{}:{}", method.as_str(), uri, body.len());
+        let request_hash = format!("{:x}", md5::compute(request_sig.as_bytes()));
+
+        if nc > self.last_nc {
+            // New request with incrementing nc - accept and store
+            self.last_nc = nc;
+            self.last_request_hash = Some(request_hash);
             true
+        } else if nc == self.last_nc {
+            // Potential retransmission - accept only if request hash matches
+            if let Some(ref last_hash) = self.last_request_hash {
+                last_hash == &request_hash
+            } else {
+                // First request with this nc
+                self.last_request_hash = Some(request_hash);
+                true
+            }
         } else {
             // nc < last_nc is a replay attack (going backwards)
             false
@@ -199,15 +216,15 @@ impl NonceManager {
         nonce
     }
 
-    /// Verifies nonce exists and is valid, and validates nonce-count for replay protection.
-    /// Returns true if nonce is valid and nc is greater than the last nc seen.
-    pub fn verify_with_nc(&self, value: &str, nc: u32) -> bool {
+    /// Verifies nonce exists and is valid, and validates nonce-count with request hash for replay protection.
+    /// Returns true if nonce is valid and request is legitimate (not a replay).
+    pub fn verify_with_nc(&self, value: &str, nc: u32, method: Method, uri: &str, body: &[u8]) -> bool {
         if let Some(mut entry) = self.nonces.get_mut(value) {
             if !entry.is_valid() {
                 return false;
             }
-            // Validate that nc is incrementing (replay protection)
-            entry.validate_nc(nc)
+            // Validate nc and request hash (replay protection + retransmission support)
+            entry.validate_nc_with_request(nc, method, uri, body)
         } else {
             false
         }
@@ -479,8 +496,15 @@ impl<S: CredentialStore> Authenticator for DigestAuthenticator<S> {
             let nc_value = u32::from_str_radix(nc_str.as_str(), 16)
                 .map_err(|_| anyhow!("invalid nc format"))?;
 
-            if !self.nonce_manager.verify_with_nc(nonce, nc_value) {
-                info!("digest nonce invalid/expired or nc decreasing (replay attack)");
+            // Verify nc with request hash to support retransmissions and block replay attacks
+            if !self.nonce_manager.verify_with_nc(
+                nonce,
+                nc_value,
+                request.start.method,
+                uri.as_str(),
+                &request.body,
+            ) {
+                info!("digest nonce invalid/expired, nc decreasing (replay), or request hash mismatch (different request with same nc)");
                 return Ok(false);
             }
         } else {
@@ -1197,6 +1221,167 @@ mod tests {
 
         assert!(!auth.verify(&replay_request, &replay_request.headers).unwrap(),
                 "Replay attack with decreasing nc should be rejected");
+    }
+
+    #[test]
+    fn digest_auth_rejects_different_request_same_nc() {
+        let creds = Credentials {
+            username: SmolStr::new("alice"),
+            password: SmolStr::new("secret"),
+            realm: SmolStr::new("example.com"),
+        };
+        let store = MemoryCredentialStore::with(vec![creds.clone()]);
+        let auth = DigestAuthenticator::new("example.com", store);
+
+        let nonce = auth.nonce_manager.generate();
+        let method = Method::Invite;
+        let uri1 = "sip:bob@example.com";
+        let uri2 = "sip:charlie@example.com"; // Different URI
+        let nc = "00000001";
+        let cnonce = "abc123";
+
+        // First request to uri1
+        let response1 = auth.compute_response(
+            creds.username.as_str(),
+            creds.password.as_str(),
+            method,
+            uri1,
+            &nonce.value,
+            Some(nc),
+            Some(cnonce),
+            Some(Qop::Auth),
+            b"",
+        );
+
+        let mut headers1 = Headers::new();
+        headers1.push(
+            SmolStr::new("Authorization"),
+            SmolStr::new(format!(
+                "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
+                creds.username, creds.realm, nonce.value, uri1, response1, cnonce, nc, auth.opaque
+            )),
+        );
+
+        let request1 = Request::new(
+            RequestLine::new(method, SipUri::parse(uri1).unwrap()),
+            headers1,
+            Bytes::new(),
+        );
+
+        assert!(auth.verify(&request1, &request1.headers).unwrap(),
+                "First request should succeed");
+
+        // Second request to uri2 with same nc (replay attack with different request)
+        let response2 = auth.compute_response(
+            creds.username.as_str(),
+            creds.password.as_str(),
+            method,
+            uri2,
+            &nonce.value,
+            Some(nc),
+            Some(cnonce),
+            Some(Qop::Auth),
+            b"",
+        );
+
+        let mut headers2 = Headers::new();
+        headers2.push(
+            SmolStr::new("Authorization"),
+            SmolStr::new(format!(
+                "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
+                creds.username, creds.realm, nonce.value, uri2, response2, cnonce, nc, auth.opaque
+            )),
+        );
+
+        let request2 = Request::new(
+            RequestLine::new(method, SipUri::parse(uri2).unwrap()),
+            headers2,
+            Bytes::new(),
+        );
+
+        assert!(!auth.verify(&request2, &request2.headers).unwrap(),
+                "Different request with same nc should be rejected (request hash mismatch)");
+    }
+
+    #[test]
+    fn digest_auth_rejects_different_body_same_nc() {
+        let creds = Credentials {
+            username: SmolStr::new("alice"),
+            password: SmolStr::new("secret"),
+            realm: SmolStr::new("example.com"),
+        };
+        let store = MemoryCredentialStore::with(vec![creds.clone()]);
+        let auth = DigestAuthenticator::new("example.com", store);
+
+        let nonce = auth.nonce_manager.generate();
+        let method = Method::Invite;
+        let uri = "sip:bob@example.com";
+        let nc = "00000001";
+        let cnonce = "abc123";
+        let body1 = b"SDP offer 1";
+        let body2 = b"SDP offer 2 - different";
+
+        // First request with body1
+        let response1 = auth.compute_response(
+            creds.username.as_str(),
+            creds.password.as_str(),
+            method,
+            uri,
+            &nonce.value,
+            Some(nc),
+            Some(cnonce),
+            Some(Qop::Auth),
+            body1,
+        );
+
+        let mut headers1 = Headers::new();
+        headers1.push(
+            SmolStr::new("Authorization"),
+            SmolStr::new(format!(
+                "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
+                creds.username, creds.realm, nonce.value, uri, response1, cnonce, nc, auth.opaque
+            )),
+        );
+
+        let request1 = Request::new(
+            RequestLine::new(method, SipUri::parse(uri).unwrap()),
+            headers1,
+            Bytes::from_static(body1),
+        );
+
+        assert!(auth.verify(&request1, &request1.headers).unwrap(),
+                "First request should succeed");
+
+        // Second request with body2 and same nc (replay attack with different body)
+        let response2 = auth.compute_response(
+            creds.username.as_str(),
+            creds.password.as_str(),
+            method,
+            uri,
+            &nonce.value,
+            Some(nc),
+            Some(cnonce),
+            Some(Qop::Auth),
+            body2,
+        );
+
+        let mut headers2 = Headers::new();
+        headers2.push(
+            SmolStr::new("Authorization"),
+            SmolStr::new(format!(
+                "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
+                creds.username, creds.realm, nonce.value, uri, response2, cnonce, nc, auth.opaque
+            )),
+        );
+
+        let request2 = Request::new(
+            RequestLine::new(method, SipUri::parse(uri).unwrap()),
+            headers2,
+            Bytes::from_static(body2),
+        );
+
+        assert!(!auth.verify(&request2, &request2.headers).unwrap(),
+                "Different body with same nc should be rejected (request hash mismatch)");
     }
 
     #[test]
