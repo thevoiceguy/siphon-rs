@@ -4,6 +4,16 @@
 //! - **Unreliable transports (UDP)**: Full timer values per RFC 3261 Table 4
 //! - **Reliable transports (TCP/TLS)**: Certain timers are set to zero
 //!
+//! # Performance Impact
+//!
+//! Transport-aware timer optimization provides significant performance benefits:
+//! - **TCP/TLS transactions complete 5-37 seconds faster** than UDP
+//! - **Timer K**: 0 for TCP/TLS (vs 5s for UDP) - instant completion after final response
+//! - **Timer J**: 0 for TCP/TLS (vs 32s for UDP) - no wait for response retransmissions
+//! - **Timer I**: 0 for TCP/TLS (vs 5s for UDP) - instant ACK processing
+//! - **Reduced memory**: No timer tracking needed for zero-duration timers
+//! - **Better scalability**: Transactions terminate immediately on reliable transports
+//!
 //! # RFC 3261 §17.1.2.2 - Reliable Transport Timer Adjustments
 //!
 //! > For unreliable transports (such as UDP), requests are retransmitted at an
@@ -13,6 +23,27 @@
 //! > For a reliable transport, Timer E MUST be set to 0, and Timer F MUST be
 //! > set to 64*T1.  For a reliable transport, Timer G MUST be set to 0, Timer H
 //! > MUST be set to 64*T1, and Timer I MUST be set to 0.
+//!
+//! # Usage
+//!
+//! ```rust
+//! use sip_transaction::timers::{Transport, TransportAwareTimers};
+//! use sip_transaction::TransactionTimer;
+//!
+//! // Create timer calculator for TCP
+//! let timers = TransportAwareTimers::new(Transport::Tcp);
+//!
+//! // Timer K is 0 for TCP (instant completion)
+//! assert_eq!(timers.duration(TransactionTimer::K), std::time::Duration::ZERO);
+//!
+//! // Timer F is still 32 seconds (timeout applies to all transports)
+//! assert_eq!(timers.duration(TransactionTimer::F), std::time::Duration::from_secs(32));
+//!
+//! // Check if retransmissions are needed
+//! assert!(!timers.should_retransmit());  // TCP doesn't need retransmissions
+//! ```
+//!
+//! See `examples/timer_behavior.rs` for comprehensive demonstrations.
 //!
 //! ## Timer Adjustments by Transport
 //!

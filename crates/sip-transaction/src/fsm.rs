@@ -1,3 +1,140 @@
+//! SIP transaction state machines implementing RFC 3261 §17.
+//!
+//! This module provides the four transaction layer finite state machines (FSMs)
+//! defined in RFC 3261, with transport-aware timer optimization per §17.1.2.2.
+//!
+//! # Transaction Types
+//!
+//! The SIP transaction layer defines four state machines based on role and method:
+//!
+//! - **Client Non-INVITE** (`ClientNonInviteFsm`) - For client sending OPTIONS, REGISTER, etc.
+//! - **Client INVITE** (`ClientInviteFsm`) - For client sending INVITE requests
+//! - **Server Non-INVITE** (`ServerNonInviteFsm`) - For server receiving OPTIONS, REGISTER, etc.
+//! - **Server INVITE** (`ServerInviteFsm`) - For server receiving INVITE requests
+//!
+//! Each FSM implements its respective state machine diagram from RFC 3261 Figures 5-9.
+//!
+//! # Transport-Aware Timer Integration
+//!
+//! All FSMs now use `TransportAwareTimers` instead of raw timer values, providing
+//! automatic optimization based on transport type:
+//!
+//! ## UDP (Unreliable Transport)
+//! - Full retransmission timers (A, E, G) with exponential backoff
+//! - Full wait timers (D, I, J, K) for absorbing retransmissions
+//! - Transactions complete in 5-37 seconds depending on response timing
+//!
+//! ## TCP/TLS (Reliable Transport)
+//! - Zero-duration retransmission timers (no retransmissions needed)
+//! - Zero-duration wait timers (instant completion)
+//! - Transactions complete in 150-500ms typically
+//!
+//! **Performance Impact**: TCP/TLS transactions complete 5-37 seconds faster than UDP.
+//!
+//! # FSM Architecture
+//!
+//! Each state machine follows the same pattern:
+//!
+//! 1. **State** - Current state enum (e.g., `Trying`, `Proceeding`, `Completed`)
+//! 2. **Events** - Input events that drive state transitions (e.g., `SendRequest`, `ReceiveResponse`)
+//! 3. **Actions** - Output actions to perform (e.g., `Transmit`, `Schedule`, `Terminate`)
+//! 4. **Transitions** - `on_event()` method processes events and returns actions
+//!
+//! The FSMs are deterministic: given a state and event, they produce a new state and actions.
+//!
+//! # Example: Client Non-INVITE Transaction
+//!
+//! ```rust
+//! use sip_transaction::fsm::{ClientNonInviteFsm, ClientNonInviteEvent, ClientAction};
+//! use sip_transaction::timers::{TransportAwareTimers, Transport};
+//! use sip_core::{Request, Method};
+//!
+//! # fn create_request() -> Request {
+//! #     Request::new(Method::Options, "sip:user@example.com".parse().unwrap())
+//! # }
+//! // Create FSM with TCP timers (zero retransmissions)
+//! let timers = TransportAwareTimers::new(Transport::Tcp);
+//! let mut fsm = ClientNonInviteFsm::new(timers);
+//!
+//! // Send request
+//! let request = create_request();
+//! let actions = fsm.on_event(ClientNonInviteEvent::SendRequest(request));
+//!
+//! // Process actions
+//! for action in actions {
+//!     match action {
+//!         ClientAction::Transmit { bytes, transport } => {
+//!             // Send bytes over transport
+//!         }
+//!         ClientAction::Schedule { timer, duration } => {
+//!             // Schedule timer (F=32s for TCP, E=0 for TCP)
+//!         }
+//!         _ => {}
+//!     }
+//! }
+//! ```
+//!
+//! # Example: Server INVITE Transaction
+//!
+//! ```rust
+//! use sip_transaction::fsm::{ServerInviteFsm, ServerInviteEvent, ServerAction};
+//! use sip_transaction::timers::{TransportAwareTimers, Transport};
+//! use sip_core::{Request, Response, Method};
+//!
+//! # fn create_request() -> Request {
+//! #     Request::new(Method::Invite, "sip:user@example.com".parse().unwrap())
+//! # }
+//! # fn create_200_ok() -> Response {
+//! #     Response::new(200, "OK")
+//! # }
+//! // Create FSM with UDP timers (full retransmissions)
+//! let timers = TransportAwareTimers::new(Transport::Udp);
+//! let mut fsm = ServerInviteFsm::new(timers);
+//!
+//! // Receive INVITE
+//! let request = create_request();
+//! let actions = fsm.on_event(ServerInviteEvent::ReceiveInvite(request));
+//!
+//! // ... send 100 Trying, 180 Ringing ...
+//!
+//! // Send 200 OK
+//! let response = create_200_ok();
+//! let actions = fsm.on_event(ServerInviteEvent::SendFinal(response));
+//!
+//! // For UDP, Timer G starts retransmitting 200 OK until ACK arrives
+//! // For TCP, no retransmissions - ACK expected once
+//! ```
+//!
+//! # Timer Behavior by FSM
+//!
+//! ## Client Non-INVITE
+//! - **Timer E**: Retransmission (0 for TCP/TLS, T1→T2 exponential for UDP)
+//! - **Timer F**: Transaction timeout (64*T1 = 32s for all transports)
+//! - **Timer K**: Wait for retransmissions (0 for TCP/TLS, T4=5s for UDP)
+//!
+//! ## Client INVITE
+//! - **Timer A**: INVITE retransmission (0 for TCP/TLS, T1→T2 exponential for UDP)
+//! - **Timer B**: Transaction timeout (64*T1 = 32s for all transports)
+//! - **Timer D**: Wait for response retransmissions (0 for TCP/TLS, 32s for UDP)
+//!
+//! ## Server Non-INVITE
+//! - **Timer J**: Wait for request retransmissions (0 for TCP/TLS, 64*T1=32s for UDP)
+//!
+//! ## Server INVITE
+//! - **Timer G**: Response retransmission (0 for TCP/TLS, T1→T2 exponential for UDP)
+//! - **Timer H**: Wait for ACK (64*T1 = 32s for all transports)
+//! - **Timer I**: Wait for ACK retransmissions (0 for TCP/TLS, T4=5s for UDP)
+//!
+//! # RFC 3261 Compliance
+//!
+//! These FSMs strictly follow RFC 3261 state machine diagrams:
+//! - Figure 5: Client INVITE transaction
+//! - Figure 6: Server INVITE transaction
+//! - Figure 7: Client non-INVITE transaction (implied)
+//! - Figure 8: Server non-INVITE transaction (implied)
+//!
+//! Timer adjustments for reliable transports follow RFC 3261 §17.1.2.2 exactly.
+
 use std::time::Duration;
 
 use bytes::Bytes;

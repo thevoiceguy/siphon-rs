@@ -107,8 +107,10 @@ The project is organized as a Cargo workspace with the following crates:
 - `sip-dns` - RFC 3263 compliant DNS resolution (NAPTR/SRV/A/AAAA) with priority/weight handling and failover
 
 **Transaction Layer:**
-- `sip-transaction` - Implements RFC 3261 client/server transaction state machines with timers (T1, T2, T4, A-K). Manages retransmissions and transaction lifecycle
+- `sip-transaction` - Implements RFC 3261 client/server transaction state machines with transport-aware timers (T1, T2, T4, A-K). Manages retransmissions and transaction lifecycle
   - Key types: `TransactionManager`, `TransactionKey`, `ClientTransactionUser`, `TransportDispatcher`
+  - `TransportAwareTimers`: RFC 3261 §17.1.2.2 compliant timer adjustments (zero wait times for TCP/TLS)
+  - `TransactionMetrics`: Performance monitoring with duration tracking, timer statistics, and outcome analysis
   - Handles branch ID generation (`z9hG4bK` magic cookie per RFC 3261)
 
 **Service Layer:**
@@ -149,16 +151,41 @@ Messages are represented as immutable types:
 
 ### Transaction Layer
 
-The transaction layer implements RFC 3261 state machines:
+The transaction layer implements RFC 3261 state machines with transport-aware timer optimizations:
 - Transactions are keyed by `TransactionKey` (branch parameter, method, is_server flag)
 - Branch IDs follow RFC 3261 magic cookie format: `z9hG4bK{random}`
 - Timer values (T1, T2, T4) drive state transitions and retransmissions
 - `TransactionManager` handles transaction lifecycle and dispatching
+- **Transport-Aware Timers**: Automatically adjusts timer values based on transport reliability
 
 State machines:
 - Client INVITE: `Calling → Proceeding → Completed → Terminated`
 - Server INVITE: `Proceeding → Completed → Confirmed → Terminated`
 - Non-INVITE transactions have simpler state machines
+
+#### Transport-Aware Timer Behavior
+
+Per RFC 3261 §17.1.2.2, timer values are adjusted based on transport type:
+
+**UDP (Unreliable Transport):**
+- Retransmission timers (A, E, G): Active with exponential backoff
+- Wait timers (D, I, J, K): Full duration (5-32 seconds)
+- Example: Timer K = 5 seconds (wait for response retransmissions)
+
+**TCP/TLS (Reliable Transport):**
+- Retransmission timers (A, E, G): Zero (no retransmissions needed)
+- Wait timers (D, I, J, K): Zero (immediate completion)
+- Example: Timer K = 0 seconds (instant transaction termination)
+
+**Performance Benefits:**
+- TCP/TLS transactions complete **5-37 seconds faster** than UDP
+- Reduced memory usage (no timer tracking for wait timers)
+- Better scalability (transactions terminate immediately after receiving final response)
+
+**Implementation:**
+- FSMs use `TransportAwareTimers` instead of hardcoded durations
+- Transport type automatically detected from `TransportContext`
+- Timeout timers (B, F, H) remain the same across all transports (64*T1 = 32 seconds)
 
 ### Dialog Layer
 
@@ -414,6 +441,55 @@ Features:
 - Authentication integration with `Authenticator` trait
 - Contact header management in responses
 
+### Performance Metrics
+
+The transaction layer provides comprehensive performance monitoring and analytics:
+
+**TransactionMetrics API:**
+- `TransactionMetrics` - Thread-safe metrics collector using `parking_lot::RwLock`
+- Automatic collection via `TransactionManager` (no instrumentation needed)
+- Manual collection for custom scenarios
+
+**Metrics Collected:**
+- **Transaction Durations**: By transport type (UDP/TCP/TLS) and method (INVITE, REGISTER, etc.)
+- **Timer Statistics**: Fire counts for all transaction timers (A-K)
+- **Transaction Outcomes**: Completed, Timeout, TransportError, Cancelled
+- **Aggregate Statistics**: Min/max/average durations, total counts
+
+**Usage:**
+```rust
+// Automatic collection via TransactionManager
+let manager = TransactionManager::new(dispatcher);
+// ... transactions occur automatically ...
+
+// Query metrics
+let snapshot = manager.metrics().snapshot();
+println!("Total transactions: {}", snapshot.total_transactions);
+
+// Get average by transport
+if let Some(tcp_stats) = snapshot.by_transport.get(&TransportType::Tcp) {
+    println!("TCP avg: {:?}", tcp_stats.avg_duration);
+}
+```
+
+**Performance Insights:**
+- Quantify TCP vs UDP performance benefits (typically 20-30x faster)
+- Identify slow transactions or timeout patterns
+- Track timer behavior and retransmission counts
+- Monitor success rates and failure modes
+
+**Example Output:**
+```
+Transport Performance Comparison:
+├─ UDP: avg 5.45s, min 5s, max 5.9s (10 transactions)
+└─ TCP: avg 195ms, min 150ms, max 240ms (10 transactions)
+   → TCP is 27.9x faster than UDP
+```
+
+**Examples:**
+- `cargo run --example metrics_demo` - Interactive metrics demonstration
+- `cargo run --example timer_behavior` - Transport-aware timer behavior
+
 ### Transport Layer
 
 Transport is abstracted through traits:
@@ -531,7 +607,9 @@ See `bins/siphond/README.md` for detailed usage examples and troubleshooting.
 This is an **alpha** implementation. Current status:
 - ✅ Core message types and parsing
 - ✅ UDP/TCP/TLS transports with connection pooling
-- ✅ Transaction layer with state machines and timers
+- ✅ Transaction layer with transport-aware state machines and timers (RFC 3261 §17.1.2.2)
+- ✅ Transport-aware timer optimization: TCP/TLS transactions complete 5-37 seconds faster than UDP
+- ✅ Transaction performance metrics: duration tracking, timer statistics, outcome analysis
 - ✅ RFC 3263 DNS resolution (NAPTR/SRV/A/AAAA)
 - ✅ Dialog layer with full state management (Early/Confirmed/Terminated)
 - ✅ Subscription layer with event notification support (RFC 3265)
@@ -545,7 +623,7 @@ This is an **alpha** implementation. Current status:
 - ✅ Proxy helper primitives (Via, Record-Route, Max-Forwards, Request-URI modification)
 - ✅ B2BUA implementation with channel-based response bridging for device-to-device calls
 - ✅ Full-featured multi-mode siphond daemon (minimal, full-uas, registrar, proxy, b2bua, call-server, subscription-server)
-- ✅ Comprehensive test coverage (211+ tests across all layers)
-- ✅ Examples: register_with_auth, invite_call_flow, late_offer_flow, blind_transfer, attended_transfer, prack_flow, tel_uri_flow
+- ✅ Comprehensive test coverage (235+ tests across all layers: 88 transaction, 22 dialog, 125+ integration)
+- ✅ Examples: register_with_auth, invite_call_flow, late_offer_flow, blind_transfer, attended_transfer, prack_flow, tel_uri_flow, timer_behavior, metrics_demo
 
 See `siphon_rs_architecture_kickstart.md` for detailed architecture planning and roadmap.

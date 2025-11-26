@@ -48,7 +48,7 @@ crates/
   sip-core/          # Core types, headers, URIs, messages
   sip-parse/         # SIP message parser (nom-based)
   sip-transport/     # Multi-transport layer (UDP, TCP, TLS)
-  sip-transaction/   # RFC 3261 transaction state machines
+  sip-transaction/   # RFC 3261 transaction state machines with transport-aware timers and metrics
   sip-dns/           # RFC 3263 DNS resolution
   sip-dialog/        # Dialog, subscription, and RSeq management
   sip-auth/          # Digest authentication (RFC 7616/7617)
