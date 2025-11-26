@@ -217,6 +217,7 @@ impl ServerTransaction {
 
 pub mod fsm;
 pub mod manager;
+pub mod metrics;
 pub mod timers;
 
 pub use fsm::{

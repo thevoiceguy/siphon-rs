@@ -12,6 +12,7 @@ rand = { workspace = true }
 sip-parse = { path = "../sip-parse" }
 bytes = { workspace = true }
 dashmap = { workspace = true }
+parking_lot = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time", "rt"] }
 async-trait = "0.1"
 tracing = { workspace = true }

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::{Duration, Instant}};
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -20,6 +20,7 @@ use crate::{
         ClientNonInviteFsm, ServerAction, ServerInviteAction, ServerInviteEvent, ServerInviteFsm,
         ServerNonInviteEvent, ServerNonInviteFsm, TransportKind,
     },
+    metrics::{TransactionMetrics, TransactionOutcome, TransportType},
     request_branch_id,
     timers::{TimerDefaults, Transport, TransportAwareTimers},
     TransactionKey, TransactionTimer,
@@ -100,6 +101,8 @@ struct ServerEntry {
     kind: ServerKind,
     ctx: TransportContext,
     timers: HashMap<TransactionTimer, oneshot::Sender<()>>,
+    start_time: Instant,
+    method: Method,
 }
 
 enum ServerKind {
@@ -113,6 +116,8 @@ struct ClientEntry {
     tu: Arc<dyn ClientTransactionUser>,
     timers: HashMap<TransactionTimer, oneshot::Sender<()>>,
     branch: SmolStr,
+    start_time: Instant,
+    method: Method,
 }
 
 enum ClientKind {
@@ -183,6 +188,7 @@ struct ManagerInner {
     // Removed client_index - build TransactionKey directly from response
     timer_defaults: TimerDefaults,
     pool: ConnectionPool,
+    metrics: TransactionMetrics,
 }
 
 /// Helper to convert TransportKind to Transport for timer calculations
@@ -229,11 +235,17 @@ impl TransactionManager {
                 client: DashMap::new(),
                 timer_defaults: TimerDefaults { t1, t2, t4 },
                 pool: ConnectionPool::new(),
+                metrics: TransactionMetrics::new(),
             }),
             cmd_tx,
         };
         manager.spawn_command_loop(cmd_rx);
         manager
+    }
+
+    /// Gets a reference to the metrics collector.
+    pub fn metrics(&self) -> &TransactionMetrics {
+        &self.inner.metrics
     }
 
     fn extract_branch(headers: &Headers) -> Option<SmolStr> {
@@ -334,13 +346,16 @@ impl TransactionManager {
         let transport = transport_kind_to_transport(ctx.transport);
         let timers = TransportAwareTimers::with_defaults(transport, self.inner.timer_defaults);
 
+        let method = request.start.method;
         let mut entry = ServerEntry {
-            kind: match request.start.method {
+            kind: match method {
                 Method::Invite => ServerKind::Invite(ServerInviteFsm::new(timers)),
                 _ => ServerKind::NonInvite(ServerNonInviteFsm::new(timers)),
             },
             ctx,
             timers: HashMap::new(),
+            start_time: Instant::now(),
+            method,
         };
 
         let actions = match &mut entry.kind {
@@ -403,6 +418,8 @@ impl TransactionManager {
             tu,
             timers: HashMap::new(),
             branch: branch.clone(),
+            start_time: Instant::now(),
+            method: key.method,
         };
 
         self.inner.client.insert(key.clone(), entry);
@@ -438,6 +455,9 @@ impl TransactionManager {
     }
 
     async fn handle_server_timer(&self, key: TransactionKey, timer: TransactionTimer) {
+        // Record timer firing for metrics
+        self.inner.metrics.record_timer_fired(timer);
+
         if let Some(mut entry) = self.inner.server.get_mut(&key) {
             entry.cancel_timer(timer);
             let actions = match &mut entry.kind {
@@ -452,6 +472,9 @@ impl TransactionManager {
     }
 
     async fn handle_client_timer(&self, key: TransactionKey, timer: TransactionTimer) {
+        // Record timer firing for metrics
+        self.inner.metrics.record_timer_fired(timer);
+
         if let Some(mut entry) = self.inner.client.get_mut(&key) {
             entry.cancel_timer(timer);
             let actions = match &mut entry.kind {
@@ -678,13 +701,28 @@ impl TransactionManager {
                     }
                 }
                 ClientAction::Terminate { reason } => {
-                    if let Some(mut entry) = self.inner.client.get_mut(key) {
-                        entry.cancel_all();
-                        let tu = entry.tu.clone();
-                        drop(entry);
-                        tu.on_terminated(key, reason.as_str()).await;
+                    if let Some((_, entry)) = self.inner.client.remove(key) {
+                        let duration = entry.start_time.elapsed();
+                        let transport = TransportType::from(transport_kind_to_transport(entry.ctx.transport));
+                        let outcome = if reason.contains("Timer") {
+                            TransactionOutcome::Timeout
+                        } else if reason.contains("transport") {
+                            TransactionOutcome::TransportError
+                        } else if reason.contains("CANCEL") {
+                            TransactionOutcome::Cancelled
+                        } else {
+                            TransactionOutcome::Completed
+                        };
+
+                        self.inner.metrics.record_transaction_duration(
+                            transport,
+                            &format!("{:?}", entry.method),
+                            duration,
+                        );
+                        self.inner.metrics.record_transaction_outcome(transport, outcome);
+
+                        entry.tu.on_terminated(key, reason.as_str()).await;
                     }
-                    self.inner.client.remove(key);
                 }
             }
         }
