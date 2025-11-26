@@ -374,11 +374,12 @@ impl IntegratedUAC {
         let mut request = helper.create_register(&registrar_uri, expires);
         drop(helper);
 
-        // Auto-fill Via/Contact
-        self.auto_fill_headers(&mut request).await;
+        // Resolve target and fill transport-aware headers
+        let dns_target = self.resolve_target(&target).await?;
+        self.auto_fill_headers(&mut request, Some(dns_target.transport))
+            .await;
 
         // Resolve target and send
-        let dns_target = self.resolve_target(&target).await?;
         self.send_non_invite_request(request, dns_target).await
     }
 
@@ -399,10 +400,14 @@ impl IntegratedUAC {
     }
 
     /// Auto-fills Via and Contact headers from local transport context.
-    async fn auto_fill_headers(&self, request: &mut Request) {
+    async fn auto_fill_headers(
+        &self,
+        request: &mut Request,
+        transport: Option<sip_dns::Transport>,
+    ) {
         if self.config.auto_via_filling {
             // Replace placeholder Via with actual local address
-            self.fill_via_header(request);
+            self.fill_via_header(request, transport);
         }
 
         if self.config.auto_contact_filling {
@@ -412,7 +417,11 @@ impl IntegratedUAC {
     }
 
     /// Fills Via header with local transport address.
-    fn fill_via_header(&self, request: &mut Request) {
+    fn fill_via_header(
+        &self,
+        request: &mut Request,
+        transport: Option<sip_dns::Transport>,
+    ) {
         // Find and replace placeholder Via
         for header in request.headers.iter_mut() {
             if header.name.as_str() == "Via" {
@@ -423,11 +432,15 @@ impl IntegratedUAC {
                     crate::generate_branch()
                 };
 
-                // Replace with actual Via
-                // TODO: Detect transport from DNS resolution (UDP/TCP/TLS)
+                // Replace with actual Via using selected transport
+                let via_transport = transport
+                    .map(|t| t.as_via_str())
+                    .unwrap_or("UDP");
+                let via_addr = self.public_addr.unwrap_or(self.local_addr);
                 header.value = SmolStr::new(format!(
-                    "SIP/2.0/UDP {};branch={}",
-                    self.local_addr,
+                    "SIP/2.0/{} {};branch={};rport",
+                    via_transport,
+                    via_addr,
                     branch
                 ));
                 break;
@@ -508,7 +521,7 @@ impl IntegratedUAC {
         dns_target: DnsTarget,
     ) -> Result<Response> {
         // Create transport context from DNS target
-        let ctx = self.create_transport_context(&dns_target)?;
+        let ctx = self.create_transport_context(&dns_target).await?;
 
         // Create channels for response
         let (final_tx, final_rx) = oneshot::channel();
@@ -567,10 +580,11 @@ impl IntegratedUAC {
 
         // Auto-fill headers again (CSeq was incremented)
         let mut auth_request = auth_request;
-        self.auto_fill_headers(&mut auth_request).await;
+        self.auto_fill_headers(&mut auth_request, Some(dns_target.transport))
+            .await;
 
         // Send authenticated request (non-recursive - don't retry again)
-        let ctx = self.create_transport_context(&dns_target)?;
+        let ctx = self.create_transport_context(&dns_target).await?;
         let (final_tx, final_rx) = oneshot::channel();
         let (term_tx, term_rx) = oneshot::channel();
 
@@ -597,7 +611,7 @@ impl IntegratedUAC {
     }
 
     /// Creates a TransportContext from a DnsTarget.
-    fn create_transport_context(&self, dns_target: &DnsTarget) -> Result<TransportContext> {
+    async fn create_transport_context(&self, dns_target: &DnsTarget) -> Result<TransportContext> {
         use sip_transaction::TransportKind;
 
         let transport = match dns_target.transport {
@@ -610,10 +624,19 @@ impl IntegratedUAC {
             sip_dns::Transport::TlsSctp => TransportKind::Tls, // Fallback to TLS
         };
 
-        // Parse host to SocketAddr
-        let peer = format!("{}:{}", dns_target.host, dns_target.port)
+        // Parse host to SocketAddr, falling back to OS DNS resolution for SRV hostnames
+        let addr_str = format!("{}:{}", dns_target.host, dns_target.port);
+        let peer = addr_str
             .parse()
-            .map_err(|e| anyhow!("Invalid peer address: {}", e))?;
+            .or_else(|_| async {
+                let mut addrs = tokio::net::lookup_host(&addr_str)
+                    .await
+                    .map_err(|e| anyhow!("DNS lookup failed for {}: {}", addr_str, e))?;
+                addrs
+                    .next()
+                    .ok_or_else(|| anyhow!("No A/AAAA results for {}", addr_str))
+            }
+            .await)?;
 
         Ok(TransportContext::new(transport, peer, None))
     }
@@ -671,11 +694,12 @@ impl IntegratedUAC {
         let mut request = helper.create_invite(&target_uri, sdp_body);
         drop(helper);
 
-        // Auto-fill Via/Contact
-        self.auto_fill_headers(&mut request).await;
-
         // Resolve target
         let dns_target = self.resolve_target(&target).await?;
+
+        // Auto-fill Via/Contact using resolved transport
+        self.auto_fill_headers(&mut request, Some(dns_target.transport))
+            .await;
 
         // Create channels for responses
         let (prov_tx, prov_rx) = mpsc::channel(16);
@@ -683,7 +707,7 @@ impl IntegratedUAC {
         let (term_tx, term_rx) = oneshot::channel();
 
         // Create transport context
-        let ctx = self.create_transport_context(&dns_target)?;
+        let ctx = self.create_transport_context(&dns_target).await?;
 
         // Create early dialogs map for forking support
         let early_dialogs = Arc::new(Mutex::new(std::collections::HashMap::new()));
@@ -770,12 +794,13 @@ impl IntegratedUAC {
         let mut request = helper.create_bye(dialog);
         drop(helper);
 
-        // Auto-fill Via
-        self.auto_fill_headers(&mut request).await;
-
         // Use remote target from dialog for DNS resolution
         let target = RequestTarget::Uri(dialog.remote_target.clone());
         let dns_target = self.resolve_target(&target).await?;
+
+        // Auto-fill Via with resolved transport
+        self.auto_fill_headers(&mut request, Some(dns_target.transport))
+            .await;
 
         // Send and wait for response
         self.send_non_invite_request(request, dns_target).await
@@ -805,11 +830,10 @@ impl IntegratedUAC {
         let mut request = helper.create_subscribe(&target_uri, event, expires);
         drop(helper);
 
-        // Auto-fill Via/Contact
-        self.auto_fill_headers(&mut request).await;
-
         // Resolve target and send
         let dns_target = self.resolve_target(&target).await?;
+        self.auto_fill_headers(&mut request, Some(dns_target.transport))
+            .await;
         let response = self.send_non_invite_request(request.clone(), dns_target).await?;
 
         // If 200 OK, create subscription
@@ -843,12 +867,11 @@ impl IntegratedUAC {
         let mut request = helper.create_notify(subscription, state, body);
         drop(helper);
 
-        // Auto-fill Via
-        self.auto_fill_headers(&mut request).await;
-
         // Use subscription contact for DNS resolution
         let target = RequestTarget::Uri(subscription.contact.clone());
         let dns_target = self.resolve_target(&target).await?;
+        self.auto_fill_headers(&mut request, Some(dns_target.transport))
+            .await;
 
         // Send and wait for response
         self.send_non_invite_request(request, dns_target).await
@@ -878,12 +901,13 @@ impl IntegratedUAC {
         let mut request = helper.create_reinvite(dialog, sdp_body);
         drop(helper);
 
-        // Auto-fill Via/Contact
-        self.auto_fill_headers(&mut request).await;
-
         // Use remote target from dialog
         let target = RequestTarget::Uri(dialog.remote_target.clone());
         let dns_target = self.resolve_target(&target).await?;
+
+        // Auto-fill Via/Contact using resolved transport
+        self.auto_fill_headers(&mut request, Some(dns_target.transport))
+            .await;
 
         // Create channels for responses
         let (prov_tx, prov_rx) = mpsc::channel(16);
@@ -891,7 +915,7 @@ impl IntegratedUAC {
         let (term_tx, term_rx) = oneshot::channel();
 
         // Create transport context
-        let ctx = self.create_transport_context(&dns_target)?;
+        let ctx = self.create_transport_context(&dns_target).await?;
 
         // Create early dialogs map for forking support
         let early_dialogs = Arc::new(Mutex::new(std::collections::HashMap::new()));
@@ -961,12 +985,11 @@ impl IntegratedUAC {
         let mut request = helper.create_update(dialog, sdp_body);
         drop(helper);
 
-        // Auto-fill Via/Contact
-        self.auto_fill_headers(&mut request).await;
-
         // Use remote target from dialog
         let target = RequestTarget::Uri(dialog.remote_target.clone());
         let dns_target = self.resolve_target(&target).await?;
+        self.auto_fill_headers(&mut request, Some(dns_target.transport))
+            .await;
 
         // Send and wait for response
         self.send_non_invite_request(request, dns_target).await
@@ -1015,12 +1038,11 @@ impl IntegratedUAC {
         };
         drop(helper);
 
-        // Auto-fill Via/Contact
-        self.auto_fill_headers(&mut request).await;
-
         // Use remote target from dialog
         let target = RequestTarget::Uri(dialog.remote_target.clone());
         let dns_target = self.resolve_target(&target).await?;
+        self.auto_fill_headers(&mut request, Some(dns_target.transport))
+            .await;
 
         // Send and wait for response
         let response = self.send_non_invite_request(request.clone(), dns_target).await?;
@@ -1036,6 +1058,19 @@ impl IntegratedUAC {
         };
 
         Ok((response, subscription))
+    }
+
+    /// Sends a lightweight CRLF keepalive to keep NAT/LB bindings active.
+    ///
+    /// Uses the resolved transport for the provided target (UDP/TCP/TLS).
+    pub async fn send_keepalive(&self, target: impl Into<RequestTarget>) -> Result<()> {
+        let target = target.into();
+        let dns_target = self.resolve_target(&target).await?;
+        let ctx = self.create_transport_context(&dns_target).await?;
+
+        // Double-CRLF keepalive (common for SIP over UDP/TCP to refresh bindings)
+        let payload = Bytes::from_static(b"\r\n\r\n");
+        self.transport_dispatcher.dispatch(&ctx, payload).await
     }
 }
 
@@ -1340,20 +1375,18 @@ impl ClientTransactionUser for InviteTransactionUser {
                 Ok(prack) => {
                     drop(helper);
 
-                    // Serialize PRACK
-                    let prack_bytes = serialize_request(&prack);
-
-                    // Send PRACK
-                    // TODO: Should start new transaction for PRACK
-                    if let Some(stream) = &ctx.stream {
-                        if let Err(e) = stream.send(prack_bytes).await {
-                            error!("Failed to send PRACK via stream: {}", e);
+                    // PRACK is a non-INVITE client transaction (RFC 3262)
+                    let tu = Arc::new(PrackTransactionUser);
+                    match self
+                        .transaction_manager
+                        .start_client_transaction(prack.clone(), ctx.clone(), tu)
+                        .await
+                    {
+                        Ok(key) => {
+                            debug!("Started PRACK transaction {}", key.branch);
                         }
-                    } else {
-                        if let Err(e) = self.dispatcher.dispatch(ctx, prack_bytes).await {
-                            error!("Failed to send PRACK via dispatcher: {}", e);
-                        } else {
-                            debug!("PRACK sent successfully");
+                        Err(e) => {
+                            error!("Failed to start PRACK transaction: {}", e);
                         }
                     }
                 }
@@ -1374,6 +1407,47 @@ impl ClientTransactionUser for InviteTransactionUser {
         if let Some(tx) = tx.take() {
             let _ = tx.send("transport error".to_string());
         }
+    }
+}
+
+/// Lightweight transaction user for PRACK transactions (fire-and-forget).
+struct PrackTransactionUser;
+
+#[async_trait]
+impl ClientTransactionUser for PrackTransactionUser {
+    async fn on_provisional(&self, _key: &TransactionKey, response: &Response) {
+        debug!("PRACK provisional: {}", response.start.code);
+    }
+
+    async fn on_final(&self, _key: &TransactionKey, response: &Response) {
+        info!("PRACK final response: {}", response.start.code);
+    }
+
+    async fn on_terminated(&self, _key: &TransactionKey, reason: &str) {
+        warn!("PRACK transaction terminated: {}", reason);
+    }
+
+    async fn send_ack(
+        &self,
+        _key: &TransactionKey,
+        _response: Response,
+        _ctx: &TransportContext,
+        _is_2xx: bool,
+    ) {
+        // No ACK for PRACK final responses
+    }
+
+    async fn send_prack(
+        &self,
+        _key: &TransactionKey,
+        _response: Response,
+        _ctx: &TransportContext,
+    ) {
+        // Nested PRACK not applicable
+    }
+
+    async fn on_transport_error(&self, _key: &TransactionKey) {
+        warn!("PRACK transport error");
     }
 }
 

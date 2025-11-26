@@ -22,9 +22,11 @@
 //!     Best response forwarded upstream
 //! ```
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use dashmap::DashMap;
-use sip_core::{Method, Request, Response, SipUri};
+use crate::cancel_ack::{AckForwarder, CancelForwarder};
+use crate::ProxyHelpers;
+use sip_core::{Request, Response, SipUri};
 use smol_str::SmolStr;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -241,15 +243,64 @@ impl ProxyContext {
     }
 
     /// Cancel all branches except the specified one (winner)
-    async fn cancel_other_branches(&self, winner_branch: &str) {
-        let branches = self.branches.read().await;
+    ///
+    /// Returns branch IDs that should receive CANCEL.
+    async fn cancel_other_branches(&self, winner_branch: &str) -> Vec<SmolStr> {
+        let mut branches = self.branches.write().await;
+        let mut to_cancel = Vec::new();
 
-        for (branch_id, branch) in branches.iter() {
-            if branch_id.as_str() != winner_branch && branch.state != BranchState::Completed {
-                info!("Would send CANCEL to branch {} (winner: {})", branch_id, winner_branch);
-                // TODO: Actually send CANCEL - needs client transaction access
+        for (branch_id, branch) in branches.iter_mut() {
+            if branch_id.as_str() != winner_branch
+                && !matches!(branch.state, BranchState::Completed | BranchState::Cancelled)
+            {
+                info!("Marking branch {} for CANCEL (winner: {})", branch_id, winner_branch);
+                branch.state = BranchState::Cancelled;
+                to_cancel.push(branch_id.clone());
             }
         }
+
+        to_cancel
+    }
+
+    /// Build CANCEL requests for all branches marked as Cancelled/Trying/Proceeding.
+    ///
+    /// The provided CANCEL template should already match the original INVITE's
+    /// Call-ID/From/To/CSeq; this will rewrite the Via branch per target branch.
+    pub async fn build_cancel_requests(&self, cancel_template: &Request) -> Vec<Request> {
+        let branches = self.branches.read().await;
+        let mut cancels = Vec::new();
+
+        for (branch_id, branch) in branches.iter() {
+            if matches!(
+                branch.state,
+                BranchState::Cancelled | BranchState::Trying | BranchState::Proceeding
+            ) {
+                match CancelForwarder::prepare_cancel(cancel_template, branch_id.as_str()) {
+                    Ok(mut cancel) => {
+                        // Ensure Request-URI targets the original branch destination
+                        ProxyHelpers::set_request_uri(&mut cancel, branch.target.clone());
+                        cancels.push(cancel);
+                    }
+                    Err(e) => warn!("Failed to prepare CANCEL for branch {}: {}", branch_id, e),
+                }
+            }
+        }
+
+        cancels
+    }
+
+    /// Determine if the selected best response was 2xx (used for ACK classification).
+    pub async fn best_response_is_2xx(&self) -> Option<bool> {
+        let best = self.best_final.read().await;
+        best.as_ref()
+            .map(|resp| resp.start.code >= 200 && resp.start.code < 300)
+    }
+
+    /// Prepare an ACK for forwarding using transaction context to decide ACK type.
+    pub async fn prepare_ack_forward(&self, ack: &Request) -> Result<Request> {
+        let is_2xx = self.best_response_is_2xx().await;
+        let ack_type = AckForwarder::ack_type(ack, is_2xx);
+        AckForwarder::prepare_ack(ack, ack_type)
     }
 
     /// Get all branch IDs
@@ -384,10 +435,12 @@ impl Default for StatefulProxy {
 pub mod forwarding {
     use super::*;
     use crate::ProxyHelpers;
+    use bytes::Bytes;
+    use sip_core::{Headers, Method, RequestLine};
 
-    /// Prepare a request for forwarding to a target
-    ///
-    /// This performs RFC 3261 §16.6 request forwarding:
+        /// Prepare a request for forwarding to a target
+        ///
+        /// This performs RFC 3261 §16.6 request forwarding:
     /// 1. Makes a copy of the request
     /// 2. Updates Request-URI to target
     /// 3. Decrements Max-Forwards
@@ -427,6 +480,71 @@ pub mod forwarding {
         Ok((forwarded, SmolStr::new(branch_id)))
     }
 
+    #[tokio::test]
+    async fn build_cancel_requests_sets_branch_and_target() {
+        let proxy = StatefulProxy::new();
+        let invite = {
+            let mut headers = Headers::new();
+            headers.push("Call-ID".into(), "call-123".into());
+            headers.push("CSeq".into(), "1 INVITE".into());
+            headers.push("Via".into(), "SIP/2.0/UDP client;branch=z9hG4bKclient".into());
+            headers.push("From".into(), "<sip:alice@example.com>;tag=a".into());
+            headers.push("To".into(), "<sip:bob@example.com>".into());
+            headers.push("Max-Forwards".into(), "70".into());
+            Request::new(
+                RequestLine::new(Method::Invite, SipUri::parse("sip:bob@example.com").unwrap()),
+                headers,
+                Bytes::new(),
+            )
+        };
+
+        let (context, _) = proxy.start_context(
+            invite.clone(),
+            "call-123".into(),
+            "z9hG4bKclient".into(),
+            ForkMode::Parallel,
+        );
+
+        let target = SipUri::parse("sip:target@example.com").unwrap();
+        let branch_info = BranchInfo {
+            branch_id: "z9hG4bKbranch1".into(),
+            target: target.clone(),
+            created_at: Instant::now(),
+            state: BranchState::Proceeding,
+            best_response: None,
+        };
+        context.add_branch(branch_info).await;
+
+        // Template CANCEL (matches INVITE headers)
+        let cancel_template = {
+            let mut headers = Headers::new();
+            headers.push("Call-ID".into(), "call-123".into());
+            headers.push("CSeq".into(), "1 CANCEL".into());
+            headers.push("From".into(), "<sip:alice@example.com>;tag=a".into());
+            headers.push("To".into(), "<sip:bob@example.com>".into());
+            headers.push("Via".into(), "SIP/2.0/UDP proxy;branch=z9hG4bKtemplate".into());
+            Request::new(
+                RequestLine::new(Method::Cancel, SipUri::parse("sip:bob@example.com").unwrap()),
+                headers,
+                Bytes::new(),
+            )
+        };
+
+        let cancels = context.build_cancel_requests(&cancel_template).await;
+        assert_eq!(cancels.len(), 1);
+        let cancel = &cancels[0];
+
+        // Branch rewritten
+        let via = cancel.headers.get("Via").unwrap();
+        assert!(via.contains("z9hG4bKbranch1"));
+
+        // Request-URI targets branch destination
+        assert_eq!(
+            cancel.start.uri.as_sip().unwrap().as_str(),
+            target.as_str()
+        );
+    }
+
     /// Prepare a response for forwarding upstream
     ///
     /// This performs RFC 3261 §16.7 response forwarding:
@@ -448,7 +566,7 @@ pub mod forwarding {
 mod tests {
     use super::*;
     use bytes::Bytes;
-    use sip_core::{Headers, RequestLine, StatusLine};
+    use sip_core::{Headers, Method, RequestLine, StatusLine};
 
     fn make_request() -> Request {
         let mut headers = Headers::new();
@@ -556,5 +674,46 @@ mod tests {
 
         // Within same class (4xx), keep first
         assert!(!select_best_response(Some(&response_486), &response_487));
+    }
+
+    #[tokio::test]
+    async fn prepares_ack_with_best_response_context() {
+        let proxy = StatefulProxy::new();
+        let invite = make_request();
+        let (context, _) = proxy.start_context(
+            invite,
+            "test-call-123".into(),
+            "z9hG4bKclient".into(),
+            ForkMode::None,
+        );
+
+        // Simulate a 200 OK winning response
+        let resp = make_response(200);
+        context.process_response("z9hG4bKclient", resp).await;
+
+        // Incoming ACK with Route header (dialog path)
+        let mut ack = {
+            let mut headers = Headers::new();
+            headers.push("Call-ID".into(), "test-call-123".into());
+            headers.push("CSeq".into(), "1 ACK".into());
+            headers.push("Route".into(), "<sip:proxy.example.com>".into());
+            Request::new(
+                RequestLine::new(Method::Ack, SipUri::parse("sip:bob@example.com").unwrap()),
+                headers,
+                Bytes::new(),
+            )
+        };
+
+        let forwarded = context.prepare_ack_forward(&ack).await.unwrap();
+
+        // Route header consumed and Request-URI updated
+        assert!(forwarded
+            .headers
+            .iter()
+            .all(|h| h.name.as_str() != "Route"));
+        assert_eq!(
+            forwarded.start.uri.as_sip().unwrap().as_str(),
+            "sip:proxy.example.com"
+        );
     }
 }

@@ -4,8 +4,8 @@
 //! different processing than regular request forwarding.
 
 use anyhow::{anyhow, Result};
-use sip_core::{Method, Request, SipUri};
-use tracing::{debug, warn};
+use sip_core::{Request, SipUri};
+use tracing::debug;
 
 /// CANCEL forwarding per RFC 3261 §16.10
 ///
@@ -57,13 +57,34 @@ impl CancelForwarder {
     pub fn prepare_cancel(original_cancel: &Request, target_branch: &str) -> Result<Request> {
         let mut cancel = original_cancel.clone();
 
-        // Update Via header with target branch
-        // The branch parameter MUST match the INVITE branch for this target
+        // Update top Via header to match the branch of the INVITE sent to this target
         debug!("Preparing CANCEL with branch {} for forwarding", target_branch);
+        if let Some(via_header) = cancel
+            .headers
+            .iter_mut()
+            .find(|h| h.name.as_str().eq_ignore_ascii_case("Via"))
+        {
+            let mut parts: Vec<String> = via_header
+                .value
+                .split(';')
+                .map(|s| s.trim().to_string())
+                .collect();
 
-        // In a real implementation, we'd update the Via header here
-        // For now, we just return the cloned request
-        // TODO: Update Via header branch parameter
+            let mut branch_updated = false;
+            for part in parts.iter_mut() {
+                if part.to_ascii_lowercase().starts_with("branch=") {
+                    *part = format!("branch={}", target_branch);
+                    branch_updated = true;
+                    break;
+                }
+            }
+
+            if !branch_updated {
+                parts.push(format!("branch={}", target_branch));
+            }
+
+            via_header.value = parts.join(";").into();
+        }
 
         Ok(cancel)
     }
@@ -100,12 +121,26 @@ impl CancelForwarder {
 pub struct AckForwarder;
 
 impl AckForwarder {
-    /// Determine the type of ACK based on CSeq and response
-    pub fn ack_type(ack: &Request) -> AckType {
-        // In a real implementation, we'd check if this ACK is for a 2xx
-        // response by looking at the transaction state
-        // For now, we default to assuming it's for a non-2xx
-        AckType::Non2xx
+    /// Determine the type of ACK based on transaction context or heuristic.
+    ///
+    /// If `is_for_2xx` is provided, that is authoritative. Otherwise, fall back
+    /// to a simple heuristic (presence of Route headers implies 2xx ACK).
+    pub fn ack_type(ack: &Request, is_for_2xx: Option<bool>) -> AckType {
+        if let Some(is_2xx) = is_for_2xx {
+            return if is_2xx { AckType::For2xx } else { AckType::Non2xx };
+        }
+
+        // Heuristic: ACKs that carry Route headers are usually 2xx ACKs
+        // traveling on the dialog route set (new transaction).
+        if ack
+            .headers
+            .iter()
+            .any(|h| h.name.as_str().eq_ignore_ascii_case("Route"))
+        {
+            AckType::For2xx
+        } else {
+            AckType::Non2xx
+        }
     }
 
     /// Prepare ACK for forwarding
@@ -118,15 +153,37 @@ impl AckForwarder {
     /// For ACK to non-2xx responses:
     /// - Forwarded hop-by-hop within INVITE transaction
     /// - Destination determined from INVITE forwarding
-    pub fn prepare_ack(original_ack: &Request, _ack_type: AckType) -> Result<Request> {
+    pub fn prepare_ack(original_ack: &Request, ack_type: AckType) -> Result<Request> {
         // Clone the ACK
-        let ack = original_ack.clone();
+        let mut ack = original_ack.clone();
 
-        // In a real implementation, we'd:
-        // 1. Process Route headers (for 2xx ACK)
-        // 2. Update Request-URI (for 2xx ACK)
-        // 3. Add Via header
-        // 4. Forward to appropriate destination
+        // For 2xx ACK, use the first Route (if present) as Request-URI per loose routing
+        if matches!(ack_type, AckType::For2xx) {
+            let mut new_headers = Vec::new();
+            let mut used_route = false;
+
+            for header in ack.headers.clone().into_iter() {
+                if header.name.as_str().eq_ignore_ascii_case("Route") && !used_route {
+                    let uri_str = header
+                        .value
+                        .as_str()
+                        .trim_matches(|c| c == '<' || c == '>');
+
+                    if let Some(uri) = SipUri::parse(uri_str) {
+                        crate::ProxyHelpers::set_request_uri(&mut ack, uri);
+                    }
+                    used_route = true;
+                    // Skip the consumed Route header
+                    continue;
+                }
+
+                new_headers.push(header);
+            }
+
+            ack.headers = sip_core::Headers::from_vec(new_headers);
+        }
+
+        // For non-2xx ACK, keep Request-URI/Via intact for hop-by-hop forwarding
 
         Ok(ack)
     }
@@ -204,7 +261,17 @@ impl RouteProcessor {
                     crate::ProxyHelpers::set_request_uri(request, route_uri.clone());
 
                     // Remove the last Route header
-                    // TODO: Actually remove the Route header
+                    let mut filtered = Vec::new();
+                    let mut removed = false;
+                    for header in request.headers.clone().into_iter().rev() {
+                        if header.name.as_str().eq_ignore_ascii_case("Route") && !removed {
+                            removed = true;
+                            continue;
+                        }
+                        filtered.push(header);
+                    }
+                    filtered.reverse();
+                    request.headers = sip_core::Headers::from_vec(filtered);
 
                     return Ok(Some(route_uri));
                 }
@@ -239,7 +306,7 @@ impl RouteProcessor {
 mod tests {
     use super::*;
     use bytes::Bytes;
-    use sip_core::{Headers, RequestLine};
+    use sip_core::{Headers, Method, RequestLine};
 
     fn make_cancel() -> Request {
         let mut headers = Headers::new();
@@ -247,6 +314,7 @@ mod tests {
         headers.push("CSeq".into(), "1 CANCEL".into());
         headers.push("From".into(), "<sip:alice@example.com>;tag=abc".into());
         headers.push("To".into(), "<sip:bob@example.com>".into());
+        headers.push("Via".into(), "SIP/2.0/UDP proxy;branch=z9hG4bKtemplate".into());
 
         Request::new(
             RequestLine::new(Method::Cancel, SipUri::parse("sip:bob@example.com").unwrap()),
@@ -259,6 +327,8 @@ mod tests {
         let mut headers = Headers::new();
         headers.push("Call-ID".into(), "test-123".into());
         headers.push("CSeq".into(), "1 ACK".into());
+        headers.push("From".into(), "<sip:alice@example.com>;tag=abc".into());
+        headers.push("To".into(), "<sip:bob@example.com>".into());
 
         Request::new(
             RequestLine::new(Method::Ack, SipUri::parse("sip:bob@example.com").unwrap()),
@@ -268,10 +338,25 @@ mod tests {
     }
 
     #[test]
+    fn ack_type_prefers_context_flag() {
+        let ack = make_ack();
+        assert_eq!(AckForwarder::ack_type(&ack, Some(true)), AckType::For2xx);
+        assert_eq!(AckForwarder::ack_type(&ack, Some(false)), AckType::Non2xx);
+    }
+
+    #[test]
     fn extracts_invite_cseq_from_cancel() {
         let cancel = make_cancel();
         let cseq = CancelForwarder::extract_invite_cseq(&cancel).unwrap();
         assert_eq!(cseq, 1);
+    }
+
+    #[test]
+    fn prepares_cancel_with_branch_update() {
+        let cancel = make_cancel();
+        let prepared = CancelForwarder::prepare_cancel(&cancel, "z9hG4bKbranch1").unwrap();
+        let via = prepared.headers.get("Via").unwrap();
+        assert!(via.contains("z9hG4bKbranch1"));
     }
 
     #[test]
