@@ -1,3 +1,6 @@
+// Integrated UAC with full transaction/transport/DNS integration
+pub mod integrated;
+
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
@@ -10,6 +13,10 @@ use std::sync::Arc;
 use tracing::info;
 
 /// UAC (User Agent Client) helper for sending SIP requests.
+///
+/// **Note**: This is the low-level helper for request generation. For production
+/// use with automatic transaction management, DNS resolution, and authentication,
+/// see [`integrated::IntegratedUAC`].
 ///
 /// Provides high-level APIs for common UAC operations like REGISTER, INVITE, and BYE,
 /// with automatic authentication handling and dialog management.
@@ -525,6 +532,223 @@ impl UserAgentClient {
             headers,
             Bytes::new(),
         )
+    }
+
+    /// Creates a re-INVITE request to modify an existing session (RFC 3261 §14).
+    ///
+    /// # Arguments
+    /// * `dialog` - The dialog to send re-INVITE within
+    /// * `sdp_body` - Optional new SDP offer (None for session refresh without media change)
+    ///
+    /// # Returns
+    /// A re-INVITE request ready to send
+    pub fn create_reinvite(&self, dialog: &Dialog, sdp_body: Option<&str>) -> Request {
+        let mut headers = Headers::new();
+
+        // Via
+        let branch = generate_branch();
+        headers.push(SmolStr::new("Via"), SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)));
+
+        // From (with local tag)
+        let from = if let Some(ref display) = self.display_name {
+            format!("\"{}\" <{}>;tag={}", display, self.local_uri.as_str(), dialog.id.local_tag.as_str())
+        } else {
+            format!("<{}>;tag={}", self.local_uri.as_str(), dialog.id.local_tag.as_str())
+        };
+        headers.push(SmolStr::new("From"), SmolStr::new(from));
+
+        // To (with remote tag)
+        let to = format!("<{}>;tag={}", dialog.remote_uri.as_str(), dialog.id.remote_tag.as_str());
+        headers.push(SmolStr::new("To"), SmolStr::new(to));
+
+        // Call-ID
+        headers.push(SmolStr::new("Call-ID"), dialog.id.call_id.clone());
+
+        // CSeq (next local CSeq)
+        let mut mutable_dialog = dialog.clone();
+        let cseq = mutable_dialog.next_local_cseq();
+        headers.push(SmolStr::new("CSeq"), SmolStr::new(format!("{} INVITE", cseq)));
+
+        // Contact
+        headers.push(SmolStr::new("Contact"), SmolStr::new(format!("<{}>", self.contact_uri.as_str())));
+
+        // Max-Forwards
+        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70".to_owned()));
+
+        // User-Agent
+        headers.push(SmolStr::new("User-Agent"), SmolStr::new("siphon-rs/0.1.0".to_owned()));
+
+        let body = if let Some(sdp) = sdp_body {
+            // Content-Type
+            headers.push(SmolStr::new("Content-Type"), SmolStr::new("application/sdp".to_owned()));
+
+            // Content-Length
+            headers.push(SmolStr::new("Content-Length"), SmolStr::new(sdp.len().to_string()));
+
+            Bytes::from(sdp.as_bytes().to_vec())
+        } else {
+            headers.push(SmolStr::new("Content-Length"), SmolStr::new("0".to_owned()));
+            Bytes::new()
+        };
+
+        // Request-URI is the remote target
+        let request_uri = dialog.remote_target.clone();
+
+        Request::new(
+            RequestLine::new(Method::Invite, request_uri),
+            headers,
+            body,
+        )
+    }
+
+    /// Creates an UPDATE request to modify session parameters (RFC 3311).
+    ///
+    /// # Arguments
+    /// * `dialog` - The dialog to send UPDATE within
+    /// * `sdp_body` - Optional SDP for session modification
+    ///
+    /// # Returns
+    /// An UPDATE request ready to send
+    pub fn create_update(&self, dialog: &Dialog, sdp_body: Option<&str>) -> Request {
+        let mut headers = Headers::new();
+
+        // Via
+        let branch = generate_branch();
+        headers.push(SmolStr::new("Via"), SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)));
+
+        // From (with local tag)
+        let from = if let Some(ref display) = self.display_name {
+            format!("\"{}\" <{}>;tag={}", display, self.local_uri.as_str(), dialog.id.local_tag.as_str())
+        } else {
+            format!("<{}>;tag={}", self.local_uri.as_str(), dialog.id.local_tag.as_str())
+        };
+        headers.push(SmolStr::new("From"), SmolStr::new(from));
+
+        // To (with remote tag)
+        let to = format!("<{}>;tag={}", dialog.remote_uri.as_str(), dialog.id.remote_tag.as_str());
+        headers.push(SmolStr::new("To"), SmolStr::new(to));
+
+        // Call-ID
+        headers.push(SmolStr::new("Call-ID"), dialog.id.call_id.clone());
+
+        // CSeq (next local CSeq)
+        let mut mutable_dialog = dialog.clone();
+        let cseq = mutable_dialog.next_local_cseq();
+        headers.push(SmolStr::new("CSeq"), SmolStr::new(format!("{} UPDATE", cseq)));
+
+        // Contact
+        headers.push(SmolStr::new("Contact"), SmolStr::new(format!("<{}>", self.contact_uri.as_str())));
+
+        // Max-Forwards
+        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70".to_owned()));
+
+        // User-Agent
+        headers.push(SmolStr::new("User-Agent"), SmolStr::new("siphon-rs/0.1.0".to_owned()));
+
+        let body = if let Some(sdp) = sdp_body {
+            // Content-Type
+            headers.push(SmolStr::new("Content-Type"), SmolStr::new("application/sdp".to_owned()));
+
+            // Content-Length
+            headers.push(SmolStr::new("Content-Length"), SmolStr::new(sdp.len().to_string()));
+
+            Bytes::from(sdp.as_bytes().to_vec())
+        } else {
+            headers.push(SmolStr::new("Content-Length"), SmolStr::new("0".to_owned()));
+            Bytes::new()
+        };
+
+        // Request-URI is the remote target
+        let request_uri = dialog.remote_target.clone();
+
+        Request::new(
+            RequestLine::new(Method::Update, request_uri),
+            headers,
+            body,
+        )
+    }
+
+    /// Creates a session refresh request for RFC 4028 session timers.
+    ///
+    /// # Arguments
+    /// * `dialog` - The dialog to refresh
+    /// * `session_expires` - Session-Expires value in seconds
+    /// * `refresher` - Refresher role ("uac" or "uas")
+    /// * `use_update` - If true, use UPDATE; if false, use re-INVITE
+    /// * `sdp_body` - Optional SDP body (required for re-INVITE if call has media)
+    ///
+    /// # Returns
+    /// A session refresh request (re-INVITE or UPDATE) with Session-Expires header
+    ///
+    /// # RFC 4028 Session Timer Refresh
+    ///
+    /// Session timers prevent stuck dialogs by requiring periodic refresh.
+    /// The refresher (UAC or UAS) must send a refresh before Session-Expires/2.
+    ///
+    /// Per RFC 4028 §7.4, refresh can be done with:
+    /// - **re-INVITE**: Full session refresh with SDP renegotiation
+    /// - **UPDATE**: Session refresh without changing media (RFC 3311)
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use sip_dialog::session_timer_manager::SessionTimerEvent;
+    ///
+    /// // Listen for refresh events
+    /// while let Some(event) = timer_events.recv().await {
+    ///     match event {
+    ///         SessionTimerEvent::RefreshNeeded(dialog_id) => {
+    ///             let dialog = dialog_manager.get(&dialog_id).unwrap();
+    ///
+    ///             // Create refresh with UPDATE (no SDP renegotiation)
+    ///             let refresh = uac.create_session_refresh(
+    ///                 &dialog,
+    ///                 1800,     // 30 minutes
+    ///                 "uac",    // We are refresher
+    ///                 true,     // Use UPDATE
+    ///                 None      // No SDP needed for UPDATE
+    ///             );
+    ///
+    ///             // Send refresh request
+    ///             transport.send(refresh).await?;
+    ///         }
+    ///         SessionTimerEvent::SessionExpired(dialog_id) => {
+    ///             // Session timed out - send BYE
+    ///         }
+    ///     }
+    /// }
+    /// ```
+    pub fn create_session_refresh(
+        &self,
+        dialog: &Dialog,
+        session_expires: u32,
+        refresher: &str,
+        use_update: bool,
+        sdp_body: Option<&str>,
+    ) -> Request {
+        // Create base request (re-INVITE or UPDATE)
+        let mut request = if use_update {
+            self.create_update(dialog, sdp_body)
+        } else {
+            self.create_reinvite(dialog, sdp_body)
+        };
+
+        // Add Session-Expires header per RFC 4028 §7.4
+        let session_expires_value = format!("{};refresher={}", session_expires, refresher);
+        request.headers.push(
+            SmolStr::new("Session-Expires"),
+            SmolStr::new(session_expires_value),
+        );
+
+        // Add Supported: timer to indicate session timer support
+        if !request.headers.get("Supported").is_some() {
+            request.headers.push(
+                SmolStr::new("Supported"),
+                SmolStr::new("timer"),
+            );
+        }
+
+        request
     }
 
     /// Creates an INFO request to send mid-dialog information (RFC 2976).

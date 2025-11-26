@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub mod session_timer_manager;
+pub mod prack_validator;
 
 /// Dialog state per RFC 3261 §12.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

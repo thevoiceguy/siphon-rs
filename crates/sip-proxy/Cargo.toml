@@ -9,3 +9,7 @@ anyhow = { workspace = true }
 sip-core = { path = "../sip-core" }
 sip-transaction = { path = "../sip-transaction" }
 bytes = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+dashmap = { workspace = true }
+smol_str = { workspace = true }
+tracing = { workspace = true }

@@ -26,6 +26,7 @@ repository = "https://github.com/yourusername/siphon-rs"
 
 [workspace.dependencies]
 anyhow = "1"
+async-trait = "0.1"
 bytes = "1"
 serde = { version = "1", features = ["derive"] }
 smol_str = "0.3"

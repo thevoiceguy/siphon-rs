@@ -11,9 +11,13 @@ sip-parse = { path = "../sip-parse" }
 sip-transport = { path = "../sip-transport" }
 sip-auth = { path = "../sip-auth" }
 sip-dialog = { path = "../sip-dialog" }
-tokio = { workspace = true }
+sip-dns = { path = "../sip-dns" }
+sip-transaction = { path = "../sip-transaction" }
+sip-sdp = { path = "../sip-sdp" }
+tokio = { workspace = true, features = ["sync"] }
 bytes = { workspace = true }
 smol_str = { workspace = true }
 tracing = { workspace = true }
 rand = { workspace = true }
 urlencoding = "2.1"
+async-trait = { workspace = true }

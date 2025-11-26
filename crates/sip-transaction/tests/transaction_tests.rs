@@ -5,6 +5,7 @@ use sip_transaction::fsm::{
     ClientNonInviteEvent, ClientNonInviteFsm, ServerAction, ServerInviteAction,
     ServerInviteEvent, ServerInviteFsm, ServerNonInviteEvent, ServerNonInviteFsm,
 };
+use sip_transaction::timers::{Transport, TransportAwareTimers};
 use sip_transaction::{ClientNonInviteState, ServerNonInviteState, TransactionTimer};
 use smol_str::SmolStr;
 use std::time::Duration;
@@ -41,7 +42,7 @@ fn sample_response(code: u16) -> Response {
 #[test]
 fn client_non_invite_retransmission_on_timer_e() {
     let req = sample_request();
-    let mut fsm = ClientNonInviteFsm::new(Duration::from_millis(500), Duration::from_secs(4), Duration::from_secs(5));
+    let mut fsm = ClientNonInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
 
     // Send request
     fsm.on_event(ClientNonInviteEvent::SendRequest(req.clone()));
@@ -70,7 +71,7 @@ fn client_non_invite_retransmission_on_timer_e() {
 fn client_non_invite_duplicate_final_response_ignored() {
     let req = sample_request();
     let resp = sample_response(200);
-    let mut fsm = ClientNonInviteFsm::new(Duration::from_millis(500), Duration::from_secs(4), Duration::from_secs(5));
+    let mut fsm = ClientNonInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
 
     fsm.on_event(ClientNonInviteEvent::SendRequest(req));
     fsm.on_event(ClientNonInviteEvent::ReceiveFinal(resp.clone()));
@@ -87,7 +88,7 @@ fn client_non_invite_duplicate_final_response_ignored() {
 #[test]
 fn client_non_invite_transport_error() {
     let req = sample_request();
-    let mut fsm = ClientNonInviteFsm::new(Duration::from_millis(500), Duration::from_secs(4), Duration::from_secs(5));
+    let mut fsm = ClientNonInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
 
     fsm.on_event(ClientNonInviteEvent::SendRequest(req));
 
@@ -104,7 +105,7 @@ fn client_non_invite_transport_error() {
 #[test]
 fn client_non_invite_timer_f_timeout() {
     let req = sample_request();
-    let mut fsm = ClientNonInviteFsm::new(Duration::from_millis(500), Duration::from_secs(4), Duration::from_secs(5));
+    let mut fsm = ClientNonInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
 
     fsm.on_event(ClientNonInviteEvent::SendRequest(req));
 
@@ -122,7 +123,7 @@ fn client_non_invite_timer_f_timeout() {
 #[test]
 fn client_non_invite_proceeding_to_completed() {
     let req = sample_request();
-    let mut fsm = ClientNonInviteFsm::new(Duration::from_millis(500), Duration::from_secs(4), Duration::from_secs(5));
+    let mut fsm = ClientNonInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
 
     fsm.on_event(ClientNonInviteEvent::SendRequest(req));
 
@@ -163,7 +164,7 @@ fn client_non_invite_proceeding_to_completed() {
 #[test]
 fn client_invite_timer_a_retransmission() {
     let invite = sample_invite();
-    let mut fsm = ClientInviteFsm::new(Duration::from_millis(500), Duration::from_secs(4));
+    let mut fsm = ClientInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
 
     fsm.on_event(ClientInviteEvent::SendInvite(invite));
 
@@ -190,7 +191,7 @@ fn client_invite_timer_a_retransmission() {
 #[test]
 fn client_invite_timer_b_timeout() {
     let invite = sample_invite();
-    let mut fsm = ClientInviteFsm::new(Duration::from_millis(500), Duration::from_secs(4));
+    let mut fsm = ClientInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
 
     fsm.on_event(ClientInviteEvent::SendInvite(invite));
 
@@ -211,7 +212,7 @@ fn client_invite_timer_b_timeout() {
 #[test]
 fn client_invite_provisional_with_rseq() {
     let invite = sample_invite();
-    let mut fsm = ClientInviteFsm::new(Duration::from_millis(500), Duration::from_secs(4));
+    let mut fsm = ClientInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
 
     fsm.on_event(ClientInviteEvent::SendInvite(invite));
 
@@ -238,7 +239,7 @@ fn client_invite_provisional_with_rseq() {
 fn client_invite_3xx_4xx_5xx_6xx_requires_ack() {
     for code in [300, 404, 503, 603] {
         let invite = sample_invite();
-        let mut fsm = ClientInviteFsm::new(Duration::from_millis(500), Duration::from_secs(4));
+        let mut fsm = ClientInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
 
         fsm.on_event(ClientInviteEvent::SendInvite(invite));
         let actions = fsm.on_event(ClientInviteEvent::ReceiveFinal(sample_response(code)));
@@ -276,7 +277,7 @@ fn client_invite_3xx_4xx_5xx_6xx_requires_ack() {
 #[test]
 fn client_invite_2xx_immediate_termination() {
     let invite = sample_invite();
-    let mut fsm = ClientInviteFsm::new(Duration::from_millis(500), Duration::from_secs(4));
+    let mut fsm = ClientInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
 
     fsm.on_event(ClientInviteEvent::SendInvite(invite));
     let actions = fsm.on_event(ClientInviteEvent::ReceiveFinal(sample_response(200)));
@@ -307,7 +308,7 @@ fn client_invite_2xx_immediate_termination() {
 #[test]
 fn client_invite_transport_error_in_calling() {
     let invite = sample_invite();
-    let mut fsm = ClientInviteFsm::new(Duration::from_millis(500), Duration::from_secs(4));
+    let mut fsm = ClientInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
 
     fsm.on_event(ClientInviteEvent::SendInvite(invite));
     let actions = fsm.on_event(ClientInviteEvent::TransportError);
@@ -331,7 +332,7 @@ fn client_invite_transport_error_in_calling() {
 #[test]
 fn server_non_invite_absorbs_retransmitted_request() {
     let req = sample_request();
-    let mut fsm = ServerNonInviteFsm::new(Duration::from_millis(500));
+    let mut fsm = ServerNonInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
 
     fsm.on_event(ServerNonInviteEvent::ReceiveRequest(req.clone()));
     fsm.on_event(ServerNonInviteEvent::SendFinal(sample_response(200)));
@@ -350,7 +351,7 @@ fn server_non_invite_absorbs_retransmitted_request() {
 #[test]
 fn server_non_invite_timer_j_termination() {
     let req = sample_request();
-    let mut fsm = ServerNonInviteFsm::new(Duration::from_millis(500));
+    let mut fsm = ServerNonInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
 
     fsm.on_event(ServerNonInviteEvent::ReceiveRequest(req));
     fsm.on_event(ServerNonInviteEvent::SendFinal(sample_response(200)));
@@ -368,7 +369,7 @@ fn server_non_invite_timer_j_termination() {
 #[test]
 fn server_non_invite_provisional_then_final() {
     let req = sample_request();
-    let mut fsm = ServerNonInviteFsm::new(Duration::from_millis(500));
+    let mut fsm = ServerNonInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
 
     fsm.on_event(ServerNonInviteEvent::ReceiveRequest(req));
 
@@ -406,7 +407,7 @@ fn server_non_invite_provisional_then_final() {
 #[test]
 fn server_non_invite_transport_error() {
     let req = sample_request();
-    let mut fsm = ServerNonInviteFsm::new(Duration::from_millis(500));
+    let mut fsm = ServerNonInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
 
     fsm.on_event(ServerNonInviteEvent::ReceiveRequest(req));
     let actions = fsm.on_event(ServerNonInviteEvent::TransportError);
@@ -427,7 +428,7 @@ fn server_non_invite_transport_error() {
 #[test]
 fn server_invite_timer_g_retransmission() {
     let invite = sample_invite();
-    let mut fsm = ServerInviteFsm::new(Duration::from_millis(500), Duration::from_secs(4), Duration::from_secs(5));
+    let mut fsm = ServerInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
 
     fsm.on_event(ServerInviteEvent::ReceiveInvite(invite));
     fsm.on_event(ServerInviteEvent::SendFinal(sample_response(486)));
@@ -459,7 +460,7 @@ fn server_invite_timer_g_retransmission() {
 #[test]
 fn server_invite_timer_h_timeout() {
     let invite = sample_invite();
-    let mut fsm = ServerInviteFsm::new(Duration::from_millis(500), Duration::from_secs(4), Duration::from_secs(5));
+    let mut fsm = ServerInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
 
     fsm.on_event(ServerInviteEvent::ReceiveInvite(invite));
     fsm.on_event(ServerInviteEvent::SendFinal(sample_response(486)));
@@ -481,7 +482,7 @@ fn server_invite_timer_h_timeout() {
 #[test]
 fn server_invite_ack_moves_to_confirmed() {
     let invite = sample_invite();
-    let mut fsm = ServerInviteFsm::new(Duration::from_millis(500), Duration::from_secs(4), Duration::from_secs(5));
+    let mut fsm = ServerInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
 
     fsm.on_event(ServerInviteEvent::ReceiveInvite(invite));
     fsm.on_event(ServerInviteEvent::SendFinal(sample_response(486)));
@@ -517,7 +518,7 @@ fn server_invite_ack_moves_to_confirmed() {
 #[test]
 fn server_invite_timer_i_termination() {
     let invite = sample_invite();
-    let mut fsm = ServerInviteFsm::new(Duration::from_millis(500), Duration::from_secs(4), Duration::from_secs(5));
+    let mut fsm = ServerInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
 
     fsm.on_event(ServerInviteEvent::ReceiveInvite(invite));
     fsm.on_event(ServerInviteEvent::SendFinal(sample_response(486)));
@@ -543,7 +544,7 @@ fn server_invite_timer_i_termination() {
 #[test]
 fn server_invite_2xx_immediate_termination() {
     let invite = sample_invite();
-    let mut fsm = ServerInviteFsm::new(Duration::from_millis(500), Duration::from_secs(4), Duration::from_secs(5));
+    let mut fsm = ServerInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
 
     fsm.on_event(ServerInviteEvent::ReceiveInvite(invite));
     let actions = fsm.on_event(ServerInviteEvent::SendFinal(sample_response(200)));
@@ -573,7 +574,7 @@ fn server_invite_2xx_immediate_termination() {
 #[test]
 fn server_invite_retransmit_in_completed() {
     let invite = sample_invite();
-    let mut fsm = ServerInviteFsm::new(Duration::from_millis(500), Duration::from_secs(4), Duration::from_secs(5));
+    let mut fsm = ServerInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
 
     fsm.on_event(ServerInviteEvent::ReceiveInvite(invite.clone()));
     fsm.on_event(ServerInviteEvent::SendFinal(sample_response(486)));
@@ -591,7 +592,7 @@ fn server_invite_retransmit_in_completed() {
 #[test]
 fn server_invite_provisional_response() {
     let invite = sample_invite();
-    let mut fsm = ServerInviteFsm::new(Duration::from_millis(500), Duration::from_secs(4), Duration::from_secs(5));
+    let mut fsm = ServerInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
 
     fsm.on_event(ServerInviteEvent::ReceiveInvite(invite));
 
@@ -621,7 +622,7 @@ fn server_invite_provisional_response() {
 #[test]
 fn server_invite_transport_error() {
     let invite = sample_invite();
-    let mut fsm = ServerInviteFsm::new(Duration::from_millis(500), Duration::from_secs(4), Duration::from_secs(5));
+    let mut fsm = ServerInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
 
     fsm.on_event(ServerInviteEvent::ReceiveInvite(invite));
     let actions = fsm.on_event(ServerInviteEvent::TransportError);

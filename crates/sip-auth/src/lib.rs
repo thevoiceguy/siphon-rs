@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use dashmap::DashMap;
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
+use md5::Context;
 use sha2::{Digest, Sha256, Sha512};
 use sip_core::{Headers, Method, Request, Response, StatusLine};
 use sip_parse::parse_authorization_header;
@@ -144,18 +145,22 @@ impl Nonce {
         self.created_at.elapsed() <= self.ttl
     }
 
-    /// Validates that the nonce-count with request hash for replay protection.
+    /// Validates nonce-count with full request hash for replay protection.
     /// - If nc > last_nc: New request, accept and store hash
-    /// - If nc == last_nc: Retransmission, accept only if request hash matches
+    /// - If nc == last_nc: Retransmission, accept only if request hash matches exactly
     /// - If nc < last_nc: Replay attack, reject
     ///
     /// This allows legitimate UDP retransmissions (same request, same nc) while
     /// blocking replay attacks (different request with same/old nc).
     pub fn validate_nc_with_request(&mut self, nc: u32, method: Method, uri: &str, body: &[u8]) -> bool {
-        // Compute hash of request (method:uri:body_len)
-        // We use body length instead of full body to avoid hashing large payloads
-        let request_sig = format!("{}:{}:{}", method.as_str(), uri, body.len());
-        let request_hash = format!("{:x}", md5::compute(request_sig.as_bytes()));
+        // Compute hash of request (method:uri:body bytes)
+        let mut ctx = Context::new();
+        ctx.consume(method.as_str().as_bytes());
+        ctx.consume(b":");
+        ctx.consume(uri.as_bytes());
+        ctx.consume(b":");
+        ctx.consume(body);
+        let request_hash = format!("{:x}", ctx.compute());
 
         if nc > self.last_nc {
             // New request with incrementing nc - accept and store
@@ -1382,6 +1387,64 @@ mod tests {
 
         assert!(!auth.verify(&request2, &request2.headers).unwrap(),
                 "Different body with same nc should be rejected (request hash mismatch)");
+    }
+
+    #[test]
+    fn digest_auth_rejects_same_length_different_body_same_nc() {
+        let creds = Credentials {
+            username: SmolStr::new("alice"),
+            password: SmolStr::new("secret"),
+            realm: SmolStr::new("example.com"),
+        };
+        let store = MemoryCredentialStore::with(vec![creds.clone()]);
+        let auth = DigestAuthenticator::new("example.com", store);
+
+        let nonce = auth.nonce_manager.generate();
+        let method = Method::Invite;
+        let uri = "sip:bob@example.com";
+        let nc = "00000001";
+        let cnonce = "abc123";
+        let body1 = b"SDP body A"; // length 10
+        let body2 = b"SDP body B"; // same length, different content
+
+        let response = auth.compute_response(
+            creds.username.as_str(),
+            creds.password.as_str(),
+            method,
+            uri,
+            &nonce.value,
+            Some(nc),
+            Some(cnonce),
+            Some(Qop::Auth),
+            body1,
+        );
+
+        let auth_header = SmolStr::new(format!(
+            "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
+            creds.username, creds.realm, nonce.value, uri, response, cnonce, nc, auth.opaque
+        ));
+
+        // First request with body1
+        let mut headers1 = Headers::new();
+        headers1.push(SmolStr::new("Authorization"), auth_header.clone());
+        let request1 = Request::new(
+            RequestLine::new(method, SipUri::parse(uri).unwrap()),
+            headers1,
+            Bytes::from_static(body1),
+        );
+        assert!(auth.verify(&request1, &request1.headers).unwrap(),
+                "First request should succeed");
+
+        // Same nc but different body with identical length should be rejected
+        let mut headers2 = Headers::new();
+        headers2.push(SmolStr::new("Authorization"), auth_header);
+        let request2 = Request::new(
+            RequestLine::new(method, SipUri::parse(uri).unwrap()),
+            headers2,
+            Bytes::from_static(body2),
+        );
+        assert!(!auth.verify(&request2, &request2.headers).unwrap(),
+                "Different body of same length with same nc should be rejected");
     }
 
     #[test]

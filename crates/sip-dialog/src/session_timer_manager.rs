@@ -279,6 +279,110 @@ pub fn calculate_refresh_time(session_expires: Duration) -> Duration {
     session_expires / 2
 }
 
+/// Negotiates Session-Expires value between UAC and UAS per RFC 4028 §4.
+///
+/// # RFC 4028 Negotiation Rules
+///
+/// 1. If requested Session-Expires < Min-SE → respond 422 (Session Interval Too Small)
+/// 2. If requested Session-Expires >= Min-SE → accept or reduce to own preference
+/// 3. Final value MUST be >= MAX(UAC Min-SE, UAS Min-SE)
+///
+/// # Parameters
+///
+/// - `requested`: Session-Expires requested by UAC
+/// - `local_min_se`: Local (UAS) Min-SE requirement
+/// - `remote_min_se`: Remote (UAC) Min-SE from request (if present)
+/// - `local_preference`: UAS preferred Session-Expires (if less than requested)
+///
+/// # Returns
+///
+/// - `Ok(negotiated_value)`: Negotiated Session-Expires that satisfies all constraints
+/// - `Err(required_min)`: Request violates Min-SE, respond with 422 and this value
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use std::time::Duration;
+/// use sip_dialog::session_timer_manager::negotiate_session_expires;
+///
+/// // UAC requests 1800s, UAS Min-SE is 90s
+/// let result = negotiate_session_expires(
+///     Duration::from_secs(1800),
+///     Duration::from_secs(90),
+///     None,
+///     Some(Duration::from_secs(3600))
+/// );
+/// assert_eq!(result, Ok(Duration::from_secs(1800))); // Accept UAC request
+///
+/// // UAC requests 60s, but UAS Min-SE is 90s → reject
+/// let result = negotiate_session_expires(
+///     Duration::from_secs(60),
+///     Duration::from_secs(90),
+///     None,
+///     None
+/// );
+/// assert!(result.is_err()); // Respond 422 with Min-SE: 90
+/// ```
+pub fn negotiate_session_expires(
+    requested: Duration,
+    local_min_se: Duration,
+    remote_min_se: Option<Duration>,
+    local_preference: Option<Duration>,
+) -> Result<Duration, Duration> {
+    // Calculate absolute minimum (MAX of local and remote Min-SE)
+    let absolute_min = if let Some(remote) = remote_min_se {
+        local_min_se.max(remote)
+    } else {
+        local_min_se
+    };
+
+    // Check if requested value violates minimum
+    if requested < absolute_min {
+        return Err(absolute_min);
+    }
+
+    // If UAS has a preference and requested exceeds it, use preference
+    if let Some(pref) = local_preference {
+        // Preference must still meet the absolute minimum
+        let negotiated = pref.max(absolute_min);
+
+        // Only reduce if preference is less than requested
+        if negotiated < requested {
+            return Ok(negotiated);
+        }
+    }
+
+    // Accept the requested value
+    Ok(requested)
+}
+
+/// Determines refresher role per RFC 4028 §7.
+///
+/// # RFC 4028 Refresher Selection
+///
+/// The refresher is selected based on the Session-Expires header parameters:
+/// - If `refresher=uac` → UAC is refresher
+/// - If `refresher=uas` → UAS is refresher
+/// - If no refresher parameter → defaults based on who supports timer extension
+///
+/// # Parameters
+///
+/// - `refresher_param`: Value from Session-Expires header refresher parameter
+/// - `is_uac`: Whether we are the UAC (caller) perspective
+///
+/// # Returns
+///
+/// `true` if we are the refresher, `false` otherwise
+pub fn determine_refresher_role(refresher_param: Option<&str>, is_uac: bool) -> bool {
+    match refresher_param {
+        Some("uac") => is_uac,
+        Some("uas") => !is_uac,
+        Some("UAC") => is_uac, // Case insensitive
+        Some("UAS") => !is_uac,
+        _ => is_uac, // Default: UAC is refresher if not specified
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -448,5 +552,115 @@ mod tests {
 
         manager.clear();
         assert_eq!(manager.active_count(), 0);
+    }
+
+    #[test]
+    fn negotiate_accepts_valid_request() {
+        let result = negotiate_session_expires(
+            Duration::from_secs(1800),
+            Duration::from_secs(90),
+            None,
+            None,
+        );
+        assert_eq!(result, Ok(Duration::from_secs(1800)));
+    }
+
+    #[test]
+    fn negotiate_rejects_below_local_min_se() {
+        let result = negotiate_session_expires(
+            Duration::from_secs(60),
+            Duration::from_secs(90),
+            None,
+            None,
+        );
+        assert_eq!(result, Err(Duration::from_secs(90)));
+    }
+
+    #[test]
+    fn negotiate_respects_remote_min_se() {
+        // UAC requests 100s with Min-SE of 120s → must reject
+        let result = negotiate_session_expires(
+            Duration::from_secs(100),
+            Duration::from_secs(90),
+            Some(Duration::from_secs(120)), // Remote Min-SE is higher
+            None,
+        );
+        assert_eq!(result, Err(Duration::from_secs(120)));
+    }
+
+    #[test]
+    fn negotiate_uses_max_of_both_min_se() {
+        // Local Min-SE=120s, Remote Min-SE=90s → absolute min is 120s
+        let result = negotiate_session_expires(
+            Duration::from_secs(100),
+            Duration::from_secs(120),
+            Some(Duration::from_secs(90)),
+            None,
+        );
+        assert_eq!(result, Err(Duration::from_secs(120)));
+    }
+
+    #[test]
+    fn negotiate_applies_local_preference() {
+        // UAC requests 3600s, but UAS prefers 1800s
+        let result = negotiate_session_expires(
+            Duration::from_secs(3600),
+            Duration::from_secs(90),
+            None,
+            Some(Duration::from_secs(1800)),
+        );
+        assert_eq!(result, Ok(Duration::from_secs(1800)));
+    }
+
+    #[test]
+    fn negotiate_preference_respects_min_se() {
+        // UAS prefers 60s, but Min-SE is 90s → must use 90s
+        let result = negotiate_session_expires(
+            Duration::from_secs(1800),
+            Duration::from_secs(90),
+            None,
+            Some(Duration::from_secs(60)),
+        );
+        assert_eq!(result, Ok(Duration::from_secs(90)));
+    }
+
+    #[test]
+    fn negotiate_accepts_when_preference_higher_than_request() {
+        // UAC requests 1800s, UAS prefers 3600s → accept UAC request
+        let result = negotiate_session_expires(
+            Duration::from_secs(1800),
+            Duration::from_secs(90),
+            None,
+            Some(Duration::from_secs(3600)),
+        );
+        assert_eq!(result, Ok(Duration::from_secs(1800)));
+    }
+
+    #[test]
+    fn determine_refresher_uac_explicit() {
+        assert!(determine_refresher_role(Some("uac"), true));
+        assert!(!determine_refresher_role(Some("uac"), false));
+        assert!(determine_refresher_role(Some("UAC"), true)); // Case insensitive
+    }
+
+    #[test]
+    fn determine_refresher_uas_explicit() {
+        assert!(!determine_refresher_role(Some("uas"), true));
+        assert!(determine_refresher_role(Some("uas"), false));
+        assert!(determine_refresher_role(Some("UAS"), false)); // Case insensitive
+    }
+
+    #[test]
+    fn determine_refresher_default() {
+        // No refresher parameter → UAC is default
+        assert!(determine_refresher_role(None, true));
+        assert!(!determine_refresher_role(None, false));
+    }
+
+    #[test]
+    fn determine_refresher_invalid() {
+        // Invalid value → UAC is default
+        assert!(determine_refresher_role(Some("invalid"), true));
+        assert!(!determine_refresher_role(Some("invalid"), false));
     }
 }

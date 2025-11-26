@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "Bash(git reset:*)",
-      "Bash(git restore:*)"
+      "Bash(git restore:*)",
+      "Bash(cargo build:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo run:*)",
+      "Bash(xargs ls:*)"
     ],
     "deny": [],
     "ask": []

@@ -20,7 +20,9 @@ use crate::{
         ClientNonInviteFsm, ServerAction, ServerInviteAction, ServerInviteEvent, ServerInviteFsm,
         ServerNonInviteEvent, ServerNonInviteFsm, TransportKind,
     },
-    request_branch_id, TransactionKey, TransactionTimer,
+    request_branch_id,
+    timers::{TimerDefaults, Transport, TransportAwareTimers},
+    TransactionKey, TransactionTimer,
 };
 
 const MAX_TIMER_BUCKETS: usize = 10_000;
@@ -179,10 +181,17 @@ struct ManagerInner {
     server: DashMap<TransactionKey, ServerEntry>,
     client: DashMap<TransactionKey, ClientEntry>,
     // Removed client_index - build TransactionKey directly from response
-    t1: Duration,
-    t2: Duration,
-    t4: Duration,
+    timer_defaults: TimerDefaults,
     pool: ConnectionPool,
+}
+
+/// Helper to convert TransportKind to Transport for timer calculations
+fn transport_kind_to_transport(kind: TransportKind) -> Transport {
+    match kind {
+        TransportKind::Udp => Transport::Udp,
+        TransportKind::Tcp => Transport::Tcp,
+        TransportKind::Tls => Transport::Tls,
+    }
 }
 
 impl TransactionManager {
@@ -218,9 +227,7 @@ impl TransactionManager {
                 dispatcher,
                 server: DashMap::new(),
                 client: DashMap::new(),
-                t1,
-                t2,
-                t4,
+                timer_defaults: TimerDefaults { t1, t2, t4 },
                 pool: ConnectionPool::new(),
             }),
             cmd_tx,
@@ -323,12 +330,14 @@ impl TransactionManager {
             }
         }
 
+        // Create transport-aware timers based on the transport type
+        let transport = transport_kind_to_transport(ctx.transport);
+        let timers = TransportAwareTimers::with_defaults(transport, self.inner.timer_defaults);
+
         let mut entry = ServerEntry {
             kind: match request.start.method {
-                Method::Invite => {
-                    ServerKind::Invite(ServerInviteFsm::new(self.inner.t1, self.inner.t2, self.inner.t4))
-                }
-                _ => ServerKind::NonInvite(ServerNonInviteFsm::new(self.inner.t1)),
+                Method::Invite => ServerKind::Invite(ServerInviteFsm::new(timers)),
+                _ => ServerKind::NonInvite(ServerNonInviteFsm::new(timers)),
             },
             ctx,
             timers: HashMap::new(),
@@ -365,9 +374,13 @@ impl TransactionManager {
             is_server: false,
         };
 
+        // Create transport-aware timers based on the transport type
+        let transport = transport_kind_to_transport(ctx.transport);
+        let timers = TransportAwareTimers::with_defaults(transport, self.inner.timer_defaults);
+
         let (kind, actions) = match (request.start.method, request) {
             (Method::Invite, request) => {
-                let mut fsm = ClientInviteFsm::new(self.inner.t1, self.inner.t2);
+                let mut fsm = ClientInviteFsm::new(timers);
                 let actions = fsm.on_event(ClientInviteEvent::SendInvite(request));
                 (
                     ClientKind::Invite(fsm),
@@ -375,7 +388,7 @@ impl TransactionManager {
                 )
             }
             (_, request) => {
-                let mut fsm = ClientNonInviteFsm::new(self.inner.t1, self.inner.t2, self.inner.t4);
+                let mut fsm = ClientNonInviteFsm::new(timers);
                 let actions = fsm.on_event(ClientNonInviteEvent::SendRequest(request));
                 (
                     ClientKind::NonInvite(fsm),

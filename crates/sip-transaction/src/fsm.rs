@@ -5,6 +5,7 @@ use sip_core::{Request, Response};
 use sip_parse::{serialize_request, serialize_response};
 use smol_str::SmolStr;
 
+use crate::timers::TransportAwareTimers;
 use crate::{ClientNonInviteState, ServerNonInviteState, TransactionTimer};
 
 /// Events that drive the client non-INVITE transaction state machine.
@@ -144,9 +145,7 @@ pub enum ServerInviteAction {
 ///   to respond, consistent with RFC 4320's goal of reducing false timeouts.
 pub struct ClientNonInviteFsm {
     pub state: ClientNonInviteState,
-    t1: Duration,
-    t2: Duration,
-    t4: Duration,
+    timers: TransportAwareTimers,
     e_interval: Duration,
     last_request: Option<Bytes>,
 }
@@ -154,20 +153,19 @@ pub struct ClientNonInviteFsm {
 /// Implements the client INVITE transaction state machine.
 pub struct ClientInviteFsm {
     pub state: crate::ClientInviteState,
-    t1: Duration,
-    t2: Duration,
+    timers: TransportAwareTimers,
     a_interval: Duration,
     last_invite: Option<Bytes>,
 }
 
 impl ClientInviteFsm {
-    /// Creates a new INVITE transaction FSM with the provided T1/T2 timers.
-    pub fn new(t1: Duration, t2: Duration) -> Self {
+    /// Creates a new INVITE transaction FSM with transport-aware timers.
+    pub fn new(timers: TransportAwareTimers) -> Self {
+        let a_initial = timers.duration(TransactionTimer::A);
         Self {
             state: crate::ClientInviteState::Calling,
-            t1,
-            t2,
-            a_interval: t1,
+            timers,
+            a_interval: a_initial,
             last_invite: None,
         }
     }
@@ -208,11 +206,11 @@ impl ClientInviteFsm {
             },
             ClientInviteAction::Schedule {
                 timer: TransactionTimer::A,
-                duration: self.t1,
+                duration: self.timers.duration(TransactionTimer::A),
             },
             ClientInviteAction::Schedule {
                 timer: TransactionTimer::B,
-                duration: self.t1.saturating_mul(64),
+                duration: self.timers.duration(TransactionTimer::B),
             },
         ]
     }
@@ -270,7 +268,7 @@ impl ClientInviteFsm {
         if !matches!(current_state, crate::ClientInviteState::Completed) {
             actions.push(ClientInviteAction::Schedule {
                 timer: TransactionTimer::D,
-                duration: Duration::from_secs(32),
+                duration: self.timers.duration(TransactionTimer::D),  // 0 for TCP/TLS, 32s for UDP
             });
         }
         actions
@@ -280,7 +278,8 @@ impl ClientInviteFsm {
         if !matches!(self.state, crate::ClientInviteState::Calling) {
             return Vec::new();
         }
-        self.a_interval = (self.a_interval * 2).min(self.t2);
+        let t2 = self.timers.duration(TransactionTimer::T2);
+        self.a_interval = (self.a_interval * 2).min(t2);
         if let Some(invite) = &self.last_invite {
             vec![
                 ClientInviteAction::Transmit {
@@ -324,14 +323,13 @@ impl ClientInviteFsm {
 }
 
 impl ClientNonInviteFsm {
-    /// Creates a new FSM ready to send a request with the provided T1/T2/T4 timers.
-    pub fn new(t1: Duration, t2: Duration, t4: Duration) -> Self {
+    /// Creates a new FSM ready to send a request with transport-aware timers.
+    pub fn new(timers: TransportAwareTimers) -> Self {
+        let e_initial = timers.duration(TransactionTimer::E);
         Self {
             state: ClientNonInviteState::Trying,
-            t1,
-            t2,
-            t4,
-            e_interval: t1,
+            timers,
+            e_interval: e_initial,
             last_request: None,
         }
     }
@@ -382,11 +380,11 @@ impl ClientNonInviteFsm {
             },
             ClientAction::Schedule {
                 timer: TransactionTimer::E,
-                duration: self.t1,
+                duration: self.timers.duration(TransactionTimer::E),
             },
             ClientAction::Schedule {
                 timer: TransactionTimer::F,
-                duration: self.t1.saturating_mul(64),
+                duration: self.timers.duration(TransactionTimer::F),
             },
         ]
     }
@@ -404,7 +402,7 @@ impl ClientNonInviteFsm {
             ClientAction::Cancel(TransactionTimer::F),
             ClientAction::Schedule {
                 timer: TransactionTimer::K,
-                duration: self.t4,  // RFC 3261 Table 4: T4 for UDP (5s), 0 for TCP
+                duration: self.timers.duration(TransactionTimer::K),  // 0 for TCP/TLS, T4 for UDP
             },
         ]
     }
@@ -413,7 +411,8 @@ impl ClientNonInviteFsm {
         if self.state == ClientNonInviteState::Completed {
             return Vec::new();
         }
-        self.e_interval = (self.e_interval * 2).min(self.t2);
+        let t2 = self.timers.duration(TransactionTimer::T2);
+        self.e_interval = (self.e_interval * 2).min(t2);
         if let Some(payload) = &self.last_request {
             vec![
                 ClientAction::Transmit {
@@ -495,16 +494,16 @@ impl ClientNonInviteFsm {
 /// responses.
 pub struct ServerNonInviteFsm {
     pub state: ServerNonInviteState,
-    t1: Duration,
+    timers: TransportAwareTimers,
     last_final: Option<Bytes>,
 }
 
 impl ServerNonInviteFsm {
-    /// Creates a server FSM in the `Trying` state.
-    pub fn new(t1: Duration) -> Self {
+    /// Creates a server FSM in the `Trying` state with transport-aware timers.
+    pub fn new(timers: TransportAwareTimers) -> Self {
         Self {
             state: ServerNonInviteState::Trying,
-            t1,
+            timers,
             last_final: None,
         }
     }
@@ -571,7 +570,7 @@ impl ServerNonInviteFsm {
             },
             ServerAction::Schedule {
                 timer: TransactionTimer::J,
-                duration: self.t1.saturating_mul(64),  // RFC 3261 Table 4: 64*T1 for UDP (32s)
+                duration: self.timers.duration(TransactionTimer::J),  // 0 for TCP/TLS, 32s for UDP
             },
         ]
     }
@@ -615,22 +614,19 @@ pub enum TransportKind {
 /// Implements the server INVITE transaction state machine.
 pub struct ServerInviteFsm {
     pub state: crate::ServerInviteState,
-    t1: Duration,
-    t2: Duration,
-    t4: Duration,
+    timers: TransportAwareTimers,
     g_interval: Duration,
     last_final: Option<Bytes>,
 }
 
 impl ServerInviteFsm {
-    /// Creates a new server INVITE FSM.
-    pub fn new(t1: Duration, t2: Duration, t4: Duration) -> Self {
+    /// Creates a new server INVITE FSM with transport-aware timers.
+    pub fn new(timers: TransportAwareTimers) -> Self {
+        let g_initial = timers.duration(TransactionTimer::G);
         Self {
             state: crate::ServerInviteState::Proceeding,
-            t1,
-            t2,
-            t4,
-            g_interval: t1,
+            timers,
+            g_interval: g_initial,
             last_final: None,
         }
     }
@@ -715,7 +711,7 @@ impl ServerInviteFsm {
         } else {
             self.state = crate::ServerInviteState::Completed;
             self.last_final = Some(bytes.clone());
-            self.g_interval = self.t1;
+            self.g_interval = self.timers.duration(TransactionTimer::G);
             vec![
                 ServerInviteAction::Transmit {
                     bytes,
@@ -727,7 +723,7 @@ impl ServerInviteFsm {
                 },
                 ServerInviteAction::Schedule {
                     timer: TransactionTimer::H,
-                    duration: self.t1.saturating_mul(64),
+                    duration: self.timers.duration(TransactionTimer::H),
                 },
             ]
         }
@@ -743,7 +739,7 @@ impl ServerInviteFsm {
             ServerInviteAction::Cancel(TransactionTimer::H),
             ServerInviteAction::Schedule {
                 timer: TransactionTimer::I,
-                duration: self.t4,  // RFC 3261 Table 4: T4 for UDP (5s), 0 for TCP
+                duration: self.timers.duration(TransactionTimer::I),  // 0 for TCP/TLS, T4 for UDP
             },
         ]
     }
@@ -757,7 +753,8 @@ impl ServerInviteFsm {
                 bytes: bytes.clone(),
                 transport: TransportKind::Udp,
             };
-            self.g_interval = (self.g_interval * 2).min(self.t2);
+            let t2 = self.timers.duration(TransactionTimer::T2);
+            self.g_interval = (self.g_interval * 2).min(t2);
             vec![
                 action,
                 ServerInviteAction::Schedule {
@@ -834,9 +831,11 @@ mod tests {
 
     #[test]
     fn client_non_invite_happy_path() {
+        use crate::timers::{Transport, TransportAwareTimers};
         let req = sample_request();
         let resp = sample_response(200);
-        let mut fsm = ClientNonInviteFsm::new(Duration::from_millis(500), Duration::from_secs(4), Duration::from_secs(5));
+        let timers = TransportAwareTimers::new(Transport::Udp);
+        let mut fsm = ClientNonInviteFsm::new(timers);
 
         let actions = fsm.on_event(ClientNonInviteEvent::SendRequest(req.clone()));
         assert!(actions
@@ -866,7 +865,9 @@ mod tests {
 
     #[test]
     fn client_invite_non2xx_flow() {
-        let mut fsm = ClientInviteFsm::new(Duration::from_millis(500), Duration::from_secs(4));
+        use crate::timers::{Transport, TransportAwareTimers};
+        let timers = TransportAwareTimers::new(Transport::Udp);
+        let mut fsm = ClientInviteFsm::new(timers);
         let actions = fsm.on_event(ClientInviteEvent::SendInvite(sample_invite()));
         assert!(actions
             .iter()
@@ -901,7 +902,9 @@ mod tests {
 
     #[test]
     fn client_invite_2xx_flow() {
-        let mut fsm = ClientInviteFsm::new(Duration::from_millis(500), Duration::from_secs(4));
+        use crate::timers::{Transport, TransportAwareTimers};
+        let timers = TransportAwareTimers::new(Transport::Udp);
+        let mut fsm = ClientInviteFsm::new(timers);
         fsm.on_event(ClientInviteEvent::SendInvite(sample_invite()));
         let actions = fsm.on_event(ClientInviteEvent::ReceiveFinal(sample_response(200)));
         assert!(matches!(fsm.state, crate::ClientInviteState::Terminated));
@@ -912,7 +915,9 @@ mod tests {
 
     #[test]
     fn server_invite_non2xx_flow() {
-        let mut fsm = ServerInviteFsm::new(Duration::from_millis(500), Duration::from_secs(4), Duration::from_secs(5));
+        use crate::timers::{Transport, TransportAwareTimers};
+        let timers = TransportAwareTimers::new(Transport::Udp);
+        let mut fsm = ServerInviteFsm::new(timers);
         fsm.on_event(ServerInviteEvent::ReceiveInvite(sample_invite()));
         let actions = fsm.on_event(ServerInviteEvent::SendFinal(sample_response(486)));
         assert!(matches!(fsm.state, crate::ServerInviteState::Completed));
@@ -955,7 +960,9 @@ mod tests {
 
     #[test]
     fn server_invite_retransmits_last_final() {
-        let mut fsm = ServerInviteFsm::new(Duration::from_millis(500), Duration::from_secs(4), Duration::from_secs(5));
+        use crate::timers::{Transport, TransportAwareTimers};
+        let timers = TransportAwareTimers::new(Transport::Udp);
+        let mut fsm = ServerInviteFsm::new(timers);
         fsm.on_event(ServerInviteEvent::ReceiveInvite(sample_invite()));
         fsm.on_event(ServerInviteEvent::SendFinal(sample_response(486)));
         let actions = fsm.on_retransmit();
@@ -966,7 +973,9 @@ mod tests {
 
     #[test]
     fn server_invite_2xx_flow() {
-        let mut fsm = ServerInviteFsm::new(Duration::from_millis(500), Duration::from_secs(4), Duration::from_secs(5));
+        use crate::timers::{Transport, TransportAwareTimers};
+        let timers = TransportAwareTimers::new(Transport::Udp);
+        let mut fsm = ServerInviteFsm::new(timers);
         fsm.on_event(ServerInviteEvent::ReceiveInvite(sample_invite()));
         let actions = fsm.on_event(ServerInviteEvent::SendFinal(sample_response(200)));
         assert!(matches!(fsm.state, crate::ServerInviteState::Terminated));
@@ -977,8 +986,10 @@ mod tests {
 
     #[test]
     fn client_non_invite_timeout() {
+        use crate::timers::{Transport, TransportAwareTimers};
         let req = sample_request();
-        let mut fsm = ClientNonInviteFsm::new(Duration::from_millis(500), Duration::from_secs(4), Duration::from_secs(5));
+        let timers = TransportAwareTimers::new(Transport::Udp);
+        let mut fsm = ClientNonInviteFsm::new(timers);
         fsm.on_event(ClientNonInviteEvent::SendRequest(req));
         let actions = fsm.on_event(ClientNonInviteEvent::TimerFired(TransactionTimer::F));
         assert!(matches!(fsm.state, ClientNonInviteState::Terminated));
@@ -989,7 +1000,9 @@ mod tests {
 
     #[test]
     fn server_non_invite_flow() {
-        let mut fsm = ServerNonInviteFsm::new(Duration::from_millis(500));
+        use crate::timers::{Transport, TransportAwareTimers};
+        let timers = TransportAwareTimers::new(Transport::Udp);
+        let mut fsm = ServerNonInviteFsm::new(timers);
         let req = sample_request();
         let actions = fsm.on_event(ServerNonInviteEvent::ReceiveRequest(req));
         assert!(actions.is_empty());
@@ -1008,7 +1021,9 @@ mod tests {
 
     #[test]
     fn server_non_invite_retransmits_final() {
-        let mut fsm = ServerNonInviteFsm::new(Duration::from_millis(500));
+        use crate::timers::{Transport, TransportAwareTimers};
+        let timers = TransportAwareTimers::new(Transport::Udp);
+        let mut fsm = ServerNonInviteFsm::new(timers);
         let req = sample_request();
         fsm.on_event(ServerNonInviteEvent::ReceiveRequest(req));
         fsm.on_event(ServerNonInviteEvent::SendFinal(sample_response(200)));

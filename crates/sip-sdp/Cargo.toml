@@ -6,3 +6,4 @@ license.workspace = true
 
 [dependencies]
 smol_str = { workspace = true }
+nom = "7"

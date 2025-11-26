@@ -1,3 +1,5 @@
+pub mod integrated;
+
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use sip_auth::Authenticator;
