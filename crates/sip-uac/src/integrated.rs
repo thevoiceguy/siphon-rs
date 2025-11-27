@@ -51,25 +51,27 @@
 /// # Ok(())
 /// # }
 /// ```
-
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
 use sip_core::{Request, Response, SipUri};
 use sip_dialog::{Dialog, DialogManager, Subscription, SubscriptionManager};
-use sip_dns::{SipResolver, DnsTarget, Resolver};
+use sip_dns::{DnsTarget, Resolver, SipResolver};
 use sip_parse::serialize_request;
 use sip_sdp::{profiles, SessionDescription};
 use sip_transaction::{
-    ClientTransactionUser, TransactionKey, TransactionManager, TransportContext, TransportDispatcher,
+    ClientTransactionUser, TransactionKey, TransactionManager, TransportContext,
+    TransportDispatcher,
 };
 use smol_str::SmolStr;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use sha1::{Digest, Sha1};
+use rand::{distributions::Alphanumeric, Rng};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{debug, error, info, warn};
 
-use crate::UserAgentClient;
+use crate::{auth_utils::extract_realm, UserAgentClient};
 
 /// Trait for generating SDP answers in late offer scenarios.
 ///
@@ -90,7 +92,11 @@ pub trait SdpAnswerGenerator: Send + Sync {
     ///
     /// # Returns
     /// The SDP answer to be sent in the ACK, or an error if answer generation fails
-    async fn generate_answer(&self, offer: &SessionDescription, dialog: &Dialog) -> Result<SessionDescription>;
+    async fn generate_answer(
+        &self,
+        offer: &SessionDescription,
+        dialog: &Dialog,
+    ) -> Result<SessionDescription>;
 }
 
 /// Configuration for IntegratedUAC behavior.
@@ -132,12 +138,46 @@ pub struct UACConfig {
     /// When set, the UAC can generate SDP offers automatically using
     /// pre-configured profiles (AudioOnly, AudioVideo, Custom).
     pub sdp_profile: Option<profiles::SdpProfile>,
+    pub sdp_profile_builder: Option<profiles::MediaProfileBuilder>,
 
     /// Local RTP audio port for SDP (default: 8000)
     pub local_audio_port: u16,
 
     /// Local RTP video port for SDP (default: 8002)
     pub local_video_port: u16,
+
+    /// Enable keepalives (CRLF or OPTIONS) per transport.
+    pub keepalive_policy: KeepalivePolicy,
+
+    /// Advertised address for Via (overrides local_addr/public_addr).
+    pub via_advertised: Option<SocketAddr>,
+
+    /// Advertised address for Contact (overrides local_addr/public_addr).
+    pub contact_advertised: Option<SocketAddr>,
+
+    /// Optional dynamic resolver for public address (e.g., STUN).
+    pub public_addr_resolver: Option<Arc<dyn PublicAddrResolver>>,
+
+    /// Optional credential provider callback (per realm).
+    pub credential_provider: Option<Arc<dyn CredentialProvider>>,
+
+    /// Optional full WS/WSS URI override for outbound requests (e.g., ws://lb:80/sip).
+    pub ws_target_uri: Option<String>,
+
+    /// Optional WS path suffix to append when building ws://host/path from DNS target.
+    pub ws_path: Option<String>,
+
+    /// Enable RFC 5626 outbound/keepalive behavior (adds ;ob on Contact).
+    pub enable_outbound: bool,
+
+    /// Optional instance-id (RFC 5626/5627) used for GRUU formation.
+    pub instance_id: Option<String>,
+
+    /// Optional flow token salt used for GRUU opaque token generation.
+    pub flow_token_salt: Option<String>,
+
+    /// Registration identifier for outbound flows (RFC 5626 reg-id).
+    pub outbound_reg_id: u32,
 }
 
 impl Default for UACConfig {
@@ -153,8 +193,56 @@ impl Default for UACConfig {
             auto_dns_resolution: true,
             sdp_answer_generator: None,
             sdp_profile: None,
+            sdp_profile_builder: None,
             local_audio_port: 8000,
             local_video_port: 8002,
+            keepalive_policy: KeepalivePolicy::default(),
+            via_advertised: None,
+            contact_advertised: None,
+            public_addr_resolver: None,
+            credential_provider: None,
+            ws_target_uri: None,
+            ws_path: None,
+            enable_outbound: false,
+            instance_id: None,
+            flow_token_salt: None,
+            outbound_reg_id: 1,
+        }
+    }
+}
+
+/// Keepalive policy for maintaining NAT/LB bindings.
+#[derive(Clone)]
+pub struct KeepalivePolicy {
+    /// Enable CRLF keepalives on UDP.
+    pub enable_udp: bool,
+    /// Enable CRLF keepalives on TCP/TLS.
+    pub enable_stream: bool,
+    /// Enable OPTIONS pings.
+    pub enable_options: bool,
+    /// Interval for keepalives (seconds).
+    pub interval_secs: u64,
+}
+
+/// Resolve current public address (e.g., via STUN or control-plane).
+#[async_trait]
+pub trait PublicAddrResolver: Send + Sync {
+    async fn resolve(&self) -> Option<SocketAddr>;
+}
+
+/// Provide credentials dynamically (per realm) for authentication challenges.
+#[async_trait]
+pub trait CredentialProvider: Send + Sync {
+    async fn credentials(&self, realm: &str) -> Option<(String, String)>;
+}
+
+impl Default for KeepalivePolicy {
+    fn default() -> Self {
+        Self {
+            enable_udp: true,
+            enable_stream: true,
+            enable_options: false,
+            interval_secs: 30,
         }
     }
 }
@@ -167,6 +255,22 @@ pub enum RequestTarget {
 
     /// Pre-resolved DNS target (host, port, transport)
     Resolved(DnsTarget),
+}
+
+impl RequestTarget {
+    /// Convert to a SipUri if possible.
+    pub fn to_uri(&self) -> Option<SipUri> {
+        match self {
+            RequestTarget::Uri(uri) => Some(uri.clone()),
+            RequestTarget::Resolved(dns) => {
+                let scheme = match dns.transport {
+                    sip_dns::Transport::Tls => "sips",
+                    _ => "sip",
+                };
+                SipUri::parse(&format!("{}:{}:{}", scheme, dns.host, dns.port))
+            }
+        }
+    }
 }
 
 impl From<SipUri> for RequestTarget {
@@ -225,9 +329,150 @@ pub struct CallHandle {
     /// Early dialogs from forked responses (keyed by To-tag)
     /// RFC 3261 §13.2.2.1: Multiple provisional responses create early dialogs
     early_dialogs: Arc<Mutex<std::collections::HashMap<SmolStr, Dialog>>>,
+
+    /// Keepalive task cancellation
+    keepalive_cancel: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+
+    /// Session timer refresh task cancellation
+    session_timer_cancel: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 impl CallHandle {
+    /// Stop keepalives on drop if still running.
+    fn stop_keepalives_sync(&self) {
+        if let Ok(mut guard) = self.keepalive_cancel.try_lock() {
+            if let Some(handle) = guard.take() {
+                handle.abort();
+            }
+        }
+    }
+
+    /// Explicitly stop keepalives (if running).
+    pub async fn stop_keepalives(&self) {
+        if let Some(handle) = self.keepalive_cancel.lock().await.take() {
+            handle.abort();
+        }
+    }
+
+    /// Explicitly stop session timer refreshes (if running).
+    pub async fn stop_session_timer(&self) {
+        if let Some(handle) = self.session_timer_cancel.lock().await.take() {
+            handle.abort();
+        }
+    }
+
+    /// Starts periodic keepalives (CRLF or OPTIONS) based on policy.
+    pub async fn start_keepalives(
+        &self,
+        policy: &KeepalivePolicy,
+        target: RequestTarget,
+        uac: Arc<IntegratedUAC>,
+    ) {
+        // Avoid multiple tasks
+        if self.keepalive_cancel.lock().await.is_some() {
+            return;
+        }
+
+        let interval = policy.interval_secs;
+        let enable_options = policy.enable_options;
+        let enable_udp = policy.enable_udp;
+        let enable_stream = policy.enable_stream;
+        let handle = tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval));
+            loop {
+                ticker.tick().await;
+
+                // Resolve target each time to respect DNS changes if needed
+                let resolved = match uac.resolve_target(&target).await {
+                    Ok(d) => d,
+                    Err(e) => {
+                        warn!("Keepalive: DNS resolution failed: {}", e);
+                        continue;
+                    }
+                };
+
+                let ctx = match uac.create_transport_context(&resolved).await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        warn!("Keepalive: failed to create transport context: {}", e);
+                        continue;
+                    }
+                };
+
+                // Decide keepalive payload based on transport
+                let is_udp = matches!(ctx.transport, sip_transaction::TransportKind::Udp);
+                let is_stream = matches!(
+                    ctx.transport,
+                    sip_transaction::TransportKind::Tcp | sip_transaction::TransportKind::Tls
+                );
+
+                if (is_udp && !enable_udp) || (is_stream && !enable_stream) {
+                    continue;
+                }
+
+                if enable_options {
+                    if let Some(uri) = target.clone().to_uri() {
+                        let helper = uac.helper.lock().await;
+                        let mut opts = helper.create_options(&uri);
+                        drop(helper);
+                        let _ = uac
+                            .auto_fill_headers(&mut opts, Some(resolved.transport))
+                            .await;
+                        let _ = uac.send_non_invite_request(opts, resolved.clone()).await;
+                    }
+                } else {
+                    // CRLF keepalive
+                    let _ = uac
+                        .transport_dispatcher
+                        .dispatch(&ctx, Bytes::from_static(b"\r\n\r\n"))
+                        .await;
+                }
+            }
+        });
+
+        *self.keepalive_cancel.lock().await = Some(handle);
+    }
+
+    /// Starts session timer refreshes (RFC 4028) at roughly half the Session-Expires interval.
+    pub async fn start_session_timer(
+        &self,
+        dialog: Dialog,
+        session_expires: u32,
+        refresher: &'static str,
+        use_update: bool,
+        uac: Arc<IntegratedUAC>,
+    ) {
+        // Avoid multiple tasks
+        if self.session_timer_cancel.lock().await.is_some() {
+            return;
+        }
+
+        // Safety: refresher must be "uac" or "uas"
+        let refresher = if refresher.eq_ignore_ascii_case("uas") {
+            "uas"
+        } else {
+            "uac"
+        };
+
+        let handle = tokio::spawn(async move {
+            // Per RFC 4028, refresh at Session-Expires/2
+            let refresh_interval = std::cmp::max(90, (session_expires / 2) as i32) as u64;
+            let mut ticker =
+                tokio::time::interval(std::time::Duration::from_secs(refresh_interval));
+            loop {
+                ticker.tick().await;
+                if let Err(e) = uac
+                    .refresh_session(&dialog, session_expires, refresher, use_update, None)
+                    .await
+                {
+                    warn!("Session refresh failed: {}", e);
+                }
+            }
+        });
+
+        *self.session_timer_cancel.lock().await = Some(handle);
+    }
+
     /// Waits for the next provisional response (180, 183, etc).
     ///
     /// Returns None if the final response arrived first.
@@ -273,17 +518,36 @@ impl CallHandle {
     /// - The winning dialog is updated in the handle
     /// - Non-winning early dialogs are automatically discarded
     pub async fn await_final(self) -> Result<Response> {
+        // Stop keepalives if running
+        if let Some(handle) = self.keepalive_cancel.lock().await.take() {
+            handle.abort();
+        }
+
         let mut final_rx = self.final_rx.lock().await;
         if let Some(rx) = final_rx.take() {
-            rx.await.map_err(|e| anyhow!("Final response channel closed: {}", e))
+            rx.await
+                .map_err(|e| anyhow!("Final response channel closed: {}", e))
         } else {
             // Check if terminated
             let mut term_rx = self.termination_rx.lock().await;
             if let Some(rx) = term_rx.take() {
-                let reason = rx.await.map_err(|_| anyhow!("Termination channel closed"))?;
+                let reason = rx
+                    .await
+                    .map_err(|_| anyhow!("Termination channel closed"))?;
                 Err(anyhow!("Transaction terminated: {}", reason))
             } else {
                 Err(anyhow!("No final response available"))
+            }
+        }
+    }
+}
+
+impl Drop for CallHandle {
+    fn drop(&mut self) {
+        self.stop_keepalives_sync();
+        if let Ok(mut guard) = self.session_timer_cancel.try_lock() {
+            if let Some(handle) = guard.take() {
+                handle.abort();
             }
         }
     }
@@ -399,29 +663,46 @@ impl IntegratedUAC {
         }
     }
 
-    /// Auto-fills Via and Contact headers from local transport context.
+    /// Auto-fills Via and Contact headers from local/public/advertised transport context.
     async fn auto_fill_headers(
         &self,
         request: &mut Request,
         transport: Option<sip_dns::Transport>,
     ) {
+        let resolved_public = self.resolve_public_addr().await;
         if self.config.auto_via_filling {
-            // Replace placeholder Via with actual local address
-            self.fill_via_header(request, transport);
+            self.fill_via_header(request, transport, resolved_public)
+                .await;
         }
 
         if self.config.auto_contact_filling {
-            // Update Contact with actual address (public if configured, else local)
-            self.fill_contact_header(request);
+            self.fill_contact_header(request, resolved_public).await;
         }
     }
 
-    /// Fills Via header with local transport address.
-    fn fill_via_header(
+    async fn resolve_public_addr(&self) -> Option<SocketAddr> {
+        if let Some(resolver) = &self.config.public_addr_resolver {
+            resolver.resolve().await
+        } else {
+            None
+        }
+    }
+
+    /// Fills Via header with advertised transport address.
+    async fn fill_via_header(
         &self,
         request: &mut Request,
         transport: Option<sip_dns::Transport>,
+        resolved_public: Option<SocketAddr>,
     ) {
+        // Preference: resolver → via_advertised → public_addr → local_addr
+        let via_addr = self
+            .config
+            .via_advertised
+            .or(resolved_public)
+            .or(self.public_addr)
+            .unwrap_or(self.local_addr);
+
         // Find and replace placeholder Via
         for header in request.headers.iter_mut() {
             if header.name.as_str() == "Via" {
@@ -433,15 +714,10 @@ impl IntegratedUAC {
                 };
 
                 // Replace with actual Via using selected transport
-                let via_transport = transport
-                    .map(|t| t.as_via_str())
-                    .unwrap_or("UDP");
-                let via_addr = self.public_addr.unwrap_or(self.local_addr);
+                let via_transport = transport.map(|t| t.as_via_str()).unwrap_or("UDP");
                 header.value = SmolStr::new(format!(
                     "SIP/2.0/{} {};branch={};rport",
-                    via_transport,
-                    via_addr,
-                    branch
+                    via_transport, via_addr, branch
                 ));
                 break;
             }
@@ -449,8 +725,18 @@ impl IntegratedUAC {
     }
 
     /// Fills Contact header with public or local address.
-    fn fill_contact_header(&self, request: &mut Request) {
-        let contact_addr = self.public_addr.unwrap_or(self.local_addr);
+    async fn fill_contact_header(
+        &self,
+        request: &mut Request,
+        resolved_public: Option<SocketAddr>,
+    ) {
+        // Preference: resolver → contact_advertised → public_addr → local_addr
+        let contact_addr = self
+            .config
+            .contact_advertised
+            .or(resolved_public)
+            .or(self.public_addr)
+            .unwrap_or(self.local_addr);
 
         for header in request.headers.iter_mut() {
             if header.name.as_str() == "Contact" {
@@ -473,17 +759,58 @@ impl IntegratedUAC {
                         format!("<sip:{}@{}>", user_part, contact_addr)
                     };
 
+                    let mut extra_params = String::new();
+                    if self.config.enable_outbound {
+                        extra_params.push_str(";ob");
+                        extra_params.push_str(&format!(";reg-id={}", self.config.outbound_reg_id));
+                        if let Some(gruu) = self.build_gruu_uri(user_part, contact_addr) {
+                            extra_params.push_str(&format!(";pub-gruu=\"{}\"", gruu));
+                            extra_params.push_str(&format!(";temp-gruu=\"{}\"", gruu));
+                        }
+                    }
+
                     // Preserve parameters (like expires)
                     if let Some(param_start) = contact_str.find(">;") {
-                        header.value = SmolStr::new(format!("{}{}", new_contact, &contact_str[param_start + 1..]));
+                        header.value = SmolStr::new(format!(
+                            "{}{}{}",
+                            new_contact,
+                            extra_params,
+                            &contact_str[param_start + 1..]
+                        ));
                     } else if contact_str.ends_with('>') {
-                        header.value = SmolStr::new(new_contact);
+                        header.value = SmolStr::new(format!("{}{}", new_contact, extra_params));
                     } else {
-                        header.value = SmolStr::new(new_contact);
+                        header.value = SmolStr::new(format!("{}{}", new_contact, extra_params));
                     }
                 }
                 break;
             }
+        }
+    }
+
+    fn build_gruu_uri(&self, user_part: &str, contact_addr: SocketAddr) -> Option<String> {
+        let instance = self.config.instance_id.as_ref()?;
+        let token = self.generate_flow_token(contact_addr);
+        let user = if user_part.is_empty() {
+            format!("gruu-{}", instance)
+        } else {
+            user_part.to_string()
+        };
+        Some(format!("sip:{}@{};gruu;opaque={}", user, contact_addr, token))
+    }
+
+    fn generate_flow_token(&self, contact_addr: SocketAddr) -> String {
+        if let Some(salt) = &self.config.flow_token_salt {
+            let mut hasher = Sha1::new();
+            hasher.update(salt.as_bytes());
+            hasher.update(contact_addr.to_string().as_bytes());
+            hex::encode(hasher.finalize())
+        } else {
+            rand::thread_rng()
+                .sample_iter(&Alphanumeric)
+                .take(16)
+                .map(char::from)
+                .collect()
         }
     }
 
@@ -505,10 +832,15 @@ impl IntegratedUAC {
                 // Auto-resolve via DNS
                 debug!("Resolving {} via DNS (RFC 3263)", uri.as_str());
 
-                let targets = self.resolver.resolve(uri).await
+                let targets = self
+                    .resolver
+                    .resolve(uri)
+                    .await
                     .map_err(|e| anyhow!("DNS resolution failed: {}", e))?;
 
-                targets.into_iter().next()
+                targets
+                    .into_iter()
+                    .next()
                     .ok_or_else(|| anyhow!("No DNS targets found for {}", uri.as_str()))
             }
         }
@@ -534,14 +866,14 @@ impl IntegratedUAC {
         });
 
         // Start client transaction
-        let key = self.transaction_manager
+        let key = self
+            .transaction_manager
             .start_client_transaction(request.clone(), ctx, tu)
             .await?;
 
         info!(
             "Started client transaction {} for {:?}",
-            key.branch,
-            request.start.method
+            key.branch, request.start.method
         );
 
         // Wait for final response or termination
@@ -573,9 +905,24 @@ impl IntegratedUAC {
         challenge: Response,
         dns_target: DnsTarget,
     ) -> Result<Response> {
-        // Create authenticated request using helper
+        // Extract realm for provider
+        let realm = extract_realm(&challenge);
+
+        // Create authenticated request using helper and optional provider
         let mut helper = self.helper.lock().await;
-        let auth_request = helper.create_authenticated_request(&original_request, &challenge)?;
+        let auth_request = helper.create_authenticated_request_with(
+            &original_request,
+            &challenge,
+            async {
+                if let Some(provider) = &self.config.credential_provider {
+                    if let Some(r) = realm.as_deref() {
+                        return provider.credentials(r).await;
+                    }
+                }
+                None
+            }
+            .await,
+        )?;
         drop(helper);
 
         // Auto-fill headers again (CSeq was incremented)
@@ -593,14 +940,14 @@ impl IntegratedUAC {
             term_tx: Mutex::new(Some(term_tx)),
         });
 
-        let key = self.transaction_manager
+        let key = self
+            .transaction_manager
             .start_client_transaction(auth_request.clone(), ctx, tu)
             .await?;
 
         info!(
             "Started authenticated client transaction {} for {:?}",
-            key.branch,
-            auth_request.start.method
+            key.branch, auth_request.start.method
         );
 
         tokio::select! {
@@ -618,27 +965,67 @@ impl IntegratedUAC {
             sip_dns::Transport::Udp => TransportKind::Udp,
             sip_dns::Transport::Tcp => TransportKind::Tcp,
             sip_dns::Transport::Tls => TransportKind::Tls,
-            sip_dns::Transport::Ws => TransportKind::Udp, // Fallback
-            sip_dns::Transport::Wss => TransportKind::Tls, // Fallback
-            sip_dns::Transport::Sctp => TransportKind::Tcp, // Fallback to TCP
-            sip_dns::Transport::TlsSctp => TransportKind::Tls, // Fallback to TLS
+            sip_dns::Transport::Ws => TransportKind::Ws,
+            sip_dns::Transport::Wss => TransportKind::Wss,
+            sip_dns::Transport::Sctp => TransportKind::Sctp,
+            sip_dns::Transport::TlsSctp => TransportKind::TlsSctp,
         };
 
         // Parse host to SocketAddr, falling back to OS DNS resolution for SRV hostnames
         let addr_str = format!("{}:{}", dns_target.host, dns_target.port);
-        let peer = addr_str
-            .parse()
-            .or_else(|_| async {
+        let peer = match addr_str.parse() {
+            Ok(addr) => addr,
+            Err(_) => {
+                // SRV targets are hostnames; resolve to first A/AAAA
                 let mut addrs = tokio::net::lookup_host(&addr_str)
                     .await
                     .map_err(|e| anyhow!("DNS lookup failed for {}: {}", addr_str, e))?;
                 addrs
                     .next()
-                    .ok_or_else(|| anyhow!("No A/AAAA results for {}", addr_str))
+                    .ok_or_else(|| anyhow!("No A/AAAA results for {}", addr_str))?
             }
-            .await)?;
+        };
 
-        Ok(TransportContext::new(transport, peer, None))
+        // Use hostname (from DNS target) for SNI when TLS/WSS is selected
+        let server_name = if matches!(transport, TransportKind::Tls | TransportKind::Wss) {
+            Some(dns_target.host.to_string())
+        } else {
+            None
+        };
+
+        let ws_uri = if matches!(transport, TransportKind::Ws | TransportKind::Wss) {
+            if let Some(uri) = self.config.ws_target_uri.clone() {
+                Some(uri)
+            } else {
+                let scheme = if matches!(transport, TransportKind::Wss) {
+                    "wss"
+                } else {
+                    "ws"
+                };
+                let path = self
+                    .config
+                    .ws_path
+                    .clone()
+                    .unwrap_or_else(|| "/".to_string());
+                let normalized_path = if path.starts_with('/') {
+                    path
+                } else {
+                    format!("/{}", path)
+                };
+                Some(format!(
+                    "{}://{}:{}{}",
+                    scheme, dns_target.host, dns_target.port, normalized_path
+                ))
+            }
+        } else {
+            None
+        };
+
+        let ctx = TransportContext::new(transport, peer, None)
+            .with_server_name(server_name)
+            .with_ws_uri(ws_uri);
+
+        Ok(ctx)
     }
 
     /// Sends an INVITE request to establish a call.
@@ -726,10 +1113,13 @@ impl IntegratedUAC {
             transaction_manager: self.transaction_manager.clone(),
             dispatcher: self.transport_dispatcher.clone(),
             early_dialogs: early_dialogs.clone(),
+            local_addr: self.local_addr,
+            public_addr: self.public_addr,
         });
 
         // Start client transaction
-        let key = self.transaction_manager
+        let key = self
+            .transaction_manager
             .start_client_transaction(request.clone(), ctx.clone(), tu)
             .await?;
 
@@ -772,6 +1162,8 @@ impl IntegratedUAC {
             dispatcher: self.transport_dispatcher.clone(),
             transaction_manager: self.transaction_manager.clone(),
             early_dialogs,
+            keepalive_cancel: Arc::new(Mutex::new(None)),
+            session_timer_cancel: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -834,7 +1226,9 @@ impl IntegratedUAC {
         let dns_target = self.resolve_target(&target).await?;
         self.auto_fill_headers(&mut request, Some(dns_target.transport))
             .await;
-        let response = self.send_non_invite_request(request.clone(), dns_target).await?;
+        let response = self
+            .send_non_invite_request(request.clone(), dns_target)
+            .await?;
 
         // If 200 OK, create subscription
         let subscription = if response.start.code == 200 {
@@ -877,6 +1271,46 @@ impl IntegratedUAC {
         self.send_non_invite_request(request, dns_target).await
     }
 
+    /// Sends an OPTIONS ping for connectivity checks.
+    pub async fn ping_options(&self, target: impl Into<RequestTarget>) -> Result<Response> {
+        let target = target.into();
+        let dns_target = self.resolve_target(&target).await?;
+
+        // Build OPTIONS
+        let helper = self.helper.lock().await;
+        let uri = self.extract_uri(&target)?;
+        let mut request = helper.create_options(&uri);
+        drop(helper);
+
+        // Auto-fill headers
+        self.auto_fill_headers(&mut request, Some(dns_target.transport))
+            .await;
+
+        // Send and wait for response
+        self.send_non_invite_request(request, dns_target).await
+    }
+
+    /// Pings a target using keepalive policy (OPTIONS when enabled, CRLF otherwise).
+    pub async fn ping(&self, target: impl Into<RequestTarget>) -> Result<()> {
+        let target = target.into();
+        let dns_target = self.resolve_target(&target).await?;
+        let ctx = self.create_transport_context(&dns_target).await?;
+
+        if self.config.keepalive_policy.enable_options {
+            let helper = self.helper.lock().await;
+            let uri = self.extract_uri(&target)?;
+            let mut req = helper.create_options(&uri);
+            drop(helper);
+            self.auto_fill_headers(&mut req, Some(dns_target.transport))
+                .await;
+            let _ = self.send_non_invite_request(req, dns_target).await?;
+        } else {
+            let payload = Bytes::from_static(b"\r\n\r\n");
+            self.transport_dispatcher.dispatch(&ctx, payload).await?;
+        }
+        Ok(())
+    }
+
     /// Sends a re-INVITE to modify an existing session (RFC 3261 §14).
     ///
     /// # Arguments
@@ -891,11 +1325,7 @@ impl IntegratedUAC {
     /// - Media changes (add/remove video, codec change)
     /// - Hold/resume (a=sendonly/a=sendrecv)
     /// - Transfer preparation
-    pub async fn reinvite(
-        &self,
-        dialog: &Dialog,
-        sdp_body: Option<&str>,
-    ) -> Result<CallHandle> {
+    pub async fn reinvite(&self, dialog: &Dialog, sdp_body: Option<&str>) -> Result<CallHandle> {
         // Generate re-INVITE using helper
         let helper = self.helper.lock().await;
         let mut request = helper.create_reinvite(dialog, sdp_body);
@@ -934,14 +1364,20 @@ impl IntegratedUAC {
             transaction_manager: self.transaction_manager.clone(),
             dispatcher: self.transport_dispatcher.clone(),
             early_dialogs: early_dialogs.clone(),
+            local_addr: self.local_addr,
+            public_addr: self.public_addr,
         });
 
         // Start client transaction
-        let key = self.transaction_manager
+        let key = self
+            .transaction_manager
             .start_client_transaction(request.clone(), ctx.clone(), tu)
             .await?;
 
-        info!("Started re-INVITE transaction {} for dialog {}", key.branch, dialog.id.call_id);
+        info!(
+            "Started re-INVITE transaction {} for dialog {}",
+            key.branch, dialog.id.call_id
+        );
 
         Ok(CallHandle {
             dialog: dialog.clone(),
@@ -954,6 +1390,8 @@ impl IntegratedUAC {
             dispatcher: self.transport_dispatcher.clone(),
             transaction_manager: self.transaction_manager.clone(),
             early_dialogs,
+            keepalive_cancel: Arc::new(Mutex::new(None)),
+            session_timer_cancel: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -975,11 +1413,7 @@ impl IntegratedUAC {
     /// - Early media changes (before call is answered)
     /// - QoS precondition updates
     /// - Session timer refresh without full re-INVITE
-    pub async fn update(
-        &self,
-        dialog: &Dialog,
-        sdp_body: Option<&str>,
-    ) -> Result<Response> {
+    pub async fn update(&self, dialog: &Dialog, sdp_body: Option<&str>) -> Result<Response> {
         // Generate UPDATE using helper
         let helper = self.helper.lock().await;
         let mut request = helper.create_update(dialog, sdp_body);
@@ -1045,7 +1479,9 @@ impl IntegratedUAC {
             .await;
 
         // Send and wait for response
-        let response = self.send_non_invite_request(request.clone(), dns_target).await?;
+        let response = self
+            .send_non_invite_request(request.clone(), dns_target)
+            .await?;
 
         // If 202 Accepted, create implicit subscription to "refer" event
         let subscription = if response.start.code == 202 {
@@ -1058,6 +1494,35 @@ impl IntegratedUAC {
         };
 
         Ok((response, subscription))
+    }
+
+    /// Refreshes an active session per RFC 4028 using UPDATE by default.
+    ///
+    /// If `use_update` is false, this falls back to re-INVITE and waits for the final response.
+    pub async fn refresh_session(
+        &self,
+        dialog: &Dialog,
+        session_expires: u32,
+        refresher: &str,
+        use_update: bool,
+        sdp_body: Option<&str>,
+    ) -> Result<Response> {
+        let helper = self.helper.lock().await;
+        let mut request =
+            helper.create_session_refresh(dialog, session_expires, refresher, use_update, sdp_body);
+        drop(helper);
+
+        if use_update {
+            let target = RequestTarget::Uri(dialog.remote_target.clone());
+            let dns_target = self.resolve_target(&target).await?;
+            self.auto_fill_headers(&mut request, Some(dns_target.transport))
+                .await;
+            self.send_non_invite_request(request, dns_target).await
+        } else {
+            // Use re-INVITE path and wait for final response
+            let handle = self.reinvite(dialog, sdp_body).await?;
+            handle.await_final().await
+        }
     }
 
     /// Sends a lightweight CRLF keepalive to keep NAT/LB bindings active.
@@ -1103,7 +1568,10 @@ impl CallHandle {
     pub async fn cancel(&self) -> Result<Response> {
         use sip_core::{Method, RequestLine};
 
-        info!("Sending CANCEL for transaction {}", self.transaction_key.branch);
+        info!(
+            "Sending CANCEL for transaction {}",
+            self.transaction_key.branch
+        );
 
         // Create CANCEL request per RFC 3261 §9.1
         // CANCEL uses same Call-ID, From, To, CSeq number as INVITE
@@ -1119,9 +1587,10 @@ impl CallHandle {
                     let new_branch = crate::generate_branch();
                     cancel_headers.push(
                         SmolStr::new("Via"),
-                        SmolStr::new(format!("SIP/2.0/UDP {};branch={}",
-                            self.transport_ctx.peer,
-                            new_branch))
+                        SmolStr::new(format!(
+                            "SIP/2.0/UDP {};branch={}",
+                            self.transport_ctx.peer, new_branch
+                        )),
                     );
                 }
                 "From" | "To" | "Call-ID" => {
@@ -1133,7 +1602,7 @@ impl CallHandle {
                     if let Some((num, _)) = header.value.split_once(' ') {
                         cancel_headers.push(
                             SmolStr::new("CSeq"),
-                            SmolStr::new(format!("{} CANCEL", num))
+                            SmolStr::new(format!("{} CANCEL", num)),
                         );
                     }
                 }
@@ -1169,7 +1638,8 @@ impl CallHandle {
             term_tx: Mutex::new(Some(term_tx)),
         });
 
-        let key = self.transaction_manager
+        let key = self
+            .transaction_manager
             .start_client_transaction(cancel_request, (*self.transport_ctx).clone(), tu)
             .await?;
 
@@ -1199,6 +1669,8 @@ struct InviteTransactionUser {
     dispatcher: Arc<dyn TransportDispatcher>,
     /// Track early dialogs for forking support (shared with CallHandle)
     early_dialogs: Arc<Mutex<std::collections::HashMap<SmolStr, Dialog>>>,
+    local_addr: SocketAddr,
+    public_addr: Option<SocketAddr>,
 }
 
 #[async_trait]
@@ -1219,8 +1691,7 @@ impl ClientTransactionUser for InviteTransactionUser {
                 if early_dialogs.contains_key(&to_tag) {
                     debug!(
                         "Updated existing early dialog from {}: to-tag={}",
-                        response.start.code,
-                        to_tag
+                        response.start.code, to_tag
                     );
                 } else {
                     debug!(
@@ -1248,8 +1719,7 @@ impl ClientTransactionUser for InviteTransactionUser {
             if let Some(dialog) = helper.process_invite_response(&self.request, response) {
                 info!(
                     "Confirmed dialog from {}: {}",
-                    response.start.code,
-                    dialog.id.call_id
+                    response.start.code, dialog.id.call_id
                 );
             }
         }
@@ -1277,7 +1747,10 @@ impl ClientTransactionUser for InviteTransactionUser {
         ctx: &TransportContext,
         is_2xx: bool,
     ) {
-        info!("Sending ACK for {} response (is_2xx={})", response.start.code, is_2xx);
+        info!(
+            "Sending ACK for {} response (is_2xx={})",
+            response.start.code, is_2xx
+        );
 
         // Find dialog for this response
         let helper = self.helper.lock().await;
@@ -1305,7 +1778,10 @@ impl ClientTransactionUser for InviteTransactionUser {
                                         Ok(sdp_answer) => {
                                             // Serialize SDP answer
                                             let sdp_answer_str = sdp_answer.to_string();
-                                            info!("Generated SDP answer for late offer ({} bytes)", sdp_answer_str.len());
+                                            info!(
+                                                "Generated SDP answer for late offer ({} bytes)",
+                                                sdp_answer_str.len()
+                                            );
                                             Some(sdp_answer_str)
                                         }
                                         Err(e) => {
@@ -1326,8 +1802,29 @@ impl ClientTransactionUser for InviteTransactionUser {
                         }
                     }
                 } else {
+                    if let Some(builder) = &self.config.sdp_profile_builder {
+                        debug!("Late offer detected - generating SDP answer via profile negotiation");
+                        if let Ok(sdp_offer) = SessionDescription::parse(
+                            std::str::from_utf8(&response.body).unwrap_or_default(),
+                        ) {
+                            let addr = self.public_addr.unwrap_or(self.local_addr);
+                            let sdp_answer = profiles::negotiate_answer(
+                                &sdp_offer,
+                                builder,
+                                &self.config.user_agent,
+                                &addr.to_string(),
+                                self.config.local_audio_port,
+                                Some(self.config.local_video_port),
+                            );
+                            let sdp_answer_str = sdp_answer.to_string();
+                            Some(sdp_answer_str)
+                        } else {
+                            None
+                        }
+                    } else {
                     warn!("Late offer scenario detected but no SDP answer generator configured");
                     None
+                    }
                 }
             } else {
                 None
@@ -1357,13 +1854,11 @@ impl ClientTransactionUser for InviteTransactionUser {
         }
     }
 
-    async fn send_prack(
-        &self,
-        _key: &TransactionKey,
-        response: Response,
-        ctx: &TransportContext,
-    ) {
-        info!("Sending PRACK for reliable provisional {}", response.start.code);
+    async fn send_prack(&self, _key: &TransactionKey, response: Response, ctx: &TransportContext) {
+        info!(
+            "Sending PRACK for reliable provisional {}",
+            response.start.code
+        );
 
         // Find dialog for this response
         let helper = self.helper.lock().await;
@@ -1516,6 +2011,8 @@ pub struct IntegratedUACBuilder {
     contact_uri: Option<SipUri>,
     local_addr: Option<SocketAddr>,
     public_addr: Option<SocketAddr>,
+    via_advertised: Option<SocketAddr>,
+    contact_advertised: Option<SocketAddr>,
     transaction_manager: Option<Arc<TransactionManager>>,
     resolver: Option<Arc<SipResolver>>,
     dispatcher: Option<Arc<dyn TransportDispatcher>>,
@@ -1531,6 +2028,8 @@ impl IntegratedUACBuilder {
             contact_uri: None,
             local_addr: None,
             public_addr: None,
+            via_advertised: None,
+            contact_advertised: None,
             transaction_manager: None,
             resolver: None,
             dispatcher: None,
@@ -1552,18 +2051,81 @@ impl IntegratedUACBuilder {
         self
     }
 
+    /// Enables RFC 5626 outbound support (adds ;ob and GRUU formation).
+    pub fn enable_outbound(mut self, instance_id: impl AsRef<str>) -> Self {
+        self.config.enable_outbound = true;
+        self.config.instance_id = Some(instance_id.as_ref().to_string());
+        self
+    }
+
+    /// Sets a salt used for flow token/opaque GRUU generation.
+    pub fn flow_token_salt(mut self, salt: impl AsRef<str>) -> Self {
+        self.config.flow_token_salt = Some(salt.as_ref().to_string());
+        self
+    }
+
+    /// Sets reg-id used for outbound flows (default 1).
+    pub fn outbound_reg_id(mut self, reg_id: u32) -> Self {
+        self.config.outbound_reg_id = reg_id.max(1);
+        self
+    }
+
+    /// Overrides the WS/WSS target URI (e.g., ws://edge.example.com/sip).
+    pub fn ws_target_uri(mut self, uri: impl AsRef<str>) -> Self {
+        self.config.ws_target_uri = Some(uri.as_ref().to_string());
+        self
+    }
+
+    /// Sets a WS path suffix to append when building ws://host/path from DNS targets.
+    pub fn ws_path(mut self, path: impl AsRef<str>) -> Self {
+        self.config.ws_path = Some(path.as_ref().to_string());
+        self
+    }
+
     /// Sets the local transport address for Via/Contact auto-filling.
     pub fn local_addr(mut self, addr: impl AsRef<str>) -> Result<Self> {
-        self.local_addr = Some(addr.as_ref().parse()
-            .map_err(|e| anyhow!("Invalid local address: {}", e))?);
+        self.local_addr = Some(
+            addr.as_ref()
+                .parse()
+                .map_err(|e| anyhow!("Invalid local address: {}", e))?,
+        );
         Ok(self)
     }
 
     /// Sets the public address for NAT scenarios (overrides local_addr in Contact).
     pub fn public_addr(mut self, addr: impl AsRef<str>) -> Result<Self> {
-        self.public_addr = Some(addr.as_ref().parse()
-            .map_err(|e| anyhow!("Invalid public address: {}", e))?);
+        self.public_addr = Some(
+            addr.as_ref()
+                .parse()
+                .map_err(|e| anyhow!("Invalid public address: {}", e))?,
+        );
         Ok(self)
+    }
+
+    /// Sets the Via advertised address (host:port), used only for Via.
+    pub fn via_advertised_addr(mut self, addr: impl AsRef<str>) -> Result<Self> {
+        self.config.via_advertised = Some(
+            addr.as_ref()
+                .parse()
+                .map_err(|e| anyhow!("Invalid Via advertised address: {}", e))?,
+        );
+        Ok(self)
+    }
+
+    /// Sets the Contact advertised address (host:port), used only for Contact.
+    pub fn contact_advertised_addr(mut self, addr: impl AsRef<str>) -> Result<Self> {
+        self.config.contact_advertised = Some(
+            addr.as_ref()
+                .parse()
+                .map_err(|e| anyhow!("Invalid Contact advertised address: {}", e))?,
+        );
+        Ok(self)
+    }
+
+    /// Sets a dynamic public address resolver (e.g., STUN).
+    pub fn public_addr_resolver(mut self, resolver: Arc<dyn PublicAddrResolver>) -> Self {
+        self.config.public_addr_resolver = Some(resolver);
+        self
     }
 
     /// Sets the transaction manager.
@@ -1587,6 +2149,12 @@ impl IntegratedUACBuilder {
     /// Sets authentication credentials (username, password).
     pub fn credentials(mut self, username: impl Into<String>, password: impl Into<String>) -> Self {
         self.credentials = Some((username.into(), password.into()));
+        self
+    }
+
+    /// Sets a credential provider (per realm).
+    pub fn credential_provider(mut self, provider: Arc<dyn CredentialProvider>) -> Self {
+        self.config.credential_provider = Some(provider);
         self
     }
 
@@ -1650,6 +2218,12 @@ impl IntegratedUACBuilder {
         self
     }
 
+    /// Sets a custom SDP media profile builder for richer offers/answers.
+    pub fn sdp_profile_builder(mut self, builder: profiles::MediaProfileBuilder) -> Self {
+        self.config.sdp_profile_builder = Some(builder);
+        self
+    }
+
     /// Sets the local RTP audio port for SDP (default: 8000).
     pub fn local_audio_port(mut self, port: u16) -> Self {
         self.config.local_audio_port = port;
@@ -1670,22 +2244,36 @@ impl IntegratedUACBuilder {
 
     /// Builds the IntegratedUAC.
     pub fn build(self) -> Result<IntegratedUAC> {
-        let local_uri = self.local_uri
+        let local_uri = self
+            .local_uri
             .ok_or_else(|| anyhow!("local_uri is required"))?;
-        let local_addr = self.local_addr
+        let local_addr = self
+            .local_addr
             .ok_or_else(|| anyhow!("local_addr is required"))?;
-        let transaction_manager = self.transaction_manager
+        let transaction_manager = self
+            .transaction_manager
             .ok_or_else(|| anyhow!("transaction_manager is required"))?;
-        let resolver = self.resolver
+        let resolver = self
+            .resolver
             .ok_or_else(|| anyhow!("resolver is required"))?;
-        let dispatcher = self.dispatcher
+        let dispatcher = self
+            .dispatcher
             .ok_or_else(|| anyhow!("dispatcher is required"))?;
 
         // Create embedded helper
         let contact_uri = self.contact_uri.unwrap_or_else(|| {
-            // Default contact: sip:user@local_addr
-            let user = local_uri.user.as_ref().map(|u| u.as_str()).unwrap_or("user");
-            SipUri::parse(&format!("sip:{}@{}", user, local_addr)).unwrap()
+            // Default contact: sip:user@advertised_contact
+            let user = local_uri
+                .user
+                .as_ref()
+                .map(|u| u.as_str())
+                .unwrap_or("user");
+            let contact_host = self
+                .config
+                .contact_advertised
+                .or(self.public_addr)
+                .unwrap_or(local_addr);
+            SipUri::parse(&format!("sip:{}@{}", user, contact_host)).unwrap()
         });
 
         let mut helper = UserAgentClient::new(local_uri, contact_uri);

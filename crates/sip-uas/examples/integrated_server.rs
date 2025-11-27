@@ -26,9 +26,9 @@ use sip_dialog::Dialog;
 use sip_transaction::{ServerTransactionHandle, TransportContext};
 use sip_uas::integrated::{IntegratedUAS, UasRequestHandler};
 use sip_uas::UserAgentServer;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use std::collections::HashMap;
 
 /// Simple auto-answer SIP server application
 struct AutoAnswerServer {
@@ -82,7 +82,10 @@ impl UasRequestHandler for AutoAnswerServer {
 
             // Add SDP answer if request had SDP offer
             if !request.body.is_empty() {
-                println!("   INVITE contains SDP offer ({} bytes)", request.body.len());
+                println!(
+                    "   INVITE contains SDP offer ({} bytes)",
+                    request.body.len()
+                );
 
                 // Generate simple SDP answer
                 let sdp_answer = format!(
@@ -101,23 +104,20 @@ impl UasRequestHandler for AutoAnswerServer {
                 );
 
                 ok_response.body = sdp_answer.as_bytes().to_vec().into();
-                ok_response.headers.push(
-                    "Content-Type".into(),
-                    "application/sdp".into(),
-                );
-                ok_response.headers.push(
-                    "Content-Length".into(),
-                    sdp_answer.len().to_string().into(),
-                );
+                ok_response
+                    .headers
+                    .push("Content-Type".into(), "application/sdp".into());
+                ok_response
+                    .headers
+                    .push("Content-Length".into(), sdp_answer.len().to_string().into());
 
                 println!("   Generated SDP answer ({} bytes)", sdp_answer.len());
             }
 
             // Add Contact header
-            ok_response.headers.push(
-                "Contact".into(),
-                format!("<{}>", self.local_uri).into(),
-            );
+            ok_response
+                .headers
+                .push("Contact".into(), format!("<{}>", self.local_uri).into());
 
             // Send 200 OK
             handle.send_final(ok_response).await;
@@ -206,10 +206,9 @@ impl UasRequestHandler for AutoAnswerServer {
             } else {
                 format!("{};expires={}", contact, expires)
             };
-            response.headers.push(
-                "Contact".into(),
-                contact_with_expires.into(),
-            );
+            response
+                .headers
+                .push("Contact".into(), contact_with_expires.into());
         }
 
         response.headers.push("Expires".into(), expires.into());
@@ -234,16 +233,14 @@ impl UasRequestHandler for AutoAnswerServer {
         );
 
         // Add Accept header
-        response.headers.push(
-            "Accept".into(),
-            "application/sdp, message/sipfrag".into(),
-        );
+        response
+            .headers
+            .push("Accept".into(), "application/sdp, message/sipfrag".into());
 
         // Add Supported header
-        response.headers.push(
-            "Supported".into(),
-            "replaces, timer, 100rel".into(),
-        );
+        response
+            .headers
+            .push("Supported".into(), "replaces, timer, 100rel".into());
 
         handle.send_final(response).await;
         println!("   → 200 OK with capabilities");
@@ -301,8 +298,12 @@ impl UasRequestHandler for AutoAnswerServer {
         if !request.body.is_empty() {
             let sdp_answer = "v=0\r\no=- 0 0 IN IP4 192.168.1.1\r\ns=-\r\nc=IN IP4 192.168.1.1\r\nt=0 0\r\nm=audio 9000 RTP/AVP 0\r\n";
             response.body = sdp_answer.as_bytes().to_vec().into();
-            response.headers.push("Content-Type".into(), "application/sdp".into());
-            response.headers.push("Content-Length".into(), sdp_answer.len().to_string().into());
+            response
+                .headers
+                .push("Content-Type".into(), "application/sdp".into());
+            response
+                .headers
+                .push("Content-Length".into(), sdp_answer.len().to_string().into());
         }
 
         handle.send_final(response).await;

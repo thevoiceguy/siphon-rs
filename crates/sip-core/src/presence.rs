@@ -36,7 +36,6 @@
 /// // Format as application/pidf+xml
 /// let xml = doc.to_xml();
 /// ```
-
 use smol_str::SmolStr;
 use std::fmt;
 

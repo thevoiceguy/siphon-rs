@@ -27,7 +27,6 @@
 /// // Format as application/simple-message-summary
 /// let body = summary.to_string();
 /// ```
-
 use smol_str::SmolStr;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -92,7 +91,9 @@ impl MessageSummary {
 
     /// Returns true if any messages are urgent.
     pub fn has_urgent(&self) -> bool {
-        self.messages.values().any(|c| c.urgent_new > 0 || c.urgent_old > 0)
+        self.messages
+            .values()
+            .any(|c| c.urgent_new > 0 || c.urgent_old > 0)
     }
 }
 
@@ -520,13 +521,13 @@ mod tests {
     fn message_summary_basic() {
         let mut summary = MessageSummary::new(true);
         summary.set_account("sip:alice@vmail.example.com");
-        summary.add_message_class(
-            MessageContextClass::Voice,
-            MessageCounts::new(2, 8),
-        );
+        summary.add_message_class(MessageContextClass::Voice, MessageCounts::new(2, 8));
 
         assert!(summary.messages_waiting);
-        assert_eq!(summary.account, Some(SmolStr::new("sip:alice@vmail.example.com")));
+        assert_eq!(
+            summary.account,
+            Some(SmolStr::new("sip:alice@vmail.example.com"))
+        );
         assert_eq!(summary.total_new(), 2);
         assert_eq!(summary.total_old(), 8);
     }
@@ -603,7 +604,10 @@ mod tests {
 
         let summary = parse_message_summary(body).unwrap();
         assert!(summary.messages_waiting);
-        assert_eq!(summary.account, Some(SmolStr::new("sip:alice@vmail.example.com")));
+        assert_eq!(
+            summary.account,
+            Some(SmolStr::new("sip:alice@vmail.example.com"))
+        );
         assert_eq!(summary.messages.len(), 1);
 
         let voice = summary.messages.get(&MessageContextClass::Voice).unwrap();

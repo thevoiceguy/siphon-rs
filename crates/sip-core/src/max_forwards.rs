@@ -12,12 +12,7 @@ pub enum MaxForwardsError {
 pub fn decrement_max_forwards(headers: &mut Headers) -> Result<u32, MaxForwardsError> {
     for header in headers.iter_mut() {
         if header.name.eq_ignore_ascii_case("Max-Forwards") {
-            let value = header
-                .value
-                .as_str()
-                .trim()
-                .parse::<u32>()
-                .unwrap_or(70);
+            let value = header.value.as_str().trim().parse::<u32>().unwrap_or(70);
             if value == 0 {
                 return Err(MaxForwardsError::Exhausted);
             }
@@ -28,10 +23,7 @@ pub fn decrement_max_forwards(headers: &mut Headers) -> Result<u32, MaxForwardsE
     }
 
     // Insert default 70 -> 69 when missing.
-    headers.push(
-        SmolStr::new("Max-Forwards"),
-        SmolStr::new("69".to_owned()),
-    );
+    headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("69".to_owned()));
     Ok(69)
 }
 

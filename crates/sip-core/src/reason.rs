@@ -1,6 +1,6 @@
+use smol_str::SmolStr;
 use std::collections::BTreeMap;
 use std::fmt;
-use smol_str::SmolStr;
 
 /// RFC 3326 Reason header.
 ///
@@ -254,17 +254,11 @@ impl ReasonHeader {
     /// ```
     pub fn sip(code: u16, text: Option<&str>) -> Self {
         let mut params = BTreeMap::new();
-        params.insert(
-            SmolStr::new("cause"),
-            Some(SmolStr::new(code.to_string())),
-        );
+        params.insert(SmolStr::new("cause"), Some(SmolStr::new(code.to_string())));
 
         let default_text = sip_response_text(code);
         let text = text.unwrap_or(default_text);
-        params.insert(
-            SmolStr::new("text"),
-            Some(SmolStr::new(text.to_owned())),
-        );
+        params.insert(SmolStr::new("text"), Some(SmolStr::new(text.to_owned())));
 
         Self {
             protocol: SmolStr::new(ReasonProtocol::Sip.as_str().to_owned()),
@@ -467,7 +461,10 @@ mod tests {
 
     #[test]
     fn q850_from_code() {
-        assert_eq!(Q850Cause::from_code(16), Some(Q850Cause::NormalCallClearing));
+        assert_eq!(
+            Q850Cause::from_code(16),
+            Some(Q850Cause::NormalCallClearing)
+        );
         assert_eq!(Q850Cause::from_code(17), Some(Q850Cause::UserBusy));
         assert_eq!(Q850Cause::from_code(19), Some(Q850Cause::NoAnswer));
         assert_eq!(Q850Cause::from_code(999), None);
@@ -504,7 +501,10 @@ mod tests {
     #[test]
     fn reason_header_display_q850() {
         let reason = ReasonHeader::q850(Q850Cause::NormalCallClearing);
-        assert_eq!(reason.to_string(), "Q.850;cause=16;text=\"Normal Call Clearing\"");
+        assert_eq!(
+            reason.to_string(),
+            "Q.850;cause=16;text=\"Normal Call Clearing\""
+        );
     }
 
     #[test]

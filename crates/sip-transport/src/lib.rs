@@ -4,10 +4,19 @@ use sip_observe::{span_with_transport, transport_metrics};
 pub mod pool;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
+#[cfg(feature = "ws")]
+use {
+    futures_util::{SinkExt, StreamExt},
+    tokio_tungstenite::{
+        accept_hdr_async,
+        tungstenite::{self, handshake::server::Request},
+    },
+};
 
 /// Maximum size of SIP headers before \r\n\r\n (64 KB).
 /// Typical SIP messages have ~2-4 KB of headers. This limit protects against
@@ -43,6 +52,10 @@ pub enum TransportKind {
     Sctp,
     /// TLS over SCTP transport (RFC 4168)
     TlsSctp,
+    /// WebSocket transport (RFC 7118)
+    Ws,
+    /// Secure WebSocket transport (RFC 7118)
+    Wss,
 }
 
 impl TransportKind {
@@ -54,6 +67,8 @@ impl TransportKind {
             TransportKind::Tls => "tls",
             TransportKind::Sctp => "sctp",
             TransportKind::TlsSctp => "tls-sctp",
+            TransportKind::Ws => "ws",
+            TransportKind::Wss => "wss",
         }
     }
 
@@ -77,6 +92,8 @@ impl TransportKind {
             TransportKind::Tls => "TLS",
             TransportKind::Sctp => "SCTP",
             TransportKind::TlsSctp => "TLS-SCTP",
+            TransportKind::Ws => "WS",
+            TransportKind::Wss => "WSS",
         }
     }
 
@@ -103,6 +120,8 @@ impl TransportKind {
             "tls" => Some(TransportKind::Tls),
             "sctp" => Some(TransportKind::Sctp),
             "tls-sctp" => Some(TransportKind::TlsSctp),
+            "ws" => Some(TransportKind::Ws),
+            "wss" => Some(TransportKind::Wss),
             _ => None,
         }
     }
@@ -123,7 +142,12 @@ impl TransportKind {
     pub fn is_stream_based(&self) -> bool {
         matches!(
             self,
-            TransportKind::Tcp | TransportKind::Tls | TransportKind::Sctp | TransportKind::TlsSctp
+            TransportKind::Tcp
+                | TransportKind::Tls
+                | TransportKind::Sctp
+                | TransportKind::TlsSctp
+                | TransportKind::Ws
+                | TransportKind::Wss
         )
     }
 
@@ -141,7 +165,7 @@ impl TransportKind {
     /// assert!(TransportKind::TlsSctp.is_secure());
     /// ```
     pub fn is_secure(&self) -> bool {
-        matches!(self, TransportKind::Tls | TransportKind::TlsSctp)
+        matches!(self, TransportKind::Tls | TransportKind::TlsSctp | TransportKind::Wss)
     }
 }
 
@@ -158,10 +182,16 @@ pub struct InboundPacket {
 pub async fn run_udp(socket: Arc<UdpSocket>, tx: mpsc::Sender<InboundPacket>) -> Result<()> {
     let bind = socket.local_addr()?;
     info!(%bind, "listening (udp)");
+    transport_metrics().on_accept(TransportKind::Udp.as_str());
     let mut buf = vec![0u8; 65_535];
     loop {
         match socket.recv_from(&mut buf).await {
             Ok((n, peer)) => {
+                transport_metrics().on_latency(
+                    TransportKind::Udp.as_str(),
+                    "recv",
+                    0,
+                );
                 let span = span_with_transport("udp_packet", TransportKind::Udp.as_str());
                 let _entered = span.enter();
                 let payload = Bytes::copy_from_slice(&buf[..n]);
@@ -206,8 +236,10 @@ pub async fn send_udp(socket: &UdpSocket, to: &std::net::SocketAddr, data: &[u8]
 pub async fn run_tcp(bind: &str, tx: mpsc::Sender<InboundPacket>) -> Result<()> {
     let listener = TcpListener::bind(bind).await?;
     info!(%bind, "listening (tcp)");
+    transport_metrics().on_accept(TransportKind::Tcp.as_str());
 
     loop {
+        let start = Instant::now();
         let (stream, peer) = match listener.accept().await {
             Ok(pair) => pair,
             Err(e) => {
@@ -216,6 +248,11 @@ pub async fn run_tcp(bind: &str, tx: mpsc::Sender<InboundPacket>) -> Result<()> 
                 continue;
             }
         };
+        transport_metrics().on_latency(
+            TransportKind::Tcp.as_str(),
+            "accept",
+            start.elapsed().as_nanos() as u64,
+        );
         let tx = tx.clone();
         tokio::spawn(async move {
             let span = span_with_transport("tcp_session", TransportKind::Tcp.as_str());
@@ -236,6 +273,7 @@ pub async fn run_tcp(bind: &str, tx: mpsc::Sender<InboundPacket>) -> Result<()> 
 /// Connects to the destination and writes the bytes over TCP.
 pub async fn send_tcp(to: &SocketAddr, data: &[u8]) -> Result<()> {
     let mut stream = TcpStream::connect(to).await?;
+    transport_metrics().on_connect(TransportKind::Tcp.as_str());
     stream.write_all(data).await?;
     transport_metrics().on_packet_sent(TransportKind::Tcp.as_str());
     Ok(())
@@ -260,6 +298,188 @@ pub async fn send_stream(
 pub struct TlsConfig {
     pub server_name: String,
     pub client_config: std::sync::Arc<tokio_rustls::rustls::ClientConfig>,
+}
+
+#[cfg(feature = "ws")]
+/// Sends bytes over a WebSocket (plaintext).
+pub async fn send_ws(url: &str, data: Bytes) -> Result<()> {
+    let (mut stream, _) = tokio_tungstenite::connect_async(url).await?;
+    transport_metrics().on_connect(TransportKind::Ws.as_str());
+    stream.send(tokio_tungstenite::tungstenite::Message::Binary(data.to_vec())).await?;
+    transport_metrics().on_packet_sent(TransportKind::Ws.as_str());
+    Ok(())
+}
+
+#[cfg(feature = "ws")]
+/// Sends bytes over a secure WebSocket (WSS).
+pub async fn send_wss(url: &str, data: Bytes) -> Result<()> {
+    let (mut stream, _) = tokio_tungstenite::connect_async(url).await?;
+    transport_metrics().on_connect(TransportKind::Wss.as_str());
+    stream.send(tokio_tungstenite::tungstenite::Message::Binary(data.to_vec())).await?;
+    transport_metrics().on_packet_sent(TransportKind::Wss.as_str());
+    Ok(())
+}
+
+#[cfg(feature = "ws")]
+async fn handle_ws_connection<S>(
+    peer: SocketAddr,
+    stream: S,
+    transport: TransportKind,
+    tx: mpsc::Sender<InboundPacket>,
+) -> Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    // RFC 7118 requires the "sip" subprotocol; honor if offered, accept otherwise for flexibility.
+    let mut selected_sip = false;
+    let ws_stream = accept_hdr_async(stream, |req: &Request, mut resp: tungstenite::handshake::server::Response| {
+        if let Some(value) = req.headers().get("Sec-WebSocket-Protocol") {
+            if let Ok(proto_str) = value.to_str() {
+                if proto_str
+                    .split(',')
+                    .any(|p| p.trim().eq_ignore_ascii_case("sip"))
+                {
+                    resp.headers_mut()
+                        .append("Sec-WebSocket-Protocol", "sip".parse().unwrap());
+                    selected_sip = true;
+                }
+            }
+        }
+        Ok(resp)
+    })
+    .await?;
+
+    if !selected_sip {
+        warn!(%peer, "WS connection without Sec-WebSocket-Protocol: sip; accepting for compatibility");
+    }
+
+    let (mut sink, mut stream) = ws_stream.split();
+    let (writer_tx, mut writer_rx) = mpsc::channel::<Bytes>(64);
+
+    loop {
+        tokio::select! {
+            outbound = writer_rx.recv() => {
+                if let Some(data) = outbound {
+                    if let Err(e) = sink.send(tungstenite::Message::Binary(data.to_vec())).await {
+                        warn!(%peer, %e, "websocket send error");
+                        break;
+                    }
+                    transport_metrics().on_packet_sent(transport.as_str());
+                } else {
+                    break;
+                }
+            }
+            inbound = stream.next() => {
+                match inbound {
+                    Some(Ok(tungstenite::Message::Binary(data))) => {
+                        transport_metrics().on_packet_received(transport.as_str());
+                        let packet = InboundPacket {
+                            transport,
+                            peer,
+                            payload: Bytes::from(data),
+                            stream: Some(writer_tx.clone()),
+                        };
+                        if tx.send(packet).await.is_err() {
+                            warn!(%peer, "websocket receiver dropped");
+                            break;
+                        }
+                    }
+                    Some(Ok(tungstenite::Message::Text(text))) => {
+                        transport_metrics().on_packet_received(transport.as_str());
+                        let packet = InboundPacket {
+                            transport,
+                            peer,
+                            payload: Bytes::from(text.into_bytes()),
+                            stream: Some(writer_tx.clone()),
+                        };
+                        if tx.send(packet).await.is_err() {
+                            warn!(%peer, "websocket receiver dropped");
+                            break;
+                        }
+                    }
+                    Some(Ok(tungstenite::Message::Ping(payload))) => {
+                        if let Err(e) = sink.send(tungstenite::Message::Pong(payload)).await {
+                            warn!(%peer, %e, "failed to send ws pong");
+                            break;
+                        }
+                    }
+                    Some(Ok(tungstenite::Message::Pong(_))) => {}
+                    Some(Ok(tungstenite::Message::Close(_))) => break,
+                    Some(Ok(tungstenite::Message::Frame(_))) => {}
+                    Some(Err(e)) => {
+                        warn!(%peer, %e, "websocket read error");
+                        break;
+                    }
+                    None => break,
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "ws")]
+/// Runs a WebSocket listener and forwards SIP-over-WS packets to the channel.
+pub async fn run_ws(bind: &str, tx: mpsc::Sender<InboundPacket>) -> Result<()> {
+    let listener = TcpListener::bind(bind).await?;
+    info!(%bind, "listening (ws)");
+    transport_metrics().on_accept(TransportKind::Ws.as_str());
+    loop {
+        let (stream, peer) = match listener.accept().await {
+            Ok(pair) => pair,
+            Err(e) => {
+                warn!(%e, "ws accept error");
+                continue;
+            }
+        };
+
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = handle_ws_connection(peer, stream, TransportKind::Ws, tx).await {
+                warn!(%peer, %e, "ws session ended with error");
+            }
+        });
+    }
+}
+
+#[cfg(all(feature = "ws", feature = "tls"))]
+/// Runs a secure WebSocket listener (WSS) and forwards SIP-over-WS packets.
+pub async fn run_wss(
+    bind: &str,
+    config: std::sync::Arc<tokio_rustls::rustls::ServerConfig>,
+    tx: mpsc::Sender<InboundPacket>,
+) -> Result<()> {
+    use tokio_rustls::TlsAcceptor;
+
+    let listener = TcpListener::bind(bind).await?;
+    let acceptor = TlsAcceptor::from(config);
+    info!(%bind, "listening (wss)");
+    transport_metrics().on_accept(TransportKind::Wss.as_str());
+
+    loop {
+        let (stream, peer) = match listener.accept().await {
+            Ok(pair) => pair,
+            Err(e) => {
+                warn!(%e, "wss accept error");
+                continue;
+            }
+        };
+        let tx = tx.clone();
+        let acceptor = acceptor.clone();
+        tokio::spawn(async move {
+            match acceptor.accept(stream).await {
+                Ok(tls_stream) => {
+                    if let Err(e) =
+                        handle_ws_connection(peer, tls_stream, TransportKind::Wss, tx).await
+                    {
+                        warn!(%peer, %e, "wss session ended with error");
+                    }
+                }
+                Err(e) => warn!(%peer, %e, "wss tls accept failed"),
+            }
+        });
+    }
 }
 
 #[cfg(feature = "tls")]
@@ -290,6 +510,7 @@ pub async fn run_tls(
     let listener = TcpListener::bind(bind).await?;
     let acceptor = TlsAcceptor::from(config);
     info!(%bind, "listening (tls)");
+    transport_metrics().on_accept(TransportKind::Tls.as_str());
 
     loop {
         let (stream, peer) = match listener.accept().await {
@@ -313,6 +534,7 @@ pub async fn run_tls(
                     return;
                 }
             };
+            transport_metrics().on_connect(TransportKind::Tls.as_str());
 
             spawn_stream_session(
                 peer,
@@ -397,7 +619,7 @@ impl Default for DefaultTransportPolicy {
 
 impl TransportPolicy for DefaultTransportPolicy {
     fn choose(&self, requested: TransportKind, payload_len: usize, sips: bool) -> TransportKind {
-        if sips {
+        if sips && !requested.is_secure() {
             return TransportKind::Tls;
         }
         if matches!(requested, TransportKind::Udp) && payload_len > self.udp_mtu {
@@ -572,8 +794,7 @@ mod tests {
 
     #[test]
     fn drains_multiple_frames_and_bodies() {
-        let msg1 =
-            b"OPTIONS sip:a SIP/2.0\r\nContent-Length: 4\r\n\r\nbody";
+        let msg1 = b"OPTIONS sip:a SIP/2.0\r\nContent-Length: 4\r\n\r\nbody";
         let msg2 = b"SIP/2.0 200 OK\r\nContent-Length: 0\r\n\r\n";
         let payload = [msg1.as_slice(), msg2.as_slice()].concat();
         let mut buf = BytesMut::from(&payload[..]);
@@ -630,7 +851,10 @@ mod tests {
         let mut buf = BytesMut::from(headers.as_bytes());
         let result = drain_sip_frames(&mut buf);
 
-        assert!(result.is_err(), "should reject incomplete headers exceeding limit");
+        assert!(
+            result.is_err(),
+            "should reject incomplete headers exceeding limit"
+        );
         let err = result.unwrap_err();
         assert!(err.to_string().contains("MAX_HEADER_SIZE"));
     }
@@ -729,7 +953,6 @@ mod tests {
     fn transport_kind_parse_invalid() {
         assert_eq!(TransportKind::parse("invalid"), None);
         assert_eq!(TransportKind::parse(""), None);
-        assert_eq!(TransportKind::parse("ws"), None);
     }
 
     #[test]

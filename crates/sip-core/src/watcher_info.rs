@@ -37,7 +37,6 @@
 /// // Format as application/watcherinfo+xml
 /// let xml = doc.to_xml();
 /// ```
-
 use smol_str::SmolStr;
 use std::fmt;
 
@@ -538,8 +537,14 @@ mod tests {
         assert_eq!(WatcherStatus::Waiting.as_str(), "waiting");
         assert_eq!(WatcherStatus::Terminated.as_str(), "terminated");
 
-        assert_eq!(WatcherStatus::from_str("active"), Some(WatcherStatus::Active));
-        assert_eq!(WatcherStatus::from_str("PENDING"), Some(WatcherStatus::Pending));
+        assert_eq!(
+            WatcherStatus::from_str("active"),
+            Some(WatcherStatus::Active)
+        );
+        assert_eq!(
+            WatcherStatus::from_str("PENDING"),
+            Some(WatcherStatus::Pending)
+        );
         assert_eq!(WatcherStatus::from_str("invalid"), None);
     }
 
@@ -549,8 +554,14 @@ mod tests {
         assert_eq!(WatcherEvent::Approved.as_str(), "approved");
         assert_eq!(WatcherEvent::Rejected.as_str(), "rejected");
 
-        assert_eq!(WatcherEvent::from_str("approved"), Some(WatcherEvent::Approved));
-        assert_eq!(WatcherEvent::from_str("TIMEOUT"), Some(WatcherEvent::Timeout));
+        assert_eq!(
+            WatcherEvent::from_str("approved"),
+            Some(WatcherEvent::Approved)
+        );
+        assert_eq!(
+            WatcherEvent::from_str("TIMEOUT"),
+            Some(WatcherEvent::Timeout)
+        );
         assert_eq!(WatcherEvent::from_str("invalid"), None);
     }
 

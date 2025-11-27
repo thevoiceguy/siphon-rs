@@ -11,7 +11,6 @@
 ///
 /// This demonstrates the transferor (Bob) initiating a blind transfer
 /// to send the transferee (Alice) to a transfer target (Charlie).
-
 use sip_core::SipUri;
 use sip_uac::UserAgentClient;
 
@@ -80,7 +79,10 @@ fn main() {
     println!("To: {}", refer_request.headers.get("To").unwrap());
     println!("Call-ID: {}", refer_request.headers.get("Call-ID").unwrap());
     println!("CSeq: {}", refer_request.headers.get("CSeq").unwrap());
-    println!("Refer-To: {}", refer_request.headers.get("Refer-To").unwrap());
+    println!(
+        "Refer-To: {}",
+        refer_request.headers.get("Refer-To").unwrap()
+    );
     println!();
     println!("Note: REFER tells Alice to call Charlie");
     println!("      This creates an implicit subscription to 'refer' event");
@@ -101,7 +103,10 @@ fn main() {
 
     // Alice creates new INVITE to Charlie
     let alice_uac = UserAgentClient::new(alice_uri.clone(), alice_contact);
-    let invite_to_charlie = alice_uac.create_invite(&charlie_uri, Some("v=0\r\no=- 123 456 IN IP4 192.168.1.100\r\n"));
+    let invite_to_charlie = alice_uac.create_invite(
+        &charlie_uri,
+        Some("v=0\r\no=- 123 456 IN IP4 192.168.1.100\r\n"),
+    );
 
     println!("INVITE sip:charlie@example.com SIP/2.0");
     println!("From: {}", invite_to_charlie.headers.get("From").unwrap());
@@ -132,7 +137,11 @@ fn main() {
 
     // Alice sends NOTIFY with 100 Trying
     println!("Alice -> Bob: NOTIFY (sipfrag: 100 Trying)");
-    let _notify_100 = alice_uac.create_notify(&subscription, SubscriptionState::Active, Some("SIP/2.0 100 Trying\r\n"));
+    let _notify_100 = alice_uac.create_notify(
+        &subscription,
+        SubscriptionState::Active,
+        Some("SIP/2.0 100 Trying\r\n"),
+    );
     println!("Event: refer");
     println!("Subscription-State: active");
     println!("Content-Type: message/sipfrag;version=2.0");
@@ -156,7 +165,11 @@ fn main() {
 
     // Alice sends final NOTIFY with 200 OK
     println!("Alice -> Bob: NOTIFY (sipfrag: 200 OK)");
-    let _notify_200 = alice_uac.create_notify(&subscription, SubscriptionState::Terminated, Some("SIP/2.0 200 OK\r\n"));
+    let _notify_200 = alice_uac.create_notify(
+        &subscription,
+        SubscriptionState::Terminated,
+        Some("SIP/2.0 200 OK\r\n"),
+    );
     println!("Event: refer");
     println!("Subscription-State: terminated;reason=noresource");
     println!("Content-Type: message/sipfrag;version=2.0");

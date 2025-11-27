@@ -254,9 +254,7 @@ fn create_rejected_media(offer_media: &MediaDescription) -> MediaDescription {
 
 /// Extract direction from attributes
 fn extract_direction(attributes: &[Attribute]) -> Option<Direction> {
-    attributes
-        .iter()
-        .find_map(Direction::from_attribute)
+    attributes.iter().find_map(Direction::from_attribute)
 }
 
 /// Generate session ID

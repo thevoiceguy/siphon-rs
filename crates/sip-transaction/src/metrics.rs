@@ -132,11 +132,11 @@
 //! - Success rate calculation
 //! - Formatted metric displays
 
+use parking_lot::RwLock;
+use sip_core::Method;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use parking_lot::RwLock;
-use sip_core::Method;
 
 use crate::timers::Transport;
 use crate::TransactionTimer;
@@ -170,6 +170,13 @@ pub enum TransactionOutcome {
     TransportError,
     /// Transaction was cancelled
     Cancelled,
+}
+
+/// Transaction role (client vs server).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TransactionRole {
+    Client,
+    Server,
 }
 
 /// Statistics for a specific transport type.
@@ -211,6 +218,15 @@ pub struct MetricsSnapshot {
     pub total_transactions: u64,
     /// Snapshot timestamp
     pub timestamp: Instant,
+    pub starts_by_transport: HashMap<TransportType, u64>,
+    pub starts_by_method: HashMap<String, u64>,
+    pub starts_by_role: HashMap<TransactionRole, u64>,
+    pub completes_by_transport: HashMap<TransportType, u64>,
+    pub completes_by_method: HashMap<String, u64>,
+    pub completes_by_role: HashMap<TransactionRole, u64>,
+    pub retransmissions: HashMap<TransportType, u64>,
+    pub auth_retries: u64,
+    pub via_transport_counts: HashMap<String, u64>,
 }
 
 /// Internal metrics storage.
@@ -226,6 +242,15 @@ struct MetricsData {
     timer_fire_counts: HashMap<TransactionTimer, u64>,
     /// Total transactions
     total_count: u64,
+    starts_by_transport: HashMap<TransportType, u64>,
+    starts_by_method: HashMap<String, u64>,
+    starts_by_role: HashMap<TransactionRole, u64>,
+    completes_by_transport: HashMap<TransportType, u64>,
+    completes_by_method: HashMap<String, u64>,
+    completes_by_role: HashMap<TransactionRole, u64>,
+    retransmissions: HashMap<TransportType, u64>,
+    auth_retries: u64,
+    via_transport_counts: HashMap<String, u64>,
 }
 
 /// Thread-safe transaction metrics collector.
@@ -277,7 +302,8 @@ impl TransactionMetrics {
     ) {
         let mut data = self.data.write();
 
-        *data.outcomes_by_transport
+        *data
+            .outcomes_by_transport
             .entry(transport)
             .or_insert_with(HashMap::new)
             .entry(outcome)
@@ -288,6 +314,46 @@ impl TransactionMetrics {
     pub fn record_timer_fired(&self, timer: TransactionTimer) {
         let mut data = self.data.write();
         *data.timer_fire_counts.entry(timer).or_insert(0) += 1;
+    }
+
+    /// Records a transaction start.
+    pub fn record_start(&self, transport: TransportType, method: &str, role: TransactionRole) {
+        let mut data = self.data.write();
+        *data.starts_by_transport.entry(transport).or_insert(0) += 1;
+        *data.starts_by_method.entry(method.to_string()).or_insert(0) += 1;
+        *data.starts_by_role.entry(role).or_insert(0) += 1;
+    }
+
+    /// Records a transaction completion.
+    pub fn record_complete(&self, transport: TransportType, method: &str, role: TransactionRole) {
+        let mut data = self.data.write();
+        *data.completes_by_transport.entry(transport).or_insert(0) += 1;
+        *data
+            .completes_by_method
+            .entry(method.to_string())
+            .or_insert(0) += 1;
+        *data.completes_by_role.entry(role).or_insert(0) += 1;
+    }
+
+    /// Records a retransmission.
+    pub fn record_retransmission(&self, transport: TransportType) {
+        let mut data = self.data.write();
+        *data.retransmissions.entry(transport).or_insert(0) += 1;
+    }
+
+    /// Records an auth retry.
+    pub fn record_auth_retry(&self) {
+        let mut data = self.data.write();
+        data.auth_retries += 1;
+    }
+
+    /// Records Via transport usage.
+    pub fn record_via_transport(&self, via_transport: &str) {
+        let mut data = self.data.write();
+        *data
+            .via_transport_counts
+            .entry(via_transport.to_string())
+            .or_insert(0) += 1;
     }
 
     /// Gets the current metrics snapshot.
@@ -311,13 +377,17 @@ impl TransactionMetrics {
             by_method.insert(method.clone(), calculate_stats(durations));
         }
 
-        let timer_stats = data.timer_fire_counts
+        let timer_stats = data
+            .timer_fire_counts
             .iter()
             .map(|(timer, count)| {
-                (*timer, TimerStats {
-                    fire_count: *count,
-                    total_callback_time: Duration::ZERO,
-                })
+                (
+                    *timer,
+                    TimerStats {
+                        fire_count: *count,
+                        total_callback_time: Duration::ZERO,
+                    },
+                )
             })
             .collect();
 
@@ -327,6 +397,15 @@ impl TransactionMetrics {
             timer_stats,
             total_transactions: data.total_count,
             timestamp: Instant::now(),
+            starts_by_transport: data.starts_by_transport.clone(),
+            starts_by_method: data.starts_by_method.clone(),
+            starts_by_role: data.starts_by_role.clone(),
+            completes_by_transport: data.completes_by_transport.clone(),
+            completes_by_method: data.completes_by_method.clone(),
+            completes_by_role: data.completes_by_role.clone(),
+            retransmissions: data.retransmissions.clone(),
+            auth_retries: data.auth_retries,
+            via_transport_counts: data.via_transport_counts.clone(),
         }
     }
 
@@ -414,12 +493,10 @@ impl TransactionTracker {
     /// Records the transaction completion.
     pub fn complete(self, outcome: TransactionOutcome) {
         let duration = self.start_time.elapsed();
-        self.metrics.record_transaction_duration(
-            self.transport,
-            &self.method,
-            duration,
-        );
-        self.metrics.record_transaction_outcome(self.transport, outcome);
+        self.metrics
+            .record_transaction_duration(self.transport, &self.method, duration);
+        self.metrics
+            .record_transaction_outcome(self.transport, outcome);
     }
 }
 
@@ -442,7 +519,9 @@ mod tests {
             Duration::from_millis(200),
         );
 
-        let avg = metrics.avg_duration_for_transport(TransportType::Tcp).unwrap();
+        let avg = metrics
+            .avg_duration_for_transport(TransportType::Tcp)
+            .unwrap();
         assert_eq!(avg, Duration::from_millis(150));
     }
 
@@ -463,11 +542,7 @@ mod tests {
     fn calculates_snapshot_correctly() {
         let metrics = TransactionMetrics::new();
 
-        metrics.record_transaction_duration(
-            TransportType::Udp,
-            "OPTIONS",
-            Duration::from_secs(1),
-        );
+        metrics.record_transaction_duration(TransportType::Udp, "OPTIONS", Duration::from_secs(1));
         metrics.record_transaction_duration(
             TransportType::Tcp,
             "OPTIONS",
@@ -518,11 +593,7 @@ mod tests {
     fn reset_clears_all_metrics() {
         let metrics = TransactionMetrics::new();
 
-        metrics.record_transaction_duration(
-            TransportType::Udp,
-            "REGISTER",
-            Duration::from_secs(1),
-        );
+        metrics.record_transaction_duration(TransportType::Udp, "REGISTER", Duration::from_secs(1));
         metrics.record_timer_fired(TransactionTimer::E);
 
         assert_eq!(metrics.total_transactions(), 1);
@@ -537,11 +608,7 @@ mod tests {
     fn transaction_tracker_lifecycle() {
         let metrics = TransactionMetrics::new();
 
-        let tracker = TransactionTracker::new(
-            metrics.clone(),
-            TransportType::Tcp,
-            Method::Invite,
-        );
+        let tracker = TransactionTracker::new(metrics.clone(), TransportType::Tcp, Method::Invite);
 
         std::thread::sleep(Duration::from_millis(10));
         tracker.complete(TransactionOutcome::Completed);
@@ -551,6 +618,9 @@ mod tests {
 
         let tcp_stats = snapshot.by_transport.get(&TransportType::Tcp).unwrap();
         assert!(tcp_stats.avg_duration >= Duration::from_millis(10));
-        assert_eq!(tcp_stats.outcomes.get(&TransactionOutcome::Completed), Some(&1));
+        assert_eq!(
+            tcp_stats.outcomes.get(&TransactionOutcome::Completed),
+            Some(&1)
+        );
     }
 }

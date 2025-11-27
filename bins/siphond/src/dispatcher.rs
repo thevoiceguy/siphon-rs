@@ -1,5 +1,4 @@
 /// Request dispatcher that routes SIP requests to appropriate handlers.
-
 use std::{collections::HashMap, sync::Arc};
 
 use sip_core::{Method, Request};
@@ -8,8 +7,8 @@ use tracing::warn;
 
 use crate::{
     handlers::{
-        bye::ByeHandler, invite::InviteHandler, options::OptionsHandler, register::RegisterHandler,
-        refer::ReferHandler, subscribe::SubscribeHandler, RequestHandler,
+        bye::ByeHandler, invite::InviteHandler, options::OptionsHandler, refer::ReferHandler,
+        register::RegisterHandler, subscribe::SubscribeHandler, RequestHandler,
     },
     services::ServiceRegistry,
 };

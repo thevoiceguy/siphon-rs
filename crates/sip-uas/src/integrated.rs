@@ -43,11 +43,11 @@
 /// # Ok(())
 /// # }
 /// ```
-
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use sip_core::{Method, Request, Response, SipUri};
 use sip_dialog::{Dialog, DialogManager, SubscriptionManager};
+use sip_sdp::profiles::MediaProfileBuilder;
 use sip_transaction::{
     ServerTransactionHandle, TransactionManager, TransportContext, TransportDispatcher,
 };
@@ -241,6 +241,7 @@ pub struct IntegratedUAS {
     dialog_manager: Arc<DialogManager>,
     subscription_manager: Arc<SubscriptionManager>,
     request_handler: Arc<dyn UasRequestHandler>,
+    sdp_profile: Option<MediaProfileBuilder>,
 }
 
 impl IntegratedUAS {
@@ -266,8 +267,7 @@ impl IntegratedUAS {
     ) -> Result<()> {
         info!(
             "Dispatching {:?} request from {}",
-            request.start.method,
-            ctx.peer
+            request.start.method, ctx.peer
         );
 
         // Route based on method
@@ -301,7 +301,9 @@ impl IntegratedUAS {
                 let helper = self.helper.lock().await;
                 if let Some(dialog) = helper.dialog_manager.find_by_request(request) {
                     drop(helper);
-                    self.request_handler.on_bye(request, handle, &dialog).await?;
+                    self.request_handler
+                        .on_bye(request, handle, &dialog)
+                        .await?;
                 } else {
                     warn!("Received BYE for unknown dialog");
                     let response = UserAgentServer::create_response(
@@ -331,7 +333,9 @@ impl IntegratedUAS {
                 let helper = self.helper.lock().await;
                 if let Some(dialog) = helper.dialog_manager.find_by_request(request) {
                     drop(helper);
-                    self.request_handler.on_refer(request, handle, &dialog).await?;
+                    self.request_handler
+                        .on_refer(request, handle, &dialog)
+                        .await?;
                 } else {
                     warn!("Received REFER for unknown dialog");
                     let response = UserAgentServer::create_response(
@@ -346,7 +350,9 @@ impl IntegratedUAS {
                 let helper = self.helper.lock().await;
                 if let Some(dialog) = helper.dialog_manager.find_by_request(request) {
                     drop(helper);
-                    self.request_handler.on_update(request, handle, &dialog).await?;
+                    self.request_handler
+                        .on_update(request, handle, &dialog)
+                        .await?;
                 } else {
                     warn!("Received UPDATE for unknown dialog");
                     let response = UserAgentServer::create_response(
@@ -361,7 +367,9 @@ impl IntegratedUAS {
                 let helper = self.helper.lock().await;
                 if let Some(dialog) = helper.dialog_manager.find_by_request(request) {
                     drop(helper);
-                    self.request_handler.on_prack(request, handle, &dialog).await?;
+                    self.request_handler
+                        .on_prack(request, handle, &dialog)
+                        .await?;
                 } else {
                     warn!("Received PRACK for unknown dialog");
                     let response = UserAgentServer::create_response(
@@ -376,7 +384,9 @@ impl IntegratedUAS {
                 let helper = self.helper.lock().await;
                 if let Some(dialog) = helper.dialog_manager.find_by_request(request) {
                     drop(helper);
-                    self.request_handler.on_info(request, handle, &dialog).await?;
+                    self.request_handler
+                        .on_info(request, handle, &dialog)
+                        .await?;
                 } else {
                     warn!("Received INFO for unknown dialog");
                     let response = UserAgentServer::create_response(
@@ -411,12 +421,18 @@ impl IntegratedUAS {
 
             let contact_value = format!(
                 "<sip:{}@{}:{}>",
-                contact_uri.user.as_ref().map(|u| u.as_str()).unwrap_or("server"),
+                contact_uri
+                    .user
+                    .as_ref()
+                    .map(|u| u.as_str())
+                    .unwrap_or("server"),
                 addr.ip(),
                 addr.port()
             );
 
-            response.headers.push(SmolStr::new("Contact"), SmolStr::new(&contact_value));
+            response
+                .headers
+                .push(SmolStr::new("Contact"), SmolStr::new(&contact_value));
         }
 
         // Add User-Agent if not present
@@ -439,6 +455,7 @@ pub struct IntegratedUASBuilder {
     dispatcher: Option<Arc<dyn TransportDispatcher>>,
     request_handler: Option<Arc<dyn UasRequestHandler>>,
     config: UASConfig,
+    sdp_profile: Option<MediaProfileBuilder>,
 }
 
 impl IntegratedUASBuilder {
@@ -452,6 +469,7 @@ impl IntegratedUASBuilder {
             dispatcher: None,
             request_handler: None,
             config: UASConfig::default(),
+            sdp_profile: None,
         }
     }
 
@@ -511,6 +529,12 @@ impl IntegratedUASBuilder {
         self
     }
 
+    /// Sets a default SDP media profile builder for auto-offer/answer.
+    pub fn sdp_profile(mut self, builder: MediaProfileBuilder) -> Self {
+        self.sdp_profile = Some(builder);
+        self
+    }
+
     /// Builds the IntegratedUAS.
     pub fn build(self) -> Result<IntegratedUAS> {
         let local_uri = self
@@ -554,6 +578,7 @@ impl IntegratedUASBuilder {
             dialog_manager,
             subscription_manager,
             request_handler,
+            sdp_profile: self.sdp_profile,
         })
     }
 }

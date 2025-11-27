@@ -115,10 +115,7 @@ impl LocationStore for MemoryLocationStore {
         let expires_at = Instant::now() + binding.expires;
         let aor_key = binding.aor.clone();
 
-        let mut list = self
-            .inner
-            .entry(aor_key)
-            .or_insert_with(Vec::new);
+        let mut list = self.inner.entry(aor_key).or_insert_with(Vec::new);
 
         // Remove existing binding with same contact
         list.retain(|b| b.contact != binding.contact);
@@ -239,16 +236,14 @@ impl<S: LocationStore, A: Authenticator> BasicRegistrar<S, A> {
 
     fn parse_expires(&self, request: &Request, contact_value: &str) -> Duration {
         // Check Contact parameter first
-        let contact_expires = contact_value
-            .split(';')
-            .find_map(|p| {
-                let trimmed = p.trim();
-                if trimmed.starts_with("expires=") {
-                    trimmed[8..].parse::<u64>().ok()
-                } else {
-                    None
-                }
-            });
+        let contact_expires = contact_value.split(';').find_map(|p| {
+            let trimmed = p.trim();
+            if trimmed.starts_with("expires=") {
+                trimmed[8..].parse::<u64>().ok()
+            } else {
+                None
+            }
+        });
 
         // Fall back to Expires header
         let header_expires = request
@@ -264,7 +259,9 @@ impl<S: LocationStore, A: Authenticator> BasicRegistrar<S, A> {
             Duration::from_secs(0)
         } else {
             // Clamp between min and max
-            let clamped = seconds.max(self.min_expires.as_secs()).min(self.max_expires.as_secs());
+            let clamped = seconds
+                .max(self.min_expires.as_secs())
+                .min(self.max_expires.as_secs());
             Duration::from_secs(clamped)
         }
     }
@@ -808,7 +805,10 @@ mod tests {
 
         let mut headers = Headers::new();
         headers.push("To".into(), "<sip:alice@example.com>".into());
-        headers.push("Contact".into(), "<sip:ua.example.com>;q=0.5;expires=60".into());
+        headers.push(
+            "Contact".into(),
+            "<sip:ua.example.com>;q=0.5;expires=60".into(),
+        );
         headers.push("Call-ID".into(), "call123".into());
         headers.push("CSeq".into(), "1 REGISTER".into());
 
@@ -859,7 +859,10 @@ mod tests {
 
         let mut headers = Headers::new();
         headers.push("To".into(), "<sip:alice@example.com>".into());
-        headers.push("Contact".into(), "<sip:ua.example.com>;expires=99999".into());
+        headers.push(
+            "Contact".into(),
+            "<sip:ua.example.com>;expires=99999".into(),
+        );
         headers.push("Call-ID".into(), "call123".into());
         headers.push("CSeq".into(), "1 REGISTER".into());
 
@@ -884,11 +887,15 @@ mod tests {
             password: "secret".into(),
             realm: "example.com".into(),
         };
-        let auth = DigestAuthenticator::new("example.com", MemoryCredentialStore::with(vec![creds]));
+        let auth =
+            DigestAuthenticator::new("example.com", MemoryCredentialStore::with(vec![creds]));
         let registrar = BasicRegistrar::new(store, Some(auth));
 
         let mut headers = Headers::new();
-        headers.push("Via".into(), "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8".into());
+        headers.push(
+            "Via".into(),
+            "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8".into(),
+        );
         headers.push("From".into(), "<sip:alice@example.com>;tag=1234".into());
         headers.push("To".into(), "<sip:alice@example.com>".into());
         headers.push("Call-ID".into(), "call123".into());
@@ -919,7 +926,7 @@ mod tests {
         // RFC 3261 §8.2.6.2: Verify To header has tag added
         let to_header = response.headers.get("To").map(|v| v.as_str()).unwrap();
         assert!(to_header.starts_with("<sip:alice@example.com>"));
-        assert!(to_header.contains(";tag="));  // Tag should be added
+        assert!(to_header.contains(";tag=")); // Tag should be added
         assert_eq!(
             response.headers.get("Call-ID").map(|v| v.as_str()),
             Some("call123")
@@ -977,14 +984,23 @@ mod tests {
             password: "secret".into(),
             realm: "example.com".into(),
         };
-        let auth = DigestAuthenticator::new("example.com", MemoryCredentialStore::with(vec![creds]));
+        let auth =
+            DigestAuthenticator::new("example.com", MemoryCredentialStore::with(vec![creds]));
         let registrar = BasicRegistrar::new(store, Some(auth));
 
         // Build a REGISTER with valid auth headers but unknown user
-        let nonce = registrar.authenticator.as_ref().unwrap().nonce_manager.generate();
+        let nonce = registrar
+            .authenticator
+            .as_ref()
+            .unwrap()
+            .nonce_manager
+            .generate();
 
         let mut headers = Headers::new();
-        headers.push("Via".into(), "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8".into());
+        headers.push(
+            "Via".into(),
+            "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8".into(),
+        );
         headers.push("From".into(), "<sip:bob@example.com>;tag=1234".into());
         headers.push("To".into(), "<sip:bob@example.com>".into());
         headers.push("Call-ID".into(), "call123".into());
@@ -1006,8 +1022,13 @@ mod tests {
         );
 
         // Should return 401 challenge, not 500 error
-        let response = registrar.handle_register(&request).expect("should return response");
-        assert_eq!(response.start.code, 401, "Unknown user should return 401, not 500");
+        let response = registrar
+            .handle_register(&request)
+            .expect("should return response");
+        assert_eq!(
+            response.start.code, 401,
+            "Unknown user should return 401, not 500"
+        );
         assert!(response.headers.get("WWW-Authenticate").is_some());
     }
 
@@ -1019,11 +1040,15 @@ mod tests {
             password: "secret".into(),
             realm: "example.com".into(),
         };
-        let auth = DigestAuthenticator::new("example.com", MemoryCredentialStore::with(vec![creds]));
+        let auth =
+            DigestAuthenticator::new("example.com", MemoryCredentialStore::with(vec![creds]));
         let registrar = BasicRegistrar::new(store, Some(auth));
 
         let mut headers = Headers::new();
-        headers.push("Via".into(), "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8".into());
+        headers.push(
+            "Via".into(),
+            "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8".into(),
+        );
         headers.push("From".into(), "<sip:alice@example.com>;tag=1234".into());
         headers.push("To".into(), "<sip:alice@example.com>".into());
         headers.push("Call-ID".into(), "call123".into());
@@ -1039,8 +1064,13 @@ mod tests {
         );
 
         // Should return 401 challenge, not 500 error
-        let response = registrar.handle_register(&request).expect("should return response");
-        assert_eq!(response.start.code, 401, "Malformed auth should return 401, not 500");
+        let response = registrar
+            .handle_register(&request)
+            .expect("should return response");
+        assert_eq!(
+            response.start.code, 401,
+            "Malformed auth should return 401, not 500"
+        );
         assert!(response.headers.get("WWW-Authenticate").is_some());
     }
 
@@ -1052,13 +1082,22 @@ mod tests {
             password: "secret".into(),
             realm: "example.com".into(),
         };
-        let auth = DigestAuthenticator::new("example.com", MemoryCredentialStore::with(vec![creds]));
+        let auth =
+            DigestAuthenticator::new("example.com", MemoryCredentialStore::with(vec![creds]));
         let registrar = BasicRegistrar::new(store, Some(auth));
 
-        let nonce = registrar.authenticator.as_ref().unwrap().nonce_manager.generate();
+        let nonce = registrar
+            .authenticator
+            .as_ref()
+            .unwrap()
+            .nonce_manager
+            .generate();
 
         let mut headers = Headers::new();
-        headers.push("Via".into(), "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8".into());
+        headers.push(
+            "Via".into(),
+            "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8".into(),
+        );
         headers.push("From".into(), "<sip:alice@example.com>;tag=1234".into());
         headers.push("To".into(), "<sip:alice@example.com>".into());
         headers.push("Call-ID".into(), "call123".into());
@@ -1081,8 +1120,13 @@ mod tests {
         );
 
         // Should return 401 challenge, not 500 error
-        let response = registrar.handle_register(&request).expect("should return response");
-        assert_eq!(response.start.code, 401, "Invalid nc format should return 401, not 500");
+        let response = registrar
+            .handle_register(&request)
+            .expect("should return response");
+        assert_eq!(
+            response.start.code, 401,
+            "Invalid nc format should return 401, not 500"
+        );
         assert!(response.headers.get("WWW-Authenticate").is_some());
     }
 
@@ -1093,7 +1137,10 @@ mod tests {
             BasicRegistrar::new(store, None);
 
         let mut headers = Headers::new();
-        headers.push("Via".into(), "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8".into());
+        headers.push(
+            "Via".into(),
+            "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8".into(),
+        );
         headers.push("From".into(), "<sip:alice@example.com>;tag=1234".into());
         // Missing To header
         headers.push("Call-ID".into(), "call123".into());
@@ -1106,8 +1153,13 @@ mod tests {
             Bytes::new(),
         );
 
-        let response = registrar.handle_register(&request).expect("should return response");
-        assert_eq!(response.start.code, 400, "Missing To header should return 400");
+        let response = registrar
+            .handle_register(&request)
+            .expect("should return response");
+        assert_eq!(
+            response.start.code, 400,
+            "Missing To header should return 400"
+        );
         assert!(response.start.reason.contains("To"));
     }
 
@@ -1118,7 +1170,10 @@ mod tests {
             BasicRegistrar::new(store, None);
 
         let mut headers = Headers::new();
-        headers.push("Via".into(), "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8".into());
+        headers.push(
+            "Via".into(),
+            "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8".into(),
+        );
         headers.push("From".into(), "<sip:alice@example.com>;tag=1234".into());
         headers.push("To".into(), "invalid-header-format".into()); // Invalid To header
         headers.push("Call-ID".into(), "call123".into());
@@ -1131,8 +1186,13 @@ mod tests {
             Bytes::new(),
         );
 
-        let response = registrar.handle_register(&request).expect("should return response");
-        assert_eq!(response.start.code, 400, "Invalid To header should return 400");
+        let response = registrar
+            .handle_register(&request)
+            .expect("should return response");
+        assert_eq!(
+            response.start.code, 400,
+            "Invalid To header should return 400"
+        );
         assert!(response.start.reason.contains("To"));
     }
 
@@ -1143,7 +1203,10 @@ mod tests {
             BasicRegistrar::new(store, None);
 
         let mut headers = Headers::new();
-        headers.push("Via".into(), "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8".into());
+        headers.push(
+            "Via".into(),
+            "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8".into(),
+        );
         headers.push("From".into(), "<sip:alice@example.com>;tag=1234".into());
         headers.push("To".into(), "<sip:alice@example.com>".into());
         headers.push("Call-ID".into(), "call123".into());
@@ -1156,8 +1219,13 @@ mod tests {
             Bytes::new(),
         );
 
-        let response = registrar.handle_register(&request).expect("should return response");
-        assert_eq!(response.start.code, 400, "Missing Contact header should return 400");
+        let response = registrar
+            .handle_register(&request)
+            .expect("should return response");
+        assert_eq!(
+            response.start.code, 400,
+            "Missing Contact header should return 400"
+        );
         assert!(response.start.reason.contains("Contact"));
     }
 
@@ -1168,7 +1236,10 @@ mod tests {
             BasicRegistrar::new(store, None);
 
         let mut headers = Headers::new();
-        headers.push("Via".into(), "SIP/2.0/UDP client.example.com;branch=z9hG4bKtest".into());
+        headers.push(
+            "Via".into(),
+            "SIP/2.0/UDP client.example.com;branch=z9hG4bKtest".into(),
+        );
         headers.push("From".into(), "<sip:alice@example.com>;tag=from123".into());
         headers.push("To".into(), "<sip:alice@example.com>".into());
         headers.push("Call-ID".into(), "callid-test-123".into());
@@ -1181,7 +1252,9 @@ mod tests {
             Bytes::new(),
         );
 
-        let response = registrar.handle_register(&request).expect("should return response");
+        let response = registrar
+            .handle_register(&request)
+            .expect("should return response");
         assert_eq!(response.start.code, 400);
 
         // Verify RFC 3261 required headers are present
@@ -1203,7 +1276,10 @@ mod tests {
         );
 
         // Verify To header has tag added
-        let to = response.headers.get("To").expect("To header should be present");
+        let to = response
+            .headers
+            .get("To")
+            .expect("To header should be present");
         assert!(to.contains(";tag="), "To header should have tag added");
     }
 }

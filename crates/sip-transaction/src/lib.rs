@@ -225,10 +225,15 @@ pub use fsm::{
     ClientNonInviteFsm, ServerAction, ServerInviteAction, ServerInviteEvent, ServerInviteFsm,
     ServerNonInviteEvent, ServerNonInviteFsm, TransportKind,
 };
+pub mod sharding;
 pub use manager::{
     ClientTransactionUser, ServerTransactionHandle, TransactionManager, TransportContext,
     TransportDispatcher,
 };
+pub use storage::{
+    ClientTransactionRecord, InMemoryTransactionStore, ServerTransactionRecord, TransactionStore,
+};
+pub mod storage;
 
 #[cfg(test)]
 mod tests {

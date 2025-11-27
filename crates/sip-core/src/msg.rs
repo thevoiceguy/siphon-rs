@@ -1,7 +1,12 @@
 use bytes::Bytes;
 use smol_str::SmolStr;
 
-use crate::{headers::Headers, method::Method, uri::{SipUri, Uri}, version::SipVersion};
+use crate::{
+    headers::Headers,
+    method::Method,
+    uri::{SipUri, Uri},
+    version::SipVersion,
+};
 
 /// First line of a SIP request.
 #[derive(Debug, Clone, PartialEq, Eq)]

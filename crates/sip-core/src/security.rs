@@ -1,6 +1,6 @@
+use smol_str::SmolStr;
 use std::collections::BTreeMap;
 use std::fmt;
-use smol_str::SmolStr;
 
 /// RFC 3329 Security Mechanism names.
 ///
@@ -100,10 +100,8 @@ impl SecurityEntry {
 
     /// Sets a parameter value.
     pub fn set_param(&mut self, name: &str, value: Option<&str>) {
-        self.params.insert(
-            SmolStr::new(name),
-            value.map(SmolStr::new),
-        );
+        self.params
+            .insert(SmolStr::new(name), value.map(SmolStr::new));
     }
 
     /// Gets a parameter value.
@@ -119,7 +117,10 @@ impl SecurityEntry {
         let q_str = if q == 1.0 {
             "1".to_string()
         } else {
-            format!("{:.3}", q).trim_end_matches('0').trim_end_matches('.').to_string()
+            format!("{:.3}", q)
+                .trim_end_matches('0')
+                .trim_end_matches('.')
+                .to_string()
         };
         self.set_param("q", Some(&q_str));
     }
@@ -310,7 +311,11 @@ impl SecurityServerHeader {
 
         for server_entry in server_sorted {
             // Check if client also supports this mechanism
-            if client.entries.iter().any(|c| c.mechanism == server_entry.mechanism) {
+            if client
+                .entries
+                .iter()
+                .any(|c| c.mechanism == server_entry.mechanism)
+            {
                 return Some(server_entry);
             }
         }
@@ -469,9 +474,18 @@ mod tests {
     fn security_mechanism_parse() {
         assert_eq!(SecurityMechanism::parse("tls"), SecurityMechanism::Tls);
         assert_eq!(SecurityMechanism::parse("TLS"), SecurityMechanism::Tls);
-        assert_eq!(SecurityMechanism::parse("digest"), SecurityMechanism::Digest);
-        assert_eq!(SecurityMechanism::parse("ipsec-ike"), SecurityMechanism::IpsecIke);
-        assert_eq!(SecurityMechanism::parse("ipsec-man"), SecurityMechanism::IpsecMan);
+        assert_eq!(
+            SecurityMechanism::parse("digest"),
+            SecurityMechanism::Digest
+        );
+        assert_eq!(
+            SecurityMechanism::parse("ipsec-ike"),
+            SecurityMechanism::IpsecIke
+        );
+        assert_eq!(
+            SecurityMechanism::parse("ipsec-man"),
+            SecurityMechanism::IpsecMan
+        );
 
         if let SecurityMechanism::Other(s) = SecurityMechanism::parse("custom") {
             assert_eq!(s.as_str(), "custom");
@@ -494,7 +508,10 @@ mod tests {
         assert!(entry.params.is_empty());
 
         entry.set_param("q", Some("0.5"));
-        assert_eq!(entry.get_param("q").unwrap().as_ref().unwrap().as_str(), "0.5");
+        assert_eq!(
+            entry.get_param("q").unwrap().as_ref().unwrap().as_str(),
+            "0.5"
+        );
     }
 
     #[test]
@@ -600,7 +617,12 @@ mod tests {
         assert_eq!(header.len(), 1);
         assert_eq!(header.entries[0].mechanism, SecurityMechanism::IpsecIke);
         assert_eq!(
-            header.entries[0].get_param("algorithm").unwrap().as_ref().unwrap().as_str(),
+            header.entries[0]
+                .get_param("algorithm")
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .as_str(),
             "des-ede3-cbc"
         );
     }

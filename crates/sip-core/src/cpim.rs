@@ -97,7 +97,9 @@ impl CpimMessage {
     /// Sets the Subject header with a language tag.
     pub fn with_subject_lang(mut self, subject: &str, lang: &str) -> Self {
         let mut header = CpimHeader::new(subject);
-        header.params.insert(SmolStr::new("lang"), SmolStr::new(lang));
+        header
+            .params
+            .insert(SmolStr::new("lang"), SmolStr::new(lang));
         self.add_header_obj("Subject", header);
         self
     }
@@ -131,8 +133,7 @@ impl CpimMessage {
     /// Sets a header, replacing any existing values.
     pub fn set_header(&mut self, name: &str, value: &str) {
         let header = CpimHeader::new(value);
-        self.headers
-            .insert(SmolStr::new(name), vec![header]);
+        self.headers.insert(SmolStr::new(name), vec![header]);
     }
 
     /// Adds a header value (allows multiple values for the same header).
@@ -237,8 +238,7 @@ impl CpimHeader {
 
     /// Adds a parameter to the header.
     pub fn with_param(mut self, name: &str, value: &str) -> Self {
-        self.params
-            .insert(SmolStr::new(name), SmolStr::new(value));
+        self.params.insert(SmolStr::new(name), SmolStr::new(value));
         self
     }
 }
@@ -370,7 +370,9 @@ pub fn parse_cpim(input: &str) -> Option<CpimMessage> {
             let name = name.trim();
             let value = value.trim();
 
-            if name.eq_ignore_ascii_case("Content-type") || name.eq_ignore_ascii_case("Content-Type") {
+            if name.eq_ignore_ascii_case("Content-type")
+                || name.eq_ignore_ascii_case("Content-Type")
+            {
                 content_type = SmolStr::new(value);
             } else {
                 content_headers.insert(SmolStr::new(name), SmolStr::new(value));
@@ -447,10 +449,7 @@ mod tests {
             .with_datetime("2023-01-15T10:30:00Z")
             .with_subject("Greeting");
 
-        assert_eq!(
-            msg.get_header("From"),
-            Some("Alice <im:alice@example.com>")
-        );
+        assert_eq!(msg.get_header("From"), Some("Alice <im:alice@example.com>"));
         assert_eq!(msg.get_header("To"), Some("Bob <im:bob@example.com>"));
         assert_eq!(msg.get_header("DateTime"), Some("2023-01-15T10:30:00Z"));
         assert_eq!(msg.get_header("Subject"), Some("Greeting"));
@@ -484,8 +483,14 @@ mod tests {
 
         // Check parameters
         let subject_headers = msg.headers.get("Subject").unwrap();
-        assert_eq!(subject_headers[0].params.get("lang"), Some(&SmolStr::new("en")));
-        assert_eq!(subject_headers[1].params.get("lang"), Some(&SmolStr::new("fr")));
+        assert_eq!(
+            subject_headers[0].params.get("lang"),
+            Some(&SmolStr::new("en"))
+        );
+        assert_eq!(
+            subject_headers[1].params.get("lang"),
+            Some(&SmolStr::new("fr"))
+        );
     }
 
     #[test]
@@ -547,12 +552,8 @@ mod tests {
     #[test]
     fn unescape_special_characters() {
         let unescaped =
-            unescape_header_value("Hello\\nWorld\\r\\nTab:\\t Quote:\\\" Backslash:\\\\")
-                .unwrap();
-        assert_eq!(
-            unescaped,
-            "Hello\nWorld\r\nTab:\t Quote:\" Backslash:\\"
-        );
+            unescape_header_value("Hello\\nWorld\\r\\nTab:\\t Quote:\\\" Backslash:\\\\").unwrap();
+        assert_eq!(unescaped, "Hello\nWorld\r\nTab:\t Quote:\" Backslash:\\");
     }
 
     #[test]
@@ -590,10 +591,7 @@ mod tests {
         let input = "Content-type: Message/CPIM\r\n\r\nFrom: Alice <im:alice@example.com>\r\nTo: Bob <im:bob@example.com>\r\nDateTime: 2023-01-15T10:30:00Z\r\nSubject: Greeting\r\n\r\nContent-type: text/plain\r\n\r\nHello, World!";
 
         let msg = parse_cpim(input).unwrap();
-        assert_eq!(
-            msg.get_header("From"),
-            Some("Alice <im:alice@example.com>")
-        );
+        assert_eq!(msg.get_header("From"), Some("Alice <im:alice@example.com>"));
         assert_eq!(msg.get_header("To"), Some("Bob <im:bob@example.com>"));
         assert_eq!(msg.get_header("DateTime"), Some("2023-01-15T10:30:00Z"));
         assert_eq!(msg.get_header("Subject"), Some("Greeting"));
@@ -612,7 +610,10 @@ mod tests {
         assert_eq!(subjects[1], "Bonjour");
 
         let subject_headers = msg.headers.get("Subject").unwrap();
-        assert_eq!(subject_headers[1].params.get("lang"), Some(&SmolStr::new("fr")));
+        assert_eq!(
+            subject_headers[1].params.get("lang"),
+            Some(&SmolStr::new("fr"))
+        );
     }
 
     #[test]
@@ -626,19 +627,13 @@ mod tests {
         let formatted = original.to_string();
         let parsed = parse_cpim(&formatted).unwrap();
 
-        assert_eq!(
-            parsed.get_header("From"),
-            original.get_header("From")
-        );
+        assert_eq!(parsed.get_header("From"), original.get_header("From"));
         assert_eq!(parsed.get_header("To"), original.get_header("To"));
         assert_eq!(
             parsed.get_header("DateTime"),
             original.get_header("DateTime")
         );
-        assert_eq!(
-            parsed.get_header("Subject"),
-            original.get_header("Subject")
-        );
+        assert_eq!(parsed.get_header("Subject"), original.get_header("Subject"));
         assert_eq!(parsed.body_as_string(), original.body_as_string());
     }
 

@@ -5,7 +5,6 @@
 /// 2. Send a REGISTER request
 /// 3. Handle a 401 Unauthorized challenge
 /// 4. Retry with authentication
-
 use sip_core::SipUri;
 use sip_uac::UserAgentClient;
 
@@ -16,8 +15,7 @@ fn main() {
     let local_uri = SipUri::parse("sip:alice@example.com").expect("valid local URI");
     let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").expect("valid contact URI");
 
-    let uac = UserAgentClient::new(local_uri, contact_uri)
-        .with_credentials("alice", "secret123");
+    let uac = UserAgentClient::new(local_uri, contact_uri).with_credentials("alice", "secret123");
 
     println!("Created UAC for alice@example.com");
 
@@ -30,7 +28,10 @@ fn main() {
     println!("Request-URI: {}", register_request.start.uri.as_str());
     println!("From: {}", register_request.headers.get("From").unwrap());
     println!("To: {}", register_request.headers.get("To").unwrap());
-    println!("Contact: {}", register_request.headers.get("Contact").unwrap());
+    println!(
+        "Contact: {}",
+        register_request.headers.get("Contact").unwrap()
+    );
     println!("CSeq: {}", register_request.headers.get("CSeq").unwrap());
 
     // Step 3: Simulate receiving 401 Unauthorized response

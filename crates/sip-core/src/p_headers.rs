@@ -1,6 +1,6 @@
+use smol_str::SmolStr;
 use std::collections::BTreeMap;
 use std::fmt;
-use smol_str::SmolStr;
 
 use crate::uri::Uri;
 use crate::SipUri;
@@ -147,16 +147,12 @@ impl PAssertedIdentityHeader {
 
     /// Returns true if this header contains at least one Tel URI identity.
     pub fn has_tel_identity(&self) -> bool {
-        self.identities
-            .iter()
-            .any(|id| id.uri.is_tel())
+        self.identities.iter().any(|id| id.uri.is_tel())
     }
 
     /// Returns true if this header contains at least one SIP URI identity.
     pub fn has_sip_identity(&self) -> bool {
-        self.identities
-            .iter()
-            .any(|id| id.uri.is_sip())
+        self.identities.iter().any(|id| id.uri.is_sip())
     }
 
     /// Returns the first SIP URI identity if present.
@@ -267,16 +263,12 @@ impl PPreferredIdentityHeader {
 
     /// Returns true if this header contains at least one Tel URI identity.
     pub fn has_tel_identity(&self) -> bool {
-        self.identities
-            .iter()
-            .any(|id| id.uri.is_tel())
+        self.identities.iter().any(|id| id.uri.is_tel())
     }
 
     /// Returns true if this header contains at least one SIP URI identity.
     pub fn has_sip_identity(&self) -> bool {
-        self.identities
-            .iter()
-            .any(|id| id.uri.is_sip())
+        self.identities.iter().any(|id| id.uri.is_sip())
     }
 
     /// Returns the first SIP URI identity if present.
@@ -480,7 +472,10 @@ mod tests {
     fn parse_p_identity_with_display() {
         let identity = parse_p_identity("\"Alice Smith\" <sip:alice@example.com>").unwrap();
         assert_eq!(identity.uri.as_str(), "sip:alice@example.com");
-        assert_eq!(identity.display_name.as_ref().map(|s| s.as_str()), Some("Alice Smith"));
+        assert_eq!(
+            identity.display_name.as_ref().map(|s| s.as_str()),
+            Some("Alice Smith")
+        );
     }
 
     #[test]

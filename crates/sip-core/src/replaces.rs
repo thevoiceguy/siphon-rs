@@ -228,11 +228,7 @@ mod tests {
 
     #[test]
     fn basic_replaces_header() {
-        let replaces = ReplacesHeader::new(
-            "425928@bobster.example.org",
-            "7743",
-            "6472",
-        );
+        let replaces = ReplacesHeader::new("425928@bobster.example.org", "7743", "6472");
 
         assert_eq!(replaces.call_id, "425928@bobster.example.org");
         assert_eq!(replaces.to_tag, "7743");
@@ -242,11 +238,8 @@ mod tests {
 
     #[test]
     fn replaces_with_early_only() {
-        let replaces = ReplacesHeader::new(
-            "call123@example.com",
-            "tag1",
-            "tag2",
-        ).with_early_only(true);
+        let replaces =
+            ReplacesHeader::new("call123@example.com", "tag1", "tag2").with_early_only(true);
 
         assert!(replaces.is_early_only());
         assert_eq!(replaces.early_only, true);
@@ -254,26 +247,25 @@ mod tests {
 
     #[test]
     fn format_replaces_header() {
-        let replaces = ReplacesHeader::new(
-            "425928@bobster.example.org",
-            "7743",
-            "6472",
-        );
+        let replaces = ReplacesHeader::new("425928@bobster.example.org", "7743", "6472");
 
         let formatted = replaces.to_string();
-        assert_eq!(formatted, "425928@bobster.example.org;to-tag=7743;from-tag=6472");
+        assert_eq!(
+            formatted,
+            "425928@bobster.example.org;to-tag=7743;from-tag=6472"
+        );
     }
 
     #[test]
     fn format_replaces_with_early_only() {
-        let replaces = ReplacesHeader::new(
-            "98asjd8@test.com",
-            "12345",
-            "67890",
-        ).with_early_only(true);
+        let replaces =
+            ReplacesHeader::new("98asjd8@test.com", "12345", "67890").with_early_only(true);
 
         let formatted = replaces.to_string();
-        assert_eq!(formatted, "98asjd8@test.com;to-tag=12345;from-tag=67890;early-only");
+        assert_eq!(
+            formatted,
+            "98asjd8@test.com;to-tag=12345;from-tag=67890;early-only"
+        );
     }
 
     #[test]
@@ -345,11 +337,8 @@ mod tests {
 
     #[test]
     fn round_trip_replaces() {
-        let original = ReplacesHeader::new(
-            "test@example.com",
-            "tag-a",
-            "tag-b",
-        ).with_early_only(true);
+        let original =
+            ReplacesHeader::new("test@example.com", "tag-a", "tag-b").with_early_only(true);
 
         let formatted = original.to_string();
         let parsed = ReplacesHeader::parse(&formatted).unwrap();
@@ -359,11 +348,7 @@ mod tests {
 
     #[test]
     fn round_trip_without_early_only() {
-        let original = ReplacesHeader::new(
-            "abc123@host.com",
-            "local",
-            "remote",
-        );
+        let original = ReplacesHeader::new("abc123@host.com", "local", "remote");
 
         let formatted = original.to_string();
         let parsed = ReplacesHeader::parse(&formatted).unwrap();

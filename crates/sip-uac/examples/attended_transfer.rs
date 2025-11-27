@@ -13,9 +13,10 @@
 ///
 /// This demonstrates attended transfer where the transferor (Bob) consults
 /// with the transfer target (Charlie) before completing the transfer.
-
 use sip_core::{RefresherRole, SipUri};
-use sip_dialog::{Dialog, DialogId, DialogStateType, Subscription, SubscriptionId, SubscriptionState};
+use sip_dialog::{
+    Dialog, DialogId, DialogStateType, Subscription, SubscriptionId, SubscriptionState,
+};
 use sip_uac::UserAgentClient;
 use std::time::Duration;
 
@@ -35,7 +36,8 @@ fn main() {
     let bob_contact = SipUri::parse("sip:bob@192.168.1.200:5060").expect("valid Bob contact");
 
     let charlie_uri = SipUri::parse("sip:charlie@example.com").expect("valid Charlie URI");
-    let charlie_contact = SipUri::parse("sip:charlie@192.168.1.150:5060").expect("valid Charlie contact");
+    let charlie_contact =
+        SipUri::parse("sip:charlie@192.168.1.150:5060").expect("valid Charlie contact");
 
     // Step 1: Call A - Alice calls Bob (established)
     println!("--- Step 1: Call A Established ---");
@@ -118,7 +120,10 @@ fn main() {
     println!("To: {}", refer_request.headers.get("To").unwrap());
     println!("Call-ID: {}", refer_request.headers.get("Call-ID").unwrap());
     println!("CSeq: {}", refer_request.headers.get("CSeq").unwrap());
-    println!("Refer-To: {}", refer_request.headers.get("Refer-To").unwrap());
+    println!(
+        "Refer-To: {}",
+        refer_request.headers.get("Refer-To").unwrap()
+    );
     println!();
     println!("Refer-To breakdown:");
     println!("  Target: sip:charlie@example.com");
@@ -182,17 +187,29 @@ fn main() {
     };
 
     println!("Alice -> Bob: NOTIFY (sipfrag: 100 Trying)");
-    let _notify_100 = alice_uac.create_notify(&subscription, SubscriptionState::Active, Some("SIP/2.0 100 Trying\r\n"));
+    let _notify_100 = alice_uac.create_notify(
+        &subscription,
+        SubscriptionState::Active,
+        Some("SIP/2.0 100 Trying\r\n"),
+    );
     println!("Subscription-State: active");
     println!();
 
     println!("Alice -> Bob: NOTIFY (sipfrag: 180 Ringing)");
-    let _notify_180 = alice_uac.create_notify(&subscription, SubscriptionState::Active, Some("SIP/2.0 180 Ringing\r\n"));
+    let _notify_180 = alice_uac.create_notify(
+        &subscription,
+        SubscriptionState::Active,
+        Some("SIP/2.0 180 Ringing\r\n"),
+    );
     println!("Subscription-State: active");
     println!();
 
     println!("Alice -> Bob: NOTIFY (sipfrag: 200 OK)");
-    let _notify_200 = alice_uac.create_notify(&subscription, SubscriptionState::Terminated, Some("SIP/2.0 200 OK\r\n"));
+    let _notify_200 = alice_uac.create_notify(
+        &subscription,
+        SubscriptionState::Terminated,
+        Some("SIP/2.0 200 OK\r\n"),
+    );
     println!("Subscription-State: terminated;reason=noresource");
     println!();
     println!("Note: Subscription terminates - transfer successful");

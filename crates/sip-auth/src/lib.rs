@@ -1,8 +1,8 @@
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use dashmap::DashMap;
-use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use md5::Context;
+use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use sha2::{Digest, Sha256, Sha512};
 use sip_core::{Headers, Method, Request, Response, StatusLine};
 use sip_parse::parse_authorization_header;
@@ -152,7 +152,13 @@ impl Nonce {
     ///
     /// This allows legitimate UDP retransmissions (same request, same nc) while
     /// blocking replay attacks (different request with same/old nc).
-    pub fn validate_nc_with_request(&mut self, nc: u32, method: Method, uri: &str, body: &[u8]) -> bool {
+    pub fn validate_nc_with_request(
+        &mut self,
+        nc: u32,
+        method: Method,
+        uri: &str,
+        body: &[u8],
+    ) -> bool {
         // Compute hash of request (method:uri:body bytes)
         let mut ctx = Context::new();
         ctx.consume(method.as_str().as_bytes());
@@ -223,7 +229,14 @@ impl NonceManager {
 
     /// Verifies nonce exists and is valid, and validates nonce-count with request hash for replay protection.
     /// Returns true if nonce is valid and request is legitimate (not a replay).
-    pub fn verify_with_nc(&self, value: &str, nc: u32, method: Method, uri: &str, body: &[u8]) -> bool {
+    pub fn verify_with_nc(
+        &self,
+        value: &str,
+        nc: u32,
+        method: Method,
+        uri: &str,
+        body: &[u8],
+    ) -> bool {
         if let Some(mut entry) = self.nonces.get_mut(value) {
             if !entry.is_valid() {
                 return false;
@@ -252,7 +265,9 @@ impl NonceManager {
 
     /// Removes the oldest nonces up to the specified count.
     fn remove_oldest(&self, count: usize) {
-        let mut entries: Vec<_> = self.nonces.iter()
+        let mut entries: Vec<_> = self
+            .nonces
+            .iter()
             .map(|entry| (entry.key().clone(), entry.value().created_at))
             .collect();
 
@@ -391,7 +406,15 @@ impl<S: CredentialStore> DigestAuthenticator<S> {
         let ha2 = self.compute_ha2(method, uri, body);
 
         let final_input = if let (Some(qop), Some(nc), Some(cnonce)) = (qop, nc, cnonce) {
-            format!("{}:{}:{}:{}:{}:{}", ha1, nonce, nc, cnonce, qop.as_str(), ha2)
+            format!(
+                "{}:{}:{}:{}:{}:{}",
+                ha1,
+                nonce,
+                nc,
+                cnonce,
+                qop.as_str(),
+                ha2
+            )
         } else {
             format!("{}:{}:{}", ha1, nonce, ha2)
         };
@@ -461,8 +484,12 @@ impl<S: CredentialStore> Authenticator for DigestAuthenticator<S> {
         let username = parsed
             .param("username")
             .ok_or_else(|| anyhow!("missing username"))?;
-        let realm = parsed.param("realm").ok_or_else(|| anyhow!("missing realm"))?;
-        let nonce = parsed.param("nonce").ok_or_else(|| anyhow!("missing nonce"))?;
+        let realm = parsed
+            .param("realm")
+            .ok_or_else(|| anyhow!("missing realm"))?;
+        let nonce = parsed
+            .param("nonce")
+            .ok_or_else(|| anyhow!("missing nonce"))?;
         let uri = parsed.param("uri").ok_or_else(|| anyhow!("missing uri"))?;
         let response = parsed
             .param("response")
@@ -619,7 +646,15 @@ impl DigestClient {
         let ha2 = Self::hash(&algorithm, ha2_input.as_bytes());
 
         let response = if let Some(qop) = qop {
-            let final_input = format!("{}:{}:{}:{}:{}:{}", ha1, nonce, nc_str, cnonce, qop.as_str(), ha2);
+            let final_input = format!(
+                "{}:{}:{}:{}:{}:{}",
+                ha1,
+                nonce,
+                nc_str,
+                cnonce,
+                qop.as_str(),
+                ha2
+            );
             Self::hash(&algorithm, final_input.as_bytes())
         } else {
             let final_input = format!("{}:{}:{}", ha1, nonce, ha2);
@@ -632,7 +667,12 @@ impl DigestClient {
         );
 
         if let Some(qop) = qop {
-            auth.push_str(&format!(", qop={}, nc={}, cnonce=\"{}\"", qop.as_str(), nc_str, cnonce));
+            auth.push_str(&format!(
+                ", qop={}, nc={}, cnonce=\"{}\"",
+                qop.as_str(),
+                nc_str,
+                cnonce
+            ));
         }
 
         if let Some(opaque_val) = opaque {
@@ -660,9 +700,18 @@ mod tests {
     #[test]
     fn digest_algorithm_from_str() {
         assert_eq!(DigestAlgorithm::from_str("MD5"), Some(DigestAlgorithm::Md5));
-        assert_eq!(DigestAlgorithm::from_str("SHA-256"), Some(DigestAlgorithm::Sha256));
-        assert_eq!(DigestAlgorithm::from_str("SHA-512"), Some(DigestAlgorithm::Sha512));
-        assert_eq!(DigestAlgorithm::from_str("sha-256"), Some(DigestAlgorithm::Sha256));
+        assert_eq!(
+            DigestAlgorithm::from_str("SHA-256"),
+            Some(DigestAlgorithm::Sha256)
+        );
+        assert_eq!(
+            DigestAlgorithm::from_str("SHA-512"),
+            Some(DigestAlgorithm::Sha512)
+        );
+        assert_eq!(
+            DigestAlgorithm::from_str("sha-256"),
+            Some(DigestAlgorithm::Sha256)
+        );
         assert_eq!(DigestAlgorithm::from_str("INVALID"), None);
     }
 
@@ -722,7 +771,10 @@ mod tests {
         let auth = DigestAuthenticator::new("example.com", store);
 
         let request = Request::new(
-            RequestLine::new(Method::Invite, SipUri::parse("sip:bob@example.com").unwrap()),
+            RequestLine::new(
+                Method::Invite,
+                SipUri::parse("sip:bob@example.com").unwrap(),
+            ),
             Headers::new(),
             Bytes::new(),
         );
@@ -738,7 +790,10 @@ mod tests {
         let auth = DigestAuthenticator::new("example.com", store).with_proxy_auth(true);
 
         let request = Request::new(
-            RequestLine::new(Method::Invite, SipUri::parse("sip:bob@example.com").unwrap()),
+            RequestLine::new(
+                Method::Invite,
+                SipUri::parse("sip:bob@example.com").unwrap(),
+            ),
             Headers::new(),
             Bytes::new(),
         );
@@ -802,8 +857,8 @@ mod tests {
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
-        let auth = DigestAuthenticator::new("example.com", store)
-            .with_algorithm(DigestAlgorithm::Sha256);
+        let auth =
+            DigestAuthenticator::new("example.com", store).with_algorithm(DigestAlgorithm::Sha256);
 
         let nonce = auth.nonce_manager.generate();
         let method = Method::Register;
@@ -849,8 +904,8 @@ mod tests {
             realm: SmolStr::new("test.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
-        let auth = DigestAuthenticator::new("test.com", store)
-            .with_algorithm(DigestAlgorithm::Sha512);
+        let auth =
+            DigestAuthenticator::new("test.com", store).with_algorithm(DigestAlgorithm::Sha512);
 
         let nonce = auth.nonce_manager.generate();
         let method = Method::Invite;
@@ -907,7 +962,10 @@ mod tests {
         );
 
         let request = Request::new(
-            RequestLine::new(Method::Invite, SipUri::parse("sip:bob@example.com").unwrap()),
+            RequestLine::new(
+                Method::Invite,
+                SipUri::parse("sip:bob@example.com").unwrap(),
+            ),
             headers,
             Bytes::new(),
         );
@@ -936,7 +994,10 @@ mod tests {
         );
 
         let request = Request::new(
-            RequestLine::new(Method::Invite, SipUri::parse("sip:bob@example.com").unwrap()),
+            RequestLine::new(
+                Method::Invite,
+                SipUri::parse("sip:bob@example.com").unwrap(),
+            ),
             headers,
             Bytes::new(),
         );
@@ -1050,8 +1111,7 @@ mod tests {
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
-        let auth = DigestAuthenticator::new("example.com", store)
-            .with_qop(Qop::AuthInt);
+        let auth = DigestAuthenticator::new("example.com", store).with_qop(Qop::AuthInt);
 
         let nonce = auth.nonce_manager.generate();
         let method = Method::Invite;
@@ -1143,8 +1203,10 @@ mod tests {
             Bytes::new(),
         );
 
-        assert!(auth.verify(&retransmit, &retransmit.headers).unwrap(),
-                "Retransmission with same nc should be accepted");
+        assert!(
+            auth.verify(&retransmit, &retransmit.headers).unwrap(),
+            "Retransmission with same nc should be accepted"
+        );
     }
 
     #[test]
@@ -1192,8 +1254,10 @@ mod tests {
             Bytes::new(),
         );
 
-        assert!(auth.verify(&request2, &request2.headers).unwrap(),
-                "Request with nc=2 should succeed");
+        assert!(
+            auth.verify(&request2, &request2.headers).unwrap(),
+            "Request with nc=2 should succeed"
+        );
 
         // Replay attack with nc=00000001 (going backwards) should be rejected
         let nc1 = "00000001";
@@ -1224,8 +1288,12 @@ mod tests {
             Bytes::new(),
         );
 
-        assert!(!auth.verify(&replay_request, &replay_request.headers).unwrap(),
-                "Replay attack with decreasing nc should be rejected");
+        assert!(
+            !auth
+                .verify(&replay_request, &replay_request.headers)
+                .unwrap(),
+            "Replay attack with decreasing nc should be rejected"
+        );
     }
 
     #[test]
@@ -1273,8 +1341,10 @@ mod tests {
             Bytes::new(),
         );
 
-        assert!(auth.verify(&request1, &request1.headers).unwrap(),
-                "First request should succeed");
+        assert!(
+            auth.verify(&request1, &request1.headers).unwrap(),
+            "First request should succeed"
+        );
 
         // Second request to uri2 with same nc (replay attack with different request)
         let response2 = auth.compute_response(
@@ -1304,8 +1374,10 @@ mod tests {
             Bytes::new(),
         );
 
-        assert!(!auth.verify(&request2, &request2.headers).unwrap(),
-                "Different request with same nc should be rejected (request hash mismatch)");
+        assert!(
+            !auth.verify(&request2, &request2.headers).unwrap(),
+            "Different request with same nc should be rejected (request hash mismatch)"
+        );
     }
 
     #[test]
@@ -1354,8 +1426,10 @@ mod tests {
             Bytes::from_static(body1),
         );
 
-        assert!(auth.verify(&request1, &request1.headers).unwrap(),
-                "First request should succeed");
+        assert!(
+            auth.verify(&request1, &request1.headers).unwrap(),
+            "First request should succeed"
+        );
 
         // Second request with body2 and same nc (replay attack with different body)
         let response2 = auth.compute_response(
@@ -1385,8 +1459,10 @@ mod tests {
             Bytes::from_static(body2),
         );
 
-        assert!(!auth.verify(&request2, &request2.headers).unwrap(),
-                "Different body with same nc should be rejected (request hash mismatch)");
+        assert!(
+            !auth.verify(&request2, &request2.headers).unwrap(),
+            "Different body with same nc should be rejected (request hash mismatch)"
+        );
     }
 
     #[test]
@@ -1432,8 +1508,10 @@ mod tests {
             headers1,
             Bytes::from_static(body1),
         );
-        assert!(auth.verify(&request1, &request1.headers).unwrap(),
-                "First request should succeed");
+        assert!(
+            auth.verify(&request1, &request1.headers).unwrap(),
+            "First request should succeed"
+        );
 
         // Same nc but different body with identical length should be rejected
         let mut headers2 = Headers::new();
@@ -1443,8 +1521,10 @@ mod tests {
             headers2,
             Bytes::from_static(body2),
         );
-        assert!(!auth.verify(&request2, &request2.headers).unwrap(),
-                "Different body of same length with same nc should be rejected");
+        assert!(
+            !auth.verify(&request2, &request2.headers).unwrap(),
+            "Different body of same length with same nc should be rejected"
+        );
     }
 
     #[test]

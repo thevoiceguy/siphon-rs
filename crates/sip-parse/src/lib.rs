@@ -1,7 +1,6 @@
 use bytes::{Bytes, BytesMut};
 use sip_core::{
-    is_valid_branch, Headers, Method, Request, RequestLine, Response, Uri, SipVersion,
-    StatusLine,
+    is_valid_branch, Headers, Method, Request, RequestLine, Response, SipVersion, StatusLine, Uri,
 };
 use smol_str::SmolStr;
 
@@ -163,9 +162,7 @@ pub fn serialize_response(res: &sip_core::Response) -> Bytes {
 /// Supports both SIP/SIPS URIs and tel URIs per RFC 3966.
 fn parse_request_line(line: &str) -> Option<(Method, Uri)> {
     use nom::{
-        bytes::complete::take_while1,
-        character::complete::space1,
-        combinator::rest,
+        bytes::complete::take_while1, character::complete::space1, combinator::rest,
         sequence::tuple,
     };
 
@@ -355,8 +352,20 @@ fn is_token_char(c: char) -> bool {
     c.is_ascii_alphanumeric()
         || matches!(
             c,
-            '!' | '#' | '$' | '%' | '&' | '\'' | '*' | '+' | '-' | '.'
-                | '^' | '_' | '`' | '|' | '~'
+            '!' | '#'
+                | '$'
+                | '%'
+                | '&'
+                | '\''
+                | '*'
+                | '+'
+                | '-'
+                | '.'
+                | '^'
+                | '_'
+                | '`'
+                | '|'
+                | '~'
         )
 }
 
@@ -854,7 +863,10 @@ Content-Length: 0\r\n\r\n",
     fn serializer_inserts_max_forwards() {
         let uri = SipUri::parse("sip:example.com").unwrap();
         let mut headers = Headers::new();
-        headers.push(SmolStr::new("Via"), SmolStr::new("SIP/2.0/UDP host".to_owned()));
+        headers.push(
+            SmolStr::new("Via"),
+            SmolStr::new("SIP/2.0/UDP host".to_owned()),
+        );
 
         let req = Request::new(
             RequestLine::new(Method::Options, uri),

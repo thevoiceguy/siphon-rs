@@ -27,10 +27,7 @@ impl fmt::Display for StaticPayloadType {
         write!(
             f,
             "PT {} {} {}/{}",
-            self.payload_type,
-            self.encoding_name,
-            self.media_type,
-            self.clock_rate
+            self.payload_type, self.encoding_name, self.media_type, self.clock_rate
         )?;
         if let Some(ch) = self.channels {
             write!(f, "/{}", ch)?;
@@ -263,56 +260,138 @@ pub const H263: StaticPayloadType = StaticPayloadType {
 ///
 /// Indexed by payload type number. None for unassigned payload types.
 pub const STATIC_PAYLOAD_TYPES: [Option<&'static StaticPayloadType>; 128] = [
-    Some(&PCMU),         // 0
-    None,                // 1 - reserved
-    None,                // 2 - reserved
-    Some(&GSM),          // 3
-    Some(&G723),         // 4
-    Some(&DVI4_8000),    // 5
-    Some(&DVI4_16000),   // 6
-    Some(&LPC),          // 7
-    Some(&PCMA),         // 8
-    Some(&G722),         // 9
-    Some(&L16_STEREO),   // 10
-    Some(&L16_MONO),     // 11
-    Some(&QCELP),        // 12
-    Some(&CN),           // 13
-    Some(&MPA),          // 14
-    Some(&G728),         // 15
-    Some(&DVI4_11025),   // 16
-    Some(&DVI4_22050),   // 17
-    Some(&G729),         // 18
-    None,                // 19 - reserved
-    None,                // 20 - unassigned
-    None,                // 21 - unassigned
-    None,                // 22 - unassigned
-    None,                // 23 - unassigned
-    None,                // 24 - unassigned
-    Some(&CELB),         // 25
-    Some(&JPEG),         // 26
-    None,                // 27 - unassigned
-    Some(&NV),           // 28
-    None,                // 29 - unassigned
-    None,                // 30 - unassigned
-    Some(&H261),         // 31
-    Some(&MPV),          // 32
-    Some(&MP2T),         // 33
-    Some(&H263),         // 34
+    Some(&PCMU),       // 0
+    None,              // 1 - reserved
+    None,              // 2 - reserved
+    Some(&GSM),        // 3
+    Some(&G723),       // 4
+    Some(&DVI4_8000),  // 5
+    Some(&DVI4_16000), // 6
+    Some(&LPC),        // 7
+    Some(&PCMA),       // 8
+    Some(&G722),       // 9
+    Some(&L16_STEREO), // 10
+    Some(&L16_MONO),   // 11
+    Some(&QCELP),      // 12
+    Some(&CN),         // 13
+    Some(&MPA),        // 14
+    Some(&G728),       // 15
+    Some(&DVI4_11025), // 16
+    Some(&DVI4_22050), // 17
+    Some(&G729),       // 18
+    None,              // 19 - reserved
+    None,              // 20 - unassigned
+    None,              // 21 - unassigned
+    None,              // 22 - unassigned
+    None,              // 23 - unassigned
+    None,              // 24 - unassigned
+    Some(&CELB),       // 25
+    Some(&JPEG),       // 26
+    None,              // 27 - unassigned
+    Some(&NV),         // 28
+    None,              // 29 - unassigned
+    None,              // 30 - unassigned
+    Some(&H261),       // 31
+    Some(&MPV),        // 32
+    Some(&MP2T),       // 33
+    Some(&H263),       // 34
     // 35-71: unassigned (37 elements)
-    None, None, None, None, None, None, None, None, None, None,
-    None, None, None, None, None, None, None, None, None, None,
-    None, None, None, None, None, None, None, None, None, None,
-    None, None, None, None, None, None, None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
     // 72-76: reserved for RTCP conflict avoidance (5 elements)
-    None, None, None, None, None,
+    None,
+    None,
+    None,
+    None,
+    None,
     // 77-95: unassigned (19 elements)
-    None, None, None, None, None, None, None, None, None, None,
-    None, None, None, None, None, None, None, None, None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
     // 96-127: dynamic (32 elements)
-    None, None, None, None, None, None, None, None, None, None,
-    None, None, None, None, None, None, None, None, None, None,
-    None, None, None, None, None, None, None, None, None, None,
-    None, None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
 ];
 
 /// Returns static payload type information for a given payload type number.
@@ -414,8 +493,7 @@ pub fn get_payload_type_with_rate(encoding_name: &str, clock_rate: u32) -> Optio
         .enumerate()
         .find_map(|(pt, opt_info)| {
             opt_info.and_then(|info| {
-                if info.encoding_name.to_uppercase() == name_upper
-                    && info.clock_rate == clock_rate
+                if info.encoding_name.to_uppercase() == name_upper && info.clock_rate == clock_rate
                 {
                     Some(pt as u8)
                 } else {
@@ -548,14 +626,14 @@ mod tests {
     #[test]
     fn test_all_audio_codecs() {
         // Test all audio codecs are present
-        assert!(get_static_payload_type(0).is_some());  // PCMU
-        assert!(get_static_payload_type(3).is_some());  // GSM
-        assert!(get_static_payload_type(4).is_some());  // G723
-        assert!(get_static_payload_type(5).is_some());  // DVI4
-        assert!(get_static_payload_type(6).is_some());  // DVI4
-        assert!(get_static_payload_type(7).is_some());  // LPC
-        assert!(get_static_payload_type(8).is_some());  // PCMA
-        assert!(get_static_payload_type(9).is_some());  // G722
+        assert!(get_static_payload_type(0).is_some()); // PCMU
+        assert!(get_static_payload_type(3).is_some()); // GSM
+        assert!(get_static_payload_type(4).is_some()); // G723
+        assert!(get_static_payload_type(5).is_some()); // DVI4
+        assert!(get_static_payload_type(6).is_some()); // DVI4
+        assert!(get_static_payload_type(7).is_some()); // LPC
+        assert!(get_static_payload_type(8).is_some()); // PCMA
+        assert!(get_static_payload_type(9).is_some()); // G722
         assert!(get_static_payload_type(10).is_some()); // L16
         assert!(get_static_payload_type(11).is_some()); // L16
         assert!(get_static_payload_type(12).is_some()); // QCELP

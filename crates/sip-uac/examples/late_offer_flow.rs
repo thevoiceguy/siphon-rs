@@ -9,7 +9,6 @@
 /// - UAC doesn't know its media capabilities in advance
 /// - UAS wants to control the media negotiation
 /// - Certain gateway/interop scenarios
-
 use sip_core::SipUri;
 use sip_uac::UserAgentClient;
 
@@ -22,8 +21,8 @@ fn main() {
     let local_uri = SipUri::parse("sip:alice@example.com").expect("valid local URI");
     let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").expect("valid contact URI");
 
-    let uac = UserAgentClient::new(local_uri, contact_uri)
-        .with_display_name("Alice Smith".to_string());
+    let uac =
+        UserAgentClient::new(local_uri, contact_uri).with_display_name("Alice Smith".to_string());
 
     println!("Created UAC for Alice Smith <sip:alice@example.com>");
 

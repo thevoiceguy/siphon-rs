@@ -128,10 +128,10 @@ fn valid_branch_magic_cookie() {
 
 #[test]
 fn invalid_branch_patterns() {
-    assert!(!is_valid_branch("z9hG4b"));         // Too short
-    assert!(!is_valid_branch("branch123"));      // No magic cookie
-    assert!(!is_valid_branch(""));                // Empty
-    assert!(!is_valid_branch("Z9HG4BKabcdef"));   // Wrong case (if case sensitive)
+    assert!(!is_valid_branch("z9hG4b")); // Too short
+    assert!(!is_valid_branch("branch123")); // No magic cookie
+    assert!(!is_valid_branch("")); // Empty
+    assert!(!is_valid_branch("Z9HG4BKabcdef")); // Wrong case (if case sensitive)
 }
 
 #[test]

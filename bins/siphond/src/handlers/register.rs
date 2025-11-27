@@ -4,7 +4,6 @@
 /// 1. Optional authentication challenge (401 Unauthorized)
 /// 2. Binding management (add/remove/update contacts)
 /// 3. Response with registered contacts and expiry
-
 use anyhow::Result;
 use async_trait::async_trait;
 use sip_core::Request;

@@ -5,7 +5,6 @@
 /// 2. Create implicit subscription to "refer" event
 /// 3. Send 202 Accepted
 /// 4. (Future: Send NOTIFY with sipfrag progress)
-
 use anyhow::Result;
 use async_trait::async_trait;
 use sip_core::Request;
@@ -87,7 +86,10 @@ impl RequestHandler for ReferHandler {
         let dialog = services.dialog_mgr.find_by_request(request);
 
         if dialog.is_none() {
-            warn!(call_id, "REFER received outside of a dialog - rejecting with 481");
+            warn!(
+                call_id,
+                "REFER received outside of a dialog - rejecting with 481"
+            );
             let mut headers = sip_core::Headers::new();
             copy_headers(request, &mut headers);
             let response = sip_core::Response::new(
@@ -120,11 +122,7 @@ impl RequestHandler for ReferHandler {
 
         match result {
             Ok((response, refer_to_target)) => {
-                info!(
-                    call_id,
-                    refer_to = refer_to_target,
-                    "REFER accepted"
-                );
+                info!(call_id, refer_to = refer_to_target, "REFER accepted");
 
                 // Send 202 Accepted
                 handle.send_final(response).await;
@@ -141,7 +139,10 @@ impl RequestHandler for ReferHandler {
                 // - If blind: Send INVITE to refer_to target
                 // - Send NOTIFYs with message/sipfrag body as call progresses
 
-                info!(call_id, "REFER accepted - actual transfer not implemented yet");
+                info!(
+                    call_id,
+                    "REFER accepted - actual transfer not implemented yet"
+                );
             }
             Err(e) => {
                 warn!(call_id, error = %e, "Failed to accept REFER");

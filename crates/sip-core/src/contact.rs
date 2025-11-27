@@ -1,5 +1,5 @@
-use crate::name_addr::NameAddr;
 use crate::capabilities::CapabilitySet;
+use crate::name_addr::NameAddr;
 
 /// Parsed representation of a Contact header value.
 ///

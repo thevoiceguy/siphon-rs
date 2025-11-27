@@ -4,7 +4,6 @@
 /// - Allow header (supported methods)
 /// - Supported header (supported extensions)
 /// - Accept header (supported content types)
-
 use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -85,10 +84,16 @@ impl RequestHandler for OptionsHandler {
     ) -> Result<()> {
         // Extract required headers from request
         let via = header(&request.headers, "Via").cloned().unwrap_or_default();
-        let from = header(&request.headers, "From").cloned().unwrap_or_default();
+        let from = header(&request.headers, "From")
+            .cloned()
+            .unwrap_or_default();
         let mut to = header(&request.headers, "To").cloned().unwrap_or_default();
-        let call_id = header(&request.headers, "Call-ID").cloned().unwrap_or_default();
-        let cseq = header(&request.headers, "CSeq").cloned().unwrap_or_default();
+        let call_id = header(&request.headers, "Call-ID")
+            .cloned()
+            .unwrap_or_default();
+        let cseq = header(&request.headers, "CSeq")
+            .cloned()
+            .unwrap_or_default();
 
         // Clone for logging (will be moved into headers)
         let call_id_log = call_id.clone();
@@ -110,14 +115,16 @@ impl RequestHandler for OptionsHandler {
         // Add capability headers
         headers.push("Allow".into(), Self::build_allow_header(services));
         headers.push("Supported".into(), Self::build_supported_header(services));
-        headers.push("Accept".into(), SmolStr::new("application/sdp, application/sdp-answer".to_string()));
-        headers.push("User-Agent".into(), SmolStr::new(services.config.user_agent.clone()));
-
-        let response = Response::new(
-            StatusLine::new(200, "OK".into()),
-            headers,
-            Bytes::new(),
+        headers.push(
+            "Accept".into(),
+            SmolStr::new("application/sdp, application/sdp-answer".to_string()),
         );
+        headers.push(
+            "User-Agent".into(),
+            SmolStr::new(services.config.user_agent.clone()),
+        );
+
+        let response = Response::new(StatusLine::new(200, "OK".into()), headers, Bytes::new());
 
         info!(
             call_id = %call_id_log,

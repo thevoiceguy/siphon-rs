@@ -1,5 +1,4 @@
 /// Configuration and operational modes for siphond daemon.
-
 use std::path::PathBuf;
 
 /// Operational mode determines which SIP methods are handled and how.
@@ -201,19 +200,30 @@ impl Default for DaemonConfig {
 impl DaemonConfig {
     /// Check if authentication is required for this mode
     pub fn requires_auth(&self) -> bool {
-        self.features.authentication && matches!(self.mode, DaemonMode::Registrar | DaemonMode::Proxy | DaemonMode::B2bua | DaemonMode::FullUas)
+        self.features.authentication
+            && matches!(
+                self.mode,
+                DaemonMode::Registrar | DaemonMode::Proxy | DaemonMode::B2bua | DaemonMode::FullUas
+            )
     }
 
     /// Check if registrar should be enabled
     pub fn enable_registrar(&self) -> bool {
-        matches!(self.mode, DaemonMode::Registrar | DaemonMode::Proxy | DaemonMode::B2bua | DaemonMode::FullUas)
+        matches!(
+            self.mode,
+            DaemonMode::Registrar | DaemonMode::Proxy | DaemonMode::B2bua | DaemonMode::FullUas
+        )
     }
 
     /// Check if call handling should be enabled (as UAS)
     pub fn enable_calls(&self) -> bool {
         matches!(
             self.mode,
-            DaemonMode::FullUas | DaemonMode::CallServer | DaemonMode::Interactive | DaemonMode::Proxy | DaemonMode::B2bua
+            DaemonMode::FullUas
+                | DaemonMode::CallServer
+                | DaemonMode::Interactive
+                | DaemonMode::Proxy
+                | DaemonMode::B2bua
         )
     }
 

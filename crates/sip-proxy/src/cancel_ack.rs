@@ -58,7 +58,10 @@ impl CancelForwarder {
         let mut cancel = original_cancel.clone();
 
         // Update top Via header to match the branch of the INVITE sent to this target
-        debug!("Preparing CANCEL with branch {} for forwarding", target_branch);
+        debug!(
+            "Preparing CANCEL with branch {} for forwarding",
+            target_branch
+        );
         if let Some(via_header) = cancel
             .headers
             .iter_mut()
@@ -127,7 +130,11 @@ impl AckForwarder {
     /// to a simple heuristic (presence of Route headers implies 2xx ACK).
     pub fn ack_type(ack: &Request, is_for_2xx: Option<bool>) -> AckType {
         if let Some(is_2xx) = is_for_2xx {
-            return if is_2xx { AckType::For2xx } else { AckType::Non2xx };
+            return if is_2xx {
+                AckType::For2xx
+            } else {
+                AckType::Non2xx
+            };
         }
 
         // Heuristic: ACKs that carry Route headers are usually 2xx ACKs
@@ -164,10 +171,7 @@ impl AckForwarder {
 
             for header in ack.headers.clone().into_iter() {
                 if header.name.as_str().eq_ignore_ascii_case("Route") && !used_route {
-                    let uri_str = header
-                        .value
-                        .as_str()
-                        .trim_matches(|c| c == '<' || c == '>');
+                    let uri_str = header.value.as_str().trim_matches(|c| c == '<' || c == '>');
 
                     if let Some(uri) = SipUri::parse(uri_str) {
                         crate::ProxyHelpers::set_request_uri(&mut ack, uri);
@@ -228,9 +232,15 @@ impl RouteProcessor {
     /// into a Record-Route header, the proxy MUST:
     /// 1. Replace Request-URI with last Route header value
     /// 2. Remove that Route header
-    pub fn process_route_set(request: &mut Request, proxy_uris: &[SipUri]) -> Result<Option<SipUri>> {
+    pub fn process_route_set(
+        request: &mut Request,
+        proxy_uris: &[SipUri],
+    ) -> Result<Option<SipUri>> {
         // Check if Request-URI is one of our Record-Route URIs
-        let request_uri = request.start.uri.as_sip()
+        let request_uri = request
+            .start
+            .uri
+            .as_sip()
             .ok_or_else(|| anyhow!("Request-URI is not a SIP URI"))?;
 
         let is_our_uri = proxy_uris
@@ -250,9 +260,7 @@ impl RouteProcessor {
 
             if let Some(last_route) = route_values.last() {
                 // Extract URI from Route header (remove angle brackets)
-                let route_uri_str = last_route
-                    .as_str()
-                    .trim_matches(|c| c == '<' || c == '>');
+                let route_uri_str = last_route.as_str().trim_matches(|c| c == '<' || c == '>');
 
                 if let Some(route_uri) = SipUri::parse(route_uri_str) {
                     debug!("Moving Route header to Request-URI: {}", route_uri.as_str());
@@ -314,10 +322,16 @@ mod tests {
         headers.push("CSeq".into(), "1 CANCEL".into());
         headers.push("From".into(), "<sip:alice@example.com>;tag=abc".into());
         headers.push("To".into(), "<sip:bob@example.com>".into());
-        headers.push("Via".into(), "SIP/2.0/UDP proxy;branch=z9hG4bKtemplate".into());
+        headers.push(
+            "Via".into(),
+            "SIP/2.0/UDP proxy;branch=z9hG4bKtemplate".into(),
+        );
 
         Request::new(
-            RequestLine::new(Method::Cancel, SipUri::parse("sip:bob@example.com").unwrap()),
+            RequestLine::new(
+                Method::Cancel,
+                SipUri::parse("sip:bob@example.com").unwrap(),
+            ),
             headers,
             Bytes::new(),
         )
@@ -374,7 +388,8 @@ mod tests {
     #[test]
     fn detects_ack_with_sdp() {
         let mut ack = make_ack();
-        ack.headers.push("Content-Type".into(), "application/sdp".into());
+        ack.headers
+            .push("Content-Type".into(), "application/sdp".into());
         ack.body = Bytes::from("v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\n");
 
         assert!(AckForwarder::has_sdp(&ack));

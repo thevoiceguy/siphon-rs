@@ -1,5 +1,4 @@
 /// Request handler trait and method-specific handlers.
-
 use anyhow::Result;
 use async_trait::async_trait;
 use sip_core::Request;
@@ -10,8 +9,8 @@ use crate::services::ServiceRegistry;
 pub mod bye;
 pub mod invite;
 pub mod options;
-pub mod register;
 pub mod refer;
+pub mod register;
 pub mod subscribe;
 
 /// Trait for handling SIP request methods.

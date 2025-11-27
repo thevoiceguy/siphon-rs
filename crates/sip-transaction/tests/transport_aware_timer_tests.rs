@@ -278,7 +278,10 @@ fn server_invite_transaction_timers() {
     // Server INVITE transaction after sending non-2xx final response
 
     // Timer G: Retransmit final response
-    assert_eq!(udp.duration(TransactionTimer::G), Duration::from_millis(500));
+    assert_eq!(
+        udp.duration(TransactionTimer::G),
+        Duration::from_millis(500)
+    );
     assert_eq!(tcp.duration(TransactionTimer::G), Duration::ZERO);
 
     // Timer H: Wait for ACK

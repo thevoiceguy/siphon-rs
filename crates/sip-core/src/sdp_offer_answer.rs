@@ -143,7 +143,8 @@ impl CodecInfo {
 
     /// Check if this codec matches an RtpMap
     pub fn matches(&self, rtpmap: &RtpMap) -> bool {
-        self.name.eq_ignore_ascii_case(&rtpmap.encoding_name) && self.clock_rate == rtpmap.clock_rate
+        self.name.eq_ignore_ascii_case(&rtpmap.encoding_name)
+            && self.clock_rate == rtpmap.clock_rate
     }
 }
 
@@ -327,8 +328,8 @@ impl OfferAnswerEngine {
             bandwidth: Vec::new(),
             encryption_key: None,
             attributes,
-            mid: offer_media.mid.clone(),                         // Preserve mid from offer (RFC 3388)
-            rtcp: offer_media.rtcp.clone(),                       // Preserve rtcp from offer (RFC 3605)
+            mid: offer_media.mid.clone(), // Preserve mid from offer (RFC 3388)
+            rtcp: offer_media.rtcp.clone(), // Preserve rtcp from offer (RFC 3605)
             capability_set: offer_media.capability_set.clone(), // Preserve capabilities from offer (RFC 3407)
         })
     }
@@ -346,8 +347,8 @@ impl OfferAnswerEngine {
             bandwidth: Vec::new(),
             encryption_key: None,
             attributes: Vec::new(),
-            mid: offer_media.mid.clone(),                         // Preserve mid from offer (RFC 3388)
-            rtcp: None,                                           // No rtcp for rejected media
+            mid: offer_media.mid.clone(), // Preserve mid from offer (RFC 3388)
+            rtcp: None,                   // No rtcp for rejected media
             capability_set: offer_media.capability_set.clone(), // Preserve capabilities from offer (RFC 3407)
         }
     }
@@ -505,9 +506,9 @@ impl OfferAnswerEngine {
             };
 
             // Remove old direction attribute
-            media.attributes.retain(|attr| {
-                attr.value.is_some() || Direction::parse(&attr.name).is_none()
-            });
+            media
+                .attributes
+                .retain(|attr| attr.value.is_some() || Direction::parse(&attr.name).is_none());
 
             // Add new direction
             media.attributes.push(Attribute {
@@ -545,9 +546,9 @@ impl OfferAnswerEngine {
             };
 
             // Remove old direction attribute
-            media.attributes.retain(|attr| {
-                attr.value.is_some() || Direction::parse(&attr.name).is_none()
-            });
+            media
+                .attributes
+                .retain(|attr| attr.value.is_some() || Direction::parse(&attr.name).is_none());
 
             // Add new direction
             media.attributes.push(Attribute {
@@ -733,7 +734,9 @@ mod tests {
 
         let offer = SdpSession::parse(offer_sdp).unwrap();
         let engine = OfferAnswerEngine::new();
-        let answer = engine.generate_answer(&offer, AnswerOptions::default()).unwrap();
+        let answer = engine
+            .generate_answer(&offer, AnswerOptions::default())
+            .unwrap();
 
         assert_eq!(answer.media.len(), 1);
         assert_eq!(answer.media[0].media, "audio");
@@ -759,7 +762,7 @@ mod tests {
         options.audio_codecs = vec![
             CodecInfo::new("PCMU", 8000, Some(1)), // Common
             CodecInfo::new("PCMA", 8000, Some(1)), // Common
-                                                    // G729 not supported
+                                                   // G729 not supported
         ];
 
         let engine = OfferAnswerEngine::new();
@@ -807,7 +810,9 @@ mod tests {
 
         let offer = SdpSession::parse(offer_sdp).unwrap();
         let engine = OfferAnswerEngine::new();
-        let answer = engine.generate_answer(&offer, AnswerOptions::default()).unwrap();
+        let answer = engine
+            .generate_answer(&offer, AnswerOptions::default())
+            .unwrap();
 
         // Offer is sendonly, answer should be recvonly
         let answer_dir = engine.get_media_direction(&answer.media[0]);
@@ -870,7 +875,9 @@ mod tests {
 
         let offer = SdpSession::parse(offer_sdp).unwrap();
         let engine = OfferAnswerEngine::new();
-        let answer = engine.generate_answer(&offer, AnswerOptions::default()).unwrap();
+        let answer = engine
+            .generate_answer(&offer, AnswerOptions::default())
+            .unwrap();
 
         // Should still negotiate PCMU (0) and PCMA (8)
         assert_eq!(answer.media[0].fmt.len(), 2);
@@ -891,7 +898,9 @@ mod tests {
 
         let offer = SdpSession::parse(offer_sdp).unwrap();
         let engine = OfferAnswerEngine::new();
-        let answer = engine.generate_answer(&offer, AnswerOptions::default()).unwrap();
+        let answer = engine
+            .generate_answer(&offer, AnswerOptions::default())
+            .unwrap();
 
         // Check that fmtp is present in answer
         let has_fmtp = answer.media[0]
@@ -952,7 +961,9 @@ mod tests {
 
         let offer = SdpSession::parse(offer_sdp).unwrap();
         let engine = OfferAnswerEngine::new();
-        let answer = engine.generate_answer(&offer, AnswerOptions::default()).unwrap();
+        let answer = engine
+            .generate_answer(&offer, AnswerOptions::default())
+            .unwrap();
 
         let curr_statuses = answer.find_current_status(0);
         assert_eq!(curr_statuses.len(), 1);
@@ -978,7 +989,9 @@ mod tests {
 
         let offer = SdpSession::parse(offer_sdp).unwrap();
         let engine = OfferAnswerEngine::new();
-        let answer = engine.generate_answer(&offer, AnswerOptions::default()).unwrap();
+        let answer = engine
+            .generate_answer(&offer, AnswerOptions::default())
+            .unwrap();
 
         // E2E status type should remain E2E
         let curr_statuses = answer.find_current_status(0);
@@ -1027,7 +1040,9 @@ mod tests {
 
         let offer = SdpSession::parse(offer_sdp).unwrap();
         let engine = OfferAnswerEngine::new();
-        let answer = engine.generate_answer(&offer, AnswerOptions::default()).unwrap();
+        let answer = engine
+            .generate_answer(&offer, AnswerOptions::default())
+            .unwrap();
 
         let des_statuses = answer.find_desired_status(0);
         assert_eq!(des_statuses.len(), 1);
@@ -1062,14 +1077,20 @@ mod tests {
             .iter()
             .find(|c| c.status_type == StatusType::Local);
         assert!(local_status.is_some());
-        assert_eq!(local_status.unwrap().direction, PreconditionDirection::SendRecv);
+        assert_eq!(
+            local_status.unwrap().direction,
+            PreconditionDirection::SendRecv
+        );
 
         // Answer's remote (offer's local) should be set from qos_remote_status
         let remote_status = curr_statuses
             .iter()
             .find(|c| c.status_type == StatusType::Remote);
         assert!(remote_status.is_some());
-        assert_eq!(remote_status.unwrap().direction, PreconditionDirection::None);
+        assert_eq!(
+            remote_status.unwrap().direction,
+            PreconditionDirection::None
+        );
     }
 
     #[test]
@@ -1084,7 +1105,9 @@ mod tests {
 
         let offer = SdpSession::parse(offer_sdp).unwrap();
         let engine = OfferAnswerEngine::new();
-        let answer = engine.generate_answer(&offer, AnswerOptions::default()).unwrap();
+        let answer = engine
+            .generate_answer(&offer, AnswerOptions::default())
+            .unwrap();
 
         let conf_statuses = answer.find_confirm_status(0);
         assert_eq!(conf_statuses.len(), 1);
@@ -1104,7 +1127,9 @@ mod tests {
 
         let offer = SdpSession::parse(offer_sdp).unwrap();
         let engine = OfferAnswerEngine::new();
-        let answer = engine.generate_answer(&offer, AnswerOptions::default()).unwrap();
+        let answer = engine
+            .generate_answer(&offer, AnswerOptions::default())
+            .unwrap();
 
         // No preconditions should be added to answer
         let curr_statuses = answer.find_current_status(0);

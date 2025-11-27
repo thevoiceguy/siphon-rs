@@ -1,7 +1,6 @@
 /// siphond - SIP testing daemon with multiple operational modes
 ///
 /// A Swiss Army knife SIP server for testing and demonstration.
-
 use anyhow::Result;
 use clap::Parser;
 use std::sync::Arc;
@@ -51,6 +50,16 @@ struct Args {
     /// TLS private key path (PEM format)
     #[arg(long)]
     tls_key: Option<String>,
+
+    /// WebSocket bind address (RFC 7118)
+    #[cfg(feature = "ws")]
+    #[arg(long)]
+    ws_bind: Option<String>,
+
+    /// Secure WebSocket bind address (RFC 7118)
+    #[cfg(feature = "ws")]
+    #[arg(long)]
+    wss_bind: Option<String>,
 
     /// Local SIP URI (used in From/Contact headers)
     #[arg(long, default_value = "sip:siphond@localhost")]
@@ -181,6 +190,18 @@ async fn main() -> Result<()> {
         user_agent: args.user_agent,
     };
 
+    #[cfg(feature = "ws")]
+    info!(
+        mode = ?config.mode,
+        udp = %args.udp_bind,
+        tcp = %args.tcp_bind,
+        tls = %args.sips_bind,
+        ws = ?args.ws_bind,
+        wss = ?args.wss_bind,
+        "siphond starting"
+    );
+
+    #[cfg(not(feature = "ws"))]
     info!(
         mode = ?config.mode,
         udp = %args.udp_bind,
@@ -207,6 +228,10 @@ async fn main() -> Result<()> {
         &args.sips_bind,
         args.tls_cert.as_deref(),
         args.tls_key.as_deref(),
+        #[cfg(feature = "ws")]
+        args.ws_bind.as_deref(),
+        #[cfg(feature = "ws")]
+        args.wss_bind.as_deref(),
         tx.clone(),
     )
     .await?;
@@ -331,7 +356,8 @@ async fn handle_packet(
     packet: InboundPacket,
 ) {
     use sip_core::Method;
-    use sip_parse::{parse_request, parse_response};
+    use sip_parse::{header, parse_request, parse_response};
+    use sip_core::SipUri;
     use sip_transaction::{request_branch_id, TransactionKey, TransportContext};
 
     // Try parsing as a request
@@ -344,7 +370,10 @@ async fn handle_packet(
                     let incoming_call_id = call_id_header.to_string();
 
                     // Look up call leg by incoming Call-ID (caller's Call-ID)
-                    if let Some(call_leg) = services.b2bua_state.find_call_leg_by_incoming(&incoming_call_id) {
+                    if let Some(call_leg) = services
+                        .b2bua_state
+                        .find_call_leg_by_incoming(&incoming_call_id)
+                    {
                         tracing::info!(
                             incoming_call_id = %incoming_call_id,
                             outgoing_call_id = %call_leg.outgoing_call_id,
@@ -397,13 +426,36 @@ async fn handle_packet(
             return;
         }
 
+        let ws_override = if matches!(
+            packet.transport,
+            sip_transport::TransportKind::Ws | sip_transport::TransportKind::Wss
+        ) {
+            header(&req.headers, "Route").and_then(|route| {
+                let raw = route.trim_matches('<').trim_matches('>');
+                SipUri::parse(raw).map(|uri| {
+                    let scheme = if matches!(packet.transport, sip_transport::TransportKind::Wss) {
+                        "wss"
+                    } else {
+                        "ws"
+                    };
+                    let port = uri.port.unwrap_or(80);
+                    format!("{}://{}:{}", scheme, uri.host, port)
+                })
+            })
+        } else {
+            None
+        };
+
         let ctx = TransportContext::new(
             map_transport(packet.transport),
             packet.peer,
             packet.stream.clone(),
-        );
+        )
+        .with_ws_uri(ws_override);
 
-        let handle = transaction_mgr.receive_request(req.clone(), ctx.clone()).await;
+        let handle = transaction_mgr
+            .receive_request(req.clone(), ctx.clone())
+            .await;
 
         // Dispatch to appropriate handler
         let dispatcher = dispatcher.clone();
@@ -482,10 +534,7 @@ fn is_keepalive(payload: &[u8]) -> bool {
     // RFC 5626: Keep-alives are CRLF sequences
     // Single CRLF: 0x0D 0x0A (2 bytes)
     // Double CRLF: 0x0D 0x0A 0x0D 0x0A (4 bytes)
-    matches!(
-        payload,
-        b"\r\n" | b"\r\n\r\n"
-    )
+    matches!(payload, b"\r\n" | b"\r\n\r\n")
 }
 
 fn map_transport(kind: sip_transport::TransportKind) -> sip_transaction::TransportKind {
@@ -493,8 +542,10 @@ fn map_transport(kind: sip_transport::TransportKind) -> sip_transaction::Transpo
         sip_transport::TransportKind::Udp => sip_transaction::TransportKind::Udp,
         sip_transport::TransportKind::Tcp => sip_transaction::TransportKind::Tcp,
         sip_transport::TransportKind::Tls => sip_transaction::TransportKind::Tls,
-        sip_transport::TransportKind::Sctp => sip_transaction::TransportKind::Tcp,
-        sip_transport::TransportKind::TlsSctp => sip_transaction::TransportKind::Tls,
+        sip_transport::TransportKind::Sctp => sip_transaction::TransportKind::Sctp,
+        sip_transport::TransportKind::TlsSctp => sip_transaction::TransportKind::TlsSctp,
+        sip_transport::TransportKind::Ws => sip_transaction::TransportKind::Ws,
+        sip_transport::TransportKind::Wss => sip_transaction::TransportKind::Wss,
     }
 }
 
@@ -532,8 +583,22 @@ fn print_mode_info(config: &DaemonConfig) {
                     "Reject"
                 }
             );
-            info!("  ├─ REFER: {}", if config.features.enable_refer { "Enabled" } else { "Disabled" });
-            info!("  └─ PRACK: {}", if config.features.enable_prack { "Enabled" } else { "Disabled" });
+            info!(
+                "  ├─ REFER: {}",
+                if config.features.enable_refer {
+                    "Enabled"
+                } else {
+                    "Disabled"
+                }
+            );
+            info!(
+                "  └─ PRACK: {}",
+                if config.features.enable_prack {
+                    "Enabled"
+                } else {
+                    "Disabled"
+                }
+            );
         }
         Registrar => {
             info!("Mode: REGISTRAR - Registration server");

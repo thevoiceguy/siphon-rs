@@ -186,7 +186,12 @@ impl SessionTimerManager {
     ///
     /// This resets the timer with potentially updated session expiration.
     /// Call this when a session refresh is received (re-INVITE, UPDATE).
-    pub fn refresh_timer(&self, dialog_id: DialogId, session_expires: Duration, is_refresher: bool) {
+    pub fn refresh_timer(
+        &self,
+        dialog_id: DialogId,
+        session_expires: Duration,
+        is_refresher: bool,
+    ) {
         self.start_timer(dialog_id, session_expires, is_refresher);
     }
 
@@ -544,9 +549,21 @@ mod tests {
     async fn clear_removes_all_timers() {
         let manager = SessionTimerManager::new();
 
-        manager.start_timer(DialogId::new("call-1", "t1", "t2"), Duration::from_secs(100), true);
-        manager.start_timer(DialogId::new("call-2", "t3", "t4"), Duration::from_secs(100), true);
-        manager.start_timer(DialogId::new("call-3", "t5", "t6"), Duration::from_secs(100), true);
+        manager.start_timer(
+            DialogId::new("call-1", "t1", "t2"),
+            Duration::from_secs(100),
+            true,
+        );
+        manager.start_timer(
+            DialogId::new("call-2", "t3", "t4"),
+            Duration::from_secs(100),
+            true,
+        );
+        manager.start_timer(
+            DialogId::new("call-3", "t5", "t6"),
+            Duration::from_secs(100),
+            true,
+        );
 
         assert_eq!(manager.active_count(), 3);
 
@@ -567,12 +584,8 @@ mod tests {
 
     #[test]
     fn negotiate_rejects_below_local_min_se() {
-        let result = negotiate_session_expires(
-            Duration::from_secs(60),
-            Duration::from_secs(90),
-            None,
-            None,
-        );
+        let result =
+            negotiate_session_expires(Duration::from_secs(60), Duration::from_secs(90), None, None);
         assert_eq!(result, Err(Duration::from_secs(90)));
     }
 

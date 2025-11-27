@@ -94,15 +94,15 @@ pub struct Connection {
 /// Time description (t=) per RFC 4566 §5.9
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimeDescription {
-    pub start_time: u64,  // NTP timestamp or 0 for permanent
-    pub stop_time: u64,   // NTP timestamp or 0 for unbounded
+    pub start_time: u64, // NTP timestamp or 0 for permanent
+    pub stop_time: u64,  // NTP timestamp or 0 for unbounded
 }
 
 /// Bandwidth specification (b=) per RFC 4566 §5.8
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bandwidth {
-    pub bw_type: SmolStr,  // "CT", "AS", etc.
-    pub bandwidth: u32,    // in kilobits per second
+    pub bw_type: SmolStr, // "CT", "AS", etc.
+    pub bandwidth: u32,   // in kilobits per second
 }
 
 /// Media description (m=) per RFC 4566 §5.14
@@ -170,14 +170,14 @@ pub enum Protocol {
 /// Network type per RFC 4566
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NetType {
-    Internet,  // "IN"
+    Internet, // "IN"
 }
 
 /// Address type per RFC 4566
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AddrType {
-    IPv4,  // "IP4"
-    IPv6,  // "IP6"
+    IPv4, // "IP4"
+    IPv6, // "IP6"
 }
 
 /// SDP Attribute (a=) per RFC 4566 §5.13
@@ -323,7 +323,10 @@ impl MediaDescription {
 
         // Add attribute
         let attr_value = if let Some(params) = &rtpmap.encoding_params {
-            format!("{} {}/{}/{}", payload_type, encoding_name, clock_rate, params)
+            format!(
+                "{} {}/{}/{}",
+                payload_type, encoding_name, clock_rate, params
+            )
         } else {
             format!("{} {}/{}", payload_type, encoding_name, clock_rate)
         };

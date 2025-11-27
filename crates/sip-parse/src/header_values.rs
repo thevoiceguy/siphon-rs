@@ -23,9 +23,8 @@ pub fn parse_via_header(value: &SmolStr) -> Option<ViaHeader> {
     };
 
     let input = value.trim();
-    let transport_token = take_while1::<_, _, nom::error::Error<_>>(|c: char| {
-        c.is_ascii_alphanumeric() || c == '-'
-    });
+    let transport_token =
+        take_while1::<_, _, nom::error::Error<_>>(|c: char| c.is_ascii_alphanumeric() || c == '-');
     let mut parser = tuple((
         tag_no_case::<_, _, nom::error::Error<_>>("SIP/2.0/"),
         transport_token,

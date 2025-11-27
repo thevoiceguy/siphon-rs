@@ -12,7 +12,6 @@
 /// - Early media (SDP in 183 Session Progress)
 /// - QoS preconditions (ensuring media path before ringing)
 /// - Reliable progress indication
-
 use sip_core::SipUri;
 use sip_uac::UserAgentClient;
 
@@ -35,7 +34,10 @@ fn main() {
         .with_display_name("Alice Smith".to_string());
 
     let bob_uri = SipUri::parse("sip:bob@example.com").expect("valid Bob URI");
-    let invite_request = alice_uac.create_invite(&bob_uri, Some("v=0\r\no=- 123 456 IN IP4 192.168.1.100\r\n"));
+    let invite_request = alice_uac.create_invite(
+        &bob_uri,
+        Some("v=0\r\no=- 123 456 IN IP4 192.168.1.100\r\n"),
+    );
 
     println!("INVITE sip:bob@example.com SIP/2.0");
     println!("From: {}", invite_request.headers.get("From").unwrap());
@@ -69,13 +71,28 @@ fn main() {
     use smol_str::SmolStr;
 
     let mut ringing_headers = Headers::new();
-    ringing_headers.push(SmolStr::new("Via"), SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"));
-    ringing_headers.push(SmolStr::new("From"), invite_request.headers.get("From").unwrap().clone());
-    ringing_headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>;tag=bob-tag-123"));
-    ringing_headers.push(SmolStr::new("Call-ID"), invite_request.headers.get("Call-ID").unwrap().clone());
+    ringing_headers.push(
+        SmolStr::new("Via"),
+        SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
+    );
+    ringing_headers.push(
+        SmolStr::new("From"),
+        invite_request.headers.get("From").unwrap().clone(),
+    );
+    ringing_headers.push(
+        SmolStr::new("To"),
+        SmolStr::new("<sip:bob@example.com>;tag=bob-tag-123"),
+    );
+    ringing_headers.push(
+        SmolStr::new("Call-ID"),
+        invite_request.headers.get("Call-ID").unwrap().clone(),
+    );
     ringing_headers.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"));
     ringing_headers.push(SmolStr::new("RSeq"), SmolStr::new("1"));
-    ringing_headers.push(SmolStr::new("Contact"), SmolStr::new("<sip:bob@192.168.1.200:5060>"));
+    ringing_headers.push(
+        SmolStr::new("Contact"),
+        SmolStr::new("<sip:bob@192.168.1.200:5060>"),
+    );
     ringing_headers.push(SmolStr::new("Require"), SmolStr::new("100rel"));
 
     let ringing_response = Response::new(
@@ -85,7 +102,8 @@ fn main() {
     );
 
     // Alice creates early dialog from 180 response
-    let early_dialog = alice_uac.process_invite_response(&invite_request, &ringing_response)
+    let early_dialog = alice_uac
+        .process_invite_response(&invite_request, &ringing_response)
         .expect("early dialog");
 
     println!("Alice creates early dialog from 180 response");
@@ -94,7 +112,8 @@ fn main() {
 
     // Step 4: Alice sends PRACK
     println!("\n--- Step 4: Alice Sends PRACK ---");
-    let prack_request = alice_uac.create_prack(&invite_request, &ringing_response, &early_dialog)
+    let prack_request = alice_uac
+        .create_prack(&invite_request, &ringing_response, &early_dialog)
         .expect("PRACK request");
 
     println!("PRACK sip:bob@192.168.1.200:5060 SIP/2.0");

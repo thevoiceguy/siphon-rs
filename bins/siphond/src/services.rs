@@ -1,7 +1,6 @@
 /// Shared service registry for handlers.
 ///
 /// Provides access to dialog management, subscriptions, registrar, authentication, etc.
-
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
@@ -37,7 +36,9 @@ pub struct ServiceRegistry {
     pub b2bua_state: Arc<B2BUAStateManager>,
 
     /// Optional registrar for REGISTER handling
-    pub registrar: Option<Arc<BasicRegistrar<MemoryLocationStore, DigestAuthenticator<MemoryCredentialStore>>>>,
+    pub registrar: Option<
+        Arc<BasicRegistrar<MemoryLocationStore, DigestAuthenticator<MemoryCredentialStore>>>,
+    >,
 
     /// Transaction manager for sending requests (set after initialization)
     pub transaction_mgr: OnceLock<Arc<TransactionManager>>,
@@ -94,18 +95,21 @@ impl ServiceRegistry {
                     }
                 }
 
-                Some(DigestAuthenticator::new(
-                    &config.auth.realm,
-                    cred_store,
-                ))
+                Some(DigestAuthenticator::new(&config.auth.realm, cred_store))
             } else {
                 None
             };
 
             let reg = BasicRegistrar::new(store, authenticator)
-                .with_default_expires(std::time::Duration::from_secs(config.registrar.default_expiry as u64))
-                .with_min_expires(std::time::Duration::from_secs(config.registrar.min_expiry as u64))
-                .with_max_expires(std::time::Duration::from_secs(config.registrar.max_expiry as u64));
+                .with_default_expires(std::time::Duration::from_secs(
+                    config.registrar.default_expiry as u64,
+                ))
+                .with_min_expires(std::time::Duration::from_secs(
+                    config.registrar.min_expiry as u64,
+                ))
+                .with_max_expires(std::time::Duration::from_secs(
+                    config.registrar.max_expiry as u64,
+                ));
 
             Some(Arc::new(reg))
         } else {
@@ -125,7 +129,10 @@ impl ServiceRegistry {
     }
 
     /// Set the transaction manager (can only be called once)
-    pub fn set_transaction_manager(&self, mgr: Arc<TransactionManager>) -> Result<(), Arc<TransactionManager>> {
+    pub fn set_transaction_manager(
+        &self,
+        mgr: Arc<TransactionManager>,
+    ) -> Result<(), Arc<TransactionManager>> {
         self.transaction_mgr.set(mgr)
     }
 

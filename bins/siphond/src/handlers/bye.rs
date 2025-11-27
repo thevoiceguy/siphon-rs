@@ -5,7 +5,6 @@
 /// 2. Update dialog state to Terminated
 /// 3. Send 200 OK
 /// 4. Clean up dialog from manager
-
 use anyhow::Result;
 use async_trait::async_trait;
 use sip_core::Request;
@@ -57,23 +56,27 @@ impl ByeHandler {
 
                 // Create BYE for caller
                 // Extract caller's contact from original INVITE
-                let caller_contact = if let Some(contact_header) = header(&leg.caller_request.headers, "Contact") {
-                    // Parse contact URI from Contact header (may have angle brackets)
-                    let contact_str = contact_header.as_str();
-                    if let Some(start) = contact_str.find('<') {
-                        if let Some(end) = contact_str.find('>') {
-                            &contact_str[start + 1..end]
+                let caller_contact =
+                    if let Some(contact_header) = header(&leg.caller_request.headers, "Contact") {
+                        // Parse contact URI from Contact header (may have angle brackets)
+                        let contact_str = contact_header.as_str();
+                        if let Some(start) = contact_str.find('<') {
+                            if let Some(end) = contact_str.find('>') {
+                                &contact_str[start + 1..end]
+                            } else {
+                                contact_str
+                            }
                         } else {
                             contact_str
                         }
                     } else {
-                        contact_str
-                    }
-                } else {
-                    warn!(call_id, "B2BUA: No Contact header in caller's INVITE, cannot send BYE");
-                    services.b2bua_state.remove_call_leg(&leg.outgoing_call_id);
-                    return Ok(());
-                };
+                        warn!(
+                            call_id,
+                            "B2BUA: No Contact header in caller's INVITE, cannot send BYE"
+                        );
+                        services.b2bua_state.remove_call_leg(&leg.outgoing_call_id);
+                        return Ok(());
+                    };
 
                 // Parse caller's contact URI
                 let caller_contact_uri = match sip_core::Uri::parse(caller_contact) {
@@ -112,11 +115,15 @@ impl ByeHandler {
                 // This is the remote side from Bob's perspective
                 if let Some(to_tag) = &leg.callee_to_tag {
                     if let Some(to) = leg.caller_request.headers.get("To") {
-                        let from_with_tag = format!("{};tag={}", to.as_str().trim_end_matches(';'), to_tag);
+                        let from_with_tag =
+                            format!("{};tag={}", to.as_str().trim_end_matches(';'), to_tag);
                         bye_headers_base.push(SmolStr::new("From"), SmolStr::new(from_with_tag));
                     }
                 } else {
-                    warn!(call_id, "B2BUA: No callee to-tag stored, BYE may be rejected");
+                    warn!(
+                        call_id,
+                        "B2BUA: No callee to-tag stored, BYE may be rejected"
+                    );
                     if let Some(to) = leg.caller_request.headers.get("To") {
                         bye_headers_base.push(SmolStr::new("From"), to.clone());
                     }
@@ -129,10 +136,7 @@ impl ByeHandler {
                 }
 
                 // Call-ID - incoming call leg
-                bye_headers_base.push(
-                    SmolStr::new("Call-ID"),
-                    SmolStr::new(&leg.incoming_call_id),
-                );
+                bye_headers_base.push(SmolStr::new("Call-ID"), SmolStr::new(&leg.incoming_call_id));
 
                 // CSeq - increment from caller's INVITE CSeq
                 if let Some(cseq) = leg.caller_request.headers.get("CSeq") {
@@ -167,7 +171,11 @@ impl ByeHandler {
                     // Try UDP first - create headers with UDP Via
                     let via_udp = format!(
                         "SIP/2.0/UDP {};branch={}",
-                        services.config.local_uri.as_str().trim_start_matches("sip:"),
+                        services
+                            .config
+                            .local_uri
+                            .as_str()
+                            .trim_start_matches("sip:"),
                         branch
                     );
                     let mut bye_headers_udp = Headers::new();
@@ -195,7 +203,9 @@ impl ByeHandler {
                     // Create temporary UDP socket for sending
                     match tokio::net::UdpSocket::bind("0.0.0.0:0").await {
                         Ok(udp_socket) => {
-                            if let Err(e) = sip_transport::send_udp(&udp_socket, &addr, &payload).await {
+                            if let Err(e) =
+                                sip_transport::send_udp(&udp_socket, &addr, &payload).await
+                            {
                                 warn!(
                                     error = %e,
                                     caller = %caller_addr,
@@ -205,7 +215,11 @@ impl ByeHandler {
                                 // Fallback to TCP if UDP fails - create BYE with TCP Via
                                 let via_tcp = format!(
                                     "SIP/2.0/TCP {};branch={}",
-                                    services.config.local_uri.as_str().trim_start_matches("sip:"),
+                                    services
+                                        .config
+                                        .local_uri
+                                        .as_str()
+                                        .trim_start_matches("sip:"),
                                     generate_branch_id()
                                 );
                                 let mut bye_headers_tcp = Headers::new();
@@ -251,7 +265,11 @@ impl ByeHandler {
                             // Fallback to TCP if we can't create UDP socket - create BYE with TCP Via
                             let via_tcp = format!(
                                 "SIP/2.0/TCP {};branch={}",
-                                services.config.local_uri.as_str().trim_start_matches("sip:"),
+                                services
+                                    .config
+                                    .local_uri
+                                    .as_str()
+                                    .trim_start_matches("sip:"),
                                 generate_branch_id()
                             );
                             let mut bye_headers_tcp = Headers::new();
@@ -395,7 +413,9 @@ impl ByeHandler {
         }
 
         // Clean up call leg
-        services.b2bua_state.remove_call_leg(&call_leg.outgoing_call_id);
+        services
+            .b2bua_state
+            .remove_call_leg(&call_leg.outgoing_call_id);
         info!(call_id, "B2BUA: Call leg removed, BYE bridging complete");
 
         Ok(())
@@ -417,7 +437,9 @@ impl RequestHandler for ByeHandler {
 
         // B2BUA MODE: Bridge BYE to the other call leg
         if services.config.enable_b2bua() {
-            return self.handle_b2bua_bye(request, handle, services, call_id).await;
+            return self
+                .handle_b2bua_bye(request, handle, services, call_id)
+                .await;
         }
 
         // UAS MODE: Normal BYE handling
@@ -445,10 +467,7 @@ impl RequestHandler for ByeHandler {
                 handle.send_final(response).await;
             }
             None => {
-                warn!(
-                    call_id,
-                    "BYE received for unknown dialog"
-                );
+                warn!(call_id, "BYE received for unknown dialog");
 
                 // Send 481 Call/Transaction Does Not Exist
                 let mut headers = sip_core::Headers::new();

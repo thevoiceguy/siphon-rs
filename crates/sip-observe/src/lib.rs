@@ -7,6 +7,9 @@ pub trait TransportMetrics: Send + Sync + 'static {
     fn on_packet_received(&self, transport: &str);
     fn on_packet_sent(&self, transport: &str);
     fn on_error(&self, transport: &str, stage: &str);
+    fn on_accept(&self, transport: &str);
+    fn on_connect(&self, transport: &str);
+    fn on_latency(&self, transport: &str, op: &str, nanos: u64);
 }
 
 #[derive(Debug, Default)]
@@ -16,6 +19,9 @@ impl TransportMetrics for NoopTransportMetrics {
     fn on_packet_received(&self, _transport: &str) {}
     fn on_packet_sent(&self, _transport: &str) {}
     fn on_error(&self, _transport: &str, _stage: &str) {}
+    fn on_accept(&self, _transport: &str) {}
+    fn on_connect(&self, _transport: &str) {}
+    fn on_latency(&self, _transport: &str, _op: &str, _nanos: u64) {}
 }
 
 static TRANSPORT_METRICS: OnceCell<Arc<dyn TransportMetrics>> = OnceCell::new();
@@ -53,5 +59,17 @@ impl TransportMetrics for TracingTransportMetrics {
 
     fn on_error(&self, transport: &str, stage: &str) {
         tracing::warn!(transport, stage, "transport error");
+    }
+
+    fn on_accept(&self, transport: &str) {
+        tracing::debug!(transport, "accept");
+    }
+
+    fn on_connect(&self, transport: &str) {
+        tracing::debug!(transport, "connect");
+    }
+
+    fn on_latency(&self, transport: &str, op: &str, nanos: u64) {
+        tracing::debug!(transport, op, nanos, "latency");
     }
 }

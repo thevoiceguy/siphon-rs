@@ -374,14 +374,11 @@ impl SipResolver {
         let mut priority_groups: BTreeMap<u16, Vec<(u16, SmolStr, u16)>> = BTreeMap::new();
         for rec in lookup.iter() {
             let target = rec.target().to_utf8();
-            priority_groups
-                .entry(rec.priority())
-                .or_default()
-                .push((
-                    rec.weight(),
-                    SmolStr::new(target.trim_end_matches('.').to_owned()),
-                    rec.port(),
-                ));
+            priority_groups.entry(rec.priority()).or_default().push((
+                rec.weight(),
+                SmolStr::new(target.trim_end_matches('.').to_owned()),
+                rec.port(),
+            ));
         }
 
         // Process priority groups in order
@@ -1080,8 +1077,12 @@ mod tests {
         }
 
         // "high" should be selected much more often than "low"
-        let high_count = selections.get(&SmolStr::new("high".to_owned())).unwrap_or(&0);
-        let low_count = selections.get(&SmolStr::new("low".to_owned())).unwrap_or(&0);
+        let high_count = selections
+            .get(&SmolStr::new("high".to_owned()))
+            .unwrap_or(&0);
+        let low_count = selections
+            .get(&SmolStr::new("low".to_owned()))
+            .unwrap_or(&0);
         assert!(*high_count > *low_count * 50); // Should be ~100x more
     }
 
@@ -1193,8 +1194,8 @@ mod tests {
     #[test]
     fn parse_dhcp_option_150_eight_addresses() {
         let data = vec![
-            192, 168, 1, 1, 192, 168, 1, 2, 192, 168, 1, 3, 192, 168, 1, 4, 10, 0, 0, 1, 10, 0,
-            0, 2, 172, 16, 0, 1, 172, 16, 0, 2,
+            192, 168, 1, 1, 192, 168, 1, 2, 192, 168, 1, 3, 192, 168, 1, 4, 10, 0, 0, 1, 10, 0, 0,
+            2, 172, 16, 0, 1, 172, 16, 0, 2,
         ];
         let servers = parse_dhcp_option_150(&data).unwrap();
         assert_eq!(servers.len(), 8);
@@ -1219,9 +1220,7 @@ mod tests {
         let provider = StaticDhcpProvider::empty().with_tftp_addresses(addresses.clone());
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let tftp_addrs = rt
-            .block_on(provider.query_tftp_server_addresses())
-            .unwrap();
+        let tftp_addrs = rt.block_on(provider.query_tftp_server_addresses()).unwrap();
 
         assert!(tftp_addrs.is_some());
         let addrs = tftp_addrs.unwrap();
@@ -1232,11 +1231,10 @@ mod tests {
 
     #[test]
     fn static_dhcp_provider_with_all_options() {
-        let provider = StaticDhcpProvider::new(vec![DhcpSipServer::Ipv4(
-            "192.168.1.100".parse().unwrap(),
-        )])
-        .with_tftp_name(TftpServerName(SmolStr::new("tftp.example.com".to_owned())))
-        .with_tftp_addresses(vec!["10.0.0.1".parse().unwrap()]);
+        let provider =
+            StaticDhcpProvider::new(vec![DhcpSipServer::Ipv4("192.168.1.100".parse().unwrap())])
+                .with_tftp_name(TftpServerName(SmolStr::new("tftp.example.com".to_owned())))
+                .with_tftp_addresses(vec!["10.0.0.1".parse().unwrap()]);
 
         let rt = tokio::runtime::Runtime::new().unwrap();
 
@@ -1246,9 +1244,7 @@ mod tests {
         let tftp_name = rt.block_on(provider.query_tftp_server_name()).unwrap();
         assert!(tftp_name.is_some());
 
-        let tftp_addrs = rt
-            .block_on(provider.query_tftp_server_addresses())
-            .unwrap();
+        let tftp_addrs = rt.block_on(provider.query_tftp_server_addresses()).unwrap();
         assert!(tftp_addrs.is_some());
     }
 
@@ -1374,9 +1370,8 @@ mod tests {
 
     #[test]
     fn dhcp_resolver_with_ipv4() {
-        let dhcp = StaticDhcpProvider::new(vec![DhcpSipServer::Ipv4(
-            "192.168.1.100".parse().unwrap(),
-        )]);
+        let dhcp =
+            StaticDhcpProvider::new(vec![DhcpSipServer::Ipv4("192.168.1.100".parse().unwrap())]);
         let dns = StaticResolver::single("fallback.example.com", 5060, Transport::Udp);
         let resolver = DhcpResolver::new(dhcp, dns);
 
@@ -1422,9 +1417,8 @@ mod tests {
 
     #[test]
     fn hybrid_resolver_uses_dhcp_when_available() {
-        let dhcp = StaticDhcpProvider::new(vec![DhcpSipServer::Ipv4(
-            "192.168.1.100".parse().unwrap(),
-        )]);
+        let dhcp =
+            StaticDhcpProvider::new(vec![DhcpSipServer::Ipv4("192.168.1.100".parse().unwrap())]);
         let dns = StaticResolver::single("dns-fallback.example.com", 5060, Transport::Udp);
         let resolver = HybridResolver::new(dhcp, dns);
 
@@ -1475,8 +1469,12 @@ mod tests {
         assert_eq!(targets.len(), 3);
         assert_eq!(targets[0].host.as_str(), "192.168.1.100");
         // Remaining targets come from DNS resolution
-        assert!(targets.iter().any(|t| t.host.as_str() == "dhcp.example.com"));
-        assert!(targets.iter().any(|t| t.host.as_str() == "dns-fallback.example.com"));
+        assert!(targets
+            .iter()
+            .any(|t| t.host.as_str() == "dhcp.example.com"));
+        assert!(targets
+            .iter()
+            .any(|t| t.host.as_str() == "dns-fallback.example.com"));
     }
 
     #[test]

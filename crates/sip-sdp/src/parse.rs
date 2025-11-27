@@ -45,7 +45,8 @@ impl std::error::Error for ParseError {}
 /// Parses a complete SDP session description
 pub fn parse_sdp(input: &str) -> Result<SessionDescription, ParseError> {
     // Parse all lines into a structured format first
-    let (remaining, lines) = parse_sdp_lines(input).map_err(|e| ParseError::ParseFailed(e.to_string()))?;
+    let (remaining, lines) =
+        parse_sdp_lines(input).map_err(|e| ParseError::ParseFailed(e.to_string()))?;
 
     // Check if there's unparsed input (should be empty or just whitespace)
     if !remaining.trim().is_empty() {
@@ -328,9 +329,10 @@ fn parse_protocol(input: &str) -> IResult<&str, Protocol> {
         map(tag("RTP/SAVP"), |_| Protocol::RtpSavp),
         map(tag("UDP"), |_| Protocol::Udp),
         map(tag("TCP"), |_| Protocol::Tcp),
-        map(take_till(|c| c == ' ' || c == '\r' || c == '\n'), |s: &str| {
-            Protocol::Other(SmolStr::new(s))
-        }),
+        map(
+            take_till(|c| c == ' ' || c == '\r' || c == '\n'),
+            |s: &str| Protocol::Other(SmolStr::new(s)),
+        ),
     ))(input)
 }
 
@@ -483,9 +485,7 @@ fn parse_rtpmap(value: &str) -> Option<RtpMap> {
 
     let encoding_name = SmolStr::new(encoding_parts[0]);
     let clock_rate = encoding_parts[1].parse::<u32>().ok()?;
-    let encoding_params = encoding_parts
-        .get(2)
-        .map(|s| SmolStr::new(*s));
+    let encoding_params = encoding_parts.get(2).map(|s| SmolStr::new(*s));
 
     Some(RtpMap {
         payload_type,
@@ -560,9 +560,15 @@ mod tests {
 
         let result = parse_sdp(sdp).unwrap();
 
-        assert_eq!(result.session_info.as_ref().unwrap().as_str(), "Test session with all fields");
+        assert_eq!(
+            result.session_info.as_ref().unwrap().as_str(),
+            "Test session with all fields"
+        );
         assert_eq!(result.uri.as_ref().unwrap().as_str(), "http://example.com");
-        assert_eq!(result.email.as_ref().unwrap().as_str(), "charlie@example.com");
+        assert_eq!(
+            result.email.as_ref().unwrap().as_str(),
+            "charlie@example.com"
+        );
         assert_eq!(result.phone.as_ref().unwrap().as_str(), "+1-555-1234");
         assert_eq!(result.bandwidth.len(), 1);
         assert_eq!(result.bandwidth[0].bw_type.as_str(), "AS");

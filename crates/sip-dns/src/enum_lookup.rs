@@ -335,14 +335,8 @@ mod tests {
 
     #[test]
     fn creates_naptr_record() {
-        let record = EnumNaptrRecord::new(
-            100,
-            10,
-            "u",
-            "E2U+sip",
-            "!^.*$!sip:user@example.com!",
-            "",
-        );
+        let record =
+            EnumNaptrRecord::new(100, 10, "u", "E2U+sip", "!^.*$!sip:user@example.com!", "");
 
         assert_eq!(record.order, 100);
         assert_eq!(record.preference, 10);
@@ -352,28 +346,22 @@ mod tests {
 
     #[test]
     fn extracts_uri_from_regexp() {
-        let record = EnumNaptrRecord::new(
-            100,
-            10,
-            "u",
-            "E2U+sip",
-            "!^.*$!sip:user@example.com!",
-            "",
-        );
+        let record =
+            EnumNaptrRecord::new(100, 10, "u", "E2U+sip", "!^.*$!sip:user@example.com!", "");
 
-        assert_eq!(record.extract_uri(), Some("sip:user@example.com".to_string()));
+        assert_eq!(
+            record.extract_uri(),
+            Some("sip:user@example.com".to_string())
+        );
 
         // Different delimiter
-        let record2 = EnumNaptrRecord::new(
-            100,
-            10,
-            "u",
-            "E2U+sip",
-            "|^.*$|sip:bob@example.net|",
-            "",
-        );
+        let record2 =
+            EnumNaptrRecord::new(100, 10, "u", "E2U+sip", "|^.*$|sip:bob@example.net|", "");
 
-        assert_eq!(record2.extract_uri(), Some("sip:bob@example.net".to_string()));
+        assert_eq!(
+            record2.extract_uri(),
+            Some("sip:bob@example.net".to_string())
+        );
     }
 
     #[test]
@@ -389,19 +377,16 @@ mod tests {
         );
 
         // The extract_uri just returns the template, not the substituted value
-        assert_eq!(record.extract_uri(), Some("sip:\\1@example.com".to_string()));
+        assert_eq!(
+            record.extract_uri(),
+            Some("sip:\\1@example.com".to_string())
+        );
     }
 
     #[test]
     fn identifies_sip_service() {
-        let sip_record = EnumNaptrRecord::new(
-            100,
-            10,
-            "u",
-            "E2U+sip",
-            "!^.*$!sip:user@example.com!",
-            "",
-        );
+        let sip_record =
+            EnumNaptrRecord::new(100, 10, "u", "E2U+sip", "!^.*$!sip:user@example.com!", "");
 
         assert!(sip_record.is_sip_service());
 
@@ -462,7 +447,14 @@ mod tests {
     fn filters_sip_records() {
         let records = vec![
             EnumNaptrRecord::new(100, 10, "u", "E2U+sip", "!^.*$!sip:user@example.com!", ""),
-            EnumNaptrRecord::new(100, 20, "u", "E2U+mailto", "!^.*$!mailto:info@example.com!", ""),
+            EnumNaptrRecord::new(
+                100,
+                20,
+                "u",
+                "E2U+mailto",
+                "!^.*$!mailto:info@example.com!",
+                "",
+            ),
             EnumNaptrRecord::new(100, 30, "u", "E2U+sip", "!^.*$!sip:bob@example.com!", ""),
             EnumNaptrRecord::new(100, 40, "u", "E2U+h323", "!^.*$!h323:user@example.com!", ""),
         ];
@@ -478,7 +470,14 @@ mod tests {
     fn selects_best_sip_record() {
         let records = vec![
             EnumNaptrRecord::new(100, 30, "u", "E2U+sip", "!^.*$!sip:c@example.com!", ""),
-            EnumNaptrRecord::new(100, 20, "u", "E2U+mailto", "!^.*$!mailto:info@example.com!", ""),
+            EnumNaptrRecord::new(
+                100,
+                20,
+                "u",
+                "E2U+mailto",
+                "!^.*$!mailto:info@example.com!",
+                "",
+            ),
             EnumNaptrRecord::new(100, 10, "u", "E2U+sip", "!^.*$!sip:best@example.com!", ""),
         ];
 
@@ -491,7 +490,14 @@ mod tests {
     #[test]
     fn selects_best_with_no_sip_records() {
         let records = vec![
-            EnumNaptrRecord::new(100, 10, "u", "E2U+mailto", "!^.*$!mailto:a@example.com!", ""),
+            EnumNaptrRecord::new(
+                100,
+                10,
+                "u",
+                "E2U+mailto",
+                "!^.*$!mailto:a@example.com!",
+                "",
+            ),
             EnumNaptrRecord::new(100, 20, "u", "E2U+h323", "!^.*$!h323:b@example.com!", ""),
         ];
 

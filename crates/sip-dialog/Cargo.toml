@@ -9,7 +9,9 @@ sip-core = { path = "../sip-core" }
 dashmap = { workspace = true }
 sip-parse = { path = "../sip-parse" }
 smol_str = { workspace = true }
+parking_lot = { workspace = true }
 bytes = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
+async-trait = "0.1"

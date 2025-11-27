@@ -15,7 +15,15 @@ rustls-pemfile = { version = "2", optional = true }
 sip-observe = { path = "../sip-observe" }
 memchr = "2.7"
 dashmap = { workspace = true }
+tokio-tungstenite = { version = "0.21", optional = true }
+futures-util = { version = "0.3", optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+bytes = { workspace = true }
+tokio-tungstenite = { version = "0.21" }
 
 [features]
 default = []
 tls = ["tokio-rustls", "rustls", "rustls-pemfile"]
+ws = ["tokio-tungstenite", "futures-util"]

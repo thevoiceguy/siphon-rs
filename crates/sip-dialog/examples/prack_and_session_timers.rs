@@ -10,14 +10,14 @@
 //! cargo run --example prack_and_session_timers
 //! ```
 
-use sip_core::{Headers, Method, Request, RequestLine, Response, StatusLine, SipUri};
-use sip_dialog::prack_validator::{PrackValidator, RAck, is_reliable_provisional};
+use bytes::Bytes;
+use sip_core::{Headers, Method, Request, RequestLine, Response, SipUri, StatusLine};
+use sip_dialog::prack_validator::{is_reliable_provisional, PrackValidator, RAck};
 use sip_dialog::session_timer_manager::{
-    SessionTimerManager, SessionTimerEvent, negotiate_session_expires,
-    determine_refresher_role, MIN_SESSION_EXPIRES,
+    determine_refresher_role, negotiate_session_expires, SessionTimerEvent, SessionTimerManager,
+    MIN_SESSION_EXPIRES,
 };
 use sip_dialog::DialogId;
-use bytes::Bytes;
 use smol_str::SmolStr;
 use std::time::Duration;
 
@@ -51,10 +51,10 @@ async fn demonstrate_prack_flow() {
     // Register the reliable provisional
     validator.register_reliable_provisional(
         dialog_id,
-        1,      // RSeq
-        100,    // CSeq
+        1,   // RSeq
+        100, // CSeq
         Method::Invite,
-        180,    // Response code
+        180, // Response code
     );
 
     println!("✓ Registered reliable provisional (RSeq=1)\n");
@@ -67,7 +67,10 @@ async fn demonstrate_prack_flow() {
         method: Method::Invite,
     };
     println!("│ PRACK sip:callee@192.168.1.100                            │");
-    println!("│ RAck: {} {} {:?}                                        │", rack.rseq, rack.cseq, rack.method);
+    println!(
+        "│ RAck: {} {} {:?}                                        │",
+        rack.rseq, rack.cseq, rack.method
+    );
     println!("│ CSeq: 101 PRACK                                           │");
     println!("└───────────────────────────────────────────────────────────┘\n");
 
@@ -75,19 +78,16 @@ async fn demonstrate_prack_flow() {
     let mut prack_headers = Headers::new();
     prack_headers.push(
         SmolStr::new("Call-ID"),
-        SmolStr::new("call-abc123".to_owned())
+        SmolStr::new("call-abc123".to_owned()),
     );
-    prack_headers.push(
-        SmolStr::new("CSeq"),
-        SmolStr::new("101 PRACK".to_owned())
-    );
-    prack_headers.push(
-        SmolStr::new("RAck"),
-        SmolStr::new(rack.to_string())
-    );
+    prack_headers.push(SmolStr::new("CSeq"), SmolStr::new("101 PRACK".to_owned()));
+    prack_headers.push(SmolStr::new("RAck"), SmolStr::new(rack.to_string()));
 
     let prack = Request::new(
-        RequestLine::new(Method::Prack, SipUri::parse("sip:callee@192.168.1.100").unwrap()),
+        RequestLine::new(
+            Method::Prack,
+            SipUri::parse("sip:callee@192.168.1.100").unwrap(),
+        ),
         prack_headers,
         Bytes::new(),
     );
@@ -97,13 +97,25 @@ async fn demonstrate_prack_flow() {
     match validator.validate_prack(dialog_id, &prack) {
         Ok(validated_rack) => {
             println!("│ ✓ PRACK is valid                                          │");
-            println!("│   RSeq matches: {}                                          │", validated_rack.rseq);
-            println!("│   CSeq matches: {}                                        │", validated_rack.cseq);
-            println!("│   Method matches: {:?}                                   │", validated_rack.method);
+            println!(
+                "│   RSeq matches: {}                                          │",
+                validated_rack.rseq
+            );
+            println!(
+                "│   CSeq matches: {}                                        │",
+                validated_rack.cseq
+            );
+            println!(
+                "│   Method matches: {:?}                                   │",
+                validated_rack.method
+            );
             println!("└───────────────────────────────────────────────────────────┘\n");
         }
         Err(e) => {
-            println!("│ ✗ PRACK validation failed: {}                             │", e);
+            println!(
+                "│ ✗ PRACK validation failed: {}                             │",
+                e
+            );
             println!("└───────────────────────────────────────────────────────────┘\n");
         }
     }
@@ -149,9 +161,18 @@ async fn demonstrate_prack_flow() {
         Bytes::new(),
     );
 
-    println!("│ 180 Ringing with RSeq: {}                              │", is_reliable_provisional(&response_180));
-    println!("│ 100 Trying with RSeq: {}                               │", is_reliable_provisional(&response_100));
-    println!("│ 200 OK with RSeq: {}                                   │", is_reliable_provisional(&response_200));
+    println!(
+        "│ 180 Ringing with RSeq: {}                              │",
+        is_reliable_provisional(&response_180)
+    );
+    println!(
+        "│ 100 Trying with RSeq: {}                               │",
+        is_reliable_provisional(&response_100)
+    );
+    println!(
+        "│ 200 OK with RSeq: {}                                   │",
+        is_reliable_provisional(&response_200)
+    );
     println!("│                                                           │");
     println!("│ Note: 100 Trying is NEVER reliable per RFC 3262 §3       │");
     println!("└───────────────────────────────────────────────────────────┘\n");
@@ -169,23 +190,29 @@ fn demonstrate_session_timer_negotiation() {
     println!("└───────────────────────────────────────────────────────────┘\n");
 
     let result = negotiate_session_expires(
-        Duration::from_secs(1800),  // Requested
-        Duration::from_secs(90),    // Local Min-SE
+        Duration::from_secs(1800),     // Requested
+        Duration::from_secs(90),       // Local Min-SE
         Some(Duration::from_secs(90)), // Remote Min-SE
-        None,                       // No preference
+        None,                          // No preference
     );
 
     println!("┌─ UAS Response ────────────────────────────────────────────┐");
     match result {
         Ok(negotiated) => {
             println!("│ 200 OK                                                    │");
-            println!("│ Session-Expires: {};refresher=uac                       │", negotiated.as_secs());
+            println!(
+                "│ Session-Expires: {};refresher=uac                       │",
+                negotiated.as_secs()
+            );
             println!("│                                                           │");
             println!("│ ✓ UAC request accepted                                    │");
         }
         Err(min) => {
             println!("│ 422 Session Interval Too Small                            │");
-            println!("│ Min-SE: {}                                                │", min.as_secs());
+            println!(
+                "│ Min-SE: {}                                                │",
+                min.as_secs()
+            );
         }
     }
     println!("└───────────────────────────────────────────────────────────┘\n");
@@ -198,8 +225,8 @@ fn demonstrate_session_timer_negotiation() {
     println!("└───────────────────────────────────────────────────────────┘\n");
 
     let result = negotiate_session_expires(
-        Duration::from_secs(60),    // Too small
-        Duration::from_secs(90),    // Local Min-SE
+        Duration::from_secs(60), // Too small
+        Duration::from_secs(90), // Local Min-SE
         Some(Duration::from_secs(60)),
         None,
     );
@@ -209,7 +236,10 @@ fn demonstrate_session_timer_negotiation() {
         Ok(_) => println!("│ ✗ Should have been rejected                               │"),
         Err(min) => {
             println!("│ 422 Session Interval Too Small                            │");
-            println!("│ Min-SE: {}                                                │", min.as_secs());
+            println!(
+                "│ Min-SE: {}                                                │",
+                min.as_secs()
+            );
             println!("│                                                           │");
             println!("│ ✓ Correctly rejected (60s < 90s minimum)                  │");
         }
@@ -233,7 +263,10 @@ fn demonstrate_session_timer_negotiation() {
     match result {
         Ok(negotiated) => {
             println!("│ 200 OK                                                    │");
-            println!("│ Session-Expires: {};refresher=uac                      │", negotiated.as_secs());
+            println!(
+                "│ Session-Expires: {};refresher=uac                      │",
+                negotiated.as_secs()
+            );
             println!("│                                                           │");
             println!("│ ✓ UAS reduced from 3600s to preferred 1800s              │");
         }
@@ -260,8 +293,21 @@ fn demonstrate_session_timer_negotiation() {
         let is_refresher = determine_refresher_role(param, is_uac);
         let param_str = param.unwrap_or("(none)");
         let perspective = if is_uac { "UAC" } else { "UAS" };
-        println!("│ refresher={:<10} │ {:<13} │ {} │", param_str, perspective, if is_refresher { "✓ Refresher    " } else { "  Not refresher" });
-        assert_eq!(is_refresher, expected_is_refresher, "Failed for param={:?}, is_uac={}", param, is_uac);
+        println!(
+            "│ refresher={:<10} │ {:<13} │ {} │",
+            param_str,
+            perspective,
+            if is_refresher {
+                "✓ Refresher    "
+            } else {
+                "  Not refresher"
+            }
+        );
+        assert_eq!(
+            is_refresher, expected_is_refresher,
+            "Failed for param={:?}, is_uac={}",
+            param, is_uac
+        );
     }
     println!("└─────────────────────┴───────────────┴─────────────────────┘\n");
 
@@ -295,7 +341,10 @@ async fn demonstrate_session_timer_refresh() {
             match event {
                 SessionTimerEvent::RefreshNeeded(id) => {
                     println!("┌─ RefreshNeeded Event Fired ───────────────────────────────┐");
-                    println!("│ Dialog: {}                            │", id.call_id.as_str());
+                    println!(
+                        "│ Dialog: {}                            │",
+                        id.call_id.as_str()
+                    );
                     println!("│ Time: ~100ms (Session-Expires/2)                          │");
                     println!("│                                                           │");
                     println!("│ Action: UAC should send session refresh                  │");
@@ -311,7 +360,9 @@ async fn demonstrate_session_timer_refresh() {
                 _ => println!("Unexpected event\n"),
             }
         }
-    }).await.expect("Should receive refresh event");
+    })
+    .await
+    .expect("Should receive refresh event");
 
     // For demo, let expiration event fire too
     println!("Waiting for expiration event...\n");
@@ -320,7 +371,10 @@ async fn demonstrate_session_timer_refresh() {
             match event {
                 SessionTimerEvent::SessionExpired(id) => {
                     println!("┌─ SessionExpired Event Fired ──────────────────────────────┐");
-                    println!("│ Dialog: {}                            │", id.call_id.as_str());
+                    println!(
+                        "│ Dialog: {}                            │",
+                        id.call_id.as_str()
+                    );
                     println!("│ Time: ~200ms (Session-Expires)                            │");
                     println!("│                                                           │");
                     println!("│ Action: Session timed out - send BYE                      │");
@@ -332,7 +386,9 @@ async fn demonstrate_session_timer_refresh() {
                 _ => println!("Unexpected event\n"),
             }
         }
-    }).await.expect("Should receive expiration event");
+    })
+    .await
+    .expect("Should receive expiration event");
 
     println!("═══ Summary ═══\n");
     println!("PRACK Benefits:");

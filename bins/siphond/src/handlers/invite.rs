@@ -7,7 +7,6 @@
 /// 4. Create and track dialog
 ///
 /// Also handles in-dialog re-INVITE for session modification.
-
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use sip_core::Request;
@@ -97,7 +96,10 @@ impl InviteHandler {
             }
             crate::config::SdpProfile::Custom(path) => {
                 // TODO: Load custom SDP from file
-                Err(anyhow!("Custom SDP profile not yet implemented: {:?}", path))
+                Err(anyhow!(
+                    "Custom SDP profile not yet implemented: {:?}",
+                    path
+                ))
             }
         }
     }
@@ -125,7 +127,10 @@ impl InviteHandler {
         handle.send_provisional(trying).await;
 
         // Extract target URI from Request-URI
-        let target_uri = request.start.uri.as_sip()
+        let target_uri = request
+            .start
+            .uri
+            .as_sip()
             .ok_or_else(|| anyhow!("Request-URI must be SIP URI for B2BUA"))?;
 
         // Normalize lookup key - strip parameters to match registration AOR format
@@ -137,19 +142,25 @@ impl InviteHandler {
         info!(call_id, target = %target_uri.as_str(), user = %user, host = %host, "Looking up callee in location service");
 
         // Look up callee in location service
-        let registrar = services.registrar.as_ref()
+        let registrar = services
+            .registrar
+            .as_ref()
             .ok_or_else(|| anyhow!("Registrar not available in B2BUA mode"))?;
 
         // Try multiple lookup strategies to find the user
-        let mut bindings = vec![];
-
         // Strategy 1: Try exact match with full URI (includes transport)
-        bindings = registrar.location_store().lookup(target_uri.as_str()).unwrap_or_default();
+        let mut bindings = registrar
+            .location_store()
+            .lookup(target_uri.as_str())
+            .unwrap_or_default();
 
         // Strategy 2: Try with UDP transport if not found
         if bindings.is_empty() {
             let lookup_udp = format!("sip:{}@{};transport=UDP", user, host);
-            bindings = registrar.location_store().lookup(&lookup_udp).unwrap_or_default();
+            bindings = registrar
+                .location_store()
+                .lookup(&lookup_udp)
+                .unwrap_or_default();
             if !bindings.is_empty() {
                 info!(call_id, "Found callee with UDP transport");
             }
@@ -158,7 +169,10 @@ impl InviteHandler {
         // Strategy 3: Try with TCP transport if not found
         if bindings.is_empty() {
             let lookup_tcp = format!("sip:{}@{};transport=TCP", user, host);
-            bindings = registrar.location_store().lookup(&lookup_tcp).unwrap_or_default();
+            bindings = registrar
+                .location_store()
+                .lookup(&lookup_tcp)
+                .unwrap_or_default();
             if !bindings.is_empty() {
                 info!(call_id, "Found callee with TCP transport");
             }
@@ -167,7 +181,10 @@ impl InviteHandler {
         // Strategy 4: Try without any transport parameter
         if bindings.is_empty() {
             let lookup_base = format!("sip:{}@{}", user, host);
-            bindings = registrar.location_store().lookup(&lookup_base).unwrap_or_default();
+            bindings = registrar
+                .location_store()
+                .lookup(&lookup_base)
+                .unwrap_or_default();
             if !bindings.is_empty() {
                 info!(call_id, "Found callee without transport parameter");
             }
@@ -209,7 +226,9 @@ impl InviteHandler {
         let outgoing_invite = uac.create_invite(&callee_contact, sdp);
 
         // Extract outgoing Call-ID for tracking
-        let outgoing_call_id = outgoing_invite.headers.get("Call-ID")
+        let outgoing_call_id = outgoing_invite
+            .headers
+            .get("Call-ID")
             .ok_or_else(|| anyhow!("Missing Call-ID in outgoing INVITE"))?
             .to_string();
 
@@ -224,16 +243,18 @@ impl InviteHandler {
 
         // Store call leg pair BEFORE sending outgoing INVITE
         // This allows us to correlate responses from callee with caller's transaction
-        services.b2bua_state.store_call_leg(crate::b2bua_state::CallLegPair {
-            outgoing_call_id: outgoing_call_id.clone(),
-            response_tx,
-            incoming_call_id: call_id.to_string(),
-            caller_request: request.clone(),
-            outgoing_invite: outgoing_invite.clone(),
-            callee_contact: callee_contact.clone(),
-            callee_to_tag: None,
-            created_at: std::time::Instant::now(),
-        });
+        services
+            .b2bua_state
+            .store_call_leg(crate::b2bua_state::CallLegPair {
+                outgoing_call_id: outgoing_call_id.clone(),
+                response_tx,
+                incoming_call_id: call_id.to_string(),
+                caller_request: request.clone(),
+                outgoing_invite: outgoing_invite.clone(),
+                callee_contact: callee_contact.clone(),
+                callee_to_tag: None,
+                created_at: std::time::Instant::now(),
+            });
 
         // Spawn task to transform and relay responses from callee to caller
         let services_clone = services.clone();
@@ -247,13 +268,15 @@ impl InviteHandler {
                     &services_clone,
                     &outgoing_call_id_clone,
                     &callee_response,
-                ).await;
+                )
+                .await;
 
                 if let Some(caller_response) = transformed {
                     if caller_response.start.code >= 100 && caller_response.start.code < 200 {
                         // Provisional response (1xx)
                         handle.send_provisional(caller_response).await;
-                    } else if caller_response.start.code >= 200 && caller_response.start.code < 300 {
+                    } else if caller_response.start.code >= 200 && caller_response.start.code < 300
+                    {
                         // 2xx response - call established
                         handle.send_final(caller_response).await;
 
@@ -270,7 +293,9 @@ impl InviteHandler {
                         handle.send_final(caller_response).await;
 
                         // Clean up call leg after error response
-                        services_clone.b2bua_state.remove_call_leg(&outgoing_call_id_clone);
+                        services_clone
+                            .b2bua_state
+                            .remove_call_leg(&outgoing_call_id_clone);
                         tracing::info!(
                             outgoing_call_id = %outgoing_call_id_clone,
                             status_code,
@@ -286,7 +311,9 @@ impl InviteHandler {
                     );
 
                     // Clean up call leg on error
-                    services_clone.b2bua_state.remove_call_leg(&outgoing_call_id_clone);
+                    services_clone
+                        .b2bua_state
+                        .remove_call_leg(&outgoing_call_id_clone);
                     break;
                 }
             }
@@ -295,8 +322,12 @@ impl InviteHandler {
         info!(call_id, "Sending outgoing INVITE to callee");
 
         // Send INVITE to callee via TCP
-        let callee_addr = format!("{}:{}", callee_contact.host, callee_contact.port.unwrap_or(5060))
-            .parse::<std::net::SocketAddr>()?;
+        let callee_addr = format!(
+            "{}:{}",
+            callee_contact.host,
+            callee_contact.port.unwrap_or(5060)
+        )
+        .parse::<std::net::SocketAddr>()?;
 
         let payload = sip_parse::serialize_request(&outgoing_invite);
         sip_transport::send_tcp(&callee_addr, &payload).await?;
@@ -343,7 +374,12 @@ impl InviteHandler {
         let mut new_headers = sip_core::Headers::new();
 
         // Copy all Via headers from caller's original request (critical for routing)
-        for via in call_leg.caller_request.headers.iter().filter(|h| h.name.as_str().eq_ignore_ascii_case("Via")) {
+        for via in call_leg
+            .caller_request
+            .headers
+            .iter()
+            .filter(|h| h.name.as_str().eq_ignore_ascii_case("Via"))
+        {
             new_headers.push("Via".into(), via.value.clone());
         }
 
@@ -353,14 +389,19 @@ impl InviteHandler {
         new_headers.push("CSeq".into(), caller_cseq.clone());
 
         // Handle To header - add callee's To-tag if present (from 200 OK)
-        if let Some(callee_to_tag) = header(&callee_response.headers, "To")
-            .and_then(|to_hdr| {
-                // Extract tag parameter from To header
-                to_hdr.split(';')
-                    .find(|part| part.trim().starts_with("tag="))
-                    .map(|tag_part| tag_part.trim().strip_prefix("tag=").unwrap_or("").to_string())
-            })
-        {
+        if let Some(callee_to_tag) = header(&callee_response.headers, "To").and_then(|to_hdr| {
+            // Extract tag parameter from To header
+            to_hdr
+                .split(';')
+                .find(|part| part.trim().starts_with("tag="))
+                .map(|tag_part| {
+                    tag_part
+                        .trim()
+                        .strip_prefix("tag=")
+                        .unwrap_or("")
+                        .to_string()
+                })
+        }) {
             // Add tag to caller's To header
             let to_with_tag = format!("{};tag={}", caller_to.as_str(), callee_to_tag);
             new_headers.push("To".into(), to_with_tag.into());
@@ -372,7 +413,9 @@ impl InviteHandler {
                     callee_to_tag = %callee_to_tag,
                     "Storing callee To-tag from 200 OK for future ACK/BYE"
                 );
-                services.b2bua_state.update_callee_to_tag(outgoing_call_id, callee_to_tag);
+                services
+                    .b2bua_state
+                    .update_callee_to_tag(outgoing_call_id, callee_to_tag);
             }
         } else {
             // No To-tag in callee's response (provisional responses may not have it)
@@ -397,7 +440,14 @@ impl InviteHandler {
         }
 
         // Copy other useful headers
-        for header_name in &["Allow", "Supported", "Server", "User-Agent", "RSeq", "Require"] {
+        for header_name in &[
+            "Allow",
+            "Supported",
+            "Server",
+            "User-Agent",
+            "RSeq",
+            "Require",
+        ] {
             if let Some(value) = header(&callee_response.headers, header_name) {
                 new_headers.push((*header_name).into(), value.clone());
             }
@@ -447,8 +497,8 @@ impl InviteHandler {
         services: &ServiceRegistry,
         call_id: &str,
     ) -> Result<()> {
-        use sip_proxy::ProxyHelpers;
         use sip_parse::serialize_request;
+        use sip_proxy::ProxyHelpers;
 
         info!(call_id, "PROXY MODE: Processing INVITE for forwarding");
 
@@ -472,22 +522,33 @@ impl InviteHandler {
         }
 
         // Step 2: Add Via header and store transaction state
-        let proxy_host = services.config.local_uri.split('@').nth(1).unwrap_or("localhost");
+        let proxy_host = services
+            .config
+            .local_uri
+            .split('@')
+            .nth(1)
+            .unwrap_or("localhost");
         let transport_name = match ctx.transport {
             sip_transaction::TransportKind::Udp => "UDP",
             sip_transaction::TransportKind::Tcp => "TCP",
             sip_transaction::TransportKind::Tls => "TLS",
+            sip_transaction::TransportKind::Ws => "WS",
+            sip_transaction::TransportKind::Wss => "WSS",
+            sip_transaction::TransportKind::Sctp => "SCTP",
+            sip_transaction::TransportKind::TlsSctp => "TLS-SCTP",
         };
         let branch = ProxyHelpers::add_via(&mut proxied_req, proxy_host, transport_name);
 
         // Store proxy transaction for response forwarding
-        services.proxy_state.store_transaction(crate::proxy_state::ProxyTransaction {
-            branch: branch.clone(),
-            sender_addr: ctx.peer,
-            sender_transport: ctx.transport,
-            call_id: call_id.to_string(),
-            created_at: std::time::Instant::now(),
-        });
+        services
+            .proxy_state
+            .store_transaction(crate::proxy_state::ProxyTransaction {
+                branch: branch.clone(),
+                sender_addr: ctx.peer,
+                sender_transport: ctx.transport,
+                call_id: call_id.to_string(),
+                created_at: std::time::Instant::now(),
+            });
 
         // Step 3: Add Record-Route (stay in signaling path)
         if let Some(proxy_uri) = sip_core::SipUri::parse(&services.config.local_uri) {
@@ -495,7 +556,10 @@ impl InviteHandler {
         }
 
         // Step 4: Location service lookup
-        let target_uri = proxied_req.start.uri.as_sip()
+        let target_uri = proxied_req
+            .start
+            .uri
+            .as_sip()
             .ok_or_else(|| anyhow!("Request-URI must be SIP URI for proxy"))?;
 
         // Normalize lookup key - try multiple transport variants
@@ -505,31 +569,43 @@ impl InviteHandler {
         info!(call_id, target = %target_uri.as_str(), user = %user, host = %host, "Looking up target in location service");
 
         // Access location store through registrar
-        let registrar = services.registrar.as_ref()
+        let registrar = services
+            .registrar
+            .as_ref()
             .ok_or_else(|| anyhow!("Registrar not available in proxy mode"))?;
 
         // Try multiple lookup strategies to find the user
-        let mut bindings = vec![];
-
         // Strategy 1: Try exact match with full URI (includes transport)
-        bindings = registrar.location_store().lookup(target_uri.as_str()).unwrap_or_default();
+        let mut bindings = registrar
+            .location_store()
+            .lookup(target_uri.as_str())
+            .unwrap_or_default();
 
         // Strategy 2: Try with UDP transport if not found
         if bindings.is_empty() {
             let lookup_udp = format!("sip:{}@{};transport=UDP", user, host);
-            bindings = registrar.location_store().lookup(&lookup_udp).unwrap_or_default();
+            bindings = registrar
+                .location_store()
+                .lookup(&lookup_udp)
+                .unwrap_or_default();
         }
 
         // Strategy 3: Try with TCP transport if not found
         if bindings.is_empty() {
             let lookup_tcp = format!("sip:{}@{};transport=TCP", user, host);
-            bindings = registrar.location_store().lookup(&lookup_tcp).unwrap_or_default();
+            bindings = registrar
+                .location_store()
+                .lookup(&lookup_tcp)
+                .unwrap_or_default();
         }
 
         // Strategy 4: Try without any transport parameter
         if bindings.is_empty() {
             let lookup_base = format!("sip:{}@{}", user, host);
-            bindings = registrar.location_store().lookup(&lookup_base).unwrap_or_default();
+            bindings = registrar
+                .location_store()
+                .lookup(&lookup_base)
+                .unwrap_or_default();
         }
 
         if bindings.is_empty() {
@@ -577,11 +653,47 @@ impl InviteHandler {
                 warn!(call_id, "TLS proxy forwarding not yet implemented");
                 return Err(anyhow!("TLS proxy forwarding not yet implemented"));
             }
+            sip_transaction::TransportKind::Ws | sip_transaction::TransportKind::Wss => {
+                #[cfg(feature = "ws")]
+                {
+                    // Prefer contact transport param if present to pick scheme.
+                    let scheme_override = contact_uri
+                        .params
+                        .get("transport")
+                        .and_then(|v| v.as_ref())
+                        .map(|s| s.to_ascii_lowercase());
+                    let scheme = match (ctx.transport, scheme_override.as_deref()) {
+                        (_, Some("wss")) => "wss",
+                        (_, Some("ws")) => "ws",
+                        (sip_transaction::TransportKind::Wss, _) => "wss",
+                        _ => "ws",
+                    };
+                    let ws_url = format!("{}://{}:{}", scheme, contact_uri.host, target_addr.port());
+                    if scheme == "wss" {
+                        sip_transport::send_wss(&ws_url, payload).await?;
+                    } else {
+                        sip_transport::send_ws(&ws_url, payload).await?;
+                    }
+                    info!(call_id, url = %ws_url, "INVITE forwarded via WS/WSS successfully");
+                }
+                #[cfg(not(feature = "ws"))]
+                {
+                    warn!(call_id, "WS/WSS proxy forwarding requires ws feature");
+                    return Err(anyhow!("WS/WSS proxy forwarding not enabled"));
+                }
+            }
+            sip_transaction::TransportKind::Sctp | sip_transaction::TransportKind::TlsSctp => {
+                warn!(call_id, "SCTP proxy forwarding not yet implemented");
+                return Err(anyhow!("SCTP proxy forwarding not yet implemented"));
+            }
         }
 
         // TODO: Response handling - proxy needs to forward responses back to caller
         // For now, this is stateless forwarding only
-        warn!(call_id, "Proxy response forwarding not yet implemented - responses will not be relayed");
+        warn!(
+            call_id,
+            "Proxy response forwarding not yet implemented - responses will not be relayed"
+        );
 
         Ok(())
     }
@@ -602,12 +714,16 @@ impl RequestHandler for InviteHandler {
 
         // B2BUA MODE: Bridge calls between two users
         if services.config.enable_b2bua() {
-            return self.handle_b2bua(request, handle, ctx, services, call_id).await;
+            return self
+                .handle_b2bua(request, handle, ctx, services, call_id)
+                .await;
         }
 
         // PROXY MODE: Forward request to registered user
         if services.config.enable_proxy() {
-            return self.handle_proxy(request, handle, ctx, services, call_id).await;
+            return self
+                .handle_proxy(request, handle, ctx, services, call_id)
+                .await;
         }
 
         // UAS MODE: Accept calls ourselves
@@ -657,7 +773,13 @@ impl RequestHandler for InviteHandler {
         info!(call_id, "Call accepted, sending 180 Ringing");
 
         // Send 180 Ringing (with optional reliable provisional)
-        if services.config.features.enable_prack && request.headers.get("Supported").map(|s| s.contains("100rel")).unwrap_or(false) {
+        if services.config.features.enable_prack
+            && request
+                .headers
+                .get("Supported")
+                .map(|s| s.contains("100rel"))
+                .unwrap_or(false)
+        {
             // TODO: Send reliable 180 with RSeq
             let ringing = uas.create_ringing(request);
             handle.send_provisional(ringing).await;

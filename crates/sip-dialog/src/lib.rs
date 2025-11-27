@@ -5,8 +5,12 @@ use smol_str::SmolStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub mod session_timer_manager;
 pub mod prack_validator;
+pub mod session_timer_manager;
+pub mod storage;
+pub use storage::{DialogStore, InMemoryDialogStore};
+pub mod metrics;
+pub use metrics::{DialogMetrics, DialogMetricsSnapshot};
 
 /// Dialog state per RFC 3261 §12.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,7 +32,11 @@ pub struct DialogId {
 }
 
 impl DialogId {
-    pub fn new(call_id: impl Into<SmolStr>, local_tag: impl Into<SmolStr>, remote_tag: impl Into<SmolStr>) -> Self {
+    pub fn new(
+        call_id: impl Into<SmolStr>,
+        local_tag: impl Into<SmolStr>,
+        remote_tag: impl Into<SmolStr>,
+    ) -> Self {
         Self {
             call_id: call_id.into(),
             local_tag: local_tag.into(),
@@ -196,8 +204,8 @@ impl Dialog {
         };
 
         // Extract remote target from Contact header
-        let remote_target = extract_contact_uri(&resp.headers)
-            .or_else(|| Some(remote_uri.clone()))?;
+        let remote_target =
+            extract_contact_uri(&resp.headers).or_else(|| Some(remote_uri.clone()))?;
 
         // Build route set from Record-Route (stored in reverse for requests)
         let route_set = build_route_set(&resp.headers);
@@ -244,8 +252,8 @@ impl Dialog {
         };
 
         // Extract remote target from Contact in request (caller's contact)
-        let remote_target = extract_contact_uri(&req.headers)
-            .or_else(|| Some(remote_uri.clone()))?;
+        let remote_target =
+            extract_contact_uri(&req.headers).or_else(|| Some(remote_uri.clone()))?;
 
         // Build route set from Record-Route
         let route_set = build_route_set(&resp.headers);
@@ -387,18 +395,21 @@ impl Dialog {
 /// Dialog manager for tracking active dialogs.
 pub struct DialogManager {
     dialogs: Arc<DashMap<DialogId, Dialog>>,
+    pub metrics: Arc<metrics::DialogMetrics>,
 }
 
 impl DialogManager {
     pub fn new() -> Self {
         Self {
             dialogs: Arc::new(DashMap::new()),
+            metrics: Arc::new(metrics::DialogMetrics::default()),
         }
     }
 
     /// Inserts or updates a dialog.
     pub fn insert(&self, dialog: Dialog) {
         self.dialogs.insert(dialog.id.clone(), dialog);
+        self.metrics.record_created();
     }
 
     /// Retrieves a dialog by ID.
@@ -423,7 +434,11 @@ impl DialogManager {
 
     /// Removes a dialog.
     pub fn remove(&self, id: &DialogId) -> Option<Dialog> {
-        self.dialogs.remove(id).map(|(_, dialog)| dialog)
+        let res = self.dialogs.remove(id).map(|(_, dialog)| dialog);
+        if res.is_some() {
+            self.metrics.record_terminated();
+        }
+        res
     }
 
     /// Returns the count of active dialogs.
@@ -433,12 +448,16 @@ impl DialogManager {
 
     /// Removes all terminated dialogs.
     pub fn cleanup_terminated(&self) {
-        self.dialogs.retain(|_, dialog| dialog.state != DialogStateType::Terminated);
+        self.dialogs
+            .retain(|_, dialog| dialog.state != DialogStateType::Terminated);
     }
 
     /// Returns all dialog IDs.
     pub fn all_ids(&self) -> Vec<DialogId> {
-        self.dialogs.iter().map(|entry| entry.key().clone()).collect()
+        self.dialogs
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect()
     }
 }
 
@@ -478,16 +497,14 @@ impl std::error::Error for DialogError {}
 
 /// Extracts tag parameter from From/To header value.
 fn extract_tag(value: &SmolStr) -> Option<SmolStr> {
-    value
-        .split(';')
-        .find_map(|segment| {
-            let trimmed = segment.trim();
-            if trimmed.starts_with("tag=") {
-                Some(SmolStr::new(trimmed[4..].to_owned()))
-            } else {
-                None
-            }
-        })
+    value.split(';').find_map(|segment| {
+        let trimmed = segment.trim();
+        if trimmed.starts_with("tag=") {
+            Some(SmolStr::new(trimmed[4..].to_owned()))
+        } else {
+            None
+        }
+    })
 }
 
 /// Builds route set from Record-Route headers (reversed for UAC).
@@ -504,8 +521,7 @@ fn build_route_set(headers: &Headers) -> Vec<SipUri> {
 
 /// Extracts Contact URI from headers.
 fn extract_contact_uri(headers: &Headers) -> Option<SipUri> {
-    header(headers, "Contact")
-        .and_then(|raw| parse_uri_from_header(raw.as_str()))
+    header(headers, "Contact").and_then(|raw| parse_uri_from_header(raw.as_str()))
 }
 
 /// Parses CSeq number from headers.
@@ -521,7 +537,10 @@ fn parse_cseq_number(headers: &Headers) -> Option<u32> {
 fn extract_session_timer(resp: &Response) -> (Option<Duration>, Option<RefresherRole>) {
     if let Some(se_header) = header(&resp.headers, "Session-Expires") {
         if let Some(se) = parse_session_expires(se_header) {
-            return (Some(Duration::from_secs(se.delta_seconds as u64)), se.refresher);
+            return (
+                Some(Duration::from_secs(se.delta_seconds as u64)),
+                se.refresher,
+            );
         }
     }
     (None, None)
@@ -576,7 +595,12 @@ pub struct SubscriptionId {
 }
 
 impl SubscriptionId {
-    pub fn new(call_id: impl Into<SmolStr>, from_tag: impl Into<SmolStr>, to_tag: impl Into<SmolStr>, event: impl Into<SmolStr>) -> Self {
+    pub fn new(
+        call_id: impl Into<SmolStr>,
+        from_tag: impl Into<SmolStr>,
+        to_tag: impl Into<SmolStr>,
+        event: impl Into<SmolStr>,
+    ) -> Self {
         Self {
             call_id: call_id.into(),
             from_tag: from_tag.into(),
@@ -620,7 +644,12 @@ pub struct Subscription {
 
 impl Subscription {
     /// Creates a new subscription from a SUBSCRIBE request (notifier perspective).
-    pub fn new_notifier(request: &Request, response: &Response, local_uri: SipUri, remote_uri: SipUri) -> Option<Self> {
+    pub fn new_notifier(
+        request: &Request,
+        response: &Response,
+        local_uri: SipUri,
+        remote_uri: SipUri,
+    ) -> Option<Self> {
         let id = SubscriptionId::from_request_response(request, response)?;
         let contact = extract_contact_uri(&response.headers)?;
         let local_cseq = parse_cseq_number(&request.headers)?;
@@ -647,7 +676,12 @@ impl Subscription {
     }
 
     /// Creates a new subscription from a SUBSCRIBE response (subscriber perspective).
-    pub fn new_subscriber(request: &Request, response: &Response, local_uri: SipUri, remote_uri: SipUri) -> Option<Self> {
+    pub fn new_subscriber(
+        request: &Request,
+        response: &Response,
+        local_uri: SipUri,
+        remote_uri: SipUri,
+    ) -> Option<Self> {
         let id = SubscriptionId::from_request_response(request, response)?;
         let contact = extract_contact_uri(&response.headers)?;
         let remote_cseq = 0;
@@ -704,12 +738,15 @@ impl SubscriptionManager {
 
     /// Inserts or updates a subscription.
     pub fn insert(&self, subscription: Subscription) {
-        self.subscriptions.insert(subscription.id.clone(), subscription);
+        self.subscriptions
+            .insert(subscription.id.clone(), subscription);
     }
 
     /// Retrieves a subscription by ID.
     pub fn get(&self, id: &SubscriptionId) -> Option<Subscription> {
-        self.subscriptions.get(id).map(|entry| entry.value().clone())
+        self.subscriptions
+            .get(id)
+            .map(|entry| entry.value().clone())
     }
 
     /// Removes a subscription.
@@ -816,7 +853,13 @@ mod tests {
     use super::*;
     use sip_core::{RequestLine, StatusLine};
 
-    fn make_request(method: Method, call_id: &str, from_tag: &str, to_tag: Option<&str>, cseq: u32) -> Request {
+    fn make_request(
+        method: Method,
+        call_id: &str,
+        from_tag: &str,
+        to_tag: Option<&str>,
+        cseq: u32,
+    ) -> Request {
         let mut headers = Headers::new();
         headers.push(SmolStr::new("Call-ID"), SmolStr::new(call_id.to_owned()));
         headers.push(
@@ -829,10 +872,19 @@ mod tests {
                 SmolStr::new(format!("<sip:bob@example.com>;tag={}", tag)),
             );
         } else {
-            headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>".to_owned()));
+            headers.push(
+                SmolStr::new("To"),
+                SmolStr::new("<sip:bob@example.com>".to_owned()),
+            );
         }
-        headers.push(SmolStr::new("CSeq"), SmolStr::new(format!("{} {}", cseq, method.as_str())));
-        headers.push(SmolStr::new("Contact"), SmolStr::new("<sip:alice@client.example.com>".to_owned()));
+        headers.push(
+            SmolStr::new("CSeq"),
+            SmolStr::new(format!("{} {}", cseq, method.as_str())),
+        );
+        headers.push(
+            SmolStr::new("Contact"),
+            SmolStr::new("<sip:alice@client.example.com>".to_owned()),
+        );
 
         Request::new(
             RequestLine::new(method, SipUri::parse("sip:bob@example.com").unwrap()),
@@ -858,7 +910,10 @@ mod tests {
         );
 
         // Add Contact header
-        headers.push(SmolStr::new("Contact"), SmolStr::new("<sip:bob@server.example.com>".to_owned()));
+        headers.push(
+            SmolStr::new("Contact"),
+            SmolStr::new("<sip:bob@server.example.com>".to_owned()),
+        );
 
         Response::new(
             StatusLine::new(code, SmolStr::new("OK")),
@@ -976,7 +1031,10 @@ mod tests {
 
         // Receiving request with same CSeq should fail
         let req2 = make_request(Method::Invite, "call123", "uac-tag", Some("uas-tag"), 1);
-        assert_eq!(dialog.update_from_request(&req2), Err(DialogError::InvalidCSeq));
+        assert_eq!(
+            dialog.update_from_request(&req2),
+            Err(DialogError::InvalidCSeq)
+        );
 
         // Receiving request with higher CSeq should succeed
         let req3 = make_request(Method::Bye, "call123", "uac-tag", Some("uas-tag"), 2);
@@ -1128,7 +1186,9 @@ mod tests {
             Some(SmolStr::new("xyz".to_owned()))
         );
         assert_eq!(
-            extract_tag(&SmolStr::new("<sip:user@host>;param=val;tag=test;other=val".to_owned())),
+            extract_tag(&SmolStr::new(
+                "<sip:user@host>;param=val;tag=test;other=val".to_owned()
+            )),
             Some(SmolStr::new("test".to_owned()))
         );
         assert_eq!(

@@ -23,7 +23,6 @@
 ///     .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true))
 ///     .with_require();
 /// ```
-
 use crate::capabilities::{CapabilitySet, FeatureTag, FeatureValue};
 use smol_str::SmolStr;
 use std::collections::BTreeMap;
@@ -616,8 +615,8 @@ mod tests {
 
     #[test]
     fn accept_contact_matching() {
-        let accept = AcceptContact::new()
-            .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true));
+        let accept =
+            AcceptContact::new().with_feature(FeatureTag::Audio, FeatureValue::Boolean(true));
 
         let mut caps = CapabilitySet::new();
         caps.add_boolean(FeatureTag::Audio, true);
@@ -668,16 +667,16 @@ mod tests {
 
     #[test]
     fn reject_contact_creation() {
-        let reject = RejectContact::new()
-            .with_feature(FeatureTag::Automata, FeatureValue::Boolean(true));
+        let reject =
+            RejectContact::new().with_feature(FeatureTag::Automata, FeatureValue::Boolean(true));
 
         assert_eq!(reject.features.len(), 1);
     }
 
     #[test]
     fn reject_contact_matches() {
-        let reject = RejectContact::new()
-            .with_feature(FeatureTag::Automata, FeatureValue::Boolean(true));
+        let reject =
+            RejectContact::new().with_feature(FeatureTag::Automata, FeatureValue::Boolean(true));
 
         let mut caps = CapabilitySet::new();
         caps.add_boolean(FeatureTag::Automata, true);
@@ -688,8 +687,8 @@ mod tests {
 
     #[test]
     fn reject_contact_no_explicit_features() {
-        let reject = RejectContact::new()
-            .with_feature(FeatureTag::Automata, FeatureValue::Boolean(true));
+        let reject =
+            RejectContact::new().with_feature(FeatureTag::Automata, FeatureValue::Boolean(true));
 
         let mut caps = CapabilitySet::new();
         caps.add_boolean(FeatureTag::Automata, true);
@@ -736,8 +735,8 @@ mod tests {
             ScoredContact::new("sip:c2@example.com", 1.0).with_explicit_features(true),
         ];
 
-        let accept = AcceptContact::new()
-            .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true));
+        let accept =
+            AcceptContact::new().with_feature(FeatureTag::Audio, FeatureValue::Boolean(true));
 
         let mut caps1 = CapabilitySet::new();
         caps1.add_boolean(FeatureTag::Audio, true);
@@ -762,8 +761,8 @@ mod tests {
             ScoredContact::new("sip:c2@example.com", 1.0).with_explicit_features(true),
         ];
 
-        let reject = RejectContact::new()
-            .with_feature(FeatureTag::Automata, FeatureValue::Boolean(true));
+        let reject =
+            RejectContact::new().with_feature(FeatureTag::Automata, FeatureValue::Boolean(true));
 
         let mut caps1 = CapabilitySet::new();
         caps1.add_boolean(FeatureTag::Audio, true);
@@ -810,8 +809,8 @@ mod tests {
             ScoredContact::new("sip:c3@example.com", 0.5).with_explicit_features(true),
         ];
 
-        let accept = AcceptContact::new()
-            .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true));
+        let accept =
+            AcceptContact::new().with_feature(FeatureTag::Audio, FeatureValue::Boolean(true));
 
         let mut caps1 = CapabilitySet::new();
         caps1.add_boolean(FeatureTag::Audio, true);

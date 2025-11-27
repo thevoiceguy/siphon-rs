@@ -22,10 +22,10 @@
 //!     Best response forwarded upstream
 //! ```
 
-use anyhow::Result;
-use dashmap::DashMap;
 use crate::cancel_ack::{AckForwarder, CancelForwarder};
 use crate::ProxyHelpers;
+use anyhow::Result;
+use dashmap::DashMap;
 use sip_core::{Request, Response, SipUri};
 use smol_str::SmolStr;
 use std::collections::HashMap;
@@ -142,6 +142,7 @@ pub struct ProxyContext {
     best_final: RwLock<Option<Response>>,
 
     /// Channel to send the selected response upstream
+    #[allow(dead_code)]
     response_tx: mpsc::UnboundedSender<Response>,
 
     /// Number of outstanding branches (not completed)
@@ -209,7 +210,10 @@ impl ProxyContext {
 
         // Handle provisional responses (always forward first 1xx per RFC 3261)
         if !is_final {
-            debug!("Forwarding provisional {} response from branch {}", response.start.code, branch_id);
+            debug!(
+                "Forwarding provisional {} response from branch {}",
+                response.start.code, branch_id
+            );
             return Some(response);
         }
 
@@ -218,7 +222,10 @@ impl ProxyContext {
         let should_forward = select_best_response(best_final.as_ref(), &response);
 
         if should_forward {
-            info!("Selected {} as best response (branch {})", response.start.code, branch_id);
+            info!(
+                "Selected {} as best response (branch {})",
+                response.start.code, branch_id
+            );
             *best_final = Some(response.clone());
 
             // If we got a 2xx and have other branches, send CANCEL to them
@@ -234,7 +241,10 @@ impl ProxyContext {
         if outstanding == 0 {
             // All branches done - return the best we have
             if let Some(best) = best_final.clone() {
-                info!("All branches complete - forwarding best response {}", best.start.code);
+                info!(
+                    "All branches complete - forwarding best response {}",
+                    best.start.code
+                );
                 return Some(best);
             }
         }
@@ -251,9 +261,15 @@ impl ProxyContext {
 
         for (branch_id, branch) in branches.iter_mut() {
             if branch_id.as_str() != winner_branch
-                && !matches!(branch.state, BranchState::Completed | BranchState::Cancelled)
+                && !matches!(
+                    branch.state,
+                    BranchState::Completed | BranchState::Cancelled
+                )
             {
-                info!("Marking branch {} for CANCEL (winner: {})", branch_id, winner_branch);
+                info!(
+                    "Marking branch {} for CANCEL (winner: {})",
+                    branch_id, winner_branch
+                );
                 branch.state = BranchState::Cancelled;
                 to_cancel.push(branch_id.clone());
             }
@@ -414,9 +430,8 @@ impl StatefulProxy {
     /// Clean up old contexts
     pub fn cleanup_old(&self) {
         let now = Instant::now();
-        self.contexts.retain(|_, ctx| {
-            now.duration_since(ctx.created_at) < self.cleanup_interval
-        });
+        self.contexts
+            .retain(|_, ctx| now.duration_since(ctx.created_at) < self.cleanup_interval);
     }
 
     /// Get count of active contexts
@@ -435,12 +450,10 @@ impl Default for StatefulProxy {
 pub mod forwarding {
     use super::*;
     use crate::ProxyHelpers;
-    use bytes::Bytes;
-    use sip_core::{Headers, Method, RequestLine};
 
-        /// Prepare a request for forwarding to a target
-        ///
-        /// This performs RFC 3261 §16.6 request forwarding:
+    /// Prepare a request for forwarding to a target
+    ///
+    /// This performs RFC 3261 §16.6 request forwarding:
     /// 1. Makes a copy of the request
     /// 2. Updates Request-URI to target
     /// 3. Decrements Max-Forwards
@@ -487,12 +500,18 @@ pub mod forwarding {
             let mut headers = Headers::new();
             headers.push("Call-ID".into(), "call-123".into());
             headers.push("CSeq".into(), "1 INVITE".into());
-            headers.push("Via".into(), "SIP/2.0/UDP client;branch=z9hG4bKclient".into());
+            headers.push(
+                "Via".into(),
+                "SIP/2.0/UDP client;branch=z9hG4bKclient".into(),
+            );
             headers.push("From".into(), "<sip:alice@example.com>;tag=a".into());
             headers.push("To".into(), "<sip:bob@example.com>".into());
             headers.push("Max-Forwards".into(), "70".into());
             Request::new(
-                RequestLine::new(Method::Invite, SipUri::parse("sip:bob@example.com").unwrap()),
+                RequestLine::new(
+                    Method::Invite,
+                    SipUri::parse("sip:bob@example.com").unwrap(),
+                ),
                 headers,
                 Bytes::new(),
             )
@@ -522,9 +541,15 @@ pub mod forwarding {
             headers.push("CSeq".into(), "1 CANCEL".into());
             headers.push("From".into(), "<sip:alice@example.com>;tag=a".into());
             headers.push("To".into(), "<sip:bob@example.com>".into());
-            headers.push("Via".into(), "SIP/2.0/UDP proxy;branch=z9hG4bKtemplate".into());
+            headers.push(
+                "Via".into(),
+                "SIP/2.0/UDP proxy;branch=z9hG4bKtemplate".into(),
+            );
             Request::new(
-                RequestLine::new(Method::Cancel, SipUri::parse("sip:bob@example.com").unwrap()),
+                RequestLine::new(
+                    Method::Cancel,
+                    SipUri::parse("sip:bob@example.com").unwrap(),
+                ),
                 headers,
                 Bytes::new(),
             )
@@ -539,10 +564,7 @@ pub mod forwarding {
         assert!(via.contains("z9hG4bKbranch1"));
 
         // Request-URI targets branch destination
-        assert_eq!(
-            cancel.start.uri.as_sip().unwrap().as_str(),
-            target.as_str()
-        );
+        assert_eq!(cancel.start.uri.as_sip().unwrap().as_str(), target.as_str());
     }
 
     /// Prepare a response for forwarding upstream
@@ -571,11 +593,17 @@ mod tests {
     fn make_request() -> Request {
         let mut headers = Headers::new();
         headers.push("Call-ID".into(), "test-call-123".into());
-        headers.push("Via".into(), "SIP/2.0/UDP client;branch=z9hG4bKclient".into());
+        headers.push(
+            "Via".into(),
+            "SIP/2.0/UDP client;branch=z9hG4bKclient".into(),
+        );
         headers.push("Max-Forwards".into(), "70".into());
 
         Request::new(
-            RequestLine::new(Method::Invite, SipUri::parse("sip:bob@example.com").unwrap()),
+            RequestLine::new(
+                Method::Invite,
+                SipUri::parse("sip:bob@example.com").unwrap(),
+            ),
             headers,
             Bytes::new(),
         )
@@ -585,13 +613,12 @@ mod tests {
         let mut headers = Headers::new();
         headers.push("Call-ID".into(), "test-call-123".into());
         headers.push("Via".into(), "SIP/2.0/UDP proxy;branch=z9hG4bKproxy".into());
-        headers.push("Via".into(), "SIP/2.0/UDP client;branch=z9hG4bKclient".into());
+        headers.push(
+            "Via".into(),
+            "SIP/2.0/UDP client;branch=z9hG4bKclient".into(),
+        );
 
-        Response::new(
-            StatusLine::new(code, "OK".into()),
-            headers,
-            Bytes::new(),
-        )
+        Response::new(StatusLine::new(code, "OK".into()), headers, Bytes::new())
     }
 
     #[tokio::test]
@@ -707,10 +734,7 @@ mod tests {
         let forwarded = context.prepare_ack_forward(&ack).await.unwrap();
 
         // Route header consumed and Request-URI updated
-        assert!(forwarded
-            .headers
-            .iter()
-            .all(|h| h.name.as_str() != "Route"));
+        assert!(forwarded.headers.iter().all(|h| h.name.as_str() != "Route"));
         assert_eq!(
             forwarded.start.uri.as_sip().unwrap().as_str(),
             "sip:proxy.example.com"

@@ -9,7 +9,6 @@
 /// 2. Parsing and handling tel URIs
 /// 3. Common use cases (PSTN gateway scenarios, mobile networks)
 /// 4. Interoperability between SIP URIs and tel URIs
-
 use sip_core::{SipUri, TelUri, Uri};
 use sip_uac::UserAgentClient;
 
@@ -40,12 +39,18 @@ fn main() {
 
     // The Request-URI is the SIP gateway that will route to PSTN
     let gateway_uri = SipUri::parse("sip:gateway.example.com").expect("valid gateway URI");
-    let invite_request = alice_uac.create_invite(&gateway_uri, Some("v=0\r\no=- 123 456 IN IP4 192.168.1.100\r\n"));
+    let invite_request = alice_uac.create_invite(
+        &gateway_uri,
+        Some("v=0\r\no=- 123 456 IN IP4 192.168.1.100\r\n"),
+    );
 
     println!("INVITE sip:gateway.example.com SIP/2.0");
     println!("From: {}", invite_request.headers.get("From").unwrap());
     println!("To: <sip:gateway.example.com>");
-    println!("Call-ID: {}", invite_request.headers.get("Call-ID").unwrap());
+    println!(
+        "Call-ID: {}",
+        invite_request.headers.get("Call-ID").unwrap()
+    );
     println!();
     println!("Note: The Request-URI is the gateway, but the application logic");
     println!("      would include Bob's tel URI in routing headers or SDP");
@@ -60,10 +65,10 @@ fn main() {
     println!("These are automatically normalized per RFC 3966 §5.1.1\n");
 
     let variants = vec![
-        "tel:+1-555-123-4567",        // Hyphens
-        "tel:+1.555.123.4567",        // Dots
-        "tel:+1 555 123 4567",        // Spaces
-        "tel:+1(555)123-4567",        // Parentheses
+        "tel:+1-555-123-4567", // Hyphens
+        "tel:+1.555.123.4567", // Dots
+        "tel:+1 555 123 4567", // Spaces
+        "tel:+1(555)123-4567", // Parentheses
     ];
 
     for variant in &variants {
@@ -84,11 +89,15 @@ fn main() {
     println!("Local tel URIs require phone-context parameter per RFC 3966 §5.1.4\n");
 
     // Valid local tel URI with phone-context
-    let local_tel = TelUri::parse("tel:5551234;phone-context=example.com").expect("valid local tel URI");
+    let local_tel =
+        TelUri::parse("tel:5551234;phone-context=example.com").expect("valid local tel URI");
     println!("Local tel URI: {}", local_tel.as_str());
     println!("  Number: {}", local_tel.number.as_str());
     println!("  Is global: {}", local_tel.is_global);
-    println!("  Phone context: {}", local_tel.phone_context.as_ref().unwrap().as_str());
+    println!(
+        "  Phone context: {}",
+        local_tel.phone_context.as_ref().unwrap().as_str()
+    );
     println!();
 
     // Invalid: local number without phone-context
@@ -104,18 +113,36 @@ fn main() {
     println!("\n--- Scenario 4: Extension Parameters ---");
     println!("tel URIs can include extension and other parameters\n");
 
-    let tel_with_ext = TelUri::parse("tel:+1-555-123-4567;ext=1234").expect("valid tel URI with extension");
+    let tel_with_ext =
+        TelUri::parse("tel:+1-555-123-4567;ext=1234").expect("valid tel URI with extension");
     println!("tel URI with extension: {}", tel_with_ext.as_str());
     println!("  Main number: {}", tel_with_ext.number.as_str());
-    println!("  Extension: {}", tel_with_ext.parameters.get("ext").unwrap().as_ref().unwrap().as_str());
+    println!(
+        "  Extension: {}",
+        tel_with_ext
+            .parameters
+            .get("ext")
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .as_str()
+    );
     println!();
 
     // Other common parameters
-    let tel_with_isub = TelUri::new("+15551234567", true)
-        .with_parameter("isub", Some("9876"));
+    let tel_with_isub = TelUri::new("+15551234567", true).with_parameter("isub", Some("9876"));
 
     println!("tel URI with ISDN subaddress: {}", tel_with_isub.as_str());
-    println!("  isub parameter: {}", tel_with_isub.parameters.get("isub").unwrap().as_ref().unwrap().as_str());
+    println!(
+        "  isub parameter: {}",
+        tel_with_isub
+            .parameters
+            .get("isub")
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .as_str()
+    );
     println!();
 
     // ========================================================================
@@ -147,7 +174,14 @@ fn main() {
             let tel = uri.as_tel().unwrap();
             println!("(tel)");
             println!("  Number: {}", tel.number.as_str());
-            println!("  Type: {}", if tel.is_global { "Global (E.164)" } else { "Local" });
+            println!(
+                "  Type: {}",
+                if tel.is_global {
+                    "Global (E.164)"
+                } else {
+                    "Local"
+                }
+            );
             if let Some(context) = &tel.phone_context {
                 println!("  Context: {}", context.as_str());
             }
@@ -167,8 +201,7 @@ fn main() {
     println!("Global tel URI: {}", global_tel.as_str());
 
     // Local tel URI with phone-context
-    let local_tel = TelUri::new("5551234", false)
-        .with_phone_context("example.com");
+    let local_tel = TelUri::new("5551234", false).with_phone_context("example.com");
     println!("Local tel URI: {}", local_tel.as_str());
 
     // tel URI with multiple parameters

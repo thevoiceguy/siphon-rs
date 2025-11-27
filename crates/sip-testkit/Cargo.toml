@@ -9,3 +9,7 @@ bytes = { workspace = true }
 sip-core = { path = "../sip-core" }
 sip-parse = { path = "../sip-parse" }
 smol_str = { workspace = true }
+proptest = { version = "1", optional = true }
+
+[dev-dependencies]
+proptest = "1"

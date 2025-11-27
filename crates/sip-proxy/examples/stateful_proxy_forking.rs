@@ -13,6 +13,7 @@
 //! cargo run --example stateful_proxy_forking
 //! ```
 
+use bytes::Bytes;
 use sip_core::{Headers, Method, Request, RequestLine, Response, SipUri, StatusLine};
 use sip_proxy::{
     cancel_ack::{CancelForwarder, RouteProcessor},
@@ -20,7 +21,6 @@ use sip_proxy::{
         forwarding, BranchInfo, BranchState, ForkMode, ProxyContext, ProxyTarget, StatefulProxy,
     },
 };
-use bytes::Bytes;
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
 
@@ -59,7 +59,10 @@ fn make_invite(target_user: &str) -> Request {
         "From".into(),
         "<sip:alice@example.com>;tag=alice-tag".into(),
     );
-    headers.push("To".into(), format!("<sip:{}@example.com>", target_user).into());
+    headers.push(
+        "To".into(),
+        format!("<sip:{}@example.com>", target_user).into(),
+    );
     headers.push(
         "Via".into(),
         "SIP/2.0/UDP alice-client:5060;branch=z9hG4bKclient123".into(),
@@ -107,11 +110,7 @@ fn make_response(code: u16, to_tag: &str) -> Response {
     );
     headers.push("Contact".into(), "<sip:bob@192.168.1.100:5060>".into());
 
-    Response::new(
-        StatusLine::new(code, "OK".into()),
-        headers,
-        Bytes::new(),
-    )
+    Response::new(StatusLine::new(code, "OK".into()), headers, Bytes::new())
 }
 
 #[tokio::main]
@@ -159,7 +158,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "z9hG4bKclient123".into(),
         ForkMode::Parallel,
     );
-    println!("  ✓ Context created with {} pending branches\n", targets.len());
+    println!(
+        "  ✓ Context created with {} pending branches\n",
+        targets.len()
+    );
 
     // Fork requests to all targets in parallel
     println!("Step 4: Forking INVITE to all targets simultaneously");
@@ -236,7 +238,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Other branches would get CANCEL
     println!("\n  t=1000ms: Proxy sends CANCEL to non-winning branches");
     for (i, branch_id) in branch_ids.iter().enumerate().skip(1) {
-        println!("            → Would send CANCEL to branch {} ({})", i + 1, branch_id);
+        println!(
+            "            → Would send CANCEL to branch {} ({})",
+            i + 1,
+            branch_id
+        );
     }
 
     // Branch 2 gets cancelled
@@ -263,11 +269,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Demonstrating RFC 3261 response selection rules:\n");
 
     let scenarios = vec![
-        ("Current: 486 Busy", "New: 200 OK", "Result: 200 OK wins (2xx beats 4xx)"),
-        ("Current: 200 OK", "New: 603 Decline", "Result: 603 Decline wins (6xx beats everything)"),
-        ("Current: 486 Busy", "New: 302 Moved", "Result: 302 Moved wins (3xx beats 4xx)"),
-        ("Current: 486 Busy", "New: 487 Cancelled", "Result: 486 Busy kept (first in class wins)"),
-        ("Current: 503 Unavailable", "New: 486 Busy", "Result: 486 Busy wins (4xx beats 5xx)"),
+        (
+            "Current: 486 Busy",
+            "New: 200 OK",
+            "Result: 200 OK wins (2xx beats 4xx)",
+        ),
+        (
+            "Current: 200 OK",
+            "New: 603 Decline",
+            "Result: 603 Decline wins (6xx beats everything)",
+        ),
+        (
+            "Current: 486 Busy",
+            "New: 302 Moved",
+            "Result: 302 Moved wins (3xx beats 4xx)",
+        ),
+        (
+            "Current: 486 Busy",
+            "New: 487 Cancelled",
+            "Result: 486 Busy kept (first in class wins)",
+        ),
+        (
+            "Current: 503 Unavailable",
+            "New: 486 Busy",
+            "Result: 486 Busy wins (4xx beats 5xx)",
+        ),
     ];
 
     for (i, (current, new, result)) in scenarios.iter().enumerate() {
@@ -310,7 +336,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "✗ Skip (already completed)"
         };
         println!("  {} (state={:?}) → {}", name, state, action);
-        assert_eq!(CancelForwarder::should_forward_to_branch(state), *should_forward);
+        assert_eq!(
+            CancelForwarder::should_forward_to_branch(state),
+            *should_forward
+        );
     }
 
     println!("\n  ✓ CANCEL forwarded only to active branches");
@@ -340,7 +369,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Step 1: Determine next hop");
     let next_hop = RouteProcessor::get_next_hop(&routed_req)?;
-    println!("  Next hop: {} (from first Route header)", next_hop.as_str());
+    println!(
+        "  Next hop: {} (from first Route header)",
+        next_hop.as_str()
+    );
     println!("  ✓ Route headers take precedence over Request-URI\n");
 
     println!("Step 2: Forward to next hop");

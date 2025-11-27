@@ -12,6 +12,7 @@ sip-dialog = { path = "../sip-dialog" }
 sip-auth = { path = "../sip-auth" }
 sip-transaction = { path = "../sip-transaction" }
 sip-transport = { path = "../sip-transport" }
+sip-sdp = { path = "../sip-sdp" }
 bytes = { workspace = true }
 smol_str = { workspace = true }
 tracing = { workspace = true }

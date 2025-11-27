@@ -177,7 +177,11 @@ impl fmt::Display for SipFrag {
                     write!(f, "{} {} {}\r\n", req.method.as_str(), req.uri, req.version)?;
                 }
                 StartLine::Response(status) => {
-                    write!(f, "{} {} {}\r\n", status.version, status.code, status.reason)?;
+                    write!(
+                        f,
+                        "{} {} {}\r\n",
+                        status.version, status.code, status.reason
+                    )?;
                 }
             }
         }
@@ -238,14 +242,22 @@ mod tests {
 
         assert!(frag.is_request());
         assert_eq!(frag.method(), Some(&Method::Invite));
-        assert!(frag.to_string().contains("INVITE sip:bob@example.com SIP/2.0"));
+        assert!(frag
+            .to_string()
+            .contains("INVITE sip:bob@example.com SIP/2.0"));
     }
 
     #[test]
     fn sipfrag_headers_only() {
         let mut headers = Headers::new();
-        headers.push(SmolStr::new("From".to_owned()), SmolStr::new("sip:alice@example.com".to_owned()));
-        headers.push(SmolStr::new("To".to_owned()), SmolStr::new("sip:bob@example.com".to_owned()));
+        headers.push(
+            SmolStr::new("From".to_owned()),
+            SmolStr::new("sip:alice@example.com".to_owned()),
+        );
+        headers.push(
+            SmolStr::new("To".to_owned()),
+            SmolStr::new("sip:bob@example.com".to_owned()),
+        );
 
         let frag = SipFrag::headers_only(headers);
         assert!(frag.start_line.is_none());

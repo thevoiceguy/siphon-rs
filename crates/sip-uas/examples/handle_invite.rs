@@ -6,7 +6,6 @@
 /// 3. Send provisional responses (100 Trying, 180 Ringing)
 /// 4. Accept or reject the call
 /// 5. Handle BYE to terminate the dialog
-
 use bytes::Bytes;
 use sip_core::{Headers, Method, Request, RequestLine, SipUri};
 use sip_uas::UserAgentServer;
@@ -59,7 +58,10 @@ m=audio 49170 RTP/AVP 0 8
 ";
 
     let invite_request = Request::new(
-        RequestLine::new(Method::Invite, SipUri::parse("sip:bob@example.com").unwrap()),
+        RequestLine::new(
+            Method::Invite,
+            SipUri::parse("sip:bob@example.com").unwrap(),
+        ),
         headers,
         Bytes::from(sdp_offer.as_bytes().to_vec()),
     );
@@ -77,12 +79,18 @@ m=audio 49170 RTP/AVP 0 8
     // Step 3: Send 100 Trying (immediately)
     let trying_response = UserAgentServer::create_trying(&invite_request);
     println!("\n--- Sending 100 Trying ---");
-    println!("Status: {} {}", trying_response.start.code, trying_response.start.reason);
+    println!(
+        "Status: {} {}",
+        trying_response.start.code, trying_response.start.reason
+    );
 
     // Step 4: Send 180 Ringing (user is being alerted)
     let ringing_response = uas.create_ringing(&invite_request);
     println!("\n--- Sending 180 Ringing ---");
-    println!("Status: {} {}", ringing_response.start.code, ringing_response.start.reason);
+    println!(
+        "Status: {} {}",
+        ringing_response.start.code, ringing_response.start.reason
+    );
 
     // Step 5: User accepts - send 200 OK with SDP answer
     let sdp_answer = "\
@@ -101,10 +109,7 @@ a=rtpmap:0 PCMU/8000
         Ok((response, dialog)) => {
             println!("\n--- Sending 200 OK (Call Accepted) ---");
             println!("Status: {} {}", response.start.code, response.start.reason);
-            println!(
-                "Contact: {}",
-                response.headers.get("Contact").unwrap()
-            );
+            println!("Contact: {}", response.headers.get("Contact").unwrap());
             let to_header = response.headers.get("To").unwrap();
             println!("To: {} (tag added)", to_header);
             println!("Content-Type: application/sdp");
@@ -127,11 +132,17 @@ a=rtpmap:0 PCMU/8000
     println!("\n--- Alternative: Rejecting the Call ---");
     println!("If user is busy:");
     let busy_response = uas.create_busy(&invite_request);
-    println!("  {} {}", busy_response.start.code, busy_response.start.reason);
+    println!(
+        "  {} {}",
+        busy_response.start.code, busy_response.start.reason
+    );
 
     println!("\nIf user declines:");
     let decline_response = uas.create_decline(&invite_request);
-    println!("  {} {}", decline_response.start.code, decline_response.start.reason);
+    println!(
+        "  {} {}",
+        decline_response.start.code, decline_response.start.reason
+    );
 
     // Step 6: Later, handle BYE to terminate the call
     println!("\n--- Handling BYE Request ---");

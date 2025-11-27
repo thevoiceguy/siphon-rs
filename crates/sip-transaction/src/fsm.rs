@@ -405,7 +405,7 @@ impl ClientInviteFsm {
         if !matches!(current_state, crate::ClientInviteState::Completed) {
             actions.push(ClientInviteAction::Schedule {
                 timer: TransactionTimer::D,
-                duration: self.timers.duration(TransactionTimer::D),  // 0 for TCP/TLS, 32s for UDP
+                duration: self.timers.duration(TransactionTimer::D), // 0 for TCP/TLS, 32s for UDP
             });
         }
         actions
@@ -539,7 +539,7 @@ impl ClientNonInviteFsm {
             ClientAction::Cancel(TransactionTimer::F),
             ClientAction::Schedule {
                 timer: TransactionTimer::K,
-                duration: self.timers.duration(TransactionTimer::K),  // 0 for TCP/TLS, T4 for UDP
+                duration: self.timers.duration(TransactionTimer::K), // 0 for TCP/TLS, T4 for UDP
             },
         ]
     }
@@ -707,7 +707,7 @@ impl ServerNonInviteFsm {
             },
             ServerAction::Schedule {
                 timer: TransactionTimer::J,
-                duration: self.timers.duration(TransactionTimer::J),  // 0 for TCP/TLS, 32s for UDP
+                duration: self.timers.duration(TransactionTimer::J), // 0 for TCP/TLS, 32s for UDP
             },
         ]
     }
@@ -746,6 +746,12 @@ pub enum TransportKind {
     Udp,
     Tcp,
     Tls,
+    Ws,
+    Wss,
+    /// SCTP transport (RFC 4168)
+    Sctp,
+    /// TLS over SCTP transport (RFC 4168)
+    TlsSctp,
 }
 
 /// Implements the server INVITE transaction state machine.
@@ -876,7 +882,7 @@ impl ServerInviteFsm {
             ServerInviteAction::Cancel(TransactionTimer::H),
             ServerInviteAction::Schedule {
                 timer: TransactionTimer::I,
-                duration: self.timers.duration(TransactionTimer::I),  // 0 for TCP/TLS, T4 for UDP
+                duration: self.timers.duration(TransactionTimer::I), // 0 for TCP/TLS, T4 for UDP
             },
         ]
     }

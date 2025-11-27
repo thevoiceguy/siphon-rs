@@ -5,7 +5,6 @@
 /// 2. Process responses to create a dialog
 /// 3. Send ACK for 200 OK
 /// 4. Send BYE to terminate the call
-
 use sip_core::SipUri;
 use sip_uac::UserAgentClient;
 
@@ -16,8 +15,8 @@ fn main() {
     let local_uri = SipUri::parse("sip:alice@example.com").expect("valid local URI");
     let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").expect("valid contact URI");
 
-    let uac = UserAgentClient::new(local_uri, contact_uri)
-        .with_display_name("Alice Smith".to_string());
+    let uac =
+        UserAgentClient::new(local_uri, contact_uri).with_display_name("Alice Smith".to_string());
 
     println!("Created UAC for Alice Smith <sip:alice@example.com>");
 
@@ -41,9 +40,15 @@ a=rtpmap:8 PCMA/8000
     println!("Request-URI: {}", invite_request.start.uri.as_str());
     println!("From: {}", invite_request.headers.get("From").unwrap());
     println!("To: {}", invite_request.headers.get("To").unwrap());
-    println!("Contact: {}", invite_request.headers.get("Contact").unwrap());
+    println!(
+        "Contact: {}",
+        invite_request.headers.get("Contact").unwrap()
+    );
     println!("CSeq: {}", invite_request.headers.get("CSeq").unwrap());
-    println!("Content-Type: {}", invite_request.headers.get("Content-Type").unwrap());
+    println!(
+        "Content-Type: {}",
+        invite_request.headers.get("Content-Type").unwrap()
+    );
     println!("Content-Length: {}", invite_request.body.len());
 
     // Step 3: Simulate call flow

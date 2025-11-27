@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use smol_str::SmolStr;
 use percent_encoding::percent_decode_str;
+use smol_str::SmolStr;
 
 use crate::TelUri;
 
@@ -66,7 +66,10 @@ impl SipUri {
 
         let (user, host_port) = match base.split_once('@') {
             Some((user, host)) => (
-                percent_decode_str(user.trim()).decode_utf8().ok().map(|s| SmolStr::new(s.to_string())),
+                percent_decode_str(user.trim())
+                    .decode_utf8()
+                    .ok()
+                    .map(|s| SmolStr::new(s.to_string())),
                 host.trim(),
             ),
             None => (None, base.trim()),
@@ -77,7 +80,10 @@ impl SipUri {
         }
 
         let (host, port) = split_host_port(host_port.trim())?;
-        let host = percent_decode_str(host).decode_utf8().ok()?.to_ascii_lowercase();
+        let host = percent_decode_str(host)
+            .decode_utf8()
+            .ok()?
+            .to_ascii_lowercase();
 
         let mut headers = BTreeMap::new();
         if let Some(headers_part) = headers_part {

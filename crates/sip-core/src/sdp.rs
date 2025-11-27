@@ -1182,11 +1182,7 @@ impl SdpSession {
                         self.repeat_times.push(parse_repeat_time(lines[idx])?);
                     }
                 }
-                'r' => {
-                    return Err(SdpError::InvalidOrder(
-                        "r= must follow t= line".to_string(),
-                    ))
-                }
+                'r' => return Err(SdpError::InvalidOrder("r= must follow t= line".to_string())),
                 'z' => {
                     let zones = parse_time_zones(line)?;
                     self.time_zones.extend(zones);
@@ -1381,9 +1377,7 @@ impl SdpSession {
         if self.connection.is_none() {
             for media in &self.media {
                 if media.connection.is_none() {
-                    return Err(SdpError::MissingRequiredField(
-                        "c= (session or all media)",
-                    ));
+                    return Err(SdpError::MissingRequiredField("c= (session or all media)"));
                 }
             }
         }
@@ -1800,11 +1794,7 @@ impl fmt::Display for Timing {
 
 impl fmt::Display for RepeatTime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "r={} {}",
-            self.repeat_interval, self.active_duration
-        )?;
+        write!(f, "r={} {}", self.repeat_interval, self.active_duration)?;
         for offset in &self.offsets {
             write!(f, " {}", offset)?;
         }
@@ -1904,9 +1894,7 @@ impl Fmtp {
 // Parsing helper functions
 
 fn parse_version(line: &str) -> Result<u32, SdpError> {
-    line[2..]
-        .parse()
-        .map_err(|_| SdpError::InvalidFormat("v="))
+    line[2..].parse().map_err(|_| SdpError::InvalidFormat("v="))
 }
 
 fn parse_origin(line: &str) -> Result<Origin, SdpError> {
@@ -2196,7 +2184,10 @@ mod tests {
                    t=0 0\r\n";
 
         let session = SdpSession::parse(sdp).unwrap();
-        assert_eq!(session.session_info, Some("Session Information".to_string()));
+        assert_eq!(
+            session.session_info,
+            Some("Session Information".to_string())
+        );
     }
 
     #[test]
@@ -2348,15 +2339,9 @@ mod tests {
 
         // Value attributes
         assert_eq!(session.attributes[1].name, "tool");
-        assert_eq!(
-            session.attributes[1].value,
-            Some("siphon v1.0".to_string())
-        );
+        assert_eq!(session.attributes[1].value, Some("siphon v1.0".to_string()));
         assert_eq!(session.attributes[2].name, "type");
-        assert_eq!(
-            session.attributes[2].value,
-            Some("broadcast".to_string())
-        );
+        assert_eq!(session.attributes[2].value, Some("broadcast".to_string()));
     }
 
     #[test]
@@ -2365,37 +2350,25 @@ mod tests {
         let sdp1 = "v=0\r\no=- 0 0 IN IP4 0.0.0.0\r\ns=-\r\nc=IN IP4 0.0.0.0\r\nt=0 0\r\n\
                     m=audio 9 RTP/AVP 0\r\na=sendrecv\r\n";
         let session1 = SdpSession::parse(sdp1).unwrap();
-        assert_eq!(
-            session1.find_direction(Some(0)),
-            Some(Direction::SendRecv)
-        );
+        assert_eq!(session1.find_direction(Some(0)), Some(Direction::SendRecv));
 
         // sendonly
         let sdp2 = "v=0\r\no=- 0 0 IN IP4 0.0.0.0\r\ns=-\r\nc=IN IP4 0.0.0.0\r\nt=0 0\r\n\
                     m=audio 9 RTP/AVP 0\r\na=sendonly\r\n";
         let session2 = SdpSession::parse(sdp2).unwrap();
-        assert_eq!(
-            session2.find_direction(Some(0)),
-            Some(Direction::SendOnly)
-        );
+        assert_eq!(session2.find_direction(Some(0)), Some(Direction::SendOnly));
 
         // recvonly
         let sdp3 = "v=0\r\no=- 0 0 IN IP4 0.0.0.0\r\ns=-\r\nc=IN IP4 0.0.0.0\r\nt=0 0\r\n\
                     m=audio 9 RTP/AVP 0\r\na=recvonly\r\n";
         let session3 = SdpSession::parse(sdp3).unwrap();
-        assert_eq!(
-            session3.find_direction(Some(0)),
-            Some(Direction::RecvOnly)
-        );
+        assert_eq!(session3.find_direction(Some(0)), Some(Direction::RecvOnly));
 
         // inactive
         let sdp4 = "v=0\r\no=- 0 0 IN IP4 0.0.0.0\r\ns=-\r\nc=IN IP4 0.0.0.0\r\nt=0 0\r\n\
                     m=audio 9 RTP/AVP 0\r\na=inactive\r\n";
         let session4 = SdpSession::parse(sdp4).unwrap();
-        assert_eq!(
-            session4.find_direction(Some(0)),
-            Some(Direction::Inactive)
-        );
+        assert_eq!(session4.find_direction(Some(0)), Some(Direction::Inactive));
     }
 
     #[test]
@@ -3022,10 +2995,7 @@ mod tests {
         assert_eq!(session.media[1].mid, Some("2".to_string()));
 
         // Verify group and mid attributes were extracted from attributes
-        assert!(session
-            .attributes
-            .iter()
-            .all(|attr| attr.name != "group"));
+        assert!(session.attributes.iter().all(|attr| attr.name != "group"));
         assert!(session.media[0]
             .attributes
             .iter()
@@ -3269,10 +3239,8 @@ mod tests {
 
     #[test]
     fn parse_capability_parameter_general() {
-        let cpar = CapabilityParameter::parse(
-            CapabilityParameterType::General,
-            "a=fmtp:96 0-16,32-35",
-        );
+        let cpar =
+            CapabilityParameter::parse(CapabilityParameterType::General, "a=fmtp:96 0-16,32-35");
         assert_eq!(cpar.param_type, CapabilityParameterType::General);
         assert_eq!(cpar.value, "a=fmtp:96 0-16,32-35");
     }
@@ -3327,7 +3295,10 @@ mod tests {
         assert_eq!(cap_set.descriptions[1].formats, vec!["96"]);
 
         assert_eq!(cap_set.parameters.len(), 1);
-        assert_eq!(cap_set.parameters[0].param_type, CapabilityParameterType::General);
+        assert_eq!(
+            cap_set.parameters[0].param_type,
+            CapabilityParameterType::General
+        );
         assert_eq!(cap_set.parameters[0].value, "a=fmtp:96 annexb=no");
     }
 
@@ -3357,9 +3328,18 @@ mod tests {
         assert_eq!(media_cap_set.descriptions[0].formats, vec!["8", "96"]);
 
         assert_eq!(media_cap_set.parameters.len(), 3);
-        assert_eq!(media_cap_set.parameters[0].param_type, CapabilityParameterType::General);
-        assert_eq!(media_cap_set.parameters[1].param_type, CapabilityParameterType::Min);
-        assert_eq!(media_cap_set.parameters[2].param_type, CapabilityParameterType::Max);
+        assert_eq!(
+            media_cap_set.parameters[0].param_type,
+            CapabilityParameterType::General
+        );
+        assert_eq!(
+            media_cap_set.parameters[1].param_type,
+            CapabilityParameterType::Min
+        );
+        assert_eq!(
+            media_cap_set.parameters[2].param_type,
+            CapabilityParameterType::Max
+        );
         assert_eq!(media_cap_set.parameters[1].value, "b=AS:32");
         assert_eq!(media_cap_set.parameters[2].value, "b=AS:64");
     }
@@ -3569,7 +3549,10 @@ mod tests {
                    m=audio 49170 RTP/AVP 0\r\n";
 
         let session = SdpSession::parse(sdp).unwrap();
-        assert_eq!(session.capability_set.as_ref().unwrap().sequence_number, 255);
+        assert_eq!(
+            session.capability_set.as_ref().unwrap().sequence_number,
+            255
+        );
     }
 
     #[test]
@@ -4173,8 +4156,8 @@ mod tests {
 
     #[test]
     fn rtcp_attribute_parse_with_address_ipv6() {
-        let rtcp = RtcpAttribute::parse("53020 IN IP6 2001:2345:6789:ABCD:EF01:2345:6789:ABCD")
-            .unwrap();
+        let rtcp =
+            RtcpAttribute::parse("53020 IN IP6 2001:2345:6789:ABCD:EF01:2345:6789:ABCD").unwrap();
         assert_eq!(rtcp.port, 53020);
         assert_eq!(rtcp.nettype, Some("IN".to_string()));
         assert_eq!(rtcp.addrtype, Some("IP6".to_string()));

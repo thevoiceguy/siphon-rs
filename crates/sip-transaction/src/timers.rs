@@ -65,8 +65,8 @@
 //! - **Timer H** (transaction timeout): 64*T1 for all transports
 //! - **Timer I** (wait time for ACK): 0 for TCP/TLS, T4 for UDP
 
-use std::time::Duration;
 use crate::TransactionTimer;
+use std::time::Duration;
 
 /// Transport protocol for timer calculations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -296,7 +296,10 @@ mod tests {
     #[test]
     fn timer_j_64t1_for_udp() {
         let timers = TransportAwareTimers::new(Transport::Udp);
-        assert_eq!(timers.duration(TransactionTimer::J), Duration::from_secs(32));
+        assert_eq!(
+            timers.duration(TransactionTimer::J),
+            Duration::from_secs(32)
+        );
     }
 
     #[test]
@@ -389,9 +392,18 @@ mod tests {
         };
         let timers = TransportAwareTimers::with_defaults(Transport::Udp, custom);
 
-        assert_eq!(timers.duration(TransactionTimer::T1), Duration::from_secs(1));
-        assert_eq!(timers.duration(TransactionTimer::K), Duration::from_secs(10));
-        assert_eq!(timers.duration(TransactionTimer::F), Duration::from_secs(64)); // 64*T1
+        assert_eq!(
+            timers.duration(TransactionTimer::T1),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            timers.duration(TransactionTimer::K),
+            Duration::from_secs(10)
+        );
+        assert_eq!(
+            timers.duration(TransactionTimer::F),
+            Duration::from_secs(64)
+        ); // 64*T1
     }
 
     #[test]

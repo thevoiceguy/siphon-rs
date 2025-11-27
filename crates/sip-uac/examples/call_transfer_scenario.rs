@@ -21,7 +21,6 @@
 use anyhow::Result;
 use tokio::time::{sleep, Duration};
 
-
 #[tokio::main]
 async fn main() -> Result<()> {
     println!("=== Call Transfer Scenarios Example ===\n");

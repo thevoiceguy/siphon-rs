@@ -12,7 +12,7 @@
 //! cargo run --example offer_answer_negotiation
 //! ```
 
-use sip_sdp::{profiles, negotiate, SessionDescription};
+use sip_sdp::{negotiate, profiles, SessionDescription};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== SDP Offer/Answer Negotiation Example ===\n");
@@ -34,25 +34,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None,
     );
 
-    println!("  Origin: o={} {} {} {} {} {}",
-             alice_offer.origin.username,
-             alice_offer.origin.session_id,
-             alice_offer.origin.session_version,
-             alice_offer.origin.net_type,
-             alice_offer.origin.addr_type,
-             alice_offer.origin.unicast_address);
+    println!(
+        "  Origin: o={} {} {} {} {} {}",
+        alice_offer.origin.username,
+        alice_offer.origin.session_id,
+        alice_offer.origin.session_version,
+        alice_offer.origin.net_type,
+        alice_offer.origin.addr_type,
+        alice_offer.origin.unicast_address
+    );
     println!("  Session: s={}", alice_offer.session_name);
-    println!("  Connection: c={} {} {}",
-             alice_offer.connection.as_ref().unwrap().net_type,
-             alice_offer.connection.as_ref().unwrap().addr_type,
-             alice_offer.connection.as_ref().unwrap().connection_address);
+    println!(
+        "  Connection: c={} {} {}",
+        alice_offer.connection.as_ref().unwrap().net_type,
+        alice_offer.connection.as_ref().unwrap().addr_type,
+        alice_offer.connection.as_ref().unwrap().connection_address
+    );
     println!("  Media: {} streams", alice_offer.media.len());
     for (i, media) in alice_offer.media.iter().enumerate() {
-        println!("    [{}] {} port {} proto {} formats {:?}",
-                 i, media.media_type, media.port, media.protocol, media.formats);
+        println!(
+            "    [{}] {} port {} proto {} formats {:?}",
+            i, media.media_type, media.port, media.protocol, media.formats
+        );
         println!("         Codecs: {} rtpmaps", media.rtpmaps.len());
         for (pt, rtpmap) in &media.rtpmaps {
-            println!("           PT {} = {}/{}", pt, rtpmap.encoding_name, rtpmap.clock_rate);
+            println!(
+                "           PT {} = {}/{}",
+                pt, rtpmap.encoding_name, rtpmap.clock_rate
+            );
         }
     }
 
@@ -60,11 +69,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nStep 2: Serialize offer to SDP text format");
     let alice_offer_text = alice_offer.to_string();
     println!("  SDP size: {} bytes", alice_offer_text.len());
-    println!("  SDP text:\n{}", alice_offer_text.lines()
-        .take(5)
-        .collect::<Vec<_>>()
-        .join("\n"));
-    println!("  ... ({} more lines)", alice_offer_text.lines().count() - 5);
+    println!(
+        "  SDP text:\n{}",
+        alice_offer_text
+            .lines()
+            .take(5)
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    println!(
+        "  ... ({} more lines)",
+        alice_offer_text.lines().count() - 5
+    );
 
     // Bob receives and parses the offer
     println!("\nStep 3: Bob receives and parses the offer");
@@ -82,23 +98,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         9000,
         None,
     );
-    println!("  Bob supports: {} media streams", bob_capabilities.media.len());
+    println!(
+        "  Bob supports: {} media streams",
+        bob_capabilities.media.len()
+    );
     println!("  Audio port: {}", bob_capabilities.media[0].port);
     println!("  Audio codecs: {:?}", bob_capabilities.media[0].formats);
 
     // Bob negotiates answer using RFC 3264
     println!("\nStep 5: Bob negotiates answer per RFC 3264");
-    let bob_answer = negotiate::negotiate_answer(
-        &parsed_offer,
-        "10.0.0.1",
-        &bob_capabilities,
-    )?;
+    let bob_answer = negotiate::negotiate_answer(&parsed_offer, "10.0.0.1", &bob_capabilities)?;
     println!("  ✓ Negotiation successful");
     println!("  Answer has {} media streams", bob_answer.media.len());
     for media in &bob_answer.media {
         if media.port > 0 {
-            println!("    ✓ {} accepted on port {} with formats {:?}",
-                     media.media_type, media.port, media.formats);
+            println!(
+                "    ✓ {} accepted on port {} with formats {:?}",
+                media.media_type, media.port, media.formats
+            );
         } else {
             println!("    ✗ {} rejected (port 0)", media.media_type);
         }
@@ -110,8 +127,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  SDP size: {} bytes", bob_answer_text.len());
 
     println!("\n  Result: Audio call established!");
-    println!("    Alice sends RTP to 10.0.0.1:{}", bob_answer.media[0].port);
-    println!("    Bob sends RTP to 192.168.1.100:{}", parsed_offer.media[0].port);
+    println!(
+        "    Alice sends RTP to 10.0.0.1:{}",
+        bob_answer.media[0].port
+    );
+    println!(
+        "    Bob sends RTP to 192.168.1.100:{}",
+        parsed_offer.media[0].port
+    );
 
     // ================================================
     // Scenario 2: Audio+Video with Codec Mismatch
@@ -129,13 +152,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         8000,
         Some(8002),
     );
-    println!("  ✓ Created offer with {} media streams", alice_av_offer.media.len());
-    println!("    - Audio: port {} formats {:?}",
-             alice_av_offer.media[0].port,
-             alice_av_offer.media[0].formats);
-    println!("    - Video: port {} formats {:?}",
-             alice_av_offer.media[1].port,
-             alice_av_offer.media[1].formats);
+    println!(
+        "  ✓ Created offer with {} media streams",
+        alice_av_offer.media.len()
+    );
+    println!(
+        "    - Audio: port {} formats {:?}",
+        alice_av_offer.media[0].port, alice_av_offer.media[0].formats
+    );
+    println!(
+        "    - Video: port {} formats {:?}",
+        alice_av_offer.media[1].port, alice_av_offer.media[1].formats
+    );
 
     // Bob only supports audio
     println!("\nStep 2: Bob only supports audio (no video codec)");
@@ -153,17 +181,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let parsed_av_offer = SessionDescription::parse(&offer_text)?;
 
     println!("\nStep 3: Negotiate answer (RFC 3264 handles mismatch)");
-    let bob_partial_answer = negotiate::negotiate_answer(
-        &parsed_av_offer,
-        "10.0.0.1",
-        &bob_audio_only,
-    )?;
+    let bob_partial_answer =
+        negotiate::negotiate_answer(&parsed_av_offer, "10.0.0.1", &bob_audio_only)?;
     println!("  ✓ Negotiation successful with partial rejection");
     for media in &bob_partial_answer.media {
         if media.port > 0 {
             println!("    ✓ {} accepted on port {}", media.media_type, media.port);
         } else {
-            println!("    ✗ {} rejected (port 0 - no common codec)", media.media_type);
+            println!(
+                "    ✗ {} rejected (port 0 - no common codec)",
+                media.media_type
+            );
         }
     }
 
@@ -181,10 +209,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Demonstrating media direction negotiation:");
 
     let directions = [
-        (negotiate::Direction::SendRecv, negotiate::Direction::SendRecv, "SendRecv + SendRecv"),
-        (negotiate::Direction::SendRecv, negotiate::Direction::SendOnly, "SendRecv + SendOnly"),
-        (negotiate::Direction::SendOnly, negotiate::Direction::RecvOnly, "SendOnly + RecvOnly"),
-        (negotiate::Direction::Inactive, negotiate::Direction::SendRecv, "Inactive + SendRecv"),
+        (
+            negotiate::Direction::SendRecv,
+            negotiate::Direction::SendRecv,
+            "SendRecv + SendRecv",
+        ),
+        (
+            negotiate::Direction::SendRecv,
+            negotiate::Direction::SendOnly,
+            "SendRecv + SendOnly",
+        ),
+        (
+            negotiate::Direction::SendOnly,
+            negotiate::Direction::RecvOnly,
+            "SendOnly + RecvOnly",
+        ),
+        (
+            negotiate::Direction::Inactive,
+            negotiate::Direction::SendRecv,
+            "Inactive + SendRecv",
+        ),
     ];
 
     for (offer_dir, answer_dir, desc) in &directions {

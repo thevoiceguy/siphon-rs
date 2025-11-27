@@ -98,7 +98,9 @@ impl ConnectionPool {
         let evict_count = (self.max_size / 10).max(1);
 
         // Collect entries sorted by last_used (oldest first)
-        let mut entries: Vec<_> = self.tcp.iter()
+        let mut entries: Vec<_> = self
+            .tcp
+            .iter()
             .map(|entry| (*entry.key(), entry.value().last_used))
             .collect();
 
@@ -157,7 +159,7 @@ impl ConnectionPool {
 
 #[cfg(feature = "tls")]
 use tokio_rustls::{
-    rustls::{ClientConfig, pki_types::ServerName},
+    rustls::{pki_types::ServerName, ClientConfig},
     TlsConnector,
 };
 
@@ -223,7 +225,9 @@ impl TlsPool {
         let evict_count = (self.max_size / 10).max(1);
 
         // Collect entries sorted by last_used (oldest first)
-        let mut entries: Vec<_> = self.inner.iter()
+        let mut entries: Vec<_> = self
+            .inner
+            .iter()
             .map(|entry| (entry.key().clone(), entry.value().last_used))
             .collect();
 

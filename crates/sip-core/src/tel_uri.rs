@@ -5,7 +5,6 @@
 /// - Local: Requires phone-context parameter (e.g., tel:555-1234;phone-context=example.com)
 ///
 /// RFC 3966 (which obsoletes RFC 2806) defines the current tel URI format.
-
 use smol_str::SmolStr;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -148,7 +147,11 @@ impl TelUri {
     }
 
     /// Adds a parameter to the tel URI.
-    pub fn with_parameter(mut self, key: impl Into<SmolStr>, value: Option<impl Into<SmolStr>>) -> Self {
+    pub fn with_parameter(
+        mut self,
+        key: impl Into<SmolStr>,
+        value: Option<impl Into<SmolStr>>,
+    ) -> Self {
         let key = key.into();
         let value = value.map(|v| v.into());
         self.parameters.insert(key, value);
@@ -160,7 +163,8 @@ impl TelUri {
         let context = context.into();
         if !self.is_global {
             self.phone_context = Some(context.clone());
-            self.parameters.insert(SmolStr::new("phone-context".to_owned()), Some(context));
+            self.parameters
+                .insert(SmolStr::new("phone-context".to_owned()), Some(context));
         }
         self
     }
@@ -225,7 +229,15 @@ mod tests {
     fn parses_with_extension() {
         let uri = TelUri::parse("tel:+1-555-123-4567;ext=1234").unwrap();
         assert!(uri.is_global);
-        assert_eq!(uri.parameters.get("ext").unwrap().as_ref().unwrap().as_str(), "1234");
+        assert_eq!(
+            uri.parameters
+                .get("ext")
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .as_str(),
+            "1234"
+        );
     }
 
     #[test]

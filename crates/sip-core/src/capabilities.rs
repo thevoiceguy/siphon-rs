@@ -26,7 +26,6 @@
 ///     FeatureValue::TokenList(vec!["INVITE".into(), "BYE".into()])
 /// );
 /// ```
-
 use smol_str::SmolStr;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -489,10 +488,9 @@ impl CapabilitySet {
 
         for (name, value) in params.iter() {
             if let Some(tag) = FeatureTag::from_param_name(name.as_str()) {
-                if let Some(feature_value) = FeatureValue::from_param_value(
-                    tag,
-                    value.as_ref().map(|v| v.as_str()),
-                ) {
+                if let Some(feature_value) =
+                    FeatureValue::from_param_value(tag, value.as_ref().map(|v| v.as_str()))
+                {
                     set.add(Capability::new(tag, feature_value));
                 }
             }
@@ -609,10 +607,7 @@ mod tests {
 
     #[test]
     fn token_list_feature_value() {
-        let val = FeatureValue::TokenList(vec![
-            SmolStr::new("INVITE"),
-            SmolStr::new("BYE"),
-        ]);
+        let val = FeatureValue::TokenList(vec![SmolStr::new("INVITE"), SmolStr::new("BYE")]);
         assert_eq!(val.to_param_value(), Some(SmolStr::new("\"INVITE,BYE\"")));
     }
 

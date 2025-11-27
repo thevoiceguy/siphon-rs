@@ -3,8 +3,8 @@
 //! These tests verify that tel URIs work correctly throughout the SIP stack,
 //! including in Request-URI, From/To headers, and Contact headers.
 
-use sip_core::{Request, RequestLine, Headers, Method, TelUri, Uri, SipUri};
 use bytes::Bytes;
+use sip_core::{Headers, Method, Request, RequestLine, SipUri, TelUri, Uri};
 use smol_str::SmolStr;
 
 #[test]
@@ -48,7 +48,10 @@ fn request_with_mixed_uri_types() {
     let request_line = RequestLine::new(Method::Invite, sip_uri);
 
     let mut headers = Headers::new();
-    headers.push(SmolStr::new("From"), SmolStr::new("<sip:alice@example.com>;tag=123"));
+    headers.push(
+        SmolStr::new("From"),
+        SmolStr::new("<sip:alice@example.com>;tag=123"),
+    );
     // To header with tel URI
     headers.push(SmolStr::new("To"), SmolStr::new("<tel:+1-555-123-4567>"));
     headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"));
@@ -123,14 +126,24 @@ fn tel_uri_builder_methods() {
     assert!(tel_uri.is_global);
     assert_eq!(tel_uri.as_str(), "tel:+15551234567");
 
-    let local_tel = TelUri::new("5551234", false)
-        .with_phone_context("example.com");
+    let local_tel = TelUri::new("5551234", false).with_phone_context("example.com");
     assert!(!local_tel.is_global);
-    assert_eq!(local_tel.phone_context.as_ref().unwrap().as_str(), "example.com");
+    assert_eq!(
+        local_tel.phone_context.as_ref().unwrap().as_str(),
+        "example.com"
+    );
 
-    let tel_with_ext = TelUri::new("+15551234567", true)
-        .with_parameter("ext", Some("1234"));
-    assert_eq!(tel_with_ext.parameters.get("ext").unwrap().as_ref().unwrap().as_str(), "1234");
+    let tel_with_ext = TelUri::new("+15551234567", true).with_parameter("ext", Some("1234"));
+    assert_eq!(
+        tel_with_ext
+            .parameters
+            .get("ext")
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .as_str(),
+        "1234"
+    );
 }
 
 #[test]
@@ -145,6 +158,11 @@ fn tel_uri_visual_separators_normalized() {
 
     for variant in variants {
         let tel_uri = TelUri::parse(variant).expect("valid tel URI");
-        assert_eq!(tel_uri.number.as_str(), "+15551234567", "failed for {}", variant);
+        assert_eq!(
+            tel_uri.number.as_str(),
+            "+15551234567",
+            "failed for {}",
+            variant
+        );
     }
 }

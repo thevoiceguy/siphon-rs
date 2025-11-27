@@ -1,4 +1,5 @@
 pub mod cancel_ack;
+pub mod service;
 pub mod stateful;
 
 use anyhow::{anyhow, Result};
@@ -129,7 +130,10 @@ mod tests {
         headers.push("Max-Forwards".into(), "70".into());
 
         let mut req = Request::new(
-            RequestLine::new(Method::Invite, SipUri::parse("sip:bob@example.com").unwrap()),
+            RequestLine::new(
+                Method::Invite,
+                SipUri::parse("sip:bob@example.com").unwrap(),
+            ),
             headers,
             Bytes::new(),
         );
@@ -148,7 +152,10 @@ mod tests {
     fn adds_record_route() {
         let mut headers = Headers::new();
         let mut req = Request::new(
-            RequestLine::new(Method::Invite, SipUri::parse("sip:bob@example.com").unwrap()),
+            RequestLine::new(
+                Method::Invite,
+                SipUri::parse("sip:bob@example.com").unwrap(),
+            ),
             headers,
             Bytes::new(),
         );
@@ -166,7 +173,10 @@ mod tests {
         headers.push("Max-Forwards".into(), "70".into());
 
         let mut req = Request::new(
-            RequestLine::new(Method::Invite, SipUri::parse("sip:bob@example.com").unwrap()),
+            RequestLine::new(
+                Method::Invite,
+                SipUri::parse("sip:bob@example.com").unwrap(),
+            ),
             headers,
             Bytes::new(),
         );
@@ -181,7 +191,10 @@ mod tests {
         headers.push("Max-Forwards".into(), "0".into());
 
         let mut req = Request::new(
-            RequestLine::new(Method::Invite, SipUri::parse("sip:bob@example.com").unwrap()),
+            RequestLine::new(
+                Method::Invite,
+                SipUri::parse("sip:bob@example.com").unwrap(),
+            ),
             headers,
             Bytes::new(),
         );
@@ -207,7 +220,10 @@ mod tests {
     #[test]
     fn updates_request_uri() {
         let mut req = Request::new(
-            RequestLine::new(Method::Invite, SipUri::parse("sip:alice@example.com").unwrap()),
+            RequestLine::new(
+                Method::Invite,
+                SipUri::parse("sip:alice@example.com").unwrap(),
+            ),
             Headers::new(),
             Bytes::new(),
         );

@@ -33,23 +33,19 @@ fn demonstrate_basic_metrics() {
     metrics.record_transaction_duration(
         TransportType::Udp,
         "INVITE",
-        Duration::from_millis(5200),  // UDP: includes retransmissions
+        Duration::from_millis(5200), // UDP: includes retransmissions
     );
     metrics.record_transaction_duration(
         TransportType::Tcp,
         "INVITE",
-        Duration::from_millis(250),  // TCP: much faster
+        Duration::from_millis(250), // TCP: much faster
     );
     metrics.record_transaction_duration(
         TransportType::Udp,
         "REGISTER",
         Duration::from_millis(6100),
     );
-    metrics.record_transaction_duration(
-        TransportType::Tcp,
-        "REGISTER",
-        Duration::from_millis(180),
-    );
+    metrics.record_transaction_duration(TransportType::Tcp, "REGISTER", Duration::from_millis(180));
 
     // Query individual averages
     if let Some(avg_udp) = metrics.avg_duration_for_transport(TransportType::Udp) {
@@ -69,14 +65,14 @@ fn demonstrate_transport_comparison() {
 
     // Simulate UDP transactions (with retransmissions and wait times)
     for i in 0..10 {
-        let duration = Duration::from_millis(5000 + (i * 100));  // 5-6 seconds
+        let duration = Duration::from_millis(5000 + (i * 100)); // 5-6 seconds
         metrics.record_transaction_duration(TransportType::Udp, "OPTIONS", duration);
         metrics.record_transaction_outcome(TransportType::Udp, TransactionOutcome::Completed);
     }
 
     // Simulate TCP transactions (immediate completion)
     for i in 0..10 {
-        let duration = Duration::from_millis(150 + (i * 10));  // 150-250ms
+        let duration = Duration::from_millis(150 + (i * 10)); // 150-250ms
         metrics.record_transaction_duration(TransportType::Tcp, "OPTIONS", duration);
         metrics.record_transaction_outcome(TransportType::Tcp, TransactionOutcome::Completed);
     }
@@ -106,7 +102,10 @@ fn demonstrate_transport_comparison() {
         snapshot.by_transport.get(&TransportType::Tcp),
     ) {
         let speedup = udp_stats.avg_duration.as_secs_f64() / tcp_stats.avg_duration.as_secs_f64();
-        println!("TCP is {:.1}x faster than UDP for OPTIONS transactions\n", speedup);
+        println!(
+            "TCP is {:.1}x faster than UDP for OPTIONS transactions\n",
+            speedup
+        );
     }
 }
 
@@ -116,12 +115,12 @@ fn demonstrate_timer_tracking() {
     let metrics = TransactionMetrics::new();
 
     // Simulate timer firings
-    metrics.record_timer_fired(TransactionTimer::E);  // Retransmission
+    metrics.record_timer_fired(TransactionTimer::E); // Retransmission
     metrics.record_timer_fired(TransactionTimer::E);
     metrics.record_timer_fired(TransactionTimer::E);
-    metrics.record_timer_fired(TransactionTimer::K);  // Wait complete
+    metrics.record_timer_fired(TransactionTimer::K); // Wait complete
     metrics.record_timer_fired(TransactionTimer::K);
-    metrics.record_timer_fired(TransactionTimer::F);  // Timeout
+    metrics.record_timer_fired(TransactionTimer::F); // Timeout
 
     let snapshot = metrics.snapshot();
 
@@ -139,7 +138,9 @@ fn demonstrate_timer_tracking() {
     ];
 
     for (timer, name) in timers_to_show {
-        let count = snapshot.timer_stats.get(&timer)
+        let count = snapshot
+            .timer_stats
+            .get(&timer)
             .map(|s| s.fire_count)
             .unwrap_or(0);
         println!("│ {:<30} │ {:>15} │", name, count);
@@ -160,7 +161,11 @@ fn demonstrate_outcome_tracking() {
 
     // Simulate various outcomes
     for _ in 0..15 {
-        metrics.record_transaction_duration(TransportType::Tcp, "INVITE", Duration::from_millis(200));
+        metrics.record_transaction_duration(
+            TransportType::Tcp,
+            "INVITE",
+            Duration::from_millis(200),
+        );
         metrics.record_transaction_outcome(TransportType::Tcp, TransactionOutcome::Completed);
     }
     for _ in 0..2 {
@@ -168,7 +173,11 @@ fn demonstrate_outcome_tracking() {
         metrics.record_transaction_outcome(TransportType::Tcp, TransactionOutcome::Timeout);
     }
     for _ in 0..1 {
-        metrics.record_transaction_duration(TransportType::Tcp, "INVITE", Duration::from_millis(50));
+        metrics.record_transaction_duration(
+            TransportType::Tcp,
+            "INVITE",
+            Duration::from_millis(50),
+        );
         metrics.record_transaction_outcome(TransportType::Tcp, TransactionOutcome::TransportError);
     }
 
@@ -193,7 +202,9 @@ fn demonstrate_outcome_tracking() {
 
         println!("└────────────────────────────┴────────────┴─────────────┘\n");
 
-        let success_rate = tcp_stats.outcomes.get(&TransactionOutcome::Completed)
+        let success_rate = tcp_stats
+            .outcomes
+            .get(&TransactionOutcome::Completed)
             .map(|c| (*c as f64 / total) * 100.0)
             .unwrap_or(0.0);
 

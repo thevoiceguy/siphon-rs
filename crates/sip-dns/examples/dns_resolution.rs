@@ -2,7 +2,7 @@
 ///
 /// Run with: cargo run --example dns_resolution
 use sip_core::SipUri;
-use sip_dns::{Resolver, SipResolver, StaticResolver, Transport, DnsTarget};
+use sip_dns::{DnsTarget, Resolver, SipResolver, StaticResolver, Transport};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

@@ -4,7 +4,6 @@
 /// - Maps outgoing Call-IDs to incoming transaction handles
 /// - Correlates responses from callee with caller's transaction
 /// - Enables proper B2BUA behavior with response relay
-
 use dashmap::DashMap;
 use sip_core::{Request, Response, SipUri};
 use std::sync::Arc;
@@ -61,7 +60,9 @@ impl B2BUAStateManager {
 
     /// Look up a call leg pair by outgoing Call-ID
     pub fn find_call_leg(&self, outgoing_call_id: &str) -> Option<CallLegPair> {
-        self.call_legs.get(outgoing_call_id).map(|entry| entry.clone())
+        self.call_legs
+            .get(outgoing_call_id)
+            .map(|entry| entry.clone())
     }
 
     /// Look up a call leg pair by incoming Call-ID (caller's Call-ID)
@@ -89,9 +90,8 @@ impl B2BUAStateManager {
     #[allow(dead_code)]
     pub fn cleanup_old(&self, max_age: Duration) {
         let now = Instant::now();
-        self.call_legs.retain(|_, pair| {
-            now.duration_since(pair.created_at) < max_age
-        });
+        self.call_legs
+            .retain(|_, pair| now.duration_since(pair.created_at) < max_age);
     }
 
     /// Get count of active call leg pairs

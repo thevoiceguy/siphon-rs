@@ -1,9 +1,9 @@
 use bytes::Bytes;
-use sip_core::{Headers, Method, Request, RequestLine, Response, StatusLine, SipUri};
+use sip_core::{Headers, Method, Request, RequestLine, Response, SipUri, StatusLine};
 use sip_transaction::fsm::{
-    ClientAction, ClientInviteAction, ClientInviteEvent, ClientInviteFsm,
-    ClientNonInviteEvent, ClientNonInviteFsm, ServerAction, ServerInviteAction,
-    ServerInviteEvent, ServerInviteFsm, ServerNonInviteEvent, ServerNonInviteFsm,
+    ClientAction, ClientInviteAction, ClientInviteEvent, ClientInviteFsm, ClientNonInviteEvent,
+    ClientNonInviteFsm, ServerAction, ServerInviteAction, ServerInviteEvent, ServerInviteFsm,
+    ServerNonInviteEvent, ServerNonInviteFsm,
 };
 use sip_transaction::timers::{Transport, TransportAwareTimers};
 use sip_transaction::{ClientNonInviteState, ServerNonInviteState, TransactionTimer};
@@ -80,7 +80,10 @@ fn client_non_invite_duplicate_final_response_ignored() {
     // Duplicate final response should be absorbed
     let actions = fsm.on_event(ClientNonInviteEvent::ReceiveFinal(resp.clone()));
     assert!(
-        actions.is_empty() || !actions.iter().any(|a| matches!(a, ClientAction::Deliver(_))),
+        actions.is_empty()
+            || !actions
+                .iter()
+                .any(|a| matches!(a, ClientAction::Deliver(_))),
         "Duplicate final responses should not be delivered again"
     );
 }
@@ -128,7 +131,9 @@ fn client_non_invite_proceeding_to_completed() {
     fsm.on_event(ClientNonInviteEvent::SendRequest(req));
 
     // Receive provisional
-    let actions = fsm.on_event(ClientNonInviteEvent::ReceiveProvisional(sample_response(180)));
+    let actions = fsm.on_event(ClientNonInviteEvent::ReceiveProvisional(sample_response(
+        180,
+    )));
     assert!(matches!(fsm.state, ClientNonInviteState::Proceeding));
     assert!(
         actions
@@ -138,7 +143,9 @@ fn client_non_invite_proceeding_to_completed() {
     );
 
     // Additional provisionals should also be delivered
-    let actions = fsm.on_event(ClientNonInviteEvent::ReceiveProvisional(sample_response(183)));
+    let actions = fsm.on_event(ClientNonInviteEvent::ReceiveProvisional(sample_response(
+        183,
+    )));
     assert!(
         actions
             .iter()
@@ -245,18 +252,14 @@ fn client_invite_3xx_4xx_5xx_6xx_requires_ack() {
         let actions = fsm.on_event(ClientInviteEvent::ReceiveFinal(sample_response(code)));
 
         assert!(
-            matches!(
-                fsm.state,
-                sip_transaction::ClientInviteState::Completed
-            ),
+            matches!(fsm.state, sip_transaction::ClientInviteState::Completed),
             "Non-2xx final should move to Completed for code {}",
             code
         );
         assert!(
-            actions.iter().any(|a| matches!(
-                a,
-                ClientInviteAction::GenerateAck { is_2xx: false, .. }
-            )),
+            actions
+                .iter()
+                .any(|a| matches!(a, ClientInviteAction::GenerateAck { is_2xx: false, .. })),
             "Non-2xx final should generate ACK for code {}",
             code
         );
@@ -287,10 +290,9 @@ fn client_invite_2xx_immediate_termination() {
         sip_transaction::ClientInviteState::Terminated
     ));
     assert!(
-        actions.iter().any(|a| matches!(
-            a,
-            ClientInviteAction::GenerateAck { is_2xx: true, .. }
-        )),
+        actions
+            .iter()
+            .any(|a| matches!(a, ClientInviteAction::GenerateAck { is_2xx: true, .. })),
         "2xx should generate ACK"
     );
     assert!(
@@ -507,10 +509,9 @@ fn server_invite_ack_moves_to_confirmed() {
         "Timer I should be scheduled on ACK receipt"
     );
     assert!(
-        actions.iter().any(|a| matches!(
-            a,
-            ServerInviteAction::Cancel(TransactionTimer::G)
-        )),
+        actions
+            .iter()
+            .any(|a| matches!(a, ServerInviteAction::Cancel(TransactionTimer::G))),
         "Timer G should be cancelled on ACK receipt"
     );
 }

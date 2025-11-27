@@ -173,9 +173,7 @@ impl PrivacyHeader {
             .map(|part| PrivacyValue::from_str(part))
             .collect();
 
-        Ok(Self {
-            values: values?,
-        })
+        Ok(Self { values: values? })
     }
 }
 
@@ -385,7 +383,10 @@ mod tests {
         assert_eq!(PrivacyValue::from_str("session"), Ok(PrivacyValue::Session));
         assert_eq!(PrivacyValue::from_str("user"), Ok(PrivacyValue::User));
         assert_eq!(PrivacyValue::from_str("id"), Ok(PrivacyValue::Id));
-        assert_eq!(PrivacyValue::from_str("critical"), Ok(PrivacyValue::Critical));
+        assert_eq!(
+            PrivacyValue::from_str("critical"),
+            Ok(PrivacyValue::Critical)
+        );
         assert_eq!(PrivacyValue::from_str("NONE"), Ok(PrivacyValue::None));
         assert_eq!(PrivacyValue::from_str("ID"), Ok(PrivacyValue::Id));
         assert!(PrivacyValue::from_str("invalid").is_err());
@@ -541,7 +542,10 @@ mod tests {
         use smol_str::SmolStr;
 
         let mut headers = Headers::new();
-        headers.push(SmolStr::new("From"), SmolStr::new("<sip:alice@example.com>"));
+        headers.push(
+            SmolStr::new("From"),
+            SmolStr::new("<sip:alice@example.com>"),
+        );
         headers.push(SmolStr::new("Subject"), SmolStr::new("Test Call"));
 
         let privacy = PrivacyHeader::single(PrivacyValue::None);
@@ -558,11 +562,17 @@ mod tests {
         use smol_str::SmolStr;
 
         let mut headers = Headers::new();
-        headers.push(SmolStr::new("From"), SmolStr::new("<sip:alice@example.com>"));
+        headers.push(
+            SmolStr::new("From"),
+            SmolStr::new("<sip:alice@example.com>"),
+        );
         headers.push(SmolStr::new("Subject"), SmolStr::new("Confidential"));
         headers.push(SmolStr::new("User-Agent"), SmolStr::new("MySIPPhone/1.0"));
         headers.push(SmolStr::new("Organization"), SmolStr::new("ACME Corp"));
-        headers.push(SmolStr::new("Call-Info"), SmolStr::new("<http://example.com>"));
+        headers.push(
+            SmolStr::new("Call-Info"),
+            SmolStr::new("<http://example.com>"),
+        );
         headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"));
 
         let privacy = PrivacyHeader::single(PrivacyValue::Header);
@@ -613,7 +623,10 @@ mod tests {
         use smol_str::SmolStr;
 
         let mut headers = Headers::new();
-        headers.push(SmolStr::new("From"), SmolStr::new("<sip:alice@example.com>"));
+        headers.push(
+            SmolStr::new("From"),
+            SmolStr::new("<sip:alice@example.com>"),
+        );
         headers.push(SmolStr::new("Subject"), SmolStr::new("Test"));
         headers.push(SmolStr::new("User-Agent"), SmolStr::new("TestUA"));
 
@@ -635,7 +648,10 @@ mod tests {
         use smol_str::SmolStr;
 
         let mut headers = Headers::new();
-        headers.push(SmolStr::new("From"), SmolStr::new("<sip:alice@example.com>"));
+        headers.push(
+            SmolStr::new("From"),
+            SmolStr::new("<sip:alice@example.com>"),
+        );
         headers.push(SmolStr::new("Subject"), SmolStr::new("Private"));
         headers.push(SmolStr::new("Organization"), SmolStr::new("Secret Inc"));
 
@@ -669,7 +685,10 @@ mod tests {
         let anonymized = anonymize_identity_header(original);
 
         assert!(anonymized.contains("anonymous@anonymous.invalid"));
-        assert_eq!(anonymized, "\"Anonymous\" <sip:anonymous@anonymous.invalid>");
+        assert_eq!(
+            anonymized,
+            "\"Anonymous\" <sip:anonymous@anonymous.invalid>"
+        );
     }
 
     #[test]
@@ -708,9 +727,18 @@ mod tests {
         use smol_str::SmolStr;
 
         let mut headers = Headers::new();
-        headers.push(SmolStr::new("From"), SmolStr::new("<sip:alice@example.com>;tag=123"));
-        headers.push(SmolStr::new("P-Asserted-Identity"), SmolStr::new("<sip:alice@example.com>"));
-        headers.push(SmolStr::new("P-Preferred-Identity"), SmolStr::new("<sip:alice@example.com>"));
+        headers.push(
+            SmolStr::new("From"),
+            SmolStr::new("<sip:alice@example.com>;tag=123"),
+        );
+        headers.push(
+            SmolStr::new("P-Asserted-Identity"),
+            SmolStr::new("<sip:alice@example.com>"),
+        );
+        headers.push(
+            SmolStr::new("P-Preferred-Identity"),
+            SmolStr::new("<sip:alice@example.com>"),
+        );
 
         let privacy = PrivacyHeader::single(PrivacyValue::Id);
         enforce_privacy(&mut headers, &privacy);
@@ -732,10 +760,22 @@ mod tests {
         use smol_str::SmolStr;
 
         let mut headers = Headers::new();
-        headers.push(SmolStr::new("From"), SmolStr::new("<sip:alice@example.com>;tag=123"));
-        headers.push(SmolStr::new("Contact"), SmolStr::new("<sip:alice@192.168.1.100>"));
-        headers.push(SmolStr::new("P-Asserted-Identity"), SmolStr::new("<sip:alice@example.com>, <tel:+15551234567>"));
-        headers.push(SmolStr::new("P-Preferred-Identity"), SmolStr::new("<tel:+15551234567>"));
+        headers.push(
+            SmolStr::new("From"),
+            SmolStr::new("<sip:alice@example.com>;tag=123"),
+        );
+        headers.push(
+            SmolStr::new("Contact"),
+            SmolStr::new("<sip:alice@192.168.1.100>"),
+        );
+        headers.push(
+            SmolStr::new("P-Asserted-Identity"),
+            SmolStr::new("<sip:alice@example.com>, <tel:+15551234567>"),
+        );
+        headers.push(
+            SmolStr::new("P-Preferred-Identity"),
+            SmolStr::new("<tel:+15551234567>"),
+        );
         headers.push(SmolStr::new("Subject"), SmolStr::new("Test Call"));
 
         let privacy = PrivacyHeader::new(vec![PrivacyValue::User]);

@@ -4,9 +4,9 @@
 //! Ensures proper sequencing and matching per RFC 3262.
 
 use anyhow::{anyhow, Result};
+use dashmap::DashMap;
 use sip_core::{Headers, Method, Request, Response};
 use std::sync::Arc;
-use dashmap::DashMap;
 use tracing::debug;
 
 /// Parse Method from string
@@ -51,7 +51,10 @@ impl RAck {
     pub fn parse(value: &str) -> Result<Self> {
         let parts: Vec<&str> = value.split_whitespace().collect();
         if parts.len() != 3 {
-            return Err(anyhow!("Invalid RAck format: expected 'rseq cseq method', got '{}'", value));
+            return Err(anyhow!(
+                "Invalid RAck format: expected 'rseq cseq method', got '{}'",
+                value
+            ));
         }
 
         let rseq = parts[0]
@@ -158,7 +161,8 @@ impl PrackValidator {
         let rack = RAck::parse(rack_value.as_str())?;
 
         // Find matching pending reliable provisional
-        let mut pending_list = self.pending
+        let mut pending_list = self
+            .pending
             .get_mut(dialog_id)
             .ok_or_else(|| anyhow!("No pending reliable provisionals for dialog {}", dialog_id))?;
 
@@ -266,22 +270,18 @@ pub fn extract_rseq(response: &Response) -> Option<u32> {
 
 /// Extract CSeq number from headers
 pub fn extract_cseq_number(headers: &Headers) -> Option<u32> {
-    headers
-        .get("CSeq")
-        .and_then(|v| {
-            let parts: Vec<&str> = v.split_whitespace().collect();
-            parts.first()?.parse::<u32>().ok()
-        })
+    headers.get("CSeq").and_then(|v| {
+        let parts: Vec<&str> = v.split_whitespace().collect();
+        parts.first()?.parse::<u32>().ok()
+    })
 }
 
 /// Extract method from CSeq header
 pub fn extract_cseq_method(headers: &Headers) -> Option<Method> {
-    headers
-        .get("CSeq")
-        .and_then(|v| {
-            let parts: Vec<&str> = v.split_whitespace().collect();
-            parse_method(parts.get(1)?)
-        })
+    headers.get("CSeq").and_then(|v| {
+        let parts: Vec<&str> = v.split_whitespace().collect();
+        parse_method(parts.get(1)?)
+    })
 }
 
 /// Check if a response is a reliable provisional (1xx with RSeq header)
@@ -296,7 +296,7 @@ pub fn is_reliable_provisional(response: &Response) -> bool {
 mod tests {
     use super::*;
     use bytes::Bytes;
-    use sip_core::{RequestLine, StatusLine, SipUri};
+    use sip_core::{RequestLine, SipUri, StatusLine};
 
     #[test]
     fn parse_rack_header() {

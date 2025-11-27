@@ -5,7 +5,6 @@
 /// 2. Create/update subscriptions
 /// 3. Send 200 OK with Expires header
 /// 4. (Future: Send initial NOTIFY)
-
 use anyhow::Result;
 use async_trait::async_trait;
 use sip_core::Request;

@@ -4,7 +4,6 @@
 /// - Maps branch IDs to original sender addresses
 /// - Correlates responses with forwarded requests
 /// - Enables stateful proxy behavior
-
 use dashmap::DashMap;
 use sip_transaction::TransportKind;
 use std::net::SocketAddr;
@@ -69,9 +68,8 @@ impl ProxyStateManager {
     #[allow(dead_code)]
     pub fn cleanup_old(&self, max_age: Duration) {
         let now = Instant::now();
-        self.transactions.retain(|_, tx| {
-            now.duration_since(tx.created_at) < max_age
-        });
+        self.transactions
+            .retain(|_, tx| now.duration_since(tx.created_at) < max_age);
     }
 
     /// Get count of active transactions

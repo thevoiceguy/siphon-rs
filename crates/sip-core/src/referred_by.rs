@@ -238,7 +238,8 @@ impl ReferredByHeader {
         };
 
         // Parse the name-addr (display name and URI)
-        let (display_name, uri_str) = if name_addr_str.contains('<') && name_addr_str.contains('>') {
+        let (display_name, uri_str) = if name_addr_str.contains('<') && name_addr_str.contains('>')
+        {
             // Format: "Display Name" <sip:uri> or <sip:uri>
             let angle_start = name_addr_str.find('<')?;
             let angle_end = name_addr_str.find('>')?;
@@ -349,10 +350,7 @@ mod tests {
 
     #[test]
     fn referred_by_with_display_name() {
-        let referred_by = ReferredByHeader::with_name(
-            "Alice",
-            "sip:alice@example.com"
-        );
+        let referred_by = ReferredByHeader::with_name("Alice", "sip:alice@example.com");
         let expected_uri = SipUri::parse("sip:alice@example.com").unwrap();
 
         assert_eq!(referred_by.name_addr.display_name.as_deref(), Some("Alice"));
@@ -361,8 +359,8 @@ mod tests {
 
     #[test]
     fn referred_by_with_cid() {
-        let referred_by = ReferredByHeader::new("sip:alice@example.com")
-            .with_cid("signature123@example.com");
+        let referred_by =
+            ReferredByHeader::new("sip:alice@example.com").with_cid("signature123@example.com");
 
         assert!(referred_by.has_signature());
         assert_eq!(referred_by.get_cid(), Some("signature123@example.com"));
@@ -390,10 +388,7 @@ mod tests {
 
     #[test]
     fn format_referred_by_with_name() {
-        let referred_by = ReferredByHeader::with_name(
-            "Alice",
-            "sip:alice@example.com"
-        );
+        let referred_by = ReferredByHeader::with_name("Alice", "sip:alice@example.com");
         let formatted = referred_by.to_string();
 
         assert_eq!(formatted, "\"Alice\" <sip:alice@example.com>");
@@ -401,21 +396,21 @@ mod tests {
 
     #[test]
     fn format_referred_by_with_cid() {
-        let referred_by = ReferredByHeader::new("sip:alice@example.com")
-            .with_cid("sig123@example.com");
+        let referred_by =
+            ReferredByHeader::new("sip:alice@example.com").with_cid("sig123@example.com");
         let formatted = referred_by.to_string();
 
-        assert_eq!(formatted, "<sip:alice@example.com>;cid=\"sig123@example.com\"");
+        assert_eq!(
+            formatted,
+            "<sip:alice@example.com>;cid=\"sig123@example.com\""
+        );
     }
 
     #[test]
     fn format_referred_by_with_all() {
-        let referred_by = ReferredByHeader::with_name(
-            "Alice",
-            "sip:alice@example.com"
-        )
-        .with_cid("sig123@example.com")
-        .with_param("tag", "abc");
+        let referred_by = ReferredByHeader::with_name("Alice", "sip:alice@example.com")
+            .with_cid("sig123@example.com")
+            .with_param("tag", "abc");
 
         let formatted = referred_by.to_string();
 
@@ -492,17 +487,17 @@ mod tests {
 
     #[test]
     fn round_trip_referred_by() {
-        let original = ReferredByHeader::with_name(
-            "Alice",
-            "sip:alice@example.com"
-        )
-        .with_cid("sig123@example.com")
-        .with_param("tag", "abc");
+        let original = ReferredByHeader::with_name("Alice", "sip:alice@example.com")
+            .with_cid("sig123@example.com")
+            .with_param("tag", "abc");
 
         let formatted = original.to_string();
         let parsed = ReferredByHeader::parse(&formatted).unwrap();
 
-        assert_eq!(parsed.name_addr.display_name, original.name_addr.display_name);
+        assert_eq!(
+            parsed.name_addr.display_name,
+            original.name_addr.display_name
+        );
         assert_eq!(parsed.name_addr.uri, original.name_addr.uri);
         assert_eq!(parsed.cid, original.cid);
         assert_eq!(parsed.get_param("tag"), original.get_param("tag"));
