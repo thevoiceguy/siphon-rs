@@ -6,6 +6,7 @@ use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use sip_auth::Authenticator;
 use sip_core::{Headers, Request, Response, StatusLine};
 use sip_parse::{header, parse_to_header};
+use sip_ratelimit::RateLimiter;
 use smol_str::SmolStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -201,6 +202,7 @@ pub struct BasicRegistrar<S: LocationStore, A: Authenticator> {
     default_expires: Duration,
     min_expires: Duration,
     max_expires: Duration,
+    rate_limiter: Option<RateLimiter>,
 }
 
 impl<S: LocationStore, A: Authenticator> BasicRegistrar<S, A> {
@@ -211,6 +213,7 @@ impl<S: LocationStore, A: Authenticator> BasicRegistrar<S, A> {
             default_expires: Duration::from_secs(3600),
             min_expires: Duration::from_secs(60),
             max_expires: Duration::from_secs(86400),
+            rate_limiter: None,
         }
     }
 
@@ -226,6 +229,29 @@ impl<S: LocationStore, A: Authenticator> BasicRegistrar<S, A> {
 
     pub fn with_max_expires(mut self, expires: Duration) -> Self {
         self.max_expires = expires;
+        self
+    }
+
+    /// Configure rate limiting for REGISTER requests
+    ///
+    /// Rate limiting is applied per IP address to prevent registration flooding.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use sip_registrar::{BasicRegistrar, MemoryLocationStore};
+    /// use sip_ratelimit::{RateLimiter, RateLimitConfig};
+    /// use sip_auth::{DigestAuthenticator, MemoryCredentialStore};
+    ///
+    /// let store = MemoryLocationStore::new();
+    /// let auth_store = MemoryCredentialStore::new();
+    /// let auth = DigestAuthenticator::new("example.com", auth_store);
+    /// let config = RateLimitConfig::register_preset(); // 60 per hour
+    /// let registrar = BasicRegistrar::new(store, Some(auth))
+    ///     .with_rate_limiter(RateLimiter::new(config));
+    /// ```
+    pub fn with_rate_limiter(mut self, limiter: RateLimiter) -> Self {
+        self.rate_limiter = Some(limiter);
         self
     }
 
@@ -331,8 +357,50 @@ impl<S: LocationStore, A: Authenticator> BasicRegistrar<S, A> {
     }
 }
 
+/// Extract IP address from the top Via header
+///
+/// Returns the IP address portion from a Via header like:
+/// "SIP/2.0/UDP 192.168.1.100:5060;branch=z9hG4bK..."
+fn extract_ip_from_via(headers: &Headers) -> Option<String> {
+    let via = headers.get("Via")?;
+
+    // Via format: SIP/2.0/TRANSPORT host[:port];params
+    // Skip "SIP/2.0/TRANSPORT " part
+    let parts: Vec<&str> = via.split_whitespace().collect();
+    if parts.len() < 2 {
+        return None;
+    }
+
+    // Extract host[:port];params
+    let host_part = parts[1];
+
+    // Remove port and parameters
+    let host = host_part
+        .split(':')
+        .next()?
+        .split(';')
+        .next()?;
+
+    Some(host.to_string())
+}
+
 impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
     fn handle_register(&self, request: &Request) -> Result<Response> {
+        // Check rate limit first (before authentication and processing)
+        if let Some(ref limiter) = self.rate_limiter {
+            // Extract IP from top Via header (sender's IP)
+            if let Some(ip) = extract_ip_from_via(&request.headers) {
+                if !limiter.check_rate_limit(&ip) {
+                    warn!(ip = %ip, "REGISTER rate limit exceeded");
+                    return self.build_error_response(
+                        request,
+                        503,
+                        "Service Unavailable - Rate Limit Exceeded",
+                    );
+                }
+            }
+        }
+
         // Authenticate if authenticator is configured
         if let Some(auth) = &self.authenticator {
             match auth.verify(request, &request.headers) {

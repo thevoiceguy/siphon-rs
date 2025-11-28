@@ -6,7 +6,8 @@
       "Bash(cargo build:*)",
       "Bash(cargo test:*)",
       "Bash(cargo run:*)",
-      "Bash(xargs ls:*)"
+      "Bash(xargs ls:*)",
+      "Bash(tokei:*)"
     ],
     "deny": [],
     "ask": []

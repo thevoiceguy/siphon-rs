@@ -15,6 +15,7 @@ members = [
     "crates/sip-sdp",
     "crates/sip-observe",
     "crates/sip-testkit",
+    "crates/sip-ratelimit",
 ]
 resolver = "2"
 

@@ -8,6 +8,7 @@ license.workspace = true
 anyhow = { workspace = true }
 smol_str = { workspace = true }
 sip-core = { path = "../sip-core" }
+sip-ratelimit = { path = "../sip-ratelimit" }
 dashmap = { workspace = true }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 bytes = { workspace = true }

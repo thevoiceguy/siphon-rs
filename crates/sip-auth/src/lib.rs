@@ -6,11 +6,12 @@ use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use sha2::{Digest, Sha256, Sha512};
 use sip_core::{Headers, Method, Request, Response, StatusLine};
 use sip_parse::parse_authorization_header;
+use sip_ratelimit::RateLimiter;
 use smol_str::SmolStr;
 use std::fmt::Write;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::info;
+use tracing::{info, warn};
 
 /// Credentials used for SIP authentication.
 #[derive(Debug, Clone)]
@@ -291,6 +292,33 @@ impl Default for NonceManager {
     }
 }
 
+/// Extract IP address from the top Via header
+///
+/// Returns the IP address portion from a Via header like:
+/// "SIP/2.0/UDP 192.168.1.100:5060;branch=z9hG4bK..."
+fn extract_ip_from_via(headers: &Headers) -> Option<String> {
+    let via = headers.get("Via")?;
+
+    // Via format: SIP/2.0/TRANSPORT host[:port];params
+    // Skip "SIP/2.0/TRANSPORT " part
+    let parts: Vec<&str> = via.split_whitespace().collect();
+    if parts.len() < 2 {
+        return None;
+    }
+
+    // Extract host[:port];params
+    let host_part = parts[1];
+
+    // Remove port and parameters
+    let host = host_part
+        .split(':')
+        .next()?
+        .split(';')
+        .next()?;
+
+    Some(host.to_string())
+}
+
 /// Digest authenticator implementing RFC 7616 (MD5, SHA-256, SHA-512).
 pub struct DigestAuthenticator<S: CredentialStore> {
     pub realm: SmolStr,
@@ -300,6 +328,7 @@ pub struct DigestAuthenticator<S: CredentialStore> {
     pub nonce_manager: NonceManager,
     pub proxy_auth: bool,
     pub opaque: SmolStr, // Opaque session token for additional security
+    pub rate_limiter: Option<RateLimiter>, // Optional rate limiting
 }
 
 impl<S: CredentialStore> DigestAuthenticator<S> {
@@ -319,6 +348,7 @@ impl<S: CredentialStore> DigestAuthenticator<S> {
             nonce_manager: NonceManager::default(),
             proxy_auth: false,
             opaque: SmolStr::new(opaque),
+            rate_limiter: None,
         }
     }
 
@@ -339,6 +369,27 @@ impl<S: CredentialStore> DigestAuthenticator<S> {
 
     pub fn with_nonce_ttl(mut self, ttl: Duration) -> Self {
         self.nonce_manager = NonceManager::new(ttl);
+        self
+    }
+
+    /// Configure rate limiting for authentication attempts
+    ///
+    /// Rate limiting is applied per IP address extracted from the Via header.
+    /// This helps prevent brute force authentication attacks.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use sip_auth::{DigestAuthenticator, MemoryCredentialStore};
+    /// use sip_ratelimit::{RateLimiter, RateLimitConfig};
+    ///
+    /// let store = MemoryCredentialStore::new();
+    /// let config = RateLimitConfig::auth_preset(); // 10 attempts per 5 minutes
+    /// let auth = DigestAuthenticator::new("example.com", store)
+    ///     .with_rate_limiter(RateLimiter::new(config));
+    /// ```
+    pub fn with_rate_limiter(mut self, limiter: RateLimiter) -> Self {
+        self.rate_limiter = Some(limiter);
         self
     }
 
@@ -461,6 +512,17 @@ impl<S: CredentialStore> Authenticator for DigestAuthenticator<S> {
     }
 
     fn verify(&self, request: &Request, headers: &Headers) -> Result<bool> {
+        // Check rate limit first (before expensive operations)
+        if let Some(ref limiter) = self.rate_limiter {
+            // Extract IP from top Via header (sender's IP)
+            if let Some(ip) = extract_ip_from_via(headers) {
+                if !limiter.check_rate_limit(&ip) {
+                    warn!(ip = %ip, "authentication rate limit exceeded");
+                    return Err(anyhow!("rate limit exceeded"));
+                }
+            }
+        }
+
         let header_name = if self.proxy_auth {
             "Proxy-Authorization"
         } else {

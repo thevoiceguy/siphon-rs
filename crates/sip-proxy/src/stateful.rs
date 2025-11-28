@@ -493,80 +493,6 @@ pub mod forwarding {
         Ok((forwarded, SmolStr::new(branch_id)))
     }
 
-    #[tokio::test]
-    async fn build_cancel_requests_sets_branch_and_target() {
-        let proxy = StatefulProxy::new();
-        let invite = {
-            let mut headers = Headers::new();
-            headers.push("Call-ID".into(), "call-123".into());
-            headers.push("CSeq".into(), "1 INVITE".into());
-            headers.push(
-                "Via".into(),
-                "SIP/2.0/UDP client;branch=z9hG4bKclient".into(),
-            );
-            headers.push("From".into(), "<sip:alice@example.com>;tag=a".into());
-            headers.push("To".into(), "<sip:bob@example.com>".into());
-            headers.push("Max-Forwards".into(), "70".into());
-            Request::new(
-                RequestLine::new(
-                    Method::Invite,
-                    SipUri::parse("sip:bob@example.com").unwrap(),
-                ),
-                headers,
-                Bytes::new(),
-            )
-        };
-
-        let (context, _) = proxy.start_context(
-            invite.clone(),
-            "call-123".into(),
-            "z9hG4bKclient".into(),
-            ForkMode::Parallel,
-        );
-
-        let target = SipUri::parse("sip:target@example.com").unwrap();
-        let branch_info = BranchInfo {
-            branch_id: "z9hG4bKbranch1".into(),
-            target: target.clone(),
-            created_at: Instant::now(),
-            state: BranchState::Proceeding,
-            best_response: None,
-        };
-        context.add_branch(branch_info).await;
-
-        // Template CANCEL (matches INVITE headers)
-        let cancel_template = {
-            let mut headers = Headers::new();
-            headers.push("Call-ID".into(), "call-123".into());
-            headers.push("CSeq".into(), "1 CANCEL".into());
-            headers.push("From".into(), "<sip:alice@example.com>;tag=a".into());
-            headers.push("To".into(), "<sip:bob@example.com>".into());
-            headers.push(
-                "Via".into(),
-                "SIP/2.0/UDP proxy;branch=z9hG4bKtemplate".into(),
-            );
-            Request::new(
-                RequestLine::new(
-                    Method::Cancel,
-                    SipUri::parse("sip:bob@example.com").unwrap(),
-                ),
-                headers,
-                Bytes::new(),
-            )
-        };
-
-        let cancels = context.build_cancel_requests(&cancel_template).await;
-        assert_eq!(cancels.len(), 1);
-        let cancel = &cancels[0];
-
-        // Branch rewritten
-        let via = cancel.headers.get("Via").unwrap();
-        assert!(via.contains("z9hG4bKbranch1"));
-
-        // Request-URI targets branch destination
-        assert_eq!(cancel.start.uri.as_sip().unwrap().as_str(), target.as_str());
-    }
-
     /// Prepare a response for forwarding upstream
     ///
     /// This performs RFC 3261 §16.7 response forwarding:
@@ -739,5 +665,79 @@ mod tests {
             forwarded.start.uri.as_sip().unwrap().as_str(),
             "sip:proxy.example.com"
         );
+    }
+
+    #[tokio::test]
+    async fn build_cancel_requests_sets_branch_and_target() {
+        let proxy = StatefulProxy::new();
+        let invite = {
+            let mut headers = Headers::new();
+            headers.push("Call-ID".into(), "call-123".into());
+            headers.push("CSeq".into(), "1 INVITE".into());
+            headers.push(
+                "Via".into(),
+                "SIP/2.0/UDP client;branch=z9hG4bKclient".into(),
+            );
+            headers.push("From".into(), "<sip:alice@example.com>;tag=a".into());
+            headers.push("To".into(), "<sip:bob@example.com>".into());
+            headers.push("Max-Forwards".into(), "70".into());
+            Request::new(
+                RequestLine::new(
+                    Method::Invite,
+                    SipUri::parse("sip:bob@example.com").unwrap(),
+                ),
+                headers,
+                Bytes::new(),
+            )
+        };
+
+        let (context, _) = proxy.start_context(
+            invite.clone(),
+            "call-123".into(),
+            "z9hG4bKclient".into(),
+            ForkMode::Parallel,
+        );
+
+        let target = SipUri::parse("sip:target@example.com").unwrap();
+        let branch_info = BranchInfo {
+            branch_id: "z9hG4bKbranch1".into(),
+            target: target.clone(),
+            created_at: Instant::now(),
+            state: BranchState::Proceeding,
+            best_response: None,
+        };
+        context.add_branch(branch_info).await;
+
+        // Template CANCEL (matches INVITE headers)
+        let cancel_template = {
+            let mut headers = Headers::new();
+            headers.push("Call-ID".into(), "call-123".into());
+            headers.push("CSeq".into(), "1 CANCEL".into());
+            headers.push("From".into(), "<sip:alice@example.com>;tag=a".into());
+            headers.push("To".into(), "<sip:bob@example.com>".into());
+            headers.push(
+                "Via".into(),
+                "SIP/2.0/UDP proxy;branch=z9hG4bKtemplate".into(),
+            );
+            Request::new(
+                RequestLine::new(
+                    Method::Cancel,
+                    SipUri::parse("sip:bob@example.com").unwrap(),
+                ),
+                headers,
+                Bytes::new(),
+            )
+        };
+
+        let cancels = context.build_cancel_requests(&cancel_template).await;
+        assert_eq!(cancels.len(), 1);
+        let cancel = &cancels[0];
+
+        // Branch rewritten
+        let via = cancel.headers.get("Via").unwrap();
+        assert!(via.contains("z9hG4bKbranch1"));
+
+        // Request-URI targets branch destination
+        assert_eq!(cancel.start.uri.as_sip().unwrap().as_str(), target.as_str());
     }
 }

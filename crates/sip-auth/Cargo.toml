@@ -8,6 +8,7 @@ license.workspace = true
 anyhow = { workspace = true }
 smol_str = { workspace = true }
 sip-core = { path = "../sip-core" }
+sip-ratelimit = { path = "../sip-ratelimit" }
 rand = { workspace = true }
 md5 = "0.7"
 sha2 = "0.10"

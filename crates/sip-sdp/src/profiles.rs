@@ -116,7 +116,7 @@ impl MediaProfileBuilder {
                 .add_attribute("fmtp", "101 0-16");
         }
         if self.rtcp_mux {
-            audio = audio.add_attribute("rtcp-mux", "");
+            audio = audio.add_property("rtcp-mux");
         }
         builder = builder.media(audio);
 
@@ -129,7 +129,7 @@ impl MediaProfileBuilder {
                     .add_rtpmap(*pt, name.as_str(), *rate, None);
             }
             if self.rtcp_mux {
-                video = video.add_attribute("rtcp-mux", "");
+                video = video.add_property("rtcp-mux");
             }
             builder = builder.media(video);
         }
@@ -266,11 +266,14 @@ pub fn negotiate_answer(
                 }
             }
             MediaType::Video => {
-                builder.enable_video = true;
-                for pt in &m.formats {
-                    if desired_video.contains(pt) {
-                        if let Some(rtp) = m.rtpmaps.get(pt) {
-                            builder = builder.add_video_codec(*pt, rtp.encoding_name.to_string(), rtp.clock_rate);
+                // Only enable video if the profile supports it
+                if profile.enable_video || !profile.video_codecs.is_empty() {
+                    builder.enable_video = true;
+                    for pt in &m.formats {
+                        if desired_video.contains(pt) {
+                            if let Some(rtp) = m.rtpmaps.get(pt) {
+                                builder = builder.add_video_codec(*pt, rtp.encoding_name.to_string(), rtp.clock_rate);
+                            }
                         }
                     }
                 }
@@ -326,9 +329,9 @@ mod tests {
         let sdp = builder.build("alice", "192.0.2.1", 5004, Some(5006));
         assert_eq!(sdp.media.len(), 2);
         assert_eq!(sdp.media[0].media_type, MediaType::Audio);
-        assert!(sdp.media[0].attributes.iter().any(|a| a.name == "rtcp-mux"));
+        assert!(sdp.media[0].attributes.iter().any(|a| matches!(a, Attribute::Property(name) if name == "rtcp-mux")));
         assert_eq!(sdp.media[1].media_type, MediaType::Video);
-        assert!(sdp.media[1].attributes.iter().any(|a| a.name == "rtcp-mux"));
+        assert!(sdp.media[1].attributes.iter().any(|a| matches!(a, Attribute::Property(name) if name == "rtcp-mux")));
     }
 
     #[test]
