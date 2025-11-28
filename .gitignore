@@ -5,4 +5,4 @@ Cargo.lock
 .DS_Store
 .idea/
 .vscode/
-.log
+sip-testkit/sipp/*.log
