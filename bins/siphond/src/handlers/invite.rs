@@ -208,12 +208,37 @@ impl InviteHandler {
 
         info!(call_id, callee = %callee_contact.as_str(), "Found callee, creating outgoing INVITE");
 
-        // Parse our local URI for UAC
-        let local_uri = sip_core::SipUri::parse(&services.config.local_uri)
+        // Extract the From URI from Bob's original request to preserve caller ID
+        let from_header = header(&request.headers, "From")
+            .ok_or_else(|| anyhow!("Missing From header"))?;
+
+        // Parse the From URI (format: "Display Name" <sip:user@host>;tag=xxx or sip:user@host;tag=xxx)
+        let from_uri = if let Some(start) = from_header.find('<') {
+            // Extract URI between < and >
+            let end = from_header.find('>').unwrap_or(from_header.len());
+            &from_header[start + 1..end]
+        } else {
+            // No angle brackets, extract URI before semicolon
+            from_header.split(';').next().unwrap_or(from_header.as_str()).trim()
+        };
+
+        let caller_uri = sip_core::SipUri::parse(from_uri)
+            .ok_or_else(|| anyhow!("Invalid From URI: {}", from_uri))?;
+
+        // Parse B2BUA URI for Contact (responses should route back to B2BUA)
+        let b2bua_contact_uri = sip_core::SipUri::parse(&services.config.local_uri)
             .ok_or_else(|| anyhow!("Invalid local_uri"))?;
 
         // Create UAC for outgoing leg
-        let uac = UserAgentClient::new(local_uri.clone(), local_uri.clone());
+        // From: caller's URI (preserves caller ID)
+        // Contact: B2BUA URI (routes responses back to us)
+        let uac = UserAgentClient::new(caller_uri.clone(), b2bua_contact_uri.clone());
+
+        info!(
+            call_id,
+            caller = %caller_uri.as_str(),
+            "Preserving caller identity in outgoing INVITE"
+        );
 
         // Extract SDP from incoming INVITE (if present)
         let sdp = if !request.body.is_empty() {
