@@ -7,8 +7,9 @@ use tracing::warn;
 
 use crate::{
     handlers::{
-        bye::ByeHandler, invite::InviteHandler, options::OptionsHandler, refer::ReferHandler,
-        register::RegisterHandler, subscribe::SubscribeHandler, RequestHandler,
+        bye::ByeHandler, cancel::CancelHandler, invite::InviteHandler, options::OptionsHandler,
+        refer::ReferHandler, register::RegisterHandler, subscribe::SubscribeHandler,
+        RequestHandler,
     },
     services::ServiceRegistry,
 };
@@ -24,7 +25,7 @@ impl RequestDispatcher {
     ///
     /// Handlers are registered based on the daemon configuration:
     /// - OPTIONS: Always enabled
-    /// - INVITE/BYE: Enabled in CallServer, FullUas, Interactive modes
+    /// - INVITE/CANCEL/BYE: Enabled in CallServer, FullUas, Interactive modes
     /// - REGISTER: Enabled in Registrar, FullUas modes
     /// - SUBSCRIBE: Enabled in SubscriptionServer, FullUas, Interactive modes
     /// - REFER: Enabled if feature flag is set
@@ -34,9 +35,10 @@ impl RequestDispatcher {
         // OPTIONS is always available
         handlers.insert(Method::Options, Arc::new(OptionsHandler::new()));
 
-        // INVITE and BYE for call handling
+        // INVITE, CANCEL, and BYE for call handling
         if services.config.enable_calls() {
             handlers.insert(Method::Invite, Arc::new(InviteHandler::new()));
+            handlers.insert(Method::Cancel, Arc::new(CancelHandler::new()));
             handlers.insert(Method::Bye, Arc::new(ByeHandler::new()));
         }
 

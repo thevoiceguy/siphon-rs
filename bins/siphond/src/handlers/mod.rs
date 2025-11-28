@@ -7,6 +7,7 @@ use sip_transaction::{ServerTransactionHandle, TransportContext};
 use crate::services::ServiceRegistry;
 
 pub mod bye;
+pub mod cancel;
 pub mod invite;
 pub mod options;
 pub mod refer;
