@@ -737,7 +737,12 @@ impl RequestHandler for InviteHandler {
 
         // Handle in-dialog re-INVITE
         if self.is_in_dialog(request, services) {
-            info!(call_id, "Received in-dialog re-INVITE");
+            warn!(
+                call_id,
+                "⚠️ re-INVITE LIMITATION: Accepting with 200 OK but NOT performing session modification. \
+                 Missing: (1) SDP renegotiation, (2) Hold/resume logic, (3) Codec changes, (4) ICE restart. \
+                 See bins/siphond/README.md#limitations"
+            );
             // TODO: Handle session modification
             let ok = UserAgentServer::create_response(request, 200, "OK");
             handle.send_final(ok).await;
@@ -815,7 +820,23 @@ impl RequestHandler for InviteHandler {
         } else {
             // Late offer - should send SDP in 200 OK
             // TODO: Generate offer in 200 OK
-            None
+            warn!(
+                call_id,
+                "⚠️ LATE OFFER LIMITATION: INVITE has no SDP body. Should generate offer in 200 OK \
+                 and expect answer in ACK (RFC 3264 §5). Currently sending 488 Not Acceptable Here. \
+                 See bins/siphond/README.md#limitations"
+            );
+
+            // Send 488 Not Acceptable Here for late offer
+            let mut headers = sip_core::Headers::new();
+            copy_dialog_headers(request, &mut headers);
+            let response = sip_core::Response::new(
+                sip_core::StatusLine::new(488, "Not Acceptable Here".into()),
+                headers,
+                bytes::Bytes::new(),
+            );
+            handle.send_final(response).await;
+            return Ok(());
         };
 
         // Accept the INVITE

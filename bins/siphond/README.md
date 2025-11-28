@@ -527,12 +527,71 @@ siphond --mode full-uas --udp-bind 192.168.1.100:5060
 
 ## Limitations
 
+⚠️ **Important: siphond is a testing/development tool, NOT production-ready software.**
+
+### ✅ What Works (RFC Compliant)
+
+- **SUBSCRIBE/NOTIFY**: RFC 3265 compliant - initial NOTIFY sent automatically after 200 OK
+- **REGISTER**: Full RFC 3261 §10 compliance with location service
+- **OPTIONS**: Complete capability advertisement
+- **Dialog Management**: Full dialog lifecycle (Early/Confirmed/Terminated)
+- **Authentication**: Digest authentication (MD5/SHA-256/SHA-512)
+- **Basic Call Flows**: Simple INVITE → 180 → 200 → ACK → BYE works
+
+### ⚠️ Known Incomplete Features
+
+#### INVITE Handler Limitations
+- **SDP Negotiation**: Basic SDP pass-through only, no codec negotiation or media attribute validation
+- **Re-INVITE Handling**: Session modification (hold/resume, codec changes) not implemented
+- **Late Offer Support**: Late offer flow (no SDP in INVITE) returns 488 Not Acceptable Here
+- **Early Media**: 183 Session Progress with SDP not fully tested
+- **PRACK Integration**: RSeq handling stub present but not integrated with INVITE state machine
+
+#### REFER Handler Limitations
+- **Implicit Subscription**: Does NOT create implicit "refer" subscription per RFC 3515 §2.4.4
+- **Referred Call Initiation**: Does NOT automatically initiate the call described in Refer-To URI
+- **NOTIFY Progress**: Does NOT send NOTIFY messages with sipfrag bodies reporting transfer progress
+- **Current Behavior**: Accepts REFER with 202 Accepted, but no further action taken
+
+#### Proxy Mode Limitations
+- **Response Relay**: Proxy can forward INVITE requests but response relay is not implemented
+- **Use B2BUA Mode**: For full bidirectional call bridging with response forwarding
+- **Transport**: TCP forwarding only, UDP proxy not implemented
+
+#### General Limitations
+- **Media/RTP**: No actual media handling - SDP is generated/passed through but no RTP streams
 - **Interactive Mode**: Not yet implemented (planned)
 - **Scenario Files**: Not yet implemented (planned)
-- **Media/RTP**: No actual media handling (SDP only)
-- **NOTIFY Sending**: REFER/SUBSCRIBE don't automatically send NOTIFY yet
-- **Custom SDP**: File-based custom SDP not implemented
-- **User Loading**: Authentication users file loading not implemented
+- **Custom SDP Files**: `--sdp-profile <path>` option not implemented, only presets work
+- **User File Loading**: `--auth-users <path>` option not implemented, hardcoded users only
+
+### 🔒 Security Status
+
+The following security features ARE implemented:
+- ✅ Rate limiting (per-IP/per-user request limits)
+- ✅ Nonce replay protection (automatic nonce expiry)
+- ✅ CSeq validation (out-of-order request detection)
+- ✅ Transaction DoS protection (configurable transaction limits)
+- ✅ Content-Length overflow protection (64 MB hard limit)
+- ✅ Connection pool limits (TCP/TLS connection exhaustion prevention)
+
+**Security Notice:** While these protections are in place, siphond has NOT undergone security auditing and should NOT be exposed to untrusted networks or used in production environments.
+
+### 📋 Recommended Use Cases
+
+**✅ Good For:**
+- SIP stack development and testing
+- Protocol learning and experimentation
+- Integration testing with real SIP phones
+- Demonstration and proof-of-concept
+- Basic call flow verification
+
+**❌ Not Suitable For:**
+- Production SIP services
+- Public-facing deployments
+- Mission-critical applications
+- High-volume call handling
+- Complex call scenarios (conference, forking, etc.)
 
 ---
 

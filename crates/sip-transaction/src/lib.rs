@@ -227,8 +227,8 @@ pub use fsm::{
 };
 pub mod sharding;
 pub use manager::{
-    ClientTransactionUser, ServerTransactionHandle, TransactionManager, TransportContext,
-    TransportDispatcher,
+    ClientTransactionUser, ServerTransactionHandle, TransactionLimits, TransactionManager,
+    TransportContext, TransportDispatcher,
 };
 pub use storage::{
     ClientTransactionRecord, InMemoryTransactionStore, ServerTransactionRecord, TransactionStore,

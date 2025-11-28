@@ -139,9 +139,14 @@ impl RequestHandler for ReferHandler {
                 // - If blind: Send INVITE to refer_to target
                 // - Send NOTIFYs with message/sipfrag body as call progresses
 
-                info!(
+                warn!(
                     call_id,
-                    "REFER accepted - actual transfer not implemented yet"
+                    refer_to = refer_to_target,
+                    attended = is_attended,
+                    "⚠️ REFER LIMITATION: 202 Accepted sent but transfer NOT performed. \
+                     Missing: (1) Implicit subscription creation, (2) Outgoing INVITE to {}, \
+                     (3) NOTIFY progress messages. See bins/siphond/README.md#limitations",
+                    refer_to_target
                 );
             }
             Err(e) => {

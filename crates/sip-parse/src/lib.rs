@@ -341,11 +341,51 @@ fn extract_body(body_bytes: &[u8], headers: &Headers) -> Option<Bytes> {
     Some(Bytes::copy_from_slice(&body_bytes[..declared]))
 }
 
-/// Reads the `Content-Length` header, ignoring invalid values.
+/// Maximum allowed Content-Length value (64 MB).
+///
+/// # Security Rationale
+///
+/// This limit prevents integer overflow attacks and memory exhaustion:
+/// - Typical SIP messages: < 10 KB
+/// - SDP with ICE candidates: < 100 KB
+/// - Maximum practical SIP: ~64 KB
+/// - Safety margin for MIME/attachments: 10 MB
+/// - Absolute DoS protection: 64 MB
+///
+/// Without a limit, attackers could send `Content-Length: 999999999999999`
+/// causing memory allocation failures or integer overflow.
+const MAX_CONTENT_LENGTH: usize = 64 * 1024 * 1024; // 64 MB
+
+/// Reads the `Content-Length` header with bounds checking.
+///
+/// Returns `None` if:
+/// - Header is missing
+/// - Value is not a valid integer
+/// - Value exceeds MAX_CONTENT_LENGTH (64 MB)
+/// - Value would cause integer overflow
 fn content_length(headers: &Headers) -> Option<usize> {
     headers
         .get("Content-Length")
-        .and_then(|value| value.trim().parse::<usize>().ok())
+        .and_then(|value| {
+            let trimmed = value.trim();
+
+            // Parse to u64 first to detect overflow on 32-bit systems
+            let value_u64 = trimmed.parse::<u64>().ok()?;
+
+            // Check if value fits in usize (prevents overflow on 32-bit)
+            if value_u64 > usize::MAX as u64 {
+                return None;
+            }
+
+            let length = value_u64 as usize;
+
+            // Enforce security limit
+            if length > MAX_CONTENT_LENGTH {
+                return None;
+            }
+
+            Some(length)
+        })
 }
 
 fn is_token_char(c: char) -> bool {
@@ -876,6 +916,115 @@ Content-Length: 0\r\n\r\n",
         let serialized = serialize_request(&req);
         let text = std::str::from_utf8(&serialized).unwrap();
         assert!(text.contains("Max-Forwards: 70"));
+    }
+
+    #[test]
+    fn content_length_rejects_overflow_values() {
+        // Test extremely large value that would cause integer overflow
+        let mut headers = Headers::new();
+        headers.push(
+            SmolStr::new("Content-Length"),
+            SmolStr::new("99999999999999999999"),
+        );
+        assert_eq!(content_length(&headers), None);
+    }
+
+    #[test]
+    fn content_length_rejects_exceeds_max() {
+        // Test value exceeding MAX_CONTENT_LENGTH (64 MB)
+        let mut headers = Headers::new();
+        let too_large = (MAX_CONTENT_LENGTH + 1).to_string();
+        headers.push(SmolStr::new("Content-Length"), SmolStr::new(too_large));
+        assert_eq!(content_length(&headers), None);
+    }
+
+    #[test]
+    fn content_length_accepts_max_value() {
+        // Test MAX_CONTENT_LENGTH is accepted
+        let mut headers = Headers::new();
+        headers.push(
+            SmolStr::new("Content-Length"),
+            SmolStr::new(MAX_CONTENT_LENGTH.to_string()),
+        );
+        assert_eq!(content_length(&headers), Some(MAX_CONTENT_LENGTH));
+    }
+
+    #[test]
+    fn content_length_accepts_normal_values() {
+        // Test typical SIP message sizes
+        let test_cases = vec![
+            ("0", Some(0)),
+            ("100", Some(100)),
+            ("1024", Some(1024)),
+            ("65536", Some(65536)),
+            ("1048576", Some(1048576)), // 1 MB
+        ];
+
+        for (input, expected) in test_cases {
+            let mut headers = Headers::new();
+            headers.push(SmolStr::new("Content-Length"), SmolStr::new(input));
+            assert_eq!(content_length(&headers), expected, "Failed for input: {}", input);
+        }
+    }
+
+    #[test]
+    fn content_length_rejects_invalid_formats() {
+        // Test invalid formats
+        let invalid_cases = vec![
+            "-1",           // Negative
+            "abc",          // Non-numeric
+            "123abc",       // Mixed
+            "12.34",        // Decimal
+            "  ",           // Whitespace only
+            "",             // Empty
+            "0x100",        // Hex notation
+        ];
+
+        for input in invalid_cases {
+            let mut headers = Headers::new();
+            headers.push(SmolStr::new("Content-Length"), SmolStr::new(input));
+            assert_eq!(content_length(&headers), None, "Should reject: {}", input);
+        }
+    }
+
+    #[test]
+    fn content_length_handles_whitespace() {
+        // Test whitespace handling
+        let mut headers = Headers::new();
+        headers.push(SmolStr::new("Content-Length"), SmolStr::new("  1234  "));
+        assert_eq!(content_length(&headers), Some(1234));
+    }
+
+    #[test]
+    fn extract_body_respects_content_length_limit() {
+        // Test that extract_body handles oversized Content-Length gracefully
+        let mut headers = Headers::new();
+        headers.push(
+            SmolStr::new("Content-Length"),
+            SmolStr::new("999999999999"), // Exceeds MAX_CONTENT_LENGTH
+        );
+
+        let body_data = b"small body";
+        // content_length() returns None, so extract_body uses body_data.len()
+        let result = extract_body(body_data, &headers);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().len(), body_data.len());
+    }
+
+    #[test]
+    fn parse_request_with_oversized_content_length() {
+        // Test full message parsing with oversized Content-Length
+        let message = Bytes::from_static(b"INVITE sip:bob@example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP pc33.example.com;branch=z9hG4bK776\r\n\
+Content-Length: 999999999999999\r\n\
+\r\n\
+Small body");
+
+        // Should parse successfully but ignore the invalid Content-Length
+        let result = parse_request(&message);
+        assert!(result.is_some());
+        let req = result.unwrap();
+        assert_eq!(req.body.as_ref(), b"Small body");
     }
 
     proptest! {

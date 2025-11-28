@@ -4,17 +4,60 @@
 /// 1. Accept SUBSCRIBE requests
 /// 2. Create/update subscriptions
 /// 3. Send 200 OK with Expires header
-/// 4. (Future: Send initial NOTIFY)
+/// 4. Send initial NOTIFY (RFC 3265 §3.1.4)
 use anyhow::Result;
 use async_trait::async_trait;
-use sip_core::Request;
+use sip_core::{Request, Response};
+use sip_dialog::{Subscription, SubscriptionState};
 use sip_parse::header;
-use sip_transaction::{ServerTransactionHandle, TransportContext};
+use sip_transaction::{ClientTransactionUser, ServerTransactionHandle, TransactionKey, TransportContext};
+use sip_uac::UserAgentClient;
 use sip_uas::UserAgentServer;
-use tracing::{info, warn};
+use std::sync::Arc;
+use tracing::{debug, info, warn};
 
 use super::RequestHandler;
 use crate::services::ServiceRegistry;
+
+/// Simple ClientTransactionUser for NOTIFY requests that just logs responses.
+struct NotifyTransactionUser;
+
+#[async_trait]
+impl ClientTransactionUser for NotifyTransactionUser {
+    async fn on_provisional(&self, _key: &TransactionKey, response: &Response) {
+        debug!(status = response.start.code, "NOTIFY received provisional response");
+    }
+
+    async fn on_final(&self, _key: &TransactionKey, response: &Response) {
+        if response.start.code >= 200 && response.start.code < 300 {
+            debug!(status = response.start.code, "NOTIFY accepted");
+        } else {
+            warn!(status = response.start.code, reason = %response.start.reason, "NOTIFY rejected");
+        }
+    }
+
+    async fn on_terminated(&self, _key: &TransactionKey, reason: &str) {
+        debug!(reason, "NOTIFY transaction terminated");
+    }
+
+    async fn send_ack(
+        &self,
+        _key: &TransactionKey,
+        _response: Response,
+        _ctx: &TransportContext,
+        _is_2xx: bool,
+    ) {
+        // NOTIFY is not INVITE, no ACK needed
+    }
+
+    async fn send_prack(&self, _key: &TransactionKey, _response: Response, _ctx: &TransportContext) {
+        // PRACK not used for NOTIFY
+    }
+
+    async fn on_transport_error(&self, _key: &TransactionKey) {
+        warn!("NOTIFY transport error");
+    }
+}
 
 pub struct SubscribeHandler;
 
@@ -35,6 +78,54 @@ impl SubscribeHandler {
     fn extract_expiry(request: &Request) -> Option<u32> {
         let expires = header(&request.headers, "Expires")?;
         expires.parse().ok()
+    }
+
+    /// Send initial NOTIFY as required by RFC 3265 §3.1.4.
+    ///
+    /// When a subscription is created, the notifier MUST send an initial NOTIFY
+    /// immediately to establish the dialog and provide initial state.
+    async fn send_initial_notify(
+        subscription: &Subscription,
+        services: &ServiceRegistry,
+        ctx: &TransportContext,
+    ) -> Result<()> {
+        // Get transaction manager
+        let Some(transaction_mgr) = services.transaction_mgr.get() else {
+            warn!("Transaction manager not available, cannot send NOTIFY");
+            return Ok(());
+        };
+
+        // Create UAC for generating NOTIFY
+        let local_uri = match sip_core::SipUri::parse(&services.config.local_uri) {
+            Some(uri) => uri,
+            None => {
+                warn!("Invalid local_uri, cannot send NOTIFY");
+                return Ok(());
+            }
+        };
+
+        let uac = UserAgentClient::new(local_uri.clone(), local_uri.clone());
+
+        // Create initial NOTIFY with "active" state
+        let notify = uac.create_notify(
+            subscription,
+            SubscriptionState::Active, // Initial state is always "active"
+            None,     // No body for simple event packages
+        );
+
+        debug!(
+            subscription_id = ?subscription.id,
+            event = %subscription.id.event,
+            "Sending initial NOTIFY"
+        );
+
+        // Send NOTIFY via transaction manager
+        let tu = Arc::new(NotifyTransactionUser);
+        let _key = transaction_mgr
+            .start_client_transaction(notify, ctx.clone(), tu)
+            .await?;
+
+        Ok(())
     }
 }
 
@@ -133,23 +224,19 @@ impl RequestHandler for SubscribeHandler {
                 // Send 200 OK
                 handle.send_final(response).await;
 
-                // TODO: Send initial NOTIFY as required by RFC 3265
-                //
-                // Implementation requires:
-                // 1. Create UserAgentClient
-                // 2. Generate NOTIFY request with create_notify()
-                // 3. Create ClientTransactionUser callback for handling responses
-                // 4. Extract destination from subscription Contact URI
-                // 5. Call transaction_mgr.start_client_transaction()
-                //
-                // For now, this is deferred as it requires significant integration work.
-                // See: bins/siphond/src/handlers/subscribe.rs:139
-
-                if services.transaction_mgr.get().is_some() {
+                // Send initial NOTIFY as required by RFC 3265 §3.1.4
+                if let Err(e) = Self::send_initial_notify(&subscription, services, _ctx).await {
+                    warn!(
+                        call_id,
+                        event_package,
+                        error = %e,
+                        "Failed to send initial NOTIFY (RFC 3265 compliance issue)"
+                    );
+                } else {
                     info!(
                         call_id,
                         event_package,
-                        "TODO: Initial NOTIFY should be sent here (RFC 3265 compliance)"
+                        "Initial NOTIFY sent successfully (RFC 3265 compliant)"
                     );
                 }
             }
