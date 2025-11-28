@@ -39,8 +39,9 @@
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::{debug, warn};
 
 /// Configuration for rate limiting
@@ -225,11 +226,82 @@ impl TokenBucket {
     }
 }
 
+/// Metrics for rate limiter operations
+#[derive(Debug, Default)]
+pub struct RateLimitMetrics {
+    /// Total number of rate limit checks performed
+    pub total_checks: AtomicU64,
+    /// Number of requests that were allowed
+    pub allowed_requests: AtomicU64,
+    /// Number of requests that were blocked
+    pub blocked_requests: AtomicU64,
+    /// Number of cleanup operations performed
+    pub cleanup_runs: AtomicU64,
+}
+
+impl RateLimitMetrics {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Get total checks
+    pub fn total_checks(&self) -> u64 {
+        self.total_checks.load(Ordering::Relaxed)
+    }
+
+    /// Get allowed requests
+    pub fn allowed_requests(&self) -> u64 {
+        self.allowed_requests.load(Ordering::Relaxed)
+    }
+
+    /// Get blocked requests
+    pub fn blocked_requests(&self) -> u64 {
+        self.blocked_requests.load(Ordering::Relaxed)
+    }
+
+    /// Get cleanup runs
+    pub fn cleanup_runs(&self) -> u64 {
+        self.cleanup_runs.load(Ordering::Relaxed)
+    }
+
+    /// Get block rate (percentage of requests blocked)
+    pub fn block_rate(&self) -> f64 {
+        let total = self.total_checks();
+        if total == 0 {
+            0.0
+        } else {
+            (self.blocked_requests() as f64 / total as f64) * 100.0
+        }
+    }
+
+    /// Reset all metrics
+    pub fn reset(&self) {
+        self.total_checks.store(0, Ordering::Relaxed);
+        self.allowed_requests.store(0, Ordering::Relaxed);
+        self.blocked_requests.store(0, Ordering::Relaxed);
+        self.cleanup_runs.store(0, Ordering::Relaxed);
+    }
+}
+
+/// Information about rate limit status for a key
+#[derive(Debug, Clone)]
+pub struct RateLimitInfo {
+    /// Maximum requests allowed in the time window
+    pub limit: u32,
+    /// Remaining tokens available
+    pub remaining: u32,
+    /// Unix timestamp when the rate limit resets (tokens fully refilled)
+    pub reset_at: u64,
+    /// Seconds until rate limit resets
+    pub retry_after: u64,
+}
+
 /// Thread-safe rate limiter with configurable limits
 #[derive(Debug, Clone)]
 pub struct RateLimiter {
     config: Arc<RateLimitConfig>,
     buckets: Arc<DashMap<String, RwLock<TokenBucket>>>,
+    metrics: Arc<RateLimitMetrics>,
 }
 
 impl RateLimiter {
@@ -238,12 +310,18 @@ impl RateLimiter {
         Self {
             config: Arc::new(config),
             buckets: Arc::new(DashMap::new()),
+            metrics: Arc::new(RateLimitMetrics::new()),
         }
     }
 
     /// Create a disabled rate limiter (allows all requests)
     pub fn disabled() -> Self {
         Self::new(RateLimitConfig::disabled())
+    }
+
+    /// Get metrics for this rate limiter
+    pub fn metrics(&self) -> &RateLimitMetrics {
+        &self.metrics
     }
 
     /// Check if a request should be rate limited
@@ -254,8 +332,12 @@ impl RateLimiter {
     ///
     /// * `key` - Identifier for rate limiting (IP address, username, etc.)
     pub fn check_rate_limit(&self, key: &str) -> bool {
+        // Track total checks
+        self.metrics.total_checks.fetch_add(1, Ordering::Relaxed);
+
         // If disabled, allow all requests
         if !self.config.enabled {
+            self.metrics.allowed_requests.fetch_add(1, Ordering::Relaxed);
             return true;
         }
 
@@ -268,7 +350,10 @@ impl RateLimiter {
         // Try to consume a token
         let allowed = bucket.write().try_consume(&self.config);
 
-        if !allowed {
+        if allowed {
+            self.metrics.allowed_requests.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.metrics.blocked_requests.fetch_add(1, Ordering::Relaxed);
             debug!(key, "rate limit exceeded");
         }
 
@@ -285,6 +370,8 @@ impl RateLimiter {
     /// Removes rate limiters that haven't been accessed within the idle timeout.
     /// Returns the number of rate limiters removed.
     pub fn cleanup_idle(&self) -> usize {
+        self.metrics.cleanup_runs.fetch_add(1, Ordering::Relaxed);
+
         if !self.config.enabled {
             return 0;
         }
@@ -337,6 +424,40 @@ impl RateLimiter {
     /// Get configuration
     pub fn config(&self) -> &RateLimitConfig {
         &self.config
+    }
+
+    /// Get rate limit information for a specific key
+    ///
+    /// Returns information about current rate limit status including
+    /// remaining tokens and reset time. Useful for adding rate limit
+    /// headers to responses.
+    ///
+    /// Returns `None` if the key doesn't exist yet (hasn't made any requests).
+    pub fn get_limit_info(&self, key: &str) -> Option<RateLimitInfo> {
+        let bucket = self.buckets.get(key)?;
+        let bucket = bucket.read();
+
+        // Calculate when the bucket will be fully refilled
+        let time_to_full = if bucket.tokens < self.config.burst_capacity as f64 {
+            let tokens_needed = self.config.burst_capacity as f64 - bucket.tokens;
+            let refills_needed = (tokens_needed / self.config.tokens_per_refill as f64).ceil();
+            Duration::from_millis(refills_needed as u64 * self.config.refill_interval_ms)
+        } else {
+            Duration::from_secs(0)
+        };
+
+        let reset_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + time_to_full.as_secs();
+
+        Some(RateLimitInfo {
+            limit: self.config.max_requests,
+            remaining: bucket.tokens as u32,
+            reset_at,
+            retry_after: time_to_full.as_secs(),
+        })
     }
 }
 
@@ -409,6 +530,91 @@ mod tests {
     use super::*;
     use std::thread;
     use std::time::Duration;
+
+    #[test]
+    fn metrics_track_operations() {
+        let config = RateLimitConfig::new(5, 60);
+        let limiter = RateLimiter::new(config);
+
+        // Allowed requests
+        for _ in 0..5 {
+            assert!(limiter.check_rate_limit("test-key"));
+        }
+
+        // Blocked request
+        assert!(!limiter.check_rate_limit("test-key"));
+
+        // Check metrics
+        let metrics = limiter.metrics();
+        assert_eq!(metrics.total_checks(), 6);
+        assert_eq!(metrics.allowed_requests(), 5);
+        assert_eq!(metrics.blocked_requests(), 1);
+    }
+
+    #[test]
+    fn metrics_block_rate() {
+        let config = RateLimitConfig::new(2, 60);
+        let limiter = RateLimiter::new(config);
+
+        limiter.check_rate_limit("test-key");
+        limiter.check_rate_limit("test-key");
+        limiter.check_rate_limit("test-key");
+        limiter.check_rate_limit("test-key");
+
+        // 2 allowed, 2 blocked = 50% block rate
+        let metrics = limiter.metrics();
+        assert_eq!(metrics.block_rate(), 50.0);
+    }
+
+    #[test]
+    fn get_limit_info_returns_correct_values() {
+        let config = RateLimitConfig::new(10, 60).with_burst_capacity(10);
+        let limiter = RateLimiter::new(config);
+
+        // No info before first request
+        assert!(limiter.get_limit_info("test-key").is_none());
+
+        // Make some requests
+        limiter.check_rate_limit("test-key");
+        limiter.check_rate_limit("test-key");
+        limiter.check_rate_limit("test-key");
+
+        // Check info
+        let info = limiter.get_limit_info("test-key").unwrap();
+        assert_eq!(info.limit, 10);
+        assert_eq!(info.remaining, 7); // 10 - 3
+        assert!(info.reset_at > 0);
+    }
+
+    #[test]
+    fn metrics_reset() {
+        let config = RateLimitConfig::new(5, 60);
+        let limiter = RateLimiter::new(config);
+
+        limiter.check_rate_limit("test-key");
+        limiter.check_rate_limit("test-key");
+
+        assert_eq!(limiter.metrics().total_checks(), 2);
+
+        limiter.metrics().reset();
+
+        assert_eq!(limiter.metrics().total_checks(), 0);
+        assert_eq!(limiter.metrics().allowed_requests(), 0);
+    }
+
+    #[test]
+    fn cleanup_tracked_in_metrics() {
+        let config = RateLimitConfig::new(10, 60);
+        let limiter = RateLimiter::new(config);
+
+        limiter.check_rate_limit("test-key");
+
+        assert_eq!(limiter.metrics().cleanup_runs(), 0);
+
+        limiter.cleanup_idle();
+
+        assert_eq!(limiter.metrics().cleanup_runs(), 1);
+    }
 
     #[test]
     fn token_bucket_allows_burst() {

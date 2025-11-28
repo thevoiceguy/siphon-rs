@@ -7,7 +7,10 @@
       "Bash(cargo test:*)",
       "Bash(cargo run:*)",
       "Bash(xargs ls:*)",
-      "Bash(tokei:*)"
+      "Bash(tokei:*)",
+      "Bash(rg:*)",
+      "Bash(sort:*)",
+      "Bash(grep:*)"
     ],
     "deny": [],
     "ask": []

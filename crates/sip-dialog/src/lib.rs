@@ -167,6 +167,9 @@ pub struct Dialog {
     /// Remote CSeq number (tracked from requests we receive)
     pub remote_cseq: u32,
 
+    /// Last ACK CSeq number (tracked separately to prevent replay)
+    pub last_ack_cseq: Option<u32>,
+
     /// Local URI (our identity)
     pub local_uri: SipUri,
 
@@ -227,6 +230,7 @@ impl Dialog {
             route_set,
             local_cseq,
             remote_cseq,
+            last_ack_cseq: None,
             local_uri,
             remote_uri,
             secure,
@@ -274,6 +278,7 @@ impl Dialog {
             route_set,
             local_cseq,
             remote_cseq,
+            last_ack_cseq: None,
             local_uri,
             remote_uri,
             secure,
@@ -353,13 +358,44 @@ impl Dialog {
     ///
     /// All usages share a single CSeq space. This method validates that incoming
     /// requests have monotonically increasing CSeq numbers (except ACK).
+    ///
+    /// # Security Considerations
+    ///
+    /// - First CSeq must be >= 1 (RFC 3261 requires non-zero initial CSeq)
+    /// - CSeq must not jump by more than 100 (prevents CSeq exhaustion attacks)
+    /// - ACK CSeq is tracked separately to prevent ACK replay attacks
     pub fn update_from_request(&mut self, req: &Request) -> Result<(), DialogError> {
         // Validate and update remote CSeq
         if let Some(cseq) = parse_cseq_number(&req.headers) {
-            if cseq <= self.remote_cseq && req.start.method != Method::Ack {
+            // RFC 3261 requires CSeq >= 1
+            if cseq == 0 {
                 return Err(DialogError::InvalidCSeq);
             }
-            self.remote_cseq = cseq;
+
+            if req.start.method == Method::Ack {
+                // ACK special handling: ACKs must have monotonically increasing CSeq
+                // This prevents both replay attacks and old ACK delivery
+                if let Some(last_ack) = self.last_ack_cseq {
+                    if cseq <= last_ack {
+                        return Err(DialogError::InvalidCSeq);
+                    }
+                }
+                self.last_ack_cseq = Some(cseq);
+            } else {
+                // Non-ACK requests must have strictly increasing CSeq
+                if cseq <= self.remote_cseq {
+                    return Err(DialogError::InvalidCSeq);
+                }
+
+                // Prevent CSeq exhaustion: reject unreasonable jumps
+                // Allow up to 100 increment for retransmissions and client restarts
+                const MAX_CSEQ_JUMP: u32 = 100;
+                if self.remote_cseq > 0 && cseq > self.remote_cseq + MAX_CSEQ_JUMP {
+                    return Err(DialogError::InvalidCSeq);
+                }
+
+                self.remote_cseq = cseq;
+            }
         }
 
         // Update remote target from Contact
@@ -1211,5 +1247,136 @@ mod tests {
     fn parse_uri_without_angle_brackets() {
         let uri = parse_uri_from_header("sip:bob@example.com").unwrap();
         assert_eq!(uri.host.as_str(), "example.com");
+    }
+
+    #[test]
+    fn cseq_validation_rejects_zero() {
+        // Create UAS dialog with initial CSeq=1
+        let req = make_request(Method::Invite, "call123", "alice-tag", None, 1);
+        let resp = make_response(200, &req, "bob-tag");
+        let mut dialog = Dialog::new_uas(
+            &req,
+            &resp,
+            SipUri::parse("sip:bob@example.com").unwrap(),
+            SipUri::parse("sip:alice@example.com").unwrap(),
+        )
+        .unwrap();
+
+        // Attempt to update with CSeq=0 should fail
+        let bad_req = make_request(Method::Invite, "call123", "alice-tag", Some("bob-tag"), 0);
+        assert!(dialog.update_from_request(&bad_req).is_err());
+    }
+
+    #[test]
+    fn cseq_validation_requires_monotonic_increase() {
+        let req = make_request(Method::Invite, "call123", "alice-tag", None, 10);
+        let resp = make_response(200, &req, "bob-tag");
+        let mut dialog = Dialog::new_uas(
+            &req,
+            &resp,
+            SipUri::parse("sip:bob@example.com").unwrap(),
+            SipUri::parse("sip:alice@example.com").unwrap(),
+        )
+        .unwrap();
+
+        // CSeq=11 should succeed
+        let req11 = make_request(Method::Bye, "call123", "alice-tag", Some("bob-tag"), 11);
+        assert!(dialog.update_from_request(&req11).is_ok());
+        assert_eq!(dialog.remote_cseq, 11);
+
+        // CSeq=11 again should fail (not strictly increasing)
+        let req11_again = make_request(Method::Bye, "call123", "alice-tag", Some("bob-tag"), 11);
+        assert!(dialog.update_from_request(&req11_again).is_err());
+
+        // CSeq=10 should fail (going backwards)
+        let req10 = make_request(Method::Bye, "call123", "alice-tag", Some("bob-tag"), 10);
+        assert!(dialog.update_from_request(&req10).is_err());
+    }
+
+    #[test]
+    fn cseq_validation_rejects_large_jumps() {
+        let req = make_request(Method::Invite, "call123", "alice-tag", None, 10);
+        let resp = make_response(200, &req, "bob-tag");
+        let mut dialog = Dialog::new_uas(
+            &req,
+            &resp,
+            SipUri::parse("sip:bob@example.com").unwrap(),
+            SipUri::parse("sip:alice@example.com").unwrap(),
+        )
+        .unwrap();
+
+        // CSeq=110 (jump of 100) should succeed (at the limit)
+        let req110 = make_request(Method::Bye, "call123", "alice-tag", Some("bob-tag"), 110);
+        assert!(dialog.update_from_request(&req110).is_ok());
+        assert_eq!(dialog.remote_cseq, 110);
+
+        // CSeq=212 (jump of 102, exceeds MAX_CSEQ_JUMP) should fail
+        let req212 = make_request(Method::Bye, "call123", "alice-tag", Some("bob-tag"), 212);
+        assert!(dialog.update_from_request(&req212).is_err());
+
+        // CSeq=210 (jump of 100 exactly) should succeed
+        let req210 = make_request(Method::Bye, "call123", "alice-tag", Some("bob-tag"), 210);
+        assert!(dialog.update_from_request(&req210).is_ok());
+        assert_eq!(dialog.remote_cseq, 210);
+    }
+
+    #[test]
+    fn cseq_validation_prevents_ack_replay() {
+        let req = make_request(Method::Invite, "call123", "alice-tag", None, 10);
+        let resp = make_response(200, &req, "bob-tag");
+        let mut dialog = Dialog::new_uas(
+            &req,
+            &resp,
+            SipUri::parse("sip:bob@example.com").unwrap(),
+            SipUri::parse("sip:alice@example.com").unwrap(),
+        )
+        .unwrap();
+
+        // First ACK with CSeq=10 should succeed
+        let ack1 = make_request(Method::Ack, "call123", "alice-tag", Some("bob-tag"), 10);
+        assert!(dialog.update_from_request(&ack1).is_ok());
+        assert_eq!(dialog.last_ack_cseq, Some(10));
+
+        // Replayed ACK with same CSeq=10 should fail
+        let ack1_replay = make_request(Method::Ack, "call123", "alice-tag", Some("bob-tag"), 10);
+        assert!(dialog.update_from_request(&ack1_replay).is_err());
+
+        // New re-INVITE with higher CSeq
+        let reinvite = make_request(Method::Invite, "call123", "alice-tag", Some("bob-tag"), 11);
+        assert!(dialog.update_from_request(&reinvite).is_ok());
+
+        // ACK with CSeq=11 for the re-INVITE should succeed
+        let ack2 = make_request(Method::Ack, "call123", "alice-tag", Some("bob-tag"), 11);
+        assert!(dialog.update_from_request(&ack2).is_ok());
+        assert_eq!(dialog.last_ack_cseq, Some(11));
+
+        // ACK with old CSeq=10 should still fail (even after new ACK)
+        let ack_old = make_request(Method::Ack, "call123", "alice-tag", Some("bob-tag"), 10);
+        assert!(dialog.update_from_request(&ack_old).is_err());
+    }
+
+    #[test]
+    fn cseq_validation_ack_does_not_update_remote_cseq() {
+        let req = make_request(Method::Invite, "call123", "alice-tag", None, 10);
+        let resp = make_response(200, &req, "bob-tag");
+        let mut dialog = Dialog::new_uas(
+            &req,
+            &resp,
+            SipUri::parse("sip:bob@example.com").unwrap(),
+            SipUri::parse("sip:alice@example.com").unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(dialog.remote_cseq, 10);
+
+        // ACK should not update remote_cseq
+        let ack = make_request(Method::Ack, "call123", "alice-tag", Some("bob-tag"), 10);
+        assert!(dialog.update_from_request(&ack).is_ok());
+        assert_eq!(dialog.remote_cseq, 10); // Should remain unchanged
+
+        // Next non-ACK request should still require CSeq > 10
+        let bye = make_request(Method::Bye, "call123", "alice-tag", Some("bob-tag"), 11);
+        assert!(dialog.update_from_request(&bye).is_ok());
+        assert_eq!(dialog.remote_cseq, 11);
     }
 }

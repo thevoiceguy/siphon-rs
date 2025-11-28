@@ -124,6 +124,7 @@ pub struct Nonce {
     pub ttl: Duration,
     pub last_nc: u32, // Last nonce-count seen (for replay protection)
     pub last_request_hash: Option<String>, // Hash of last request (method:uri:body) for retransmission detection
+    pub last_used: Instant, // Timestamp of last successful authentication (for request age validation)
 }
 
 impl Nonce {
@@ -133,12 +134,14 @@ impl Nonce {
             .take(32)
             .map(char::from)
             .collect();
+        let now = Instant::now();
         Self {
             value: SmolStr::new(token),
-            created_at: Instant::now(),
+            created_at: now,
             ttl,
             last_nc: 0,
             last_request_hash: None,
+            last_used: now,
         }
     }
 
@@ -153,6 +156,9 @@ impl Nonce {
     ///
     /// This allows legitimate UDP retransmissions (same request, same nc) while
     /// blocking replay attacks (different request with same/old nc).
+    ///
+    /// Also validates request age to prevent replay attacks using cached credentials.
+    /// Requests must be made within a reasonable time window after the previous request.
     pub fn validate_nc_with_request(
         &mut self,
         nc: u32,
@@ -160,6 +166,14 @@ impl Nonce {
         uri: &str,
         body: &[u8],
     ) -> bool {
+        // Reject requests that are significantly delayed (potential replay attack)
+        // Allow up to 30 seconds between requests for normal network delays
+        const MAX_REQUEST_AGE: Duration = Duration::from_secs(30);
+        if self.last_nc > 0 && self.last_used.elapsed() > MAX_REQUEST_AGE {
+            // If this isn't the first request (last_nc > 0) and it's been too long
+            // since the last successful auth, reject as potential replay
+            return false;
+        }
         // Compute hash of request (method:uri:body bytes)
         let mut ctx = Context::new();
         ctx.consume(method.as_str().as_bytes());
@@ -173,14 +187,22 @@ impl Nonce {
             // New request with incrementing nc - accept and store
             self.last_nc = nc;
             self.last_request_hash = Some(request_hash);
+            self.last_used = Instant::now(); // Update last used time
             true
         } else if nc == self.last_nc {
             // Potential retransmission - accept only if request hash matches
             if let Some(ref last_hash) = self.last_request_hash {
-                last_hash == &request_hash
+                if last_hash == &request_hash {
+                    // Valid retransmission, update last used time
+                    self.last_used = Instant::now();
+                    true
+                } else {
+                    false
+                }
             } else {
                 // First request with this nc
                 self.last_request_hash = Some(request_hash);
+                self.last_used = Instant::now();
                 true
             }
         } else {

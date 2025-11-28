@@ -1143,6 +1143,7 @@ impl IntegratedUAC {
             remote_target: target_uri,
             local_cseq: 1,
             remote_cseq: 0,
+            last_ack_cseq: None,
             route_set: vec![],
             secure: false,
             session_expires: None,

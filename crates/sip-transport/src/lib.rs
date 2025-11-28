@@ -339,9 +339,12 @@ where
                     .split(',')
                     .any(|p| p.trim().eq_ignore_ascii_case("sip"))
                 {
-                    resp.headers_mut()
-                        .append("Sec-WebSocket-Protocol", "sip".parse().unwrap());
-                    selected_sip = true;
+                    // Safety: "sip" is a valid HeaderValue
+                    if let Ok(header_value) = "sip".parse() {
+                        resp.headers_mut()
+                            .append("Sec-WebSocket-Protocol", header_value);
+                        selected_sip = true;
+                    }
                 }
             }
         }

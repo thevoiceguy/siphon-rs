@@ -1166,7 +1166,10 @@ impl SdpSession {
                 return Err(SdpError::InvalidSyntax(format!("Invalid line: {}", line)));
             }
 
-            let field_type = line.chars().next().unwrap();
+            // Safety: We know line.len() >= 2 from check above, so next() must return Some
+            let Some(field_type) = line.chars().next() else {
+                return Err(SdpError::InvalidSyntax(format!("Empty line")));
+            };
             match field_type {
                 'i' => self.session_info = Some(line[2..].to_string()),
                 'u' => self.uri = Some(line[2..].to_string()),
@@ -1679,7 +1682,10 @@ impl MediaDescription {
                 return Err(SdpError::InvalidSyntax(format!("Invalid line: {}", line)));
             }
 
-            let field_type = line.chars().next().unwrap();
+            // Safety: We know line.len() >= 2 from check above, so next() must return Some
+            let Some(field_type) = line.chars().next() else {
+                return Err(SdpError::InvalidSyntax(format!("Empty line")));
+            };
             match field_type {
                 'i' => desc.title = Some(line[2..].to_string()),
                 'c' => desc.connection = Some(parse_connection(line)?),
