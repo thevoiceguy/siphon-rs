@@ -1,0 +1,13 @@
+The following events occurred:
+2025-11-28	12:57:17.983239	1764352637.983239: Aborting call on unexpected message for Call-Id '1-282011@127.0.0.1': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 127.0.0.1:5061;branch=z9hG4bK-282011-1-0
+Max-Forwards: 70
+From: <sip:sipp@127.0.0.1>;tag=1
+To: <sip:test@127.0.0.1>
+Call-ID: 1-282011@127.0.0.1
+CSeq: 1 INVITE
+Contact: <sip:sipp@127.0.0.1:5061>
+Content-Type: application/sdp
+Content-Length: 0
+
+'

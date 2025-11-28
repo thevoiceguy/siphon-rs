@@ -1,0 +1,29 @@
+----------------------------------------------- 2025-11-28 12:57:18.994924
+UDP message sent (291 bytes):
+
+REGISTER sip:127.0.0.1:5060 SIP/2.0
+Via: SIP/2.0/UDP 127.0.0.1:5061;branch=z9hG4bK-282013-1-0
+Max-Forwards: 70
+From: <sip:test@127.0.0.1>;tag=1
+To: <sip:test@127.0.0.1>
+Call-ID: 1-282013@127.0.0.1
+CSeq: 1 REGISTER
+Contact: <sip:test@127.0.0.1:5061>
+Expires: 60
+Content-Length: 0
+
+
+----------------------------------------------- 2025-11-28 12:57:18.995496
+UDP message received [302] bytes :
+
+SIP/2.0 200 OK
+Via: SIP/2.0/UDP 127.0.0.1:5061;branch=z9hG4bK-282013-1-0
+From: <sip:test@127.0.0.1>;tag=1
+To: <sip:test@127.0.0.1>;tag=qlzB63um
+Call-ID: 1-282013@127.0.0.1
+CSeq: 1 REGISTER
+Contact: <sip:test@127.0.0.1:5061>;expires=60
+Date: Fri, 28 Nov 2025 17:57:18 +0000
+Content-Length: 0
+
+

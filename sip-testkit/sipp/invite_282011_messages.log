@@ -1,0 +1,79 @@
+----------------------------------------------- 2025-11-28 12:57:17.982512
+UDP message sent (443 bytes):
+
+INVITE sip:test@127.0.0.1:5060 SIP/2.0
+Via: SIP/2.0/UDP 127.0.0.1:5061;branch=z9hG4bK-282011-1-0
+Max-Forwards: 70
+From: <sip:sipp@127.0.0.1>;tag=1
+To: <sip:test@127.0.0.1>
+Call-ID: 1-282011@127.0.0.1
+CSeq: 1 INVITE
+Contact: <sip:sipp@127.0.0.1:5061>
+Content-Type: application/sdp
+Content-Length:   129
+
+v=0
+o=user1 53655765 2353687637 IN IP4 127.0.0.1
+s=-
+c=IN IP4 127.0.0.1
+t=0 0
+m=audio 9000 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+
+----------------------------------------------- 2025-11-28 12:57:17.983144
+UDP message received [205] bytes :
+
+SIP/2.0 100 Trying
+Via: SIP/2.0/UDP 127.0.0.1:5061;branch=z9hG4bK-282011-1-0
+From: <sip:sipp@127.0.0.1>;tag=1
+Call-ID: 1-282011@127.0.0.1
+CSeq: 1 INVITE
+To: <sip:test@127.0.0.1>
+Content-Length: 0
+
+
+----------------------------------------------- 2025-11-28 12:57:17.983223
+UDP message received [293] bytes :
+
+SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 127.0.0.1:5061;branch=z9hG4bK-282011-1-0
+Max-Forwards: 70
+From: <sip:sipp@127.0.0.1>;tag=1
+To: <sip:test@127.0.0.1>
+Call-ID: 1-282011@127.0.0.1
+CSeq: 1 INVITE
+Contact: <sip:sipp@127.0.0.1:5061>
+Content-Type: application/sdp
+Content-Length: 0
+
+
+-----------------------------------------------
+Unexpected UDP message received:
+
+SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 127.0.0.1:5061;branch=z9hG4bK-282011-1-0
+Max-Forwards: 70
+From: <sip:sipp@127.0.0.1>;tag=1
+To: <sip:test@127.0.0.1>
+Call-ID: 1-282011@127.0.0.1
+CSeq: 1 INVITE
+Contact: <sip:sipp@127.0.0.1:5061>
+Content-Type: application/sdp
+Content-Length: 0
+
+
+----------------------------------------------- 2025-11-28 12:57:17.983384
+UDP message sent (309 bytes):
+
+ACK sip:test@127.0.0.1 SIP/2.0
+Via: SIP/2.0/UDP 127.0.0.1:5061;branch=z9hG4bK-282011-1-0
+From: <sip:sipp@127.0.0.1>;tag=1
+To: <sip:test@127.0.0.1>
+Call-ID: 1-282011@127.0.0.1
+CSeq: 1 ACK
+Contact: <sip:sipp@127.0.0.1:5061;transport=UDP>
+Max-Forwards: 70
+Subject: Performance Test
+Content-Length: 0
+
+

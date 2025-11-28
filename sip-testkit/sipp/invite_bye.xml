@@ -68,5 +68,5 @@ Content-Length: 0
   <!-- Receive 200 OK for BYE -->
   <recv response="200" rtd="true"/>
 
-  <response-time repartition="1,500"/>
+  <!-- <response-time repartition="1,500"/> -->
 </scenario>

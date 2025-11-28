@@ -17,5 +17,5 @@ Content-Length: 0
 
   <recv response="200" rtd="true"/>
 
-  <response-time repartition="1,500"/>
+  <!-- <response-time repartition="1,500"/> -->
 </scenario>
