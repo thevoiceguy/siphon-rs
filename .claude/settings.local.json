@@ -10,7 +10,8 @@
       "Bash(tokei:*)",
       "Bash(rg:*)",
       "Bash(sort:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(journalctl:*)"
     ],
     "deny": [],
     "ask": []

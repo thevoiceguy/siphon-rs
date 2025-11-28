@@ -109,6 +109,167 @@ impl InviteHandler {
         services.dialog_mgr.find_by_request(request).is_some()
     }
 
+    /// Handle re-INVITE in B2BUA mode - forward to the other leg
+    async fn handle_b2bua_reinvite(
+        &self,
+        request: &Request,
+        handle: ServerTransactionHandle,
+        _ctx: &TransportContext,
+        services: &ServiceRegistry,
+        call_id: &str,
+    ) -> Result<()> {
+        info!(call_id, "B2BUA: Processing re-INVITE for hold/resume");
+
+        // Send 100 Trying immediately
+        let trying = sip_uas::UserAgentServer::create_trying(request);
+        handle.send_provisional(trying).await;
+
+        // Try to find which leg this re-INVITE belongs to
+        let dialog = services
+            .dialog_mgr
+            .find_by_request(request)
+            .ok_or_else(|| anyhow!("Dialog not found for re-INVITE"))?;
+
+        // Check if this is from the UAC leg (Alice) or UAS leg (Bob)
+        let call_leg = services
+            .b2bua_state
+            .find_by_uac_dialog(&dialog.id)
+            .or_else(|| services.b2bua_state.find_by_uas_dialog(&dialog.id))
+            .ok_or_else(|| anyhow!("Call leg not found for re-INVITE"))?;
+
+        let is_from_alice = services
+            .b2bua_state
+            .find_by_uac_dialog(&dialog.id)
+            .is_some();
+
+        // Extract SDP from re-INVITE to detect hold/resume
+        let sdp_str = if !request.body.is_empty() {
+            std::str::from_utf8(&request.body).ok()
+        } else {
+            None
+        };
+
+        let is_hold = sdp_str.map(|s| s.contains("a=inactive") || s.contains("a=sendonly")).unwrap_or(false);
+        let is_resume = sdp_str.map(|s| s.contains("a=sendrecv")).unwrap_or(false);
+
+        // Get the other leg's dialog for forwarding
+        let other_dialog = if is_from_alice {
+            // Alice → Bob: use UAS dialog to send to Bob
+            call_leg
+                .uas_dialog
+                .as_ref()
+                .ok_or_else(|| anyhow!("UAS dialog not found for forwarding"))?
+        } else {
+            // Bob → Alice: use UAC dialog to send to Alice
+            call_leg
+                .uac_dialog
+                .as_ref()
+                .ok_or_else(|| anyhow!("UAC dialog not found for forwarding"))?
+        };
+
+        // Log what's happening
+        if is_from_alice {
+            if is_hold {
+                info!(call_id, "Alice is putting Bob on hold - forwarding re-INVITE to Bob");
+            } else if is_resume {
+                info!(call_id, "Alice is resuming call with Bob - forwarding re-INVITE to Bob");
+            } else {
+                info!(call_id, "Alice sent re-INVITE (session modification) - forwarding to Bob");
+            }
+        } else {
+            if is_hold {
+                info!(call_id, "Bob is putting Alice on hold - forwarding re-INVITE to Alice");
+            } else if is_resume {
+                info!(call_id, "Bob is resuming call with Alice - forwarding re-INVITE to Alice");
+            } else {
+                info!(call_id, "Bob sent re-INVITE (session modification) - forwarding to Alice");
+            }
+        }
+
+        // Parse B2BUA URI for creating UAC
+        let b2bua_contact_uri = sip_core::SipUri::parse(&services.config.local_uri)
+            .ok_or_else(|| anyhow!("Invalid local_uri"))?;
+
+        // Create UAC for outgoing re-INVITE (use B2BUA as both local and contact)
+        let uac = sip_uac::UserAgentClient::new(b2bua_contact_uri.clone(), b2bua_contact_uri.clone());
+
+        // Create outgoing re-INVITE using the other dialog
+        let outgoing_reinvite = uac.create_reinvite(other_dialog, sdp_str);
+
+        // Determine target address from the other dialog's remote target
+        let target_addr = format!(
+            "{}:{}",
+            other_dialog.remote_target.host,
+            other_dialog.remote_target.port.unwrap_or(5060)
+        )
+        .parse::<std::net::SocketAddr>()?;
+
+        info!(
+            call_id,
+            target = %target_addr,
+            "Forwarding re-INVITE to other leg"
+        );
+
+        // Send the re-INVITE via TCP
+        let payload = sip_parse::serialize_request(&outgoing_reinvite);
+        sip_transport::send_tcp(&target_addr, &payload).await?;
+
+        info!(
+            call_id,
+            "re-INVITE forwarded successfully - sending 200 OK to original sender"
+        );
+
+        // Send 200 OK response back to the original sender
+        // For a full B2BUA, we should wait for the other leg's response first,
+        // but for basic hold/resume support, we can accept immediately
+        let mut response_headers = sip_core::Headers::new();
+
+        // Copy essential headers
+        if let Some(via) = header(&request.headers, "Via") {
+            response_headers.push("Via".into(), via.clone());
+        }
+        if let Some(from) = header(&request.headers, "From") {
+            response_headers.push("From".into(), from.clone());
+        }
+        if let Some(to) = header(&request.headers, "To") {
+            response_headers.push("To".into(), to.clone());
+        }
+        if let Some(call_id_hdr) = header(&request.headers, "Call-ID") {
+            response_headers.push("Call-ID".into(), call_id_hdr.clone());
+        }
+        if let Some(cseq) = header(&request.headers, "CSeq") {
+            response_headers.push("CSeq".into(), cseq.clone());
+        }
+
+        // Add Contact header (B2BUA's URI)
+        response_headers.push("Contact".into(), format!("<{}>", services.config.local_uri).into());
+
+        // Echo back the SDP from the original request
+        if !request.body.is_empty() {
+            if let Some(content_type) = header(&request.headers, "Content-Type") {
+                response_headers.push("Content-Type".into(), content_type.clone());
+            }
+            response_headers.push("Content-Length".into(), request.body.len().to_string().into());
+        } else {
+            response_headers.push("Content-Length".into(), "0".into());
+        }
+
+        let response = sip_core::Response::new(
+            sip_core::StatusLine::new(200, "OK".into()),
+            response_headers,
+            request.body.clone(), // Echo back the SDP
+        );
+
+        handle.send_final(response).await;
+
+        info!(
+            call_id,
+            "200 OK sent to original sender - re-INVITE flow complete"
+        );
+
+        Ok(())
+    }
+
     /// Handle INVITE in B2BUA mode - bridge two call legs
     async fn handle_b2bua(
         &self,
@@ -119,6 +280,13 @@ impl InviteHandler {
         call_id: &str,
     ) -> Result<()> {
         use sip_uac::UserAgentClient;
+
+        // Check if this is a re-INVITE (in-dialog request)
+        if self.is_in_dialog(request, services) {
+            return self
+                .handle_b2bua_reinvite(request, handle, _ctx, services, call_id)
+                .await;
+        }
 
         info!(call_id, "B2BUA MODE: Bridging call between users");
 
@@ -278,6 +446,8 @@ impl InviteHandler {
                 outgoing_invite: outgoing_invite.clone(),
                 callee_contact: callee_contact.clone(),
                 callee_to_tag: None,
+                uas_dialog: None, // Will be set after Bob's 200 OK ACK
+                uac_dialog: None, // Will be set after Alice's 200 OK
                 created_at: std::time::Instant::now(),
             });
 
@@ -440,7 +610,111 @@ impl InviteHandler {
                 );
                 services
                     .b2bua_state
-                    .update_callee_to_tag(outgoing_call_id, callee_to_tag);
+                    .update_callee_to_tag(outgoing_call_id, callee_to_tag.clone());
+
+                // Create UAC dialog (B2BUA → Alice) for handling re-INVITEs
+                // Extract local URI from the From header of outgoing INVITE (B2BUA's URI)
+                let local_uri = if let Some(from_hdr) = header(&call_leg.outgoing_invite.headers, "From") {
+                    let from_uri = if let Some(start) = from_hdr.find('<') {
+                        let end = from_hdr.find('>').unwrap_or(from_hdr.len());
+                        &from_hdr[start + 1..end]
+                    } else {
+                        from_hdr.split(';').next().unwrap_or(from_hdr.as_str()).trim()
+                    };
+                    sip_core::SipUri::parse(from_uri)
+                } else {
+                    None
+                };
+
+                // Extract remote URI from Alice's Contact header in the 200 OK
+                let remote_uri = if let Some(contact) = header(&callee_response.headers, "Contact") {
+                    // Extract URI from Contact header
+                    let contact_uri = if let Some(start) = contact.find('<') {
+                        let end = contact.find('>').unwrap_or(contact.len());
+                        &contact[start + 1..end]
+                    } else {
+                        contact.split(';').next().unwrap_or(contact.as_str()).trim()
+                    };
+                    sip_core::SipUri::parse(contact_uri)
+                } else {
+                    None
+                };
+
+                if let (Some(local), Some(remote)) = (local_uri, remote_uri) {
+                    if let Some(uac_dialog) = sip_dialog::Dialog::new_uac(
+                        &call_leg.outgoing_invite,
+                        callee_response,
+                        local.clone(),
+                        remote,
+                    ) {
+                        tracing::info!(
+                            outgoing_call_id,
+                            uac_dialog_id = ?uac_dialog.id,
+                            "Created and storing UAC dialog for re-INVITE support"
+                        );
+                        services
+                            .b2bua_state
+                            .update_uac_dialog(outgoing_call_id, uac_dialog.clone());
+
+                        // Also store in dialog manager for easy lookup
+                        services.dialog_mgr.insert(uac_dialog);
+                    } else {
+                        tracing::warn!(
+                            outgoing_call_id,
+                            "Failed to create UAC dialog from 200 OK - re-INVITEs may not work"
+                        );
+                    }
+                } else {
+                    tracing::warn!(
+                        outgoing_call_id,
+                        "Failed to extract URIs for UAC dialog creation"
+                    );
+                }
+
+                // Also create UAS dialog (Bob → B2BUA) for handling re-INVITEs from Bob
+                // We need to create a response that matches the transformed one we're sending
+                let uas_response = sip_core::Response::new(
+                    sip_core::StatusLine::new(200, "OK".into()),
+                    new_headers.clone(),
+                    callee_response.body.clone(),
+                );
+
+                // Extract local and remote URIs for UAS dialog (from Bob's perspective)
+                let caller_uri_str = if let Some(start) = caller_from.find('<') {
+                    let end = caller_from.find('>').unwrap_or(caller_from.len());
+                    &caller_from[start + 1..end]
+                } else {
+                    caller_from.split(';').next().unwrap_or(caller_from.as_str()).trim()
+                };
+
+                if let Some(caller_uri) = sip_core::SipUri::parse(caller_uri_str) {
+                    let b2bua_uri = sip_core::SipUri::parse(&services.config.local_uri);
+                    if let Some(b2bua_uri) = b2bua_uri {
+                        if let Some(uas_dialog) = sip_dialog::Dialog::new_uas(
+                            &call_leg.caller_request,
+                            &uas_response,
+                            b2bua_uri,
+                            caller_uri,
+                        ) {
+                            tracing::info!(
+                                outgoing_call_id,
+                                uas_dialog_id = ?uas_dialog.id,
+                                "Created and storing UAS dialog for re-INVITE support"
+                            );
+                            services
+                                .b2bua_state
+                                .update_uas_dialog(outgoing_call_id, uas_dialog.clone());
+
+                            // Also store in dialog manager
+                            services.dialog_mgr.insert(uas_dialog);
+                        } else {
+                            tracing::warn!(
+                                outgoing_call_id,
+                                "Failed to create UAS dialog from 200 OK - re-INVITEs from caller may not work"
+                            );
+                        }
+                    }
+                }
             }
         } else {
             // No To-tag in callee's response (provisional responses may not have it)

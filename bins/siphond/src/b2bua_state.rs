@@ -6,6 +6,7 @@
 /// - Enables proper B2BUA behavior with response relay
 use dashmap::DashMap;
 use sip_core::{Request, Response, SipUri};
+use sip_dialog::{Dialog, DialogId};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -33,6 +34,12 @@ pub struct CallLegPair {
 
     /// To-tag from callee (extracted from 200 OK To header)
     pub callee_to_tag: Option<String>,
+
+    /// UAS dialog (Bob → B2BUA)
+    pub uas_dialog: Option<Dialog>,
+
+    /// UAC dialog (B2BUA → Alice)
+    pub uac_dialog: Option<Dialog>,
 
     /// When this call leg pair was created
     #[allow(dead_code)]
@@ -84,6 +91,48 @@ impl B2BUAStateManager {
         if let Some(mut pair) = self.call_legs.get_mut(outgoing_call_id) {
             pair.callee_to_tag = Some(to_tag);
         }
+    }
+
+    /// Update the UAS dialog (Bob → B2BUA)
+    pub fn update_uas_dialog(&self, outgoing_call_id: &str, dialog: Dialog) {
+        if let Some(mut pair) = self.call_legs.get_mut(outgoing_call_id) {
+            pair.uas_dialog = Some(dialog);
+        }
+    }
+
+    /// Update the UAC dialog (B2BUA → Alice)
+    pub fn update_uac_dialog(&self, outgoing_call_id: &str, dialog: Dialog) {
+        if let Some(mut pair) = self.call_legs.get_mut(outgoing_call_id) {
+            pair.uac_dialog = Some(dialog);
+        }
+    }
+
+    /// Find call leg by UAC dialog ID (for in-dialog requests from Alice)
+    pub fn find_by_uac_dialog(&self, dialog_id: &DialogId) -> Option<CallLegPair> {
+        self.call_legs
+            .iter()
+            .find(|entry| {
+                if let Some(ref uac_dialog) = entry.value().uac_dialog {
+                    &uac_dialog.id == dialog_id
+                } else {
+                    false
+                }
+            })
+            .map(|entry| entry.value().clone())
+    }
+
+    /// Find call leg by UAS dialog ID (for in-dialog requests from Bob)
+    pub fn find_by_uas_dialog(&self, dialog_id: &DialogId) -> Option<CallLegPair> {
+        self.call_legs
+            .iter()
+            .find(|entry| {
+                if let Some(ref uas_dialog) = entry.value().uas_dialog {
+                    &uas_dialog.id == dialog_id
+                } else {
+                    false
+                }
+            })
+            .map(|entry| entry.value().clone())
     }
 
     /// Clean up old call legs (older than 5 minutes)
