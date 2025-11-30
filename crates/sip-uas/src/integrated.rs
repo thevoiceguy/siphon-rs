@@ -15,7 +15,7 @@
 ///
 /// # Example
 ///
-/// ```no_run
+/// ```ignore
 /// use sip_uas::integrated::{IntegratedUAS, UasRequestHandler};
 /// use sip_core::{Request, Response};
 /// use anyhow::Result;

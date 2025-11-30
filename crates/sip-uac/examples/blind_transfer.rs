@@ -62,6 +62,7 @@ fn main() {
         remote_target: alice_contact.clone(),
         local_cseq: 1,
         remote_cseq: 1,
+        last_ack_cseq: None,
         route_set: vec![],
         secure: false,
         session_expires: Some(Duration::from_secs(1800)),

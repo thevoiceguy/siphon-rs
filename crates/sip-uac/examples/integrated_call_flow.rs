@@ -23,7 +23,9 @@
 //! - Wire up packet reception to the transaction manager
 
 use anyhow::Result;
+use sip_sdp::{MediaDescription, SessionDescription};
 use sip_uac::integrated::{IntegratedUAC, SdpAnswerGenerator};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::{sleep, Duration};
 
 /// Example SDP answer generator for late offer scenarios
@@ -37,22 +39,30 @@ struct SimpleSdpGenerator;
 
 #[async_trait::async_trait]
 impl SdpAnswerGenerator for SimpleSdpGenerator {
-    async fn generate_answer(&self, _offer: &str, dialog: &sip_dialog::Dialog) -> Result<String> {
-        // Generate simple audio-only answer
-        let answer = format!(
-            "v=0\r\n\
-             o=- {} 0 IN IP4 127.0.0.1\r\n\
-             s=Example Call\r\n\
-             c=IN IP4 127.0.0.1\r\n\
-             t=0 0\r\n\
-             m=audio 8000 RTP/AVP 0 8\r\n\
-             a=rtpmap:0 PCMU/8000\r\n\
-             a=rtpmap:8 PCMA/8000\r\n",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs()
-        );
+    async fn generate_answer(
+        &self,
+        _offer: &SessionDescription,
+        dialog: &sip_dialog::Dialog,
+    ) -> Result<SessionDescription> {
+        // Generate simple audio-only answer using the builder for type-safe SDP
+        let session_id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            .to_string();
+
+        let answer = SessionDescription::builder()
+            .origin("example", &session_id, "127.0.0.1")
+            .session_name("Example Call")
+            .connection("127.0.0.1")
+            .media(
+                MediaDescription::audio(8000)
+                    .add_format(0)
+                    .add_format(8)
+                    .add_rtpmap(0, "PCMU", 8000, None)
+                    .add_rtpmap(8, "PCMA", 8000, None),
+            )
+            .build();
 
         println!("Generated SDP answer for dialog {}", dialog.id.call_id);
         Ok(answer)

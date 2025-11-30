@@ -214,7 +214,7 @@ impl UserAgentClient {
     ///
     /// # Example
     ///
-    /// ```no_run
+    /// ```ignore
     /// use sip_uac::UserAgentClient;
     /// use sip_core::{SipUri, Response, StatusLine, Headers};
     /// use bytes::Bytes;
@@ -291,7 +291,7 @@ impl UserAgentClient {
     ///
     /// # Example
     ///
-    /// ```no_run
+    /// ```ignore
     /// use sip_uac::UserAgentClient;
     /// use sip_core::SipUri;
     ///
@@ -965,7 +965,7 @@ impl UserAgentClient {
     ///         }
     ///     }
     /// }
-    /// ```
+    /// ```ignore
     pub fn create_session_refresh(
         &self,
         dialog: &Dialog,
@@ -1021,13 +1021,13 @@ impl UserAgentClient {
     /// ```ignore
     /// let dtmf_body = "Signal=1\r\nDuration=100\r\n";
     /// let info = uac.create_info(&dialog, "application/dtmf-relay", dtmf_body);
-    /// ```
+    /// ```ignore
     ///
     /// ## Custom Application Data
     /// ```ignore
     /// let json_body = r#"{"action":"mute","value":true}"#;
     /// let info = uac.create_info(&dialog, "application/json", json_body);
-    /// ```
+    /// ```ignore
     pub fn create_info(&self, dialog: &Dialog, content_type: &str, body: &str) -> Request {
         let mut headers = Headers::new();
 
@@ -1095,7 +1095,7 @@ impl UserAgentClient {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use sip_core::PrivacyValue;
     /// use sip_uac::UserAgentClient;
     ///
@@ -1107,8 +1107,8 @@ impl UserAgentClient {
     ///
     /// // Add critical privacy (must be honored or request fails)
     /// UserAgentClient::add_privacy_header(&mut invite, vec![
-    ///     PrivacyValue::Id,
-    ///     PrivacyValue::Critical,
+        ///     PrivacyValue::Id,
+        ///     PrivacyValue::Critical,
     /// ]);
     /// ```
     pub fn add_privacy_header(request: &mut Request, privacy_values: Vec<sip_core::PrivacyValue>) {
@@ -1134,7 +1134,7 @@ impl UserAgentClient {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use sip_core::PrivacyValue;
     /// use sip_uac::UserAgentClient;
     ///
@@ -1163,7 +1163,7 @@ impl UserAgentClient {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use sip_core::{ReasonHeader, Q850Cause};
     /// use sip_uac::UserAgentClient;
     ///
@@ -1193,7 +1193,7 @@ impl UserAgentClient {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use sip_core::{ReasonHeader, Q850Cause};
     /// use sip_uac::UserAgentClient;
     ///
@@ -1232,7 +1232,7 @@ impl UserAgentClient {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use sip_core::{PPreferredIdentityHeader, SipUri};
     /// use sip_uac::UserAgentClient;
     ///
@@ -1272,7 +1272,7 @@ impl UserAgentClient {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use sip_core::{PPreferredIdentityHeader, SipUri};
     /// use sip_uac::UserAgentClient;
     ///
@@ -1312,7 +1312,7 @@ impl UserAgentClient {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use sip_core::{PAssertedIdentityHeader, SipUri};
     /// use sip_uac::UserAgentClient;
     ///

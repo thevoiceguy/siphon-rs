@@ -16,7 +16,7 @@ use std::fmt;
 /// # Examples
 ///
 /// ```
-/// use sip_core::{RegInfo, Registration, Contact, ContactState, RegistrationState};
+/// use sip_core::{RegInfo, Registration, Contact, ContactState, RegInfoState, RegistrationState};
 /// use smol_str::SmolStr;
 ///
 /// // Create registration info with one active contact

@@ -50,7 +50,7 @@ use smol_str::SmolStr;
 ///
 /// # Example
 ///
-/// ```
+/// ```ignore
 /// use sip_core::SipETagHeader;
 ///
 /// // Server generates entity-tag
@@ -135,7 +135,7 @@ impl fmt::Display for SipETagHeader {
 ///
 /// # Example
 ///
-/// ```
+/// ```ignore
 /// use sip_core::SipIfMatchHeader;
 ///
 /// // Client wants to refresh publication

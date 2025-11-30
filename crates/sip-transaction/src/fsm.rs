@@ -47,10 +47,13 @@
 //! ```rust
 //! use sip_transaction::fsm::{ClientNonInviteFsm, ClientNonInviteEvent, ClientAction};
 //! use sip_transaction::timers::{TransportAwareTimers, Transport};
-//! use sip_core::{Request, Method};
+//! use sip_core::{Headers, Method, Request, RequestLine, SipUri};
+//! use bytes::Bytes;
 //!
 //! # fn create_request() -> Request {
-//! #     Request::new(Method::Options, "sip:user@example.com".parse().unwrap())
+//! #     let uri = SipUri::parse("sip:user@example.com").unwrap();
+//! #     let line = RequestLine::new(Method::Options, uri);
+//! #     Request::new(line, Headers::new(), Bytes::new())
 //! # }
 //! // Create FSM with TCP timers (zero retransmissions)
 //! let timers = TransportAwareTimers::new(Transport::Tcp);
@@ -79,13 +82,16 @@
 //! ```rust
 //! use sip_transaction::fsm::{ServerInviteFsm, ServerInviteEvent, ServerAction};
 //! use sip_transaction::timers::{TransportAwareTimers, Transport};
-//! use sip_core::{Request, Response, Method};
+//! use sip_core::{Headers, Method, Request, RequestLine, Response, SipUri, StatusLine};
+//! use bytes::Bytes;
 //!
 //! # fn create_request() -> Request {
-//! #     Request::new(Method::Invite, "sip:user@example.com".parse().unwrap())
+//! #     let uri = SipUri::parse("sip:user@example.com").unwrap();
+//! #     let line = RequestLine::new(Method::Invite, uri);
+//! #     Request::new(line, Headers::new(), Bytes::new())
 //! # }
 //! # fn create_200_ok() -> Response {
-//! #     Response::new(200, "OK")
+//! #     Response::new(StatusLine::new(200, "OK".into()), Headers::new(), Bytes::new())
 //! # }
 //! // Create FSM with UDP timers (full retransmissions)
 //! let timers = TransportAwareTimers::new(Transport::Udp);
