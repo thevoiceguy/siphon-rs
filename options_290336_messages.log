@@ -1,0 +1,30 @@
+----------------------------------------------- 2025-11-29 12:59:40.955407
+UDP message sent (307 bytes):
+
+OPTIONS sip:service@45.79.214.159:5060 SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290336-1-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81>;tag=1
+To: <sip:service@45.79.214.159>
+Call-ID: 1-290336@192.168.1.81
+CSeq: 1 OPTIONS
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Length: 0
+
+
+----------------------------------------------- 2025-11-29 12:59:41.002739
+UDP message received [439] bytes :
+
+SIP/2.0 200 OK
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290336-1-0
+From: <sip:sipp@192.168.1.81:5060>;tag=1
+To: <sip:service@45.79.214.159>;tag=siphond-563182929
+Call-ID: 1-290336@192.168.1.81
+CSeq: 1 OPTIONS
+Allow: OPTIONS, ACK, CANCEL, INVITE, BYE, UPDATE, REGISTER, REFER, PRACK
+Supported: path, 100rel, replaces
+Accept: application/sdp, application/sdp-answer
+User-Agent: siphond/0.2-refactored
+Content-Length: 0
+
+

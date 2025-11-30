@@ -1,0 +1,79 @@
+----------------------------------------------- 2025-11-29 13:01:17.467311
+UDP message sent (475 bytes):
+
+INVITE sip:service@45.79.214.159:5060 SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290393-1-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81>;tag=1
+To: <sip:service@45.79.214.159>
+Call-ID: 1-290393@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length:   135
+
+v=0
+o=user1 53655765 2353687637 IN IP4 192.168.1.81
+s=-
+c=IN IP4 192.168.1.81
+t=0 0
+m=audio 9000 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+
+----------------------------------------------- 2025-11-29 13:01:17.544124
+UDP message received [226] bytes :
+
+SIP/2.0 100 Trying
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290393-1-0
+From: <sip:sipp@192.168.1.81:5060>;tag=1
+Call-ID: 1-290393@192.168.1.81
+CSeq: 1 INVITE
+To: <sip:service@45.79.214.159>
+Content-Length: 0
+
+
+----------------------------------------------- 2025-11-29 13:01:17.544217
+UDP message received [317] bytes :
+
+SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290393-1-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=1
+To: <sip:service@45.79.214.159>
+Call-ID: 1-290393@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+
+-----------------------------------------------
+Unexpected UDP message received:
+
+SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290393-1-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=1
+To: <sip:service@45.79.214.159>
+Call-ID: 1-290393@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+
+----------------------------------------------- 2025-11-29 13:01:17.544280
+UDP message sent (340 bytes):
+
+ACK sip:service@45.79.214.159 SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290393-1-0
+From: <sip:sipp@192.168.1.81:5060>;tag=1
+To: <sip:service@45.79.214.159>
+Call-ID: 1-290393@192.168.1.81
+CSeq: 1 ACK
+Contact: <sip:sipp@192.168.1.81:5060;transport=UDP>
+Max-Forwards: 70
+Subject: Performance Test
+Content-Length: 0
+
+

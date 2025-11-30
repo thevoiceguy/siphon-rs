@@ -1,0 +1,49 @@
+----------------------------------------------- 2025-11-29 12:59:07.371343
+UDP message received [699] bytes :
+
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---5a10d331f24e4818;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=f34a606b13ce6d2c;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=410ab90b
+Call-ID: xmGQfh82ofhaDjzUKdF_gA..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+----------------------------------------------- 2025-11-29 12:59:07.463329
+UDP message sent (307 bytes):
+
+OPTIONS sip:service@45.79.214.159:5060 SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290333-1-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81>;tag=1
+To: <sip:service@45.79.214.159>
+Call-ID: 1-290333@192.168.1.81
+CSeq: 1 OPTIONS
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Length: 0
+
+
+----------------------------------------------- 2025-11-29 12:59:07.512509
+UDP message received [440] bytes :
+
+SIP/2.0 200 OK
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290333-1-0
+From: <sip:sipp@192.168.1.81:5060>;tag=1
+To: <sip:service@45.79.214.159>;tag=siphond-1161400618
+Call-ID: 1-290333@192.168.1.81
+CSeq: 1 OPTIONS
+Allow: OPTIONS, ACK, CANCEL, INVITE, BYE, UPDATE, REGISTER, REFER, PRACK
+Supported: path, 100rel, replaces
+Accept: application/sdp, application/sdp-answer
+User-Agent: siphond/0.2-refactored
+Content-Length: 0
+
+

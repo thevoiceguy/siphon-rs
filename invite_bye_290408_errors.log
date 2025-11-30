@@ -1,0 +1,1699 @@
+The following events occurred:
+2025-11-29	13:02:00.820838	1764439320.820838: Aborting call on unexpected message for Call-Id '1-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-1-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=1
+To: <sip:service@45.79.214.159>
+Call-ID: 1-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:00.907798	1764439320.907798: Aborting call on unexpected message for Call-Id '2-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-2-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=2
+To: <sip:service@45.79.214.159>
+Call-ID: 2-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:00.998932	1764439320.998932: Aborting call on unexpected message for Call-Id '3-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-3-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=3
+To: <sip:service@45.79.214.159>
+Call-ID: 3-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:01.100222	1764439321.100222: Aborting call on unexpected message for Call-Id '4-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-4-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=4
+To: <sip:service@45.79.214.159>
+Call-ID: 4-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:01.197092	1764439321.197092: Aborting call on unexpected message for Call-Id '5-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-5-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=5
+To: <sip:service@45.79.214.159>
+Call-ID: 5-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:01.324693	1764439321.324693: Aborting call on unexpected message for Call-Id '6-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-6-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=6
+To: <sip:service@45.79.214.159>
+Call-ID: 6-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:01.410573	1764439321.410573: Aborting call on unexpected message for Call-Id '7-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-7-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=7
+To: <sip:service@45.79.214.159>
+Call-ID: 7-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:01.499154	1764439321.499154: Aborting call on unexpected message for Call-Id '8-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-8-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=8
+To: <sip:service@45.79.214.159>
+Call-ID: 8-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:01.602851	1764439321.602851: Aborting call on unexpected message for Call-Id '9-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-9-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=9
+To: <sip:service@45.79.214.159>
+Call-ID: 9-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:01.739166	1764439321.739166: Aborting call on unexpected message for Call-Id '10-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-10-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=10
+To: <sip:service@45.79.214.159>
+Call-ID: 10-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:01.797502	1764439321.797502: Aborting call on unexpected message for Call-Id '11-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-11-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=11
+To: <sip:service@45.79.214.159>
+Call-ID: 11-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:01.923060	1764439321.923060: Aborting call on unexpected message for Call-Id '12-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-12-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=12
+To: <sip:service@45.79.214.159>
+Call-ID: 12-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:02.007899	1764439322.007899: Aborting call on unexpected message for Call-Id '13-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-13-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=13
+To: <sip:service@45.79.214.159>
+Call-ID: 13-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:02.123852	1764439322.123852: Aborting call on unexpected message for Call-Id '14-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-14-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=14
+To: <sip:service@45.79.214.159>
+Call-ID: 14-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:02.226635	1764439322.226635: Aborting call on unexpected message for Call-Id '15-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-15-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=15
+To: <sip:service@45.79.214.159>
+Call-ID: 15-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:02.309998	1764439322.309998: Aborting call on unexpected message for Call-Id '16-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-16-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=16
+To: <sip:service@45.79.214.159>
+Call-ID: 16-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:02.432647	1764439322.432647: Aborting call on unexpected message for Call-Id '17-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-17-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=17
+To: <sip:service@45.79.214.159>
+Call-ID: 17-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:02.514405	1764439322.514405: Aborting call on unexpected message for Call-Id '18-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-18-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=18
+To: <sip:service@45.79.214.159>
+Call-ID: 18-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:02.597144	1764439322.597144: Aborting call on unexpected message for Call-Id '19-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-19-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=19
+To: <sip:service@45.79.214.159>
+Call-ID: 19-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:02.711483	1764439322.711483: Aborting call on unexpected message for Call-Id '20-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-20-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=20
+To: <sip:service@45.79.214.159>
+Call-ID: 20-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:02.801054	1764439322.801054: Aborting call on unexpected message for Call-Id '21-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-21-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=21
+To: <sip:service@45.79.214.159>
+Call-ID: 21-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:02.929754	1764439322.929754: Aborting call on unexpected message for Call-Id '22-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-22-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=22
+To: <sip:service@45.79.214.159>
+Call-ID: 22-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:02.997813	1764439322.997813: Aborting call on unexpected message for Call-Id '23-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-23-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=23
+To: <sip:service@45.79.214.159>
+Call-ID: 23-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:03.098334	1764439323.098334: Aborting call on unexpected message for Call-Id '24-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-24-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=24
+To: <sip:service@45.79.214.159>
+Call-ID: 24-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:03.201877	1764439323.201877: Aborting call on unexpected message for Call-Id '25-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-25-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=25
+To: <sip:service@45.79.214.159>
+Call-ID: 25-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:03.295041	1764439323.295041: Aborting call on unexpected message for Call-Id '26-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-26-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=26
+To: <sip:service@45.79.214.159>
+Call-ID: 26-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:03.395942	1764439323.395942: Aborting call on unexpected message for Call-Id '27-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-27-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=27
+To: <sip:service@45.79.214.159>
+Call-ID: 27-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:03.495573	1764439323.495573: Aborting call on unexpected message for Call-Id '28-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-28-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=28
+To: <sip:service@45.79.214.159>
+Call-ID: 28-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:03.599746	1764439323.599746: Aborting call on unexpected message for Call-Id '29-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-29-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=29
+To: <sip:service@45.79.214.159>
+Call-ID: 29-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:03.694082	1764439323.694082: Aborting call on unexpected message for Call-Id '30-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-30-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=30
+To: <sip:service@45.79.214.159>
+Call-ID: 30-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:03.793262	1764439323.793262: Aborting call on unexpected message for Call-Id '31-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-31-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=31
+To: <sip:service@45.79.214.159>
+Call-ID: 31-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:03.901839	1764439323.901839: Aborting call on unexpected message for Call-Id '32-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-32-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=32
+To: <sip:service@45.79.214.159>
+Call-ID: 32-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:03.998030	1764439323.998030: Aborting call on unexpected message for Call-Id '33-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-33-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=33
+To: <sip:service@45.79.214.159>
+Call-ID: 33-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:04.095829	1764439324.095829: Aborting call on unexpected message for Call-Id '34-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-34-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=34
+To: <sip:service@45.79.214.159>
+Call-ID: 34-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:04.195779	1764439324.195779: Aborting call on unexpected message for Call-Id '35-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-35-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=35
+To: <sip:service@45.79.214.159>
+Call-ID: 35-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:04.294852	1764439324.294852: Aborting call on unexpected message for Call-Id '36-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-36-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=36
+To: <sip:service@45.79.214.159>
+Call-ID: 36-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:04.395667	1764439324.395667: Aborting call on unexpected message for Call-Id '37-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-37-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=37
+To: <sip:service@45.79.214.159>
+Call-ID: 37-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:04.496476	1764439324.496476: Aborting call on unexpected message for Call-Id '38-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-38-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=38
+To: <sip:service@45.79.214.159>
+Call-ID: 38-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:04.598222	1764439324.598222: Aborting call on unexpected message for Call-Id '39-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-39-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=39
+To: <sip:service@45.79.214.159>
+Call-ID: 39-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:04.742150	1764439324.742150: Aborting call on unexpected message for Call-Id '40-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-40-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=40
+To: <sip:service@45.79.214.159>
+Call-ID: 40-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:04.793855	1764439324.793855: Aborting call on unexpected message for Call-Id '41-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-41-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=41
+To: <sip:service@45.79.214.159>
+Call-ID: 41-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:04.896428	1764439324.896428: Aborting call on unexpected message for Call-Id '42-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-42-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=42
+To: <sip:service@45.79.214.159>
+Call-ID: 42-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:04.998669	1764439324.998669: Aborting call on unexpected message for Call-Id '43-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-43-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=43
+To: <sip:service@45.79.214.159>
+Call-ID: 43-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:05.094295	1764439325.094295: Aborting call on unexpected message for Call-Id '44-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-44-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=44
+To: <sip:service@45.79.214.159>
+Call-ID: 44-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:05.196265	1764439325.196265: Aborting call on unexpected message for Call-Id '45-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-45-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=45
+To: <sip:service@45.79.214.159>
+Call-ID: 45-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:05.296180	1764439325.296180: Aborting call on unexpected message for Call-Id '46-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-46-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=46
+To: <sip:service@45.79.214.159>
+Call-ID: 46-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:05.402695	1764439325.402695: Aborting call on unexpected message for Call-Id '47-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-47-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=47
+To: <sip:service@45.79.214.159>
+Call-ID: 47-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:05.523583	1764439325.523583: Aborting call on unexpected message for Call-Id '48-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-48-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=48
+To: <sip:service@45.79.214.159>
+Call-ID: 48-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:05.635922	1764439325.635922: Aborting call on unexpected message for Call-Id '49-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-49-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=49
+To: <sip:service@45.79.214.159>
+Call-ID: 49-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:05.700138	1764439325.700138: Aborting call on unexpected message for Call-Id '50-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-50-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=50
+To: <sip:service@45.79.214.159>
+Call-ID: 50-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:05.794103	1764439325.794103: Aborting call on unexpected message for Call-Id '51-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-51-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=51
+To: <sip:service@45.79.214.159>
+Call-ID: 51-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:05.896848	1764439325.896848: Aborting call on unexpected message for Call-Id '52-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-52-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=52
+To: <sip:service@45.79.214.159>
+Call-ID: 52-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:05.995524	1764439325.995524: Aborting call on unexpected message for Call-Id '53-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-53-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=53
+To: <sip:service@45.79.214.159>
+Call-ID: 53-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:06.097577	1764439326.097577: Aborting call on unexpected message for Call-Id '54-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-54-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=54
+To: <sip:service@45.79.214.159>
+Call-ID: 54-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:06.194703	1764439326.194703: Aborting call on unexpected message for Call-Id '55-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-55-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=55
+To: <sip:service@45.79.214.159>
+Call-ID: 55-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:06.293600	1764439326.293600: Aborting call on unexpected message for Call-Id '56-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-56-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=56
+To: <sip:service@45.79.214.159>
+Call-ID: 56-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:06.396451	1764439326.396451: Aborting call on unexpected message for Call-Id '57-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-57-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=57
+To: <sip:service@45.79.214.159>
+Call-ID: 57-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:06.495868	1764439326.495868: Aborting call on unexpected message for Call-Id '58-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-58-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=58
+To: <sip:service@45.79.214.159>
+Call-ID: 58-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:06.619666	1764439326.619666: Aborting call on unexpected message for Call-Id '59-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-59-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=59
+To: <sip:service@45.79.214.159>
+Call-ID: 59-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:06.693440	1764439326.693440: Aborting call on unexpected message for Call-Id '60-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-60-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=60
+To: <sip:service@45.79.214.159>
+Call-ID: 60-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:06.797890	1764439326.797890: Aborting call on unexpected message for Call-Id '61-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-61-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=61
+To: <sip:service@45.79.214.159>
+Call-ID: 61-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:06.897017	1764439326.897017: Aborting call on unexpected message for Call-Id '62-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-62-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=62
+To: <sip:service@45.79.214.159>
+Call-ID: 62-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:07.018144	1764439327.018144: Aborting call on unexpected message for Call-Id '63-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-63-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=63
+To: <sip:service@45.79.214.159>
+Call-ID: 63-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:07.096010	1764439327.096010: Aborting call on unexpected message for Call-Id '64-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-64-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=64
+To: <sip:service@45.79.214.159>
+Call-ID: 64-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:07.195617	1764439327.195617: Aborting call on unexpected message for Call-Id '65-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-65-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=65
+To: <sip:service@45.79.214.159>
+Call-ID: 65-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:07.295209	1764439327.295209: Aborting call on unexpected message for Call-Id '66-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-66-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=66
+To: <sip:service@45.79.214.159>
+Call-ID: 66-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:07.393909	1764439327.393909: Aborting call on unexpected message for Call-Id '67-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-67-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=67
+To: <sip:service@45.79.214.159>
+Call-ID: 67-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:07.498578	1764439327.498578: Aborting call on unexpected message for Call-Id '68-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-68-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=68
+To: <sip:service@45.79.214.159>
+Call-ID: 68-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:07.594410	1764439327.594410: Aborting call on unexpected message for Call-Id '69-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-69-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=69
+To: <sip:service@45.79.214.159>
+Call-ID: 69-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:07.733087	1764439327.733087: Aborting call on unexpected message for Call-Id '70-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-70-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=70
+To: <sip:service@45.79.214.159>
+Call-ID: 70-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:07.798265	1764439327.798265: Aborting call on unexpected message for Call-Id '71-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-71-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=71
+To: <sip:service@45.79.214.159>
+Call-ID: 71-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:07.895078	1764439327.895078: Aborting call on unexpected message for Call-Id '72-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-72-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=72
+To: <sip:service@45.79.214.159>
+Call-ID: 72-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:07.994838	1764439327.994838: Aborting call on unexpected message for Call-Id '73-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-73-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=73
+To: <sip:service@45.79.214.159>
+Call-ID: 73-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:08.094221	1764439328.094221: Aborting call on unexpected message for Call-Id '74-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-74-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=74
+To: <sip:service@45.79.214.159>
+Call-ID: 74-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:08.197925	1764439328.197925: Aborting call on unexpected message for Call-Id '75-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-75-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=75
+To: <sip:service@45.79.214.159>
+Call-ID: 75-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:08.296434	1764439328.296434: Aborting call on unexpected message for Call-Id '76-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-76-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=76
+To: <sip:service@45.79.214.159>
+Call-ID: 76-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:08.404119	1764439328.404119: Aborting call on unexpected message for Call-Id '77-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-77-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=77
+To: <sip:service@45.79.214.159>
+Call-ID: 77-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:08.497016	1764439328.497016: Aborting call on unexpected message for Call-Id '78-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-78-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=78
+To: <sip:service@45.79.214.159>
+Call-ID: 78-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:08.599023	1764439328.599023: Aborting call on unexpected message for Call-Id '79-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-79-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=79
+To: <sip:service@45.79.214.159>
+Call-ID: 79-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:08.700328	1764439328.700328: Aborting call on unexpected message for Call-Id '80-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-80-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=80
+To: <sip:service@45.79.214.159>
+Call-ID: 80-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:08.796148	1764439328.796148: Aborting call on unexpected message for Call-Id '81-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-81-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=81
+To: <sip:service@45.79.214.159>
+Call-ID: 81-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:08.901435	1764439328.901435: Aborting call on unexpected message for Call-Id '82-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-82-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=82
+To: <sip:service@45.79.214.159>
+Call-ID: 82-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:08.997459	1764439328.997459: Aborting call on unexpected message for Call-Id '83-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-83-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=83
+To: <sip:service@45.79.214.159>
+Call-ID: 83-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:09.096249	1764439329.096249: Aborting call on unexpected message for Call-Id '84-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-84-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=84
+To: <sip:service@45.79.214.159>
+Call-ID: 84-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:09.349796	1764439329.349796: Aborting call on unexpected message for Call-Id '86-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-86-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=86
+To: <sip:service@45.79.214.159>
+Call-ID: 86-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:09.412582	1764439329.412582: Aborting call on unexpected message for Call-Id '87-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-87-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=87
+To: <sip:service@45.79.214.159>
+Call-ID: 87-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:09.512323	1764439329.512323: Aborting call on unexpected message for Call-Id '88-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-88-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=88
+To: <sip:service@45.79.214.159>
+Call-ID: 88-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:09.627096	1764439329.627096: Aborting call on unexpected message for Call-Id '89-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-89-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=89
+To: <sip:service@45.79.214.159>
+Call-ID: 89-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:09.693569	1764439329.693569: Aborting call on unexpected message for Call-Id '90-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-90-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=90
+To: <sip:service@45.79.214.159>
+Call-ID: 90-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:09.795037	1764439329.795037: Aborting call on unexpected message for Call-Id '91-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-91-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=91
+To: <sip:service@45.79.214.159>
+Call-ID: 91-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:09.896357	1764439329.896357: Aborting call on unexpected message for Call-Id '92-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-92-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=92
+To: <sip:service@45.79.214.159>
+Call-ID: 92-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:09.996977	1764439329.996977: Aborting call on unexpected message for Call-Id '93-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-93-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=93
+To: <sip:service@45.79.214.159>
+Call-ID: 93-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:10.105359	1764439330.105359: Aborting call on unexpected message for Call-Id '94-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-94-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=94
+To: <sip:service@45.79.214.159>
+Call-ID: 94-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:10.199099	1764439330.199099: Aborting call on unexpected message for Call-Id '95-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-95-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=95
+To: <sip:service@45.79.214.159>
+Call-ID: 95-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:10.295097	1764439330.295097: Aborting call on unexpected message for Call-Id '96-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-96-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=96
+To: <sip:service@45.79.214.159>
+Call-ID: 96-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:10.396519	1764439330.396519: Aborting call on unexpected message for Call-Id '97-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-97-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=97
+To: <sip:service@45.79.214.159>
+Call-ID: 97-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:10.539751	1764439330.539751: Aborting call on unexpected message for Call-Id '98-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-98-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=98
+To: <sip:service@45.79.214.159>
+Call-ID: 98-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:10.594996	1764439330.594996: Aborting call on unexpected message for Call-Id '99-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-99-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=99
+To: <sip:service@45.79.214.159>
+Call-ID: 99-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:10.722169	1764439330.722169: Aborting call on unexpected message for Call-Id '100-290408@192.168.1.81': while expecting '180' (index 2), received 'SIP/2.0 404 Not Found
+Via: SIP/2.0/UDP 192.168.1.81:5060;branch=z9hG4bK-290408-100-0
+Max-Forwards: 70
+From: <sip:sipp@192.168.1.81:5060>;tag=100
+To: <sip:service@45.79.214.159>
+Call-ID: 100-290408@192.168.1.81
+CSeq: 1 INVITE
+Contact: <sip:sipp@192.168.1.81:5060>
+Content-Type: application/sdp
+Content-Length: 0
+
+'
+2025-11-29	13:02:12.157585	1764439332.157585: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---e0e914806bee9406;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=63ddb9e991fd11bf;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=dd022432
+Call-ID: ds1_56YBeV8C_MPqS-rbQQ..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+2025-11-29	13:02:12.665153	1764439332.665153: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---e0e914806bee9406;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=63ddb9e991fd11bf;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=dd022432
+Call-ID: ds1_56YBeV8C_MPqS-rbQQ..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+2025-11-29	13:02:13.676969	1764439333.676969: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---e0e914806bee9406;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=63ddb9e991fd11bf;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=dd022432
+Call-ID: ds1_56YBeV8C_MPqS-rbQQ..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+2025-11-29	13:02:15.690872	1764439335.690872: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---e0e914806bee9406;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=63ddb9e991fd11bf;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=dd022432
+Call-ID: ds1_56YBeV8C_MPqS-rbQQ..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+2025-11-29	13:02:19.694667	1764439339.694667: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---e0e914806bee9406;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=63ddb9e991fd11bf;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=dd022432
+Call-ID: ds1_56YBeV8C_MPqS-rbQQ..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+2025-11-29	13:02:23.706491	1764439343.706491: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---e0e914806bee9406;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=63ddb9e991fd11bf;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=dd022432
+Call-ID: ds1_56YBeV8C_MPqS-rbQQ..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+2025-11-29	13:02:27.711947	1764439347.711947: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---e0e914806bee9406;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=63ddb9e991fd11bf;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=dd022432
+Call-ID: ds1_56YBeV8C_MPqS-rbQQ..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+2025-11-29	13:02:31.720988	1764439351.720988: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---e0e914806bee9406;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=63ddb9e991fd11bf;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=dd022432
+Call-ID: ds1_56YBeV8C_MPqS-rbQQ..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+2025-11-29	13:02:35.728290	1764439355.728290: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---e0e914806bee9406;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=63ddb9e991fd11bf;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=dd022432
+Call-ID: ds1_56YBeV8C_MPqS-rbQQ..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+2025-11-29	13:02:39.743639	1764439359.743639: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---e0e914806bee9406;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=63ddb9e991fd11bf;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=dd022432
+Call-ID: ds1_56YBeV8C_MPqS-rbQQ..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+2025-11-29	13:02:43.745822	1764439363.745822: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---e0e914806bee9406;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=63ddb9e991fd11bf;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=dd022432
+Call-ID: ds1_56YBeV8C_MPqS-rbQQ..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+2025-11-29	13:03:16.126318	1764439396.126318: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---c45008473fed89da;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=bf45b59514b7de9b;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=ad03c91c
+Call-ID: 9Z5GJanWjvdybfDU_Kn-uA..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+2025-11-29	13:03:16.631618	1764439396.631618: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---c45008473fed89da;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=bf45b59514b7de9b;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=ad03c91c
+Call-ID: 9Z5GJanWjvdybfDU_Kn-uA..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+2025-11-29	13:03:17.638634	1764439397.638634: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---c45008473fed89da;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=bf45b59514b7de9b;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=ad03c91c
+Call-ID: 9Z5GJanWjvdybfDU_Kn-uA..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+2025-11-29	13:03:19.651396	1764439399.651396: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---c45008473fed89da;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=bf45b59514b7de9b;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=ad03c91c
+Call-ID: 9Z5GJanWjvdybfDU_Kn-uA..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+2025-11-29	13:03:23.663250	1764439403.663250: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---c45008473fed89da;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=bf45b59514b7de9b;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=ad03c91c
+Call-ID: 9Z5GJanWjvdybfDU_Kn-uA..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+2025-11-29	13:03:27.666182	1764439407.666182: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---c45008473fed89da;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=bf45b59514b7de9b;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=ad03c91c
+Call-ID: 9Z5GJanWjvdybfDU_Kn-uA..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+2025-11-29	13:03:31.678864	1764439411.678864: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---c45008473fed89da;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=bf45b59514b7de9b;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=ad03c91c
+Call-ID: 9Z5GJanWjvdybfDU_Kn-uA..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+2025-11-29	13:03:35.684645	1764439415.684645: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---c45008473fed89da;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=bf45b59514b7de9b;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=ad03c91c
+Call-ID: 9Z5GJanWjvdybfDU_Kn-uA..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+2025-11-29	13:03:39.685939	1764439419.685939: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---c45008473fed89da;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=bf45b59514b7de9b;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=ad03c91c
+Call-ID: 9Z5GJanWjvdybfDU_Kn-uA..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+2025-11-29	13:03:43.689029	1764439423.689029: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---c45008473fed89da;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=bf45b59514b7de9b;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=ad03c91c
+Call-ID: 9Z5GJanWjvdybfDU_Kn-uA..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+2025-11-29	13:03:47.698328	1764439427.698328: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---c45008473fed89da;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=bf45b59514b7de9b;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=ad03c91c
+Call-ID: 9Z5GJanWjvdybfDU_Kn-uA..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+2025-11-29	13:04:20.304328	1764439460.304328: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---f8c09e71ff23c510;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=95a12784c0b0eda1;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=00396e0f
+Call-ID: rRCMN5Kz9GYqvBvPiNcxdA..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+2025-11-29	13:04:20.811378	1764439460.811378: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---f8c09e71ff23c510;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=95a12784c0b0eda1;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=00396e0f
+Call-ID: rRCMN5Kz9GYqvBvPiNcxdA..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+2025-11-29	13:04:21.821542	1764439461.821542: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---f8c09e71ff23c510;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=95a12784c0b0eda1;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=00396e0f
+Call-ID: rRCMN5Kz9GYqvBvPiNcxdA..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+2025-11-29	13:04:23.829639	1764439463.829639: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---f8c09e71ff23c510;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=95a12784c0b0eda1;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=00396e0f
+Call-ID: rRCMN5Kz9GYqvBvPiNcxdA..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+2025-11-29	13:04:27.844238	1764439467.844238: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---f8c09e71ff23c510;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=95a12784c0b0eda1;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=00396e0f
+Call-ID: rRCMN5Kz9GYqvBvPiNcxdA..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+2025-11-29	13:04:31.850362	1764439471.850362: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---f8c09e71ff23c510;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=95a12784c0b0eda1;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=00396e0f
+Call-ID: rRCMN5Kz9GYqvBvPiNcxdA..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+2025-11-29	13:04:35.851326	1764439475.851326: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---f8c09e71ff23c510;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=95a12784c0b0eda1;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=00396e0f
+Call-ID: rRCMN5Kz9GYqvBvPiNcxdA..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
+2025-11-29	13:04:39.853733	1764439479.853733: Discarding message which can't be mapped to a known SIPp call:
+REGISTER sip:192.168.1.81;transport=UDP SIP/2.0
+Via: SIP/2.0/UDP 192.168.1.80:57376;branch=z9hG4bK-524287-1---f8c09e71ff23c510;rport
+Max-Forwards: 70
+Contact: <sip:alice@192.168.1.80:57376;rinstance=95a12784c0b0eda1;transport=UDP>
+To: <sip:alice@192.168.1.81;transport=UDP>
+From: <sip:alice@192.168.1.81;transport=UDP>;tag=00396e0f
+Call-ID: rRCMN5Kz9GYqvBvPiNcxdA..
+CSeq: 1 REGISTER
+Expires: 60
+Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE
+Supported: replaces, norefersub, extended-refer, timer, sec-agree, outbound, path, X-cisco-serviceuri
+User-Agent: Z 5.6.11 v2.10.20.11
+Allow-Events: presence, kpml, talk, as-feature-event
+Content-Length: 0
+
+
