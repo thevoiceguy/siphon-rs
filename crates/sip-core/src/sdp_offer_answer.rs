@@ -19,8 +19,17 @@
 //! use sip_core::sdp_offer_answer::{OfferAnswerEngine, AnswerOptions};
 //! use sip_core::sdp::SdpSession;
 //!
-//! // Parse offer
-//! let offer = SdpSession::parse("v=0\r\n...").unwrap();
+//! // Parse minimal offer with one audio stream
+//! let offer = SdpSession::parse(concat!(
+//!     "v=0\r\n",
+//!     "o=alice 123 456 IN IP4 192.0.2.1\r\n",
+//!     "s=Example Session\r\n",
+//!     "c=IN IP4 192.0.2.1\r\n",
+//!     "t=0 0\r\n",
+//!     "m=audio 49170 RTP/AVP 0\r\n",
+//!     "a=rtpmap:0 PCMU/8000\r\n",
+//! ))
+//! .unwrap();
 //!
 //! // Create negotiation engine
 //! let engine = OfferAnswerEngine::new();
@@ -480,7 +489,15 @@ impl OfferAnswerEngine {
     /// use sip_core::sdp::SdpSession;
     /// use sip_core::sdp_offer_answer::OfferAnswerEngine;
     ///
-    /// let active_session = SdpSession::parse("...").unwrap();
+    /// let active_session = SdpSession::parse(concat!(
+    ///     "v=0\r\n",
+    ///     "o=alice 123 456 IN IP4 192.0.2.1\r\n",
+    ///     "s=Example Session\r\n",
+    ///     "c=IN IP4 192.0.2.1\r\n",
+    ///     "t=0 0\r\n",
+    ///     "m=audio 49170 RTP/AVP 0\r\n",
+    ///     "a=rtpmap:0 PCMU/8000\r\n",
+    /// )).unwrap();
     /// let engine = OfferAnswerEngine::new();
     /// let hold_offer = engine.create_hold_offer(&active_session);
     ///

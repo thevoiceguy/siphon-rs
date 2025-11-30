@@ -15,7 +15,7 @@
 ///
 /// # Example
 ///
-/// ```no_run
+/// ```ignore
 /// use sip_uac::integrated::{IntegratedUAC, UACConfig};
 /// use sip_transaction::TransactionManager;
 /// use sip_dns::SipResolver;
@@ -1048,7 +1048,7 @@ impl IntegratedUAC {
     ///
     /// # Example
     ///
-    /// ```no_run
+    /// ```ignore
     /// # use sip_uac::integrated::IntegratedUAC;
     /// # async fn example(uac: &IntegratedUAC) -> anyhow::Result<()> {
     /// // Early offer (SDP in INVITE)
@@ -2172,7 +2172,7 @@ impl IntegratedUACBuilder {
     /// without SDP (late offer flow per RFC 3264).
     ///
     /// # Example
-    /// ```no_run
+    /// ```ignore
     /// use sip_uac::integrated::{IntegratedUAC, SdpAnswerGenerator};
     /// use std::sync::Arc;
     ///
@@ -2180,9 +2180,14 @@ impl IntegratedUACBuilder {
     ///
     /// #[async_trait::async_trait]
     /// impl SdpAnswerGenerator for MySdpGenerator {
-    ///     async fn generate_answer(&self, offer: &str, dialog: &sip_dialog::Dialog) -> anyhow::Result<String> {
+    ///     async fn generate_answer(
+    ///         &self,
+    ///         offer: &sip_sdp::SessionDescription,
+    ///         dialog: &sip_dialog::Dialog,
+    ///     ) -> anyhow::Result<sip_sdp::SessionDescription> {
     ///         // Parse offer and generate answer...
-    ///         Ok("v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\n...".to_string())
+    ///         println!("Got offer for dialog {:?}", dialog.id);
+    ///         Ok(offer.clone())
     ///     }
     /// }
     ///

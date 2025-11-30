@@ -55,7 +55,7 @@ use crate::SipUri;
 /// ## Authenticated Transfer
 ///
 /// 1. Alice sends REFER with signed identity:
-///    ```
+///    ```text
 ///    Referred-By: <sip:alice@example.com>;cid="sig123@example.com"
 ///    Content-Type: multipart/signed
 ///    [S/MIME signature body]
@@ -216,8 +216,8 @@ impl ReferredByHeader {
     ///     r#""Alice" <sip:alice@example.com>;cid="sig123@example.com""#
     /// ).unwrap();
     ///
-    /// assert_eq!(header.name_addr.display_name(), Some("Alice"));
-    /// assert_eq!(header.cid, Some("sig123@example.com".into()));
+    /// assert_eq!(header.name_addr.display_name.as_deref(), Some("Alice"));
+    /// assert_eq!(header.cid.as_deref(), Some("sig123@example.com"));
     /// ```
     pub fn parse(input: &str) -> Option<Self> {
         let input = input.trim();
