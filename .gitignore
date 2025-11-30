@@ -6,3 +6,4 @@ Cargo.lock
 .idea/
 .vscode/
 sip-testkit/sipp/*.log
+*.log
