@@ -3,6 +3,7 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use md5::Context;
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
+use async_trait::async_trait;
 use sha2::{Digest, Sha256, Sha512};
 use sip_core::{Headers, Method, Request, Response, StatusLine};
 use sip_parse::parse_authorization_header;
@@ -12,6 +13,7 @@ use std::fmt::Write;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
+use tokio::{runtime::Handle, task};
 
 /// Credentials used for SIP authentication.
 #[derive(Debug, Clone)]
@@ -33,6 +35,59 @@ pub trait CredentialStore: Send + Sync {
     fn fetch(&self, username: &str, realm: &str) -> Option<Credentials>;
 }
 
+/// Async credential store for non-blocking backends.
+#[async_trait]
+pub trait AsyncCredentialStore: Send + Sync {
+    async fn fetch(&self, username: &str, realm: &str) -> Option<Credentials>;
+}
+
+/// Adapter to expose an async credential store as a sync store.
+pub struct AsyncToSyncCredentialAdapter<T: AsyncCredentialStore> {
+    inner: T,
+}
+
+impl<T: AsyncCredentialStore> AsyncToSyncCredentialAdapter<T> {
+    pub fn new(inner: T) -> Self {
+        Self { inner }
+    }
+
+    fn block_on<F: std::future::Future>(&self, fut: F) -> F::Output {
+        task::block_in_place(|| Handle::current().block_on(fut))
+    }
+}
+
+impl<T: AsyncCredentialStore> CredentialStore for AsyncToSyncCredentialAdapter<T> {
+    fn fetch(&self, username: &str, realm: &str) -> Option<Credentials> {
+        self.block_on(self.inner.fetch(username, realm))
+    }
+}
+
+/// Adapter to expose a synchronous store as async using spawn_blocking.
+pub struct SyncToAsyncCredentialAdapter<T: CredentialStore> {
+    inner: Arc<T>,
+}
+
+impl<T: CredentialStore> SyncToAsyncCredentialAdapter<T> {
+    pub fn new(inner: T) -> Self {
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+}
+
+#[async_trait]
+impl<T: CredentialStore + 'static> AsyncCredentialStore for SyncToAsyncCredentialAdapter<T> {
+    async fn fetch(&self, username: &str, realm: &str) -> Option<Credentials> {
+        let inner = Arc::clone(&self.inner);
+        let username = username.to_owned();
+        let realm = realm.to_owned();
+        task::spawn_blocking(move || inner.fetch(&username, &realm))
+            .await
+            .ok()
+            .flatten()
+    }
+}
+
 /// In-memory credential store for testing/demo.
 #[derive(Default)]
 pub struct MemoryCredentialStore {
@@ -51,6 +106,11 @@ impl MemoryCredentialStore {
     pub fn add(&mut self, creds: Credentials) {
         self.creds.push(creds);
     }
+
+    /// Convenience inherent fetch that delegates to the sync trait implementation.
+    pub fn fetch(&self, username: &str, realm: &str) -> Option<Credentials> {
+        CredentialStore::fetch(self, username, realm)
+    }
 }
 
 impl CredentialStore for MemoryCredentialStore {
@@ -59,6 +119,13 @@ impl CredentialStore for MemoryCredentialStore {
             .iter()
             .find(|c| c.username == username && c.realm == realm)
             .cloned()
+    }
+}
+
+#[async_trait]
+impl AsyncCredentialStore for MemoryCredentialStore {
+    async fn fetch(&self, username: &str, realm: &str) -> Option<Credentials> {
+        CredentialStore::fetch(self, username, realm)
     }
 }
 
@@ -341,8 +408,19 @@ fn extract_ip_from_via(headers: &Headers) -> Option<String> {
     Some(host.to_string())
 }
 
+struct DigestParams {
+    username: SmolStr,
+    realm: SmolStr,
+    nonce: SmolStr,
+    uri: SmolStr,
+    response: SmolStr,
+    nc_raw: Option<SmolStr>,
+    cnonce: Option<SmolStr>,
+    qop: Option<Qop>,
+}
+
 /// Digest authenticator implementing RFC 7616 (MD5, SHA-256, SHA-512).
-pub struct DigestAuthenticator<S: CredentialStore> {
+pub struct DigestAuthenticator<S> {
     pub realm: SmolStr,
     pub algorithm: DigestAlgorithm,
     pub qop: Qop,
@@ -353,7 +431,122 @@ pub struct DigestAuthenticator<S: CredentialStore> {
     pub rate_limiter: Option<RateLimiter>, // Optional rate limiting
 }
 
-impl<S: CredentialStore> DigestAuthenticator<S> {
+impl<S> DigestAuthenticator<S> {
+    fn prepare_digest(
+        &self,
+        request: &Request,
+        headers: &Headers,
+    ) -> Result<Option<DigestParams>> {
+        if let Some(ref limiter) = self.rate_limiter {
+            if let Some(ip) = extract_ip_from_via(headers) {
+                if !limiter.check_rate_limit(&ip) {
+                    warn!(ip = %ip, "authentication rate limit exceeded");
+                    return Err(anyhow!("rate limit exceeded"));
+                }
+            }
+        }
+
+        let header_name = if self.proxy_auth {
+            "Proxy-Authorization"
+        } else {
+            "Authorization"
+        };
+
+        let auth_header = match headers.get(header_name) {
+            Some(h) => h,
+            None => return Ok(None),
+        };
+
+        let parsed = match parse_authorization_header(auth_header) {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+
+        if !parsed.scheme.eq_ignore_ascii_case("Digest") {
+            return Ok(None);
+        }
+
+        let username = parsed
+            .param("username")
+            .ok_or_else(|| anyhow!("missing username"))?;
+        let realm = parsed
+            .param("realm")
+            .ok_or_else(|| anyhow!("missing realm"))?;
+        let nonce = parsed
+            .param("nonce")
+            .ok_or_else(|| anyhow!("missing nonce"))?;
+        let uri = parsed.param("uri").ok_or_else(|| anyhow!("missing uri"))?;
+        let response = parsed
+            .param("response")
+            .ok_or_else(|| anyhow!("missing response"))?;
+
+        let _algorithm = parsed
+            .param("algorithm")
+            .and_then(|a| DigestAlgorithm::from_str(a.as_str()))
+            .unwrap_or(self.algorithm);
+
+        let nc = parsed.param("nc");
+        let cnonce = parsed.param("cnonce");
+        let qop = parsed.param("qop").and_then(|q| Qop::from_str(q.as_str()));
+        let opaque = parsed.param("opaque");
+
+        if realm.as_str() != self.realm.as_str() {
+            info!(realm = %realm, "digest realm mismatch");
+            return Ok(None);
+        }
+
+        if let Some(client_opaque) = opaque {
+            if client_opaque.as_str() != self.opaque.as_str() {
+                info!("digest opaque mismatch");
+                return Ok(None);
+            }
+        } else {
+            info!("digest missing opaque parameter");
+            return Ok(None);
+        }
+
+        let _validated_nc = if let Some(nc_str) = nc {
+            let nc_value = u32::from_str_radix(nc_str.as_str(), 16)
+                .map_err(|_| anyhow!("invalid nc format"))?;
+
+            if !self.nonce_manager.verify_with_nc(
+                nonce,
+                nc_value,
+                request.start.method,
+                uri.as_str(),
+                &request.body,
+            ) {
+                info!("digest nonce invalid/expired, nc decreasing (replay), or request hash mismatch (different request with same nc)");
+                return Ok(None);
+            }
+            Some(nc_value)
+        } else {
+            if qop.is_some() {
+                info!("digest missing nc parameter with qop");
+                return Ok(None);
+            }
+
+            if !self.nonce_manager.verify(nonce) {
+                info!("digest nonce invalid/expired");
+                return Ok(None);
+            }
+            None
+        };
+
+        Ok(Some(DigestParams {
+            username: username.clone(),
+            realm: realm.clone(),
+            nonce: nonce.clone(),
+            uri: uri.clone(),
+            response: response.clone(),
+            nc_raw: nc.cloned(),
+            cnonce: cnonce.cloned(),
+            qop,
+        }))
+    }
+}
+
+impl<S> DigestAuthenticator<S> {
     pub fn new(realm: &str, store: S) -> Self {
         // Generate a random opaque value for this authenticator instance
         let opaque: String = thread_rng()
@@ -534,131 +727,63 @@ impl<S: CredentialStore> Authenticator for DigestAuthenticator<S> {
     }
 
     fn verify(&self, request: &Request, headers: &Headers) -> Result<bool> {
-        // Check rate limit first (before expensive operations)
-        if let Some(ref limiter) = self.rate_limiter {
-            // Extract IP from top Via header (sender's IP)
-            if let Some(ip) = extract_ip_from_via(headers) {
-                if !limiter.check_rate_limit(&ip) {
-                    warn!(ip = %ip, "authentication rate limit exceeded");
-                    return Err(anyhow!("rate limit exceeded"));
-                }
-            }
-        }
-
-        let header_name = if self.proxy_auth {
-            "Proxy-Authorization"
-        } else {
-            "Authorization"
-        };
-
-        let auth_header = match headers.get(header_name) {
-            Some(h) => h,
-            None => return Ok(false),
-        };
-
-        let parsed = match parse_authorization_header(auth_header) {
+        let params = match self.prepare_digest(request, headers)? {
             Some(p) => p,
             None => return Ok(false),
         };
 
-        if !parsed.scheme.eq_ignore_ascii_case("Digest") {
-            return Ok(false);
-        }
-
-        let username = parsed
-            .param("username")
-            .ok_or_else(|| anyhow!("missing username"))?;
-        let realm = parsed
-            .param("realm")
-            .ok_or_else(|| anyhow!("missing realm"))?;
-        let nonce = parsed
-            .param("nonce")
-            .ok_or_else(|| anyhow!("missing nonce"))?;
-        let uri = parsed.param("uri").ok_or_else(|| anyhow!("missing uri"))?;
-        let response = parsed
-            .param("response")
-            .ok_or_else(|| anyhow!("missing response"))?;
-
-        let _algorithm = parsed
-            .param("algorithm")
-            .and_then(|a| DigestAlgorithm::from_str(a.as_str()))
-            .unwrap_or(self.algorithm);
-
-        let nc = parsed.param("nc");
-        let cnonce = parsed.param("cnonce");
-        let qop = parsed.param("qop").and_then(|q| Qop::from_str(q.as_str()));
-        let opaque = parsed.param("opaque");
-
-        if realm.as_str() != self.realm.as_str() {
-            info!(realm = %realm, "digest realm mismatch");
-            return Ok(false);
-        }
-
-        // Validate opaque parameter matches our instance opaque
-        if let Some(client_opaque) = opaque {
-            if client_opaque.as_str() != self.opaque.as_str() {
-                info!("digest opaque mismatch");
-                return Ok(false);
-            }
-        } else {
-            // Opaque is required when we send it in the challenge
-            info!("digest missing opaque parameter");
-            return Ok(false);
-        }
-
-        // Parse and validate nonce-count for replay protection
-        if let Some(nc_str) = nc {
-            // Parse nc from hex string (e.g., "00000001")
-            let nc_value = u32::from_str_radix(nc_str.as_str(), 16)
-                .map_err(|_| anyhow!("invalid nc format"))?;
-
-            // Verify nc with request hash to support retransmissions and block replay attacks
-            if !self.nonce_manager.verify_with_nc(
-                nonce,
-                nc_value,
-                request.start.method,
-                uri.as_str(),
-                &request.body,
-            ) {
-                info!("digest nonce invalid/expired, nc decreasing (replay), or request hash mismatch (different request with same nc)");
-                return Ok(false);
-            }
-        } else {
-            // If qop is specified, nc is required
-            if qop.is_some() {
-                info!("digest missing nc parameter with qop");
-                return Ok(false);
-            }
-
-            // Fall back to basic verification without nc tracking
-            if !self.nonce_manager.verify(nonce) {
-                info!("digest nonce invalid/expired");
-                return Ok(false);
-            }
-        }
-
         let creds = self
             .store
-            .fetch(username, &self.realm)
+            .fetch(params.username.as_str(), params.realm.as_str())
             .ok_or_else(|| anyhow!("unknown user"))?;
 
         let response_calc = self.compute_response(
-            username,
+            params.username.as_str(),
             creds.password.as_str(),
             request.start.method,
-            uri,
-            nonce,
-            nc.map(|s| s.as_str()),
-            cnonce.map(|s| s.as_str()),
-            qop,
+            params.uri.as_str(),
+            params.nonce.as_str(),
+            params.nc_raw.as_deref(),
+            params.cnonce.as_deref(),
+            params.qop,
             request.body.as_ref(),
         );
 
-        Ok(response_calc == response.as_str())
+        Ok(response_calc == params.response.as_str())
     }
 
     fn credentials_for(&self, _method: Method, _uri: &str) -> Option<Credentials> {
         None
+    }
+}
+
+impl<S: AsyncCredentialStore> DigestAuthenticator<S> {
+    /// Asynchronous verification using an async credential store.
+    pub async fn verify_async(&self, request: &Request, headers: &Headers) -> Result<bool> {
+        let params = match self.prepare_digest(request, headers)? {
+            Some(p) => p,
+            None => return Ok(false),
+        };
+
+        let creds = self
+            .store
+            .fetch(params.username.as_str(), params.realm.as_str())
+            .await
+            .ok_or_else(|| anyhow!("unknown user"))?;
+
+        let response_calc = self.compute_response(
+            params.username.as_str(),
+            creds.password.as_str(),
+            request.start.method,
+            params.uri.as_str(),
+            params.nonce.as_str(),
+            params.nc_raw.as_deref(),
+            params.cnonce.as_deref(),
+            params.qop,
+            request.body.as_ref(),
+        );
+
+        Ok(response_calc == params.response.as_str())
     }
 }
 

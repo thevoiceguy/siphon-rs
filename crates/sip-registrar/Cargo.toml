@@ -16,6 +16,8 @@ sip-parse = { path = "../sip-parse" }
 sip-auth = { path = "../sip-auth" }
 tracing = { workspace = true }
 rand = { workspace = true }
+async-trait = "0.1"
+tokio = { workspace = true }
 
 [dev-dependencies]
 bytes = { workspace = true }
