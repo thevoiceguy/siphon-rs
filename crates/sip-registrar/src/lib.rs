@@ -3,6 +3,7 @@ use bytes::Bytes;
 use chrono::Utc;
 use dashmap::DashMap;
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
+use async_trait::async_trait;
 use sip_auth::Authenticator;
 use sip_core::{Headers, Request, Response, StatusLine};
 use sip_parse::{header, parse_to_header};
@@ -11,6 +12,7 @@ use smol_str::SmolStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
+use tokio::{runtime::Handle, task};
 
 /// Registration binding for an address-of-record (AOR).
 ///
@@ -82,6 +84,109 @@ pub trait LocationStore: Send + Sync {
     fn cleanup_expired(&self) -> Result<usize>;
 }
 
+/// Async storage for registration bindings.
+#[async_trait]
+pub trait AsyncLocationStore: Send + Sync {
+    async fn upsert(&self, binding: Binding) -> Result<()>;
+    async fn remove(&self, aor: &str, contact: &str) -> Result<()>;
+    async fn remove_all(&self, aor: &str) -> Result<()>;
+    async fn lookup(&self, aor: &str) -> Result<Vec<Binding>>;
+    async fn cleanup_expired(&self) -> Result<usize>;
+}
+
+/// Adapter allowing an async store to satisfy the synchronous trait.
+pub struct AsyncToSyncAdapter<T: AsyncLocationStore> {
+    inner: T,
+}
+
+impl<T: AsyncLocationStore> AsyncToSyncAdapter<T> {
+    pub fn new(inner: T) -> Self {
+        Self { inner }
+    }
+
+    fn block_on<F: std::future::Future>(&self, fut: F) -> F::Output {
+        // Assume we are on a runtime; block_in_place to avoid starving.
+        task::block_in_place(|| Handle::current().block_on(fut))
+    }
+}
+
+impl<T: AsyncLocationStore> LocationStore for AsyncToSyncAdapter<T> {
+    fn upsert(&self, binding: Binding) -> Result<()> {
+        self.block_on(self.inner.upsert(binding))
+    }
+
+    fn remove(&self, aor: &str, contact: &str) -> Result<()> {
+        self.block_on(self.inner.remove(aor, contact))
+    }
+
+    fn remove_all(&self, aor: &str) -> Result<()> {
+        self.block_on(self.inner.remove_all(aor))
+    }
+
+    fn lookup(&self, aor: &str) -> Result<Vec<Binding>> {
+        self.block_on(self.inner.lookup(aor))
+    }
+
+    fn cleanup_expired(&self) -> Result<usize> {
+        self.block_on(self.inner.cleanup_expired())
+    }
+}
+
+/// Adapter allowing synchronous stores to be used asynchronously.
+pub struct SyncToAsyncAdapter<T: LocationStore> {
+    inner: Arc<T>,
+}
+
+impl<T: LocationStore> SyncToAsyncAdapter<T> {
+    pub fn new(inner: T) -> Self {
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+}
+
+#[async_trait]
+impl<T: LocationStore + 'static> AsyncLocationStore for SyncToAsyncAdapter<T> {
+    async fn upsert(&self, binding: Binding) -> Result<()> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || inner.upsert(binding))
+            .await
+            .map_err(|e| anyhow::anyhow!("task join error: {}", e))?
+    }
+
+    async fn remove(&self, aor: &str, contact: &str) -> Result<()> {
+        let inner = Arc::clone(&self.inner);
+        let aor = aor.to_owned();
+        let contact = contact.to_owned();
+        task::spawn_blocking(move || inner.remove(&aor, &contact))
+            .await
+            .map_err(|e| anyhow::anyhow!("task join error: {}", e))?
+    }
+
+    async fn remove_all(&self, aor: &str) -> Result<()> {
+        let inner = Arc::clone(&self.inner);
+        let aor = aor.to_owned();
+        task::spawn_blocking(move || inner.remove_all(&aor))
+            .await
+            .map_err(|e| anyhow::anyhow!("task join error: {}", e))?
+    }
+
+    async fn lookup(&self, aor: &str) -> Result<Vec<Binding>> {
+        let inner = Arc::clone(&self.inner);
+        let aor = aor.to_owned();
+        task::spawn_blocking(move || inner.lookup(&aor))
+            .await
+            .map_err(|e| anyhow::anyhow!("task join error: {}", e))?
+    }
+
+    async fn cleanup_expired(&self) -> Result<usize> {
+        let inner = Arc::clone(&self.inner);
+        task::spawn_blocking(move || inner.cleanup_expired())
+            .await
+            .map_err(|e| anyhow::anyhow!("task join error: {}", e))?
+    }
+}
+
 /// Simple in-memory location store with expiry tracking.
 #[derive(Default, Clone)]
 pub struct MemoryLocationStore {
@@ -108,6 +213,27 @@ impl MemoryLocationStore {
         if let Some(mut entry) = self.inner.get_mut(aor) {
             entry.retain(|b| b.expires_at > Instant::now());
         }
+    }
+
+    /// Convenience inherent helpers to avoid trait method ambiguity.
+    pub fn upsert(&self, binding: Binding) -> Result<()> {
+        LocationStore::upsert(self, binding)
+    }
+
+    pub fn remove(&self, aor: &str, contact: &str) -> Result<()> {
+        LocationStore::remove(self, aor, contact)
+    }
+
+    pub fn remove_all(&self, aor: &str) -> Result<()> {
+        LocationStore::remove_all(self, aor)
+    }
+
+    pub fn lookup(&self, aor: &str) -> Result<Vec<Binding>> {
+        LocationStore::lookup(self, aor)
+    }
+
+    pub fn cleanup_expired(&self) -> Result<usize> {
+        LocationStore::cleanup_expired(self)
     }
 }
 
@@ -190,13 +316,36 @@ impl LocationStore for MemoryLocationStore {
     }
 }
 
+#[async_trait]
+impl AsyncLocationStore for MemoryLocationStore {
+    async fn upsert(&self, binding: Binding) -> Result<()> {
+        LocationStore::upsert(self, binding)
+    }
+
+    async fn remove(&self, aor: &str, contact: &str) -> Result<()> {
+        LocationStore::remove(self, aor, contact)
+    }
+
+    async fn remove_all(&self, aor: &str) -> Result<()> {
+        LocationStore::remove_all(self, aor)
+    }
+
+    async fn lookup(&self, aor: &str) -> Result<Vec<Binding>> {
+        LocationStore::lookup(self, aor)
+    }
+
+    async fn cleanup_expired(&self) -> Result<usize> {
+        LocationStore::cleanup_expired(self)
+    }
+}
+
 /// Trait describing registrar behaviour for inbound REGISTER requests.
 pub trait Registrar: Send + Sync {
     fn handle_register(&self, request: &Request) -> Result<Response>;
 }
 
 /// Basic registrar that stores contacts in a provided store and optionally enforces authentication.
-pub struct BasicRegistrar<S: LocationStore, A: Authenticator> {
+pub struct BasicRegistrar<S, A> {
     store: S,
     authenticator: Option<A>,
     default_expires: Duration,
@@ -205,7 +354,7 @@ pub struct BasicRegistrar<S: LocationStore, A: Authenticator> {
     rate_limiter: Option<RateLimiter>,
 }
 
-impl<S: LocationStore, A: Authenticator> BasicRegistrar<S, A> {
+impl<S, A> BasicRegistrar<S, A> {
     pub fn new(store: S, authenticator: Option<A>) -> Self {
         Self {
             store,
@@ -382,6 +531,167 @@ fn extract_ip_from_via(headers: &Headers) -> Option<String> {
         .next()?;
 
     Some(host.to_string())
+}
+
+impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
+    /// Async variant of REGISTER handling for async storage backends.
+    pub async fn handle_register_async(&self, request: &Request) -> Result<Response> {
+        // Rate limiting
+        if let Some(ref limiter) = self.rate_limiter {
+            if let Some(ip) = extract_ip_from_via(&request.headers) {
+                if !limiter.check_rate_limit(&ip) {
+                    warn!(ip = %ip, "REGISTER rate limit exceeded");
+                    return self.build_error_response(
+                        request,
+                        503,
+                        "Service Unavailable - Rate Limit Exceeded",
+                    );
+                }
+            }
+        }
+
+        // Authentication (sync authenticator)
+        if let Some(auth) = &self.authenticator {
+            match auth.verify(request, &request.headers) {
+                Ok(true) => {}
+                Ok(false) => {
+                    info!("REGISTER authentication failed, issuing challenge");
+                    return auth.challenge(request);
+                }
+                Err(e) => {
+                    warn!("REGISTER authentication error: {}, issuing challenge", e);
+                    return auth.challenge(request);
+                }
+            }
+        }
+
+        let to_uri = match header(&request.headers, "To") {
+            Some(h) => h,
+            None => {
+                warn!("REGISTER missing To header");
+                return self.build_error_response(request, 400, "Bad Request - Missing To header");
+            }
+        };
+
+        let to_parsed = match parse_to_header(to_uri) {
+            Some(p) => p,
+            None => {
+                warn!("REGISTER invalid To header");
+                return self.build_error_response(request, 400, "Bad Request - Invalid To header");
+            }
+        };
+        let aor = to_parsed.inner().uri().as_str().to_owned();
+
+        let call_id = header(&request.headers, "Call-ID")
+            .cloned()
+            .unwrap_or_else(|| SmolStr::new(""));
+
+        let cseq = header(&request.headers, "CSeq")
+            .and_then(|v| {
+                v.split_whitespace()
+                    .next()
+                    .and_then(|n| n.parse::<u32>().ok())
+            })
+            .unwrap_or(0);
+
+        let contacts = contact_headers(&request.headers);
+        if contacts.is_empty() {
+            warn!("REGISTER missing Contact header");
+            return self.build_error_response(request, 400, "Bad Request - Missing Contact header");
+        }
+
+        if contacts.len() == 1 && contacts[0].trim() == "*" {
+            self.store.remove_all(&aor).await?;
+            info!(aor = %aor, "REGISTER removed all bindings (wildcard)");
+
+            let mut headers = Headers::new();
+
+            if let Some(via) = request.headers.get("Via") {
+                headers.push(SmolStr::new("Via"), via.clone());
+            }
+            if let Some(from) = request.headers.get("From") {
+                headers.push(SmolStr::new("From"), from.clone());
+            }
+            if let Some(to) = request.headers.get("To") {
+                headers.push(SmolStr::new("To"), ensure_to_tag(to.as_str()));
+            }
+            if let Some(call_id) = request.headers.get("Call-ID") {
+                headers.push(SmolStr::new("Call-ID"), call_id.clone());
+            }
+            if let Some(cseq) = request.headers.get("CSeq") {
+                headers.push(SmolStr::new("CSeq"), cseq.clone());
+            }
+
+            headers.push(SmolStr::new("Contact"), SmolStr::new("*"));
+            headers.push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()));
+            headers.push(SmolStr::new("Content-Length"), SmolStr::new("0".to_owned()));
+
+            return Ok(Response::new(
+                StatusLine::new(200, SmolStr::new("OK")),
+                headers,
+                Bytes::new(),
+            ));
+        }
+
+        for contact in &contacts {
+            let expires = self.parse_expires(request, contact.as_str());
+            let q_value = self.parse_q_value(contact.as_str());
+            let contact_uri = self.extract_contact_uri(contact.as_str());
+
+            if expires.as_secs() == 0 {
+                self.store.remove(&aor, contact_uri.as_str()).await?;
+                info!(aor = %aor, contact = %contact_uri, "REGISTER removed binding");
+            } else {
+                let binding = Binding::new(SmolStr::new(aor.clone()), contact_uri.clone(), expires)
+                    .with_call_id(call_id.clone())
+                    .with_cseq(cseq)
+                    .with_q_value(q_value);
+
+                self.store.upsert(binding).await?;
+                info!(aor = %aor, contact = %contact_uri, expires = %expires.as_secs(), "REGISTER stored binding");
+            }
+        }
+
+        let mut headers = Headers::new();
+
+        if let Some(via) = request.headers.get("Via") {
+            headers.push(SmolStr::new("Via"), via.clone());
+        }
+        if let Some(from) = request.headers.get("From") {
+            headers.push(SmolStr::new("From"), from.clone());
+        }
+        if let Some(to) = request.headers.get("To") {
+            headers.push(SmolStr::new("To"), ensure_to_tag(to.as_str()));
+        }
+        if let Some(call_id) = request.headers.get("Call-ID") {
+            headers.push(SmolStr::new("Call-ID"), call_id.clone());
+        }
+        if let Some(cseq) = request.headers.get("CSeq") {
+            headers.push(SmolStr::new("CSeq"), cseq.clone());
+        }
+
+        let bindings = self.store.lookup(&aor).await?;
+        for binding in &bindings {
+            headers.push(
+                SmolStr::new("Contact"),
+                SmolStr::new(format!(
+                    "{};expires={};q={}",
+                    binding.contact,
+                    binding.expires.as_secs(),
+                    binding.q_value
+                )),
+            );
+        }
+
+        headers.push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()));
+        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0".to_owned()));
+
+        Ok(Response::new(
+            StatusLine::new(200, SmolStr::new("OK")),
+            headers,
+            Bytes::new(),
+        ))
+    }
 }
 
 impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {

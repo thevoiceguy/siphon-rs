@@ -17,6 +17,8 @@ bytes = { workspace = true }
 sip-parse = { path = "../sip-parse" }
 tracing = { workspace = true }
 dashmap = { workspace = true }
+async-trait = "0.1"
+tokio = { workspace = true }
 
 [dev-dependencies]
 bytes = { workspace = true }
