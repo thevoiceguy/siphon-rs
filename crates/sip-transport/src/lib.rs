@@ -234,7 +234,22 @@ pub async fn send_udp(socket: &UdpSocket, to: &std::net::SocketAddr, data: &[u8]
 
 /// Accepts TCP connections, streaming frames to the supplied channel.
 pub async fn run_tcp(bind: &str, tx: mpsc::Sender<InboundPacket>) -> Result<()> {
-    let listener = TcpListener::bind(bind).await?;
+    let bind_addr: SocketAddr = bind
+        .parse()
+        .map_err(|e| anyhow!("Invalid bind address: {}", e))?;
+
+    let listener = {
+        use socket2::{Domain, Protocol, Socket, Type};
+
+        let socket = Socket::new(Domain::for_address(bind_addr), Type::STREAM, Some(Protocol::TCP))?;
+        socket.set_reuse_address(true)?;
+        socket.set_nonblocking(true)?;
+        socket.bind(&bind_addr.into())?;
+        socket.listen(128)?;
+
+        let std_listener: std::net::TcpListener = socket.into();
+        TcpListener::from_std(std_listener)?
+    };
     info!(%bind, "listening (tcp)");
     transport_metrics().on_accept(TransportKind::Tcp.as_str());
 

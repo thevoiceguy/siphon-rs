@@ -17,6 +17,7 @@ memchr = "2.7"
 dashmap = { workspace = true }
 tokio-tungstenite = { version = "0.21", optional = true }
 futures-util = { version = "0.3", optional = true }
+socket2 = "0.5"
 
 [dev-dependencies]
 tokio = { workspace = true }
