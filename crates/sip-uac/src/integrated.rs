@@ -54,7 +54,9 @@
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
-use sip_core::{Request, Response, SipUri};
+use rand::{distributions::Alphanumeric, Rng};
+use sha1::{Digest, Sha1};
+use sip_core::{Method, Request, Response, SipUri};
 use sip_dialog::{Dialog, DialogManager, Subscription, SubscriptionManager};
 use sip_dns::{DnsTarget, Resolver, SipResolver};
 use sip_parse::serialize_request;
@@ -66,8 +68,6 @@ use sip_transaction::{
 use smol_str::SmolStr;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use sha1::{Digest, Sha1};
-use rand::{distributions::Alphanumeric, Rng};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{debug, error, info, warn};
 
@@ -279,6 +279,74 @@ impl From<SipUri> for RequestTarget {
     }
 }
 
+fn prepare_in_dialog_request(dialog: &mut Dialog, request: &mut Request) -> SipUri {
+    // Increment local CSeq and overwrite header with the new value
+    let cseq = dialog.next_local_cseq();
+    request.headers.remove("CSeq");
+    request.headers.push(
+        SmolStr::new("CSeq"),
+        SmolStr::new(format!("{} {}", cseq, request.start.method.as_str())),
+    );
+
+    // Ensure Route headers reflect the dialog route set
+    request.headers.remove("Route");
+    if dialog.route_set.is_empty() {
+        request.start.uri = dialog.remote_target.clone().into();
+        return dialog.remote_target.clone();
+    }
+
+    let first_route = dialog.route_set.first().cloned().unwrap();
+    let loose_route = first_route.params.contains_key("lr");
+
+    if loose_route {
+        request.start.uri = dialog.remote_target.clone().into();
+        for route in dialog.route_set.iter() {
+            request
+                .headers
+                .push(SmolStr::new("Route"), SmolStr::new(format!("<{}>", route.as_str())));
+        }
+    } else {
+        // Strict routing: first route becomes Request-URI, remote target appended to Route
+        request.start.uri = first_route.clone().into();
+        for route in dialog.route_set.iter().skip(1) {
+            request
+                .headers
+                .push(SmolStr::new("Route"), SmolStr::new(format!("<{}>", route.as_str())));
+        }
+        request.headers.push(
+            SmolStr::new("Route"),
+            SmolStr::new(format!("<{}>", dialog.remote_target.as_str())),
+        );
+    }
+
+    // Target for transport resolution is always the topmost route when present
+    first_route
+}
+
+fn apply_in_dialog_response(
+    dialog_manager: &DialogManager,
+    dialog: &mut Dialog,
+    response: &Response,
+) -> Result<()> {
+    if (200..300).contains(&response.start.code) {
+        dialog.update_from_response(response);
+        dialog_manager.insert(dialog.clone());
+        return Ok(());
+    }
+
+    if matches!(response.start.code, 408 | 481) {
+        dialog.terminate();
+        dialog_manager.insert(dialog.clone());
+        return Err(anyhow!(
+            "Received {} for in-dialog {}",
+            response.start.code,
+            response.start.reason
+        ));
+    }
+
+    Ok(())
+}
+
 impl From<DnsTarget> for RequestTarget {
     fn from(target: DnsTarget) -> Self {
         RequestTarget::Resolved(target)
@@ -455,6 +523,7 @@ impl CallHandle {
         };
 
         let handle = tokio::spawn(async move {
+            let mut dialog = dialog;
             // Per RFC 4028, refresh at Session-Expires/2
             let refresh_interval = std::cmp::max(90, (session_expires / 2) as i32) as u64;
             let mut ticker =
@@ -462,7 +531,7 @@ impl CallHandle {
             loop {
                 ticker.tick().await;
                 if let Err(e) = uac
-                    .refresh_session(&dialog, session_expires, refresher, use_update, None)
+                    .refresh_session(&mut dialog, session_expires, refresher, use_update, None)
                     .await
                 {
                     warn!("Session refresh failed: {}", e);
@@ -812,6 +881,11 @@ impl IntegratedUAC {
                 .map(char::from)
                 .collect()
         }
+    }
+
+    /// Applies dialog updates based on the response (target refresh, session timers).
+    fn handle_in_dialog_response(&self, dialog: &mut Dialog, response: &Response) -> Result<()> {
+        apply_in_dialog_response(&self.dialog_manager, dialog, response)
     }
 
     /// Resolves a RequestTarget to a DnsTarget.
@@ -1326,74 +1400,24 @@ impl IntegratedUAC {
     /// - Media changes (add/remove video, codec change)
     /// - Hold/resume (a=sendonly/a=sendrecv)
     /// - Transfer preparation
-    pub async fn reinvite(&self, dialog: &Dialog, sdp_body: Option<&str>) -> Result<CallHandle> {
+    pub async fn reinvite(&self, dialog: &mut Dialog, sdp_body: Option<&str>) -> Result<CallHandle> {
         // Generate re-INVITE using helper
         let helper = self.helper.lock().await;
         let mut request = helper.create_reinvite(dialog, sdp_body);
         drop(helper);
 
-        // Use remote target from dialog
-        let target = RequestTarget::Uri(dialog.remote_target.clone());
-        let dns_target = self.resolve_target(&target).await?;
+        let target_uri = prepare_in_dialog_request(dialog, &mut request);
+        self.dialog_manager.insert(dialog.clone());
+        let dns_target = self
+            .resolve_target(&RequestTarget::Uri(target_uri))
+            .await?;
 
         // Auto-fill Via/Contact using resolved transport
         self.auto_fill_headers(&mut request, Some(dns_target.transport))
             .await;
 
-        // Create channels for responses
-        let (prov_tx, prov_rx) = mpsc::channel(16);
-        let (final_tx, final_rx) = oneshot::channel();
-        let (term_tx, term_rx) = oneshot::channel();
-
-        // Create transport context
-        let ctx = self.create_transport_context(&dns_target).await?;
-
-        // Create early dialogs map for forking support
-        let early_dialogs = Arc::new(Mutex::new(std::collections::HashMap::new()));
-
-        // Create INVITE transaction user
-        let tu = Arc::new(InviteTransactionUser {
-            prov_tx,
-            final_tx: Mutex::new(Some(final_tx)),
-            term_tx: Mutex::new(Some(term_tx)),
-            dialog_manager: self.dialog_manager.clone(),
-            helper: self.helper.clone(),
-            request: request.clone(),
-            config: self.config.clone(),
-            ctx: ctx.clone(),
-            auto_retry_auth: self.config.auto_retry_auth,
-            transaction_manager: self.transaction_manager.clone(),
-            dispatcher: self.transport_dispatcher.clone(),
-            early_dialogs: early_dialogs.clone(),
-            local_addr: self.local_addr,
-            public_addr: self.public_addr,
-        });
-
-        // Start client transaction
-        let key = self
-            .transaction_manager
-            .start_client_transaction(request.clone(), ctx.clone(), tu)
-            .await?;
-
-        info!(
-            "Started re-INVITE transaction {} for dialog {}",
-            key.branch, dialog.id.call_id
-        );
-
-        Ok(CallHandle {
-            dialog: dialog.clone(),
-            transaction_key: key,
-            provisional_rx: Arc::new(Mutex::new(prov_rx)),
-            final_rx: Arc::new(Mutex::new(Some(final_rx))),
-            termination_rx: Arc::new(Mutex::new(Some(term_rx))),
-            invite_request: Arc::new(request),
-            transport_ctx: Arc::new(ctx),
-            dispatcher: self.transport_dispatcher.clone(),
-            transaction_manager: self.transaction_manager.clone(),
-            early_dialogs,
-            keepalive_cancel: Arc::new(Mutex::new(None)),
-            session_timer_cancel: Arc::new(Mutex::new(None)),
-        })
+        self.start_dialog_invite_transaction(dialog.clone(), request, dns_target)
+            .await
     }
 
     /// Sends an UPDATE request to modify session parameters (RFC 3311).
@@ -1414,20 +1438,17 @@ impl IntegratedUAC {
     /// - Early media changes (before call is answered)
     /// - QoS precondition updates
     /// - Session timer refresh without full re-INVITE
-    pub async fn update(&self, dialog: &Dialog, sdp_body: Option<&str>) -> Result<Response> {
-        // Generate UPDATE using helper
+    pub async fn send_update(&self, dialog: &mut Dialog, sdp_body: Option<&str>) -> Result<Response> {
         let helper = self.helper.lock().await;
-        let mut request = helper.create_update(dialog, sdp_body);
+        let request = helper.create_update(dialog, sdp_body);
         drop(helper);
 
-        // Use remote target from dialog
-        let target = RequestTarget::Uri(dialog.remote_target.clone());
-        let dns_target = self.resolve_target(&target).await?;
-        self.auto_fill_headers(&mut request, Some(dns_target.transport))
-            .await;
+        self.send_in_dialog_non_invite(dialog, request).await
+    }
 
-        // Send and wait for response
-        self.send_non_invite_request(request, dns_target).await
+    /// Backwards-compatible alias for [`send_update`].
+    pub async fn update(&self, dialog: &mut Dialog, sdp_body: Option<&str>) -> Result<Response> {
+        self.send_update(dialog, sdp_body).await
     }
 
     /// Sends a REFER request for call transfer (RFC 3515).
@@ -1460,28 +1481,22 @@ impl IntegratedUAC {
     /// ```
     pub async fn refer(
         &self,
-        dialog: &Dialog,
+        dialog: &mut Dialog,
         refer_to: &SipUri,
         target_dialog: Option<&Dialog>,
     ) -> Result<(Response, Option<Subscription>)> {
         // Generate REFER using helper
         let helper = self.helper.lock().await;
-        let mut request = if let Some(target) = target_dialog {
+        let request = if let Some(target) = target_dialog {
             helper.create_refer_with_replaces(dialog, refer_to, target)
         } else {
             helper.create_refer(dialog, refer_to)
         };
         drop(helper);
 
-        // Use remote target from dialog
-        let target = RequestTarget::Uri(dialog.remote_target.clone());
-        let dns_target = self.resolve_target(&target).await?;
-        self.auto_fill_headers(&mut request, Some(dns_target.transport))
-            .await;
-
         // Send and wait for response
         let response = self
-            .send_non_invite_request(request.clone(), dns_target)
+            .send_in_dialog_non_invite(dialog, request.clone())
             .await?;
 
         // If 202 Accepted, create implicit subscription to "refer" event
@@ -1502,28 +1517,187 @@ impl IntegratedUAC {
     /// If `use_update` is false, this falls back to re-INVITE and waits for the final response.
     pub async fn refresh_session(
         &self,
-        dialog: &Dialog,
+        dialog: &mut Dialog,
         session_expires: u32,
         refresher: &str,
         use_update: bool,
         sdp_body: Option<&str>,
     ) -> Result<Response> {
         let helper = self.helper.lock().await;
-        let mut request =
+        let request =
             helper.create_session_refresh(dialog, session_expires, refresher, use_update, sdp_body);
         drop(helper);
 
         if use_update {
-            let target = RequestTarget::Uri(dialog.remote_target.clone());
-            let dns_target = self.resolve_target(&target).await?;
-            self.auto_fill_headers(&mut request, Some(dns_target.transport))
-                .await;
-            self.send_non_invite_request(request, dns_target).await
+            self.send_in_dialog_non_invite(dialog, request).await
         } else {
-            // Use re-INVITE path and wait for final response
-            let handle = self.reinvite(dialog, sdp_body).await?;
-            handle.await_final().await
+            self.send_in_dialog_invite(dialog, request).await
         }
+    }
+
+    /// Sends any non-INVITE request within a dialog, handling routing and CSeq.
+    pub async fn send_in_dialog_non_invite(
+        &self,
+        dialog: &mut Dialog,
+        mut request: Request,
+    ) -> Result<Response> {
+        let target_uri = prepare_in_dialog_request(dialog, &mut request);
+        self.dialog_manager.insert(dialog.clone());
+        let dns_target = self
+            .resolve_target(&RequestTarget::Uri(target_uri))
+            .await?;
+
+        self.auto_fill_headers(&mut request, Some(dns_target.transport))
+            .await;
+
+        let response = self.send_non_invite_request(request, dns_target).await?;
+        self.handle_in_dialog_response(dialog, &response)?;
+        Ok(response)
+    }
+
+    /// Sends an INVITE inside an existing dialog (e.g., re-INVITE).
+    pub async fn send_in_dialog_invite(
+        &self,
+        dialog: &mut Dialog,
+        mut request: Request,
+    ) -> Result<Response> {
+        let target_uri = prepare_in_dialog_request(dialog, &mut request);
+        self.dialog_manager.insert(dialog.clone());
+        let dns_target = self
+            .resolve_target(&RequestTarget::Uri(target_uri))
+            .await?;
+
+        self.auto_fill_headers(&mut request, Some(dns_target.transport))
+            .await;
+
+        let handle = self
+            .start_dialog_invite_transaction(dialog.clone(), request, dns_target)
+            .await?;
+        let response = handle.await_final().await?;
+        self.handle_in_dialog_response(dialog, &response)?;
+        Ok(response)
+    }
+
+    /// Sends PRACK for a reliable provisional response within a dialog.
+    pub async fn send_prack(&self, dialog: &mut Dialog, provisional: &Response) -> Result<Response> {
+        let helper = self.helper.lock().await;
+        let request = helper.create_prack_from_provisional(provisional, dialog)?;
+        drop(helper);
+
+        self.send_in_dialog_non_invite(dialog, request).await
+    }
+
+    /// Convenience helper for re-INVITE that waits for the final response.
+    pub async fn send_reinvite(
+        &self,
+        dialog: &mut Dialog,
+        sdp_body: Option<&str>,
+    ) -> Result<Response> {
+        let helper = self.helper.lock().await;
+        let request = helper.create_reinvite(dialog, sdp_body);
+        drop(helper);
+
+        self.send_in_dialog_invite(dialog, request).await
+    }
+
+    /// Convenience helper for INFO within a dialog.
+    pub async fn send_info(
+        &self,
+        dialog: &mut Dialog,
+        content_type: &str,
+        body: &str,
+    ) -> Result<Response> {
+        let helper = self.helper.lock().await;
+        let request = helper.create_info(dialog, content_type, body);
+        drop(helper);
+
+        self.send_in_dialog_non_invite(dialog, request).await
+    }
+
+    /// Convenience helper for REFER within a dialog.
+    pub async fn send_refer(
+        &self,
+        dialog: &mut Dialog,
+        refer_to: &SipUri,
+        target_dialog: Option<&Dialog>,
+    ) -> Result<(Response, Option<Subscription>)> {
+        let helper = self.helper.lock().await;
+        let request = if let Some(target) = target_dialog {
+            helper.create_refer_with_replaces(dialog, refer_to, target)
+        } else {
+            helper.create_refer(dialog, refer_to)
+        };
+        drop(helper);
+
+        let response = self
+            .send_in_dialog_non_invite(dialog, request.clone())
+            .await?;
+
+        let subscription = if response.start.code == 202 {
+            let helper = self.helper.lock().await;
+            helper.process_subscribe_response(&request, &response)
+        } else {
+            None
+        };
+
+        Ok((response, subscription))
+    }
+
+    /// Starts an INVITE transaction for an existing dialog and returns a handle.
+    async fn start_dialog_invite_transaction(
+        &self,
+        dialog: Dialog,
+        request: Request,
+        dns_target: DnsTarget,
+    ) -> Result<CallHandle> {
+        let (prov_tx, prov_rx) = mpsc::channel(16);
+        let (final_tx, final_rx) = oneshot::channel();
+        let (term_tx, term_rx) = oneshot::channel();
+
+        let ctx = self.create_transport_context(&dns_target).await?;
+        let early_dialogs = Arc::new(Mutex::new(std::collections::HashMap::new()));
+
+        let tu = Arc::new(InviteTransactionUser {
+            prov_tx,
+            final_tx: Mutex::new(Some(final_tx)),
+            term_tx: Mutex::new(Some(term_tx)),
+            dialog_manager: self.dialog_manager.clone(),
+            helper: self.helper.clone(),
+            request: request.clone(),
+            config: self.config.clone(),
+            ctx: ctx.clone(),
+            auto_retry_auth: self.config.auto_retry_auth,
+            transaction_manager: self.transaction_manager.clone(),
+            dispatcher: self.transport_dispatcher.clone(),
+            early_dialogs: early_dialogs.clone(),
+            local_addr: self.local_addr,
+            public_addr: self.public_addr,
+        });
+
+        let key = self
+            .transaction_manager
+            .start_client_transaction(request.clone(), ctx.clone(), tu)
+            .await?;
+
+        info!(
+            "Started INVITE transaction {} for dialog {}",
+            key.branch, dialog.id.call_id
+        );
+
+        Ok(CallHandle {
+            dialog,
+            transaction_key: key,
+            provisional_rx: Arc::new(Mutex::new(prov_rx)),
+            final_rx: Arc::new(Mutex::new(Some(final_rx))),
+            termination_rx: Arc::new(Mutex::new(Some(term_rx))),
+            invite_request: Arc::new(request),
+            transport_ctx: Arc::new(ctx),
+            dispatcher: self.transport_dispatcher.clone(),
+            transaction_manager: self.transaction_manager.clone(),
+            early_dialogs,
+            keepalive_cancel: Arc::new(Mutex::new(None)),
+            session_timer_cancel: Arc::new(Mutex::new(None)),
+        })
     }
 
     /// Sends a lightweight CRLF keepalive to keep NAT/LB bindings active.
@@ -1537,6 +1711,123 @@ impl IntegratedUAC {
         // Double-CRLF keepalive (common for SIP over UDP/TCP to refresh bindings)
         let payload = Bytes::from_static(b"\r\n\r\n");
         self.transport_dispatcher.dispatch(&ctx, payload).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+    use sip_core::{Headers, RequestLine, StatusLine};
+    use sip_dialog::{DialogId, DialogStateType};
+    use std::time::Duration;
+
+    fn base_dialog() -> Dialog {
+        Dialog {
+            id: DialogId {
+                call_id: SmolStr::new("call"),
+                local_tag: SmolStr::new("local"),
+                remote_tag: SmolStr::new("remote"),
+            },
+            state: DialogStateType::Confirmed,
+            remote_target: SipUri::parse("sip:remote@example.com").unwrap(),
+            route_set: vec![],
+            local_cseq: 1,
+            remote_cseq: 0,
+            last_ack_cseq: None,
+            local_uri: SipUri::parse("sip:local@example.com").unwrap(),
+            remote_uri: SipUri::parse("sip:remote@example.com").unwrap(),
+            secure: false,
+            session_expires: Some(Duration::from_secs(30)),
+            refresher: None,
+            is_uac: true,
+        }
+    }
+
+    #[test]
+    fn prepare_in_dialog_respects_loose_routing() {
+        let mut dialog = base_dialog();
+        dialog.route_set =
+            vec![SipUri::parse("sip:proxy.example.com;lr").expect("valid route")];
+
+        let mut request = Request::new(
+            RequestLine::new(Method::Info, dialog.remote_target.clone()),
+            Headers::new(),
+            Bytes::new(),
+        );
+
+        let target = prepare_in_dialog_request(&mut dialog, &mut request);
+
+        assert_eq!(target, dialog.route_set[0]);
+        assert_eq!(request.start.uri, dialog.remote_target.clone().into());
+        assert_eq!(
+            request.headers.get("Route").map(|v| v.as_str()),
+            Some("<sip:proxy.example.com;lr>")
+        );
+        assert_eq!(dialog.local_cseq, 2);
+        assert_eq!(
+            request.headers.get("CSeq").map(|v| v.as_str()),
+            Some("2 INFO")
+        );
+    }
+
+    #[test]
+    fn prepare_in_dialog_handles_strict_routing() {
+        let mut dialog = base_dialog();
+        dialog.route_set = vec![
+            SipUri::parse("sip:strict.example.com").unwrap(),
+            SipUri::parse("sip:loose.example.com;lr").unwrap(),
+        ];
+
+        let mut request = Request::new(
+            RequestLine::new(Method::Update, dialog.remote_target.clone()),
+            Headers::new(),
+            Bytes::new(),
+        );
+
+        let target = prepare_in_dialog_request(&mut dialog, &mut request);
+        let routes: Vec<&SmolStr> = request.headers.get_all("Route").collect();
+
+        assert_eq!(target, dialog.route_set[0]);
+        assert_eq!(request.start.uri, dialog.route_set[0].clone().into());
+        assert_eq!(routes.len(), 2);
+        assert_eq!(routes[0].as_str(), "<sip:loose.example.com;lr>");
+        assert_eq!(routes[1].as_str(), "<sip:remote@example.com>");
+    }
+
+    #[test]
+    fn apply_response_updates_remote_target() {
+        let mut dialog = base_dialog();
+        let manager = DialogManager::new();
+        let mut headers = Headers::new();
+        headers.push(
+            SmolStr::new("Contact"),
+            SmolStr::new("<sip:new-remote@example.com>"),
+        );
+        let response = Response::new(
+            StatusLine::new(200, SmolStr::new("OK")),
+            headers,
+            Bytes::new(),
+        );
+
+        apply_in_dialog_response(&manager, &mut dialog, &response).unwrap();
+        assert_eq!(dialog.remote_target.as_str(), "sip:new-remote@example.com");
+        assert_eq!(dialog.state, DialogStateType::Confirmed);
+    }
+
+    #[test]
+    fn apply_response_marks_termination_on_481() {
+        let mut dialog = base_dialog();
+        let manager = DialogManager::new();
+        let response = Response::new(
+            StatusLine::new(481, SmolStr::new("Call/Transaction Does Not Exist")),
+            Headers::new(),
+            Bytes::new(),
+        );
+
+        let result = apply_in_dialog_response(&manager, &mut dialog, &response);
+        assert!(result.is_err());
+        assert_eq!(dialog.state, DialogStateType::Terminated);
     }
 }
 
