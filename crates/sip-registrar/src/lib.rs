@@ -5,7 +5,7 @@ use dashmap::DashMap;
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use async_trait::async_trait;
 use sip_auth::Authenticator;
-use sip_core::{Headers, Request, Response, StatusLine};
+use sip_core::{Headers, Request, Response, SipUri, StatusLine};
 use sip_parse::{header, parse_to_header};
 use sip_ratelimit::RateLimiter;
 use smol_str::SmolStr;
@@ -13,6 +13,35 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
 use tokio::{runtime::Handle, task};
+
+/// Normalize an AOR for consistent storage and lookup.
+///
+/// - Percent-decodes user/host (handled by `SipUri::parse`).
+/// - Strips URI parameters by rebuilding without them.
+/// - If the user contains an embedded `@domain` that matches the host, drop
+///   the suffix (e.g., `bob%40192.168.1.81@192.168.1.81` → `bob`).
+pub fn normalize_aor(uri: &SipUri) -> String {
+    let scheme = if uri.sips { "sips" } else { "sip" };
+
+    let host_port = match uri.port {
+        Some(port) => format!("{}:{}", uri.host, port),
+        None => uri.host.to_string(),
+    };
+
+    let user = uri.user.as_ref().map(|u| {
+        if let Some((local, domain)) = u.rsplit_once('@') {
+            if domain.eq_ignore_ascii_case(uri.host.as_str()) {
+                return local.to_string();
+            }
+        }
+        u.to_string()
+    });
+
+    match user {
+        Some(user) if !user.is_empty() => format!("{}:{}@{}", scheme, user, host_port),
+        _ => format!("{}:{}", scheme, host_port),
+    }
+}
 
 /// Registration binding for an address-of-record (AOR).
 ///
@@ -580,7 +609,7 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
                 return self.build_error_response(request, 400, "Bad Request - Invalid To header");
             }
         };
-        let aor = to_parsed.inner().uri().as_str().to_owned();
+        let aor = normalize_aor(to_parsed.inner().uri());
 
         let call_id = header(&request.headers, "Call-ID")
             .cloned()

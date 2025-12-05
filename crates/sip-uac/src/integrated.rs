@@ -1142,6 +1142,29 @@ impl IntegratedUAC {
     /// # Ok(())
     /// # }
     /// ```
+
+    /// Sets the display name for the From header in subsequent requests.
+    ///
+    /// This is useful for B2BUA scenarios where you want to preserve the original caller's
+    /// display name when forwarding calls.
+    ///
+    /// # Arguments
+    /// * `name` - Optional display name to set, or None to clear it
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use sip_uac::integrated::IntegratedUAC;
+    /// # async fn example(uac: &IntegratedUAC) {
+    /// // Set display name before making a call
+    /// uac.set_display_name(Some("Bob Smith".to_string())).await;
+    /// let call = uac.invite("sip:alice@example.com", None).await.unwrap();
+    /// # }
+    /// ```
+    pub async fn set_display_name(&self, name: Option<String>) {
+        let mut helper = self.helper.lock().await;
+        helper.display_name = name;
+    }
+
     pub async fn invite(
         &self,
         target: impl Into<RequestTarget>,
