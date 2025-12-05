@@ -1353,13 +1353,6 @@ impl UserAgentClient {
         reliable_provisional: &Response,
         dialog: &Dialog,
     ) -> Result<Request> {
-        // Extract RSeq from response
-        let rseq_str = header(&reliable_provisional.headers, "RSeq")
-            .ok_or_else(|| anyhow!("No RSeq header in provisional response"))?;
-        let rseq: u32 = rseq_str
-            .parse()
-            .map_err(|_| anyhow!("Invalid RSeq value: {}", rseq_str))?;
-
         // Extract CSeq number from original INVITE
         let cseq_str = header(&invite_request.headers, "CSeq")
             .ok_or_else(|| anyhow!("No CSeq header in INVITE"))?;
@@ -1372,6 +1365,48 @@ impl UserAgentClient {
             .map_err(|_| anyhow!("Invalid CSeq number: {}", cseq_parts[0]))?;
         let invite_method = cseq_parts[1];
 
+        // Extract RSeq from response
+        let rseq_str = header(&reliable_provisional.headers, "RSeq")
+            .ok_or_else(|| anyhow!("No RSeq header in provisional response"))?;
+        let rseq: u32 = rseq_str
+            .parse()
+            .map_err(|_| anyhow!("Invalid RSeq value: {}", rseq_str))?;
+
+        let rack_value = format!("{} {} {}", rseq, invite_cseq, invite_method);
+        self.build_prack_request(dialog, rack_value)
+    }
+
+    /// Builds a PRACK request using only a provisional response (no original INVITE needed).
+    pub fn create_prack_from_provisional(
+        &self,
+        reliable_provisional: &Response,
+        dialog: &Dialog,
+    ) -> Result<Request> {
+        let rseq_str = header(&reliable_provisional.headers, "RSeq")
+            .ok_or_else(|| anyhow!("No RSeq header in provisional response"))?;
+        let rseq: u32 = rseq_str
+            .parse()
+            .map_err(|_| anyhow!("Invalid RSeq value: {}", rseq_str))?;
+
+        let cseq_str = header(&reliable_provisional.headers, "CSeq")
+            .ok_or_else(|| anyhow!("No CSeq header in provisional response"))?;
+        let mut parts = cseq_str.split_whitespace();
+        let invite_cseq = parts
+            .next()
+            .ok_or_else(|| anyhow!("Invalid CSeq header in provisional response"))?;
+        let invite_method = parts
+            .next()
+            .ok_or_else(|| anyhow!("Invalid CSeq header in provisional response"))?;
+
+        let rack_value = format!("{} {} {}", rseq, invite_cseq, invite_method);
+        self.build_prack_request(dialog, rack_value)
+    }
+
+    fn build_prack_request(
+        &self,
+        dialog: &Dialog,
+        rack_value: String,
+    ) -> Result<Request> {
         let mut headers = Headers::new();
 
         // Via
@@ -1418,10 +1453,7 @@ impl UserAgentClient {
         );
 
         // RAck: RSeq CSeq-number Method
-        headers.push(
-            SmolStr::new("RAck"),
-            SmolStr::new(format!("{} {} {}", rseq, invite_cseq, invite_method)),
-        );
+        headers.push(SmolStr::new("RAck"), SmolStr::new(rack_value));
 
         // Max-Forwards
         headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70".to_owned()));
@@ -1471,7 +1503,13 @@ impl UserAgentClient {
             "UAC created dialog"
         );
 
-        // Store in dialog manager
+        // Store in dialog manager or update existing dialog
+        if let Some(mut existing) = self.dialog_manager.get(&dialog.id) {
+            existing.update_from_response(response);
+            self.dialog_manager.insert(existing.clone());
+            return Some(existing);
+        }
+
         self.dialog_manager.insert(dialog.clone());
 
         Some(dialog)
@@ -3709,5 +3747,63 @@ mod tests {
         // Should have Route header for IM proxy
         let route_header = message.headers.get("Route").unwrap();
         assert!(route_header.contains("im-proxy.example.com"));
+    }
+
+    #[test]
+    fn prack_from_provisional_uses_response_cseq_and_rseq() {
+        use sip_dialog::{DialogId, DialogStateType};
+        use std::time::Duration;
+
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+        let uac = UserAgentClient::new(local_uri.clone(), contact_uri);
+
+        let dialog = Dialog {
+            id: DialogId {
+                call_id: SmolStr::new("call-id"),
+                local_tag: SmolStr::new("ltag"),
+                remote_tag: SmolStr::new("rtag"),
+            },
+            state: DialogStateType::Confirmed,
+            remote_target: SipUri::parse("sip:bob@example.com").unwrap(),
+            route_set: vec![],
+            local_cseq: 4,
+            remote_cseq: 1,
+            last_ack_cseq: None,
+            local_uri,
+            remote_uri: SipUri::parse("sip:bob@example.com").unwrap(),
+            secure: false,
+            session_expires: Some(Duration::from_secs(60)),
+            refresher: None,
+            is_uac: true,
+        };
+
+        let mut headers = Headers::new();
+        headers.push(SmolStr::new("RSeq"), SmolStr::new("42"));
+        headers.push(SmolStr::new("CSeq"), SmolStr::new("7 INVITE"));
+        headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>;tag=rtag"));
+        headers.push(
+            SmolStr::new("From"),
+            SmolStr::new("<sip:alice@example.com>;tag=ltag"),
+        );
+        headers.push(
+            SmolStr::new("Call-ID"),
+            SmolStr::new("call-id"),
+        );
+
+        let provisional =
+            Response::new(StatusLine::new(183, SmolStr::new("Session Progress")), headers, Bytes::new());
+
+        let prack = uac
+            .create_prack_from_provisional(&provisional, &dialog)
+            .expect("should build prack");
+
+        assert_eq!(prack.start.method, Method::Prack);
+        assert_eq!(
+            prack.headers.get("RAck").map(|v| v.as_str()),
+            Some("42 7 INVITE")
+        );
+        assert_eq!(prack.start.uri, dialog.remote_target.into());
+        assert!(prack.headers.get("CSeq").unwrap().contains("PRACK"));
     }
 }
