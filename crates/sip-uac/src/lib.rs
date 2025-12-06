@@ -33,6 +33,9 @@ pub struct UserAgentClient {
     /// Display name for From header
     pub display_name: Option<String>,
 
+    /// Optional override for From URI (used in B2BUA scenarios)
+    pub from_uri_override: Option<SipUri>,
+
     /// Dialog manager for call state
     pub dialog_manager: Arc<DialogManager>,
 
@@ -59,6 +62,7 @@ impl UserAgentClient {
             local_uri,
             contact_uri,
             display_name: None,
+            from_uri_override: None,
             dialog_manager: Arc::new(DialogManager::new()),
             subscription_manager: Arc::new(SubscriptionManager::new()),
             digest_client: None,
@@ -2195,17 +2199,19 @@ impl UserAgentClient {
     }
 
     fn format_from_header(&self) -> String {
+        let uri = self.from_uri_override.as_ref().unwrap_or(&self.local_uri);
+
         if let Some(ref display) = self.display_name {
             format!(
                 "\"{}\" <{}>;tag={}",
                 display,
-                self.local_uri.as_str(),
+                uri.as_str(),
                 self.local_tag.as_str()
             )
         } else {
             format!(
                 "<{}>;tag={}",
-                self.local_uri.as_str(),
+                uri.as_str(),
                 self.local_tag.as_str()
             )
         }
@@ -3805,5 +3811,34 @@ mod tests {
         );
         assert_eq!(prack.start.uri, dialog.remote_target.into());
         assert!(prack.headers.get("CSeq").unwrap().contains("PRACK"));
+    }
+
+    #[test]
+    fn format_from_header_uses_override_uri() {
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+        let mut uac = UserAgentClient::new(local_uri.clone(), contact_uri);
+
+        let override_uri = SipUri::parse("sip:bob@example.com").unwrap();
+        uac.from_uri_override = Some(override_uri.clone());
+
+        let header = uac.format_from_header();
+        assert!(header.contains(override_uri.as_str()));
+        assert!(header.contains("tag="));
+    }
+
+    #[test]
+    fn format_from_header_uses_display_and_override() {
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+        let mut uac = UserAgentClient::new(local_uri.clone(), contact_uri);
+
+        let override_uri = SipUri::parse("sip:bob@example.com").unwrap();
+        uac.display_name = Some("Bob Smith".to_string());
+        uac.from_uri_override = Some(override_uri.clone());
+
+        let header = uac.format_from_header();
+        assert!(header.contains("\"Bob Smith\""));
+        assert!(header.contains(override_uri.as_str()));
     }
 }

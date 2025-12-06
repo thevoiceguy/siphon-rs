@@ -1165,6 +1165,16 @@ impl IntegratedUAC {
         helper.display_name = name;
     }
 
+    /// Sets the From URI override for subsequent requests (useful for B2BUA identity preservation).
+    ///
+    /// # Security
+    /// Only use in trusted contexts (e.g., after authenticating the A-leg). Clearing the override
+    /// after use is recommended to avoid leaking identity into unrelated requests.
+    pub async fn set_from_uri(&self, uri: Option<SipUri>) {
+        let mut helper = self.helper.lock().await;
+        helper.from_uri_override = uri;
+    }
+
     pub async fn invite(
         &self,
         target: impl Into<RequestTarget>,
