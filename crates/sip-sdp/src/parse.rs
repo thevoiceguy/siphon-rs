@@ -322,13 +322,20 @@ fn parse_port(input: &str) -> IResult<&str, (u16, Option<u16>)> {
     )(input)
 }
 
-/// Parse protocol: RTP/AVP, RTP/SAVP, UDP, TCP, etc.
+/// Parse protocol: RTP/AVP, RTP/SAVP, RTP/SAVPF, UDP/TLS/RTP/SAVPF, TCP/TLS/RTP/SAVPF, UDP, TCP, etc.
 fn parse_protocol(input: &str) -> IResult<&str, Protocol> {
     alt((
-        map(tag("RTP/AVP"), |_| Protocol::RtpAvp),
+        // WebRTC protocols (longest first to avoid partial matches)
+        map(tag("UDP/TLS/RTP/SAVPF"), |_| Protocol::UdpTlsRtpSavpf),
+        map(tag("TCP/TLS/RTP/SAVPF"), |_| Protocol::TcpTlsRtpSavpf),
+        map(tag("RTP/SAVPF"), |_| Protocol::RtpSavpf),
+        // Traditional RTP protocols
         map(tag("RTP/SAVP"), |_| Protocol::RtpSavp),
+        map(tag("RTP/AVP"), |_| Protocol::RtpAvp),
+        // Basic protocols
         map(tag("UDP"), |_| Protocol::Udp),
         map(tag("TCP"), |_| Protocol::Tcp),
+        // Fallback for unknown protocols
         map(
             take_till(|c| c == ' ' || c == '\r' || c == '\n'),
             |s: &str| Protocol::Other(SmolStr::new(s)),

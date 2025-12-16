@@ -159,6 +159,12 @@ pub enum Protocol {
     RtpAvp,
     /// Secure RTP Profile (RFC 3711)
     RtpSavp,
+    /// RTP/SAVPF - Secure RTP Profile with RTCP Feedback (RFC 5124)
+    RtpSavpf,
+    /// UDP/TLS/RTP/SAVPF - WebRTC standard (RFC 5764)
+    UdpTlsRtpSavpf,
+    /// TCP/TLS/RTP/SAVPF - WebRTC over TCP (RFC 4571 + RFC 5764)
+    TcpTlsRtpSavpf,
     /// UDP
     Udp,
     /// TCP
@@ -426,6 +432,9 @@ impl std::fmt::Display for Protocol {
         match self {
             Protocol::RtpAvp => write!(f, "RTP/AVP"),
             Protocol::RtpSavp => write!(f, "RTP/SAVP"),
+            Protocol::RtpSavpf => write!(f, "RTP/SAVPF"),
+            Protocol::UdpTlsRtpSavpf => write!(f, "UDP/TLS/RTP/SAVPF"),
+            Protocol::TcpTlsRtpSavpf => write!(f, "TCP/TLS/RTP/SAVPF"),
             Protocol::Udp => write!(f, "UDP"),
             Protocol::Tcp => write!(f, "TCP"),
             Protocol::Other(s) => write!(f, "{}", s),
