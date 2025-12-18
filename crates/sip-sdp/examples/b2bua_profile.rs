@@ -11,8 +11,14 @@ fn main() {
     let profile_b = MediaProfileBuilder::audio_only().add_audio_codec(111, "opus", 48000);
 
     // B2BUA negotiates answer to caller based on callee profile
-    let answer_to_a =
-        sip_sdp::profiles::negotiate_answer(&offer_a, &profile_b, "b2bua", "198.51.100.1", 6000, None);
+    let answer_to_a = sip_sdp::profiles::negotiate_answer(
+        &offer_a,
+        &profile_b,
+        "b2bua",
+        "198.51.100.1",
+        6000,
+        None,
+    );
 
     // B2BUA constructs offer toward callee using the same profile (audio/opus)
     let offer_b = profile_b.build("b2bua", "198.51.100.1", 6000, None);

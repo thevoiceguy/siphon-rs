@@ -337,7 +337,9 @@ impl RateLimiter {
 
         // If disabled, allow all requests
         if !self.config.enabled {
-            self.metrics.allowed_requests.fetch_add(1, Ordering::Relaxed);
+            self.metrics
+                .allowed_requests
+                .fetch_add(1, Ordering::Relaxed);
             return true;
         }
 
@@ -351,9 +353,13 @@ impl RateLimiter {
         let allowed = bucket.write().try_consume(&self.config);
 
         if allowed {
-            self.metrics.allowed_requests.fetch_add(1, Ordering::Relaxed);
+            self.metrics
+                .allowed_requests
+                .fetch_add(1, Ordering::Relaxed);
         } else {
-            self.metrics.blocked_requests.fetch_add(1, Ordering::Relaxed);
+            self.metrics
+                .blocked_requests
+                .fetch_add(1, Ordering::Relaxed);
             debug!(key, "rate limit exceeded");
         }
 

@@ -1,9 +1,9 @@
 use anyhow::{anyhow, Result};
+use async_trait::async_trait;
 use bytes::Bytes;
 use dashmap::DashMap;
 use md5::Context;
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
-use async_trait::async_trait;
 use sha2::{Digest, Sha256, Sha512};
 use sip_core::{Headers, Method, Request, Response, StatusLine};
 use sip_parse::parse_authorization_header;
@@ -12,8 +12,8 @@ use smol_str::SmolStr;
 use std::fmt::Write;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::{info, warn};
 use tokio::{runtime::Handle, task};
+use tracing::{info, warn};
 
 /// Credentials used for SIP authentication.
 #[derive(Debug, Clone)]
@@ -399,11 +399,7 @@ fn extract_ip_from_via(headers: &Headers) -> Option<String> {
     let host_part = parts[1];
 
     // Remove port and parameters
-    let host = host_part
-        .split(':')
-        .next()?
-        .split(';')
-        .next()?;
+    let host = host_part.split(':').next()?.split(';').next()?;
 
     Some(host.to_string())
 }
@@ -432,11 +428,7 @@ pub struct DigestAuthenticator<S> {
 }
 
 impl<S> DigestAuthenticator<S> {
-    fn prepare_digest(
-        &self,
-        request: &Request,
-        headers: &Headers,
-    ) -> Result<Option<DigestParams>> {
+    fn prepare_digest(&self, request: &Request, headers: &Headers) -> Result<Option<DigestParams>> {
         if let Some(ref limiter) = self.rate_limiter {
             if let Some(ip) = extract_ip_from_via(headers) {
                 if !limiter.check_rate_limit(&ip) {

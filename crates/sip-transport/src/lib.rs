@@ -165,7 +165,10 @@ impl TransportKind {
     /// assert!(TransportKind::TlsSctp.is_secure());
     /// ```
     pub fn is_secure(&self) -> bool {
-        matches!(self, TransportKind::Tls | TransportKind::TlsSctp | TransportKind::Wss)
+        matches!(
+            self,
+            TransportKind::Tls | TransportKind::TlsSctp | TransportKind::Wss
+        )
     }
 }
 
@@ -187,11 +190,7 @@ pub async fn run_udp(socket: Arc<UdpSocket>, tx: mpsc::Sender<InboundPacket>) ->
     loop {
         match socket.recv_from(&mut buf).await {
             Ok((n, peer)) => {
-                transport_metrics().on_latency(
-                    TransportKind::Udp.as_str(),
-                    "recv",
-                    0,
-                );
+                transport_metrics().on_latency(TransportKind::Udp.as_str(), "recv", 0);
                 let span = span_with_transport("udp_packet", TransportKind::Udp.as_str());
                 let _entered = span.enter();
                 let payload = Bytes::copy_from_slice(&buf[..n]);
@@ -241,7 +240,11 @@ pub async fn run_tcp(bind: &str, tx: mpsc::Sender<InboundPacket>) -> Result<()> 
     let listener = {
         use socket2::{Domain, Protocol, Socket, Type};
 
-        let socket = Socket::new(Domain::for_address(bind_addr), Type::STREAM, Some(Protocol::TCP))?;
+        let socket = Socket::new(
+            Domain::for_address(bind_addr),
+            Type::STREAM,
+            Some(Protocol::TCP),
+        )?;
         socket.set_reuse_address(true)?;
         socket.set_nonblocking(true)?;
         socket.bind(&bind_addr.into())?;
@@ -320,7 +323,11 @@ pub struct TlsConfig {
 pub async fn send_ws(url: &str, data: Bytes) -> Result<()> {
     let (mut stream, _) = tokio_tungstenite::connect_async(url).await?;
     transport_metrics().on_connect(TransportKind::Ws.as_str());
-    stream.send(tokio_tungstenite::tungstenite::Message::Binary(data.to_vec())).await?;
+    stream
+        .send(tokio_tungstenite::tungstenite::Message::Binary(
+            data.to_vec(),
+        ))
+        .await?;
     transport_metrics().on_packet_sent(TransportKind::Ws.as_str());
     Ok(())
 }
@@ -330,7 +337,11 @@ pub async fn send_ws(url: &str, data: Bytes) -> Result<()> {
 pub async fn send_wss(url: &str, data: Bytes) -> Result<()> {
     let (mut stream, _) = tokio_tungstenite::connect_async(url).await?;
     transport_metrics().on_connect(TransportKind::Wss.as_str());
-    stream.send(tokio_tungstenite::tungstenite::Message::Binary(data.to_vec())).await?;
+    stream
+        .send(tokio_tungstenite::tungstenite::Message::Binary(
+            data.to_vec(),
+        ))
+        .await?;
     transport_metrics().on_packet_sent(TransportKind::Wss.as_str());
     Ok(())
 }
@@ -347,24 +358,27 @@ where
 {
     // RFC 7118 requires the "sip" subprotocol; honor if offered, accept otherwise for flexibility.
     let mut selected_sip = false;
-    let ws_stream = accept_hdr_async(stream, |req: &Request, mut resp: tungstenite::handshake::server::Response| {
-        if let Some(value) = req.headers().get("Sec-WebSocket-Protocol") {
-            if let Ok(proto_str) = value.to_str() {
-                if proto_str
-                    .split(',')
-                    .any(|p| p.trim().eq_ignore_ascii_case("sip"))
-                {
-                    // Safety: "sip" is a valid HeaderValue
-                    if let Ok(header_value) = "sip".parse() {
-                        resp.headers_mut()
-                            .append("Sec-WebSocket-Protocol", header_value);
-                        selected_sip = true;
+    let ws_stream = accept_hdr_async(
+        stream,
+        |req: &Request, mut resp: tungstenite::handshake::server::Response| {
+            if let Some(value) = req.headers().get("Sec-WebSocket-Protocol") {
+                if let Ok(proto_str) = value.to_str() {
+                    if proto_str
+                        .split(',')
+                        .any(|p| p.trim().eq_ignore_ascii_case("sip"))
+                    {
+                        // Safety: "sip" is a valid HeaderValue
+                        if let Ok(header_value) = "sip".parse() {
+                            resp.headers_mut()
+                                .append("Sec-WebSocket-Protocol", header_value);
+                            selected_sip = true;
+                        }
                     }
                 }
             }
-        }
-        Ok(resp)
-    })
+            Ok(resp)
+        },
+    )
     .await?;
 
     if !selected_sip {

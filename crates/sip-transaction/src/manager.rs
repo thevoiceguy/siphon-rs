@@ -319,7 +319,10 @@ impl TransactionManager {
     }
 
     /// Creates a transaction manager with custom limits for DoS protection.
-    pub fn with_limits(dispatcher: Arc<dyn TransportDispatcher>, limits: TransactionLimits) -> Self {
+    pub fn with_limits(
+        dispatcher: Arc<dyn TransportDispatcher>,
+        limits: TransactionLimits,
+    ) -> Self {
         Self::with_timers_and_limits(dispatcher, T1_DEFAULT, T2_DEFAULT, T4_DEFAULT, limits)
     }
 
@@ -406,7 +409,8 @@ impl TransactionManager {
                     let tu = entry.tu.clone();
                     let key_clone = oldest_key.clone();
                     tokio::spawn(async move {
-                        tu.on_terminated(&key_clone, "resource limit exceeded").await;
+                        tu.on_terminated(&key_clone, "resource limit exceeded")
+                            .await;
                     });
                 }
                 return true;
@@ -533,9 +537,11 @@ impl TransactionManager {
 
         let method = request.start.method;
         let transport_type = TransportType::from(transport);
-        self.inner
-            .metrics
-            .record_start(transport_type, &format!("{:?}", method), TransactionRole::Server);
+        self.inner.metrics.record_start(
+            transport_type,
+            &format!("{:?}", method),
+            TransactionRole::Server,
+        );
         if let Some(via) = top_via(&request) {
             self.inner.metrics.record_via_transport(via);
         }
@@ -712,8 +718,7 @@ impl TransactionManager {
         } else if let Some((_, entry)) = self.inner.server.remove(&key) {
             // If no actions, still record outcome for metrics.
             let duration = entry.start_time.elapsed();
-            let transport =
-                TransportType::from(transport_kind_to_transport(entry.ctx.transport));
+            let transport = TransportType::from(transport_kind_to_transport(entry.ctx.transport));
             self.inner.metrics.record_transaction_duration(
                 transport,
                 &format!("{:?}", entry.method),
@@ -773,7 +778,10 @@ impl TransactionManager {
     async fn apply_server_actions(&self, key: &TransactionKey, actions: Vec<ServerInviteAction>) {
         for action in actions {
             match action {
-                ServerInviteAction::Transmit { bytes, transport: _ } => {
+                ServerInviteAction::Transmit {
+                    bytes,
+                    transport: _,
+                } => {
                     if let Some(entry) = self.inner.server.get(key) {
                         let ctx = entry.ctx.clone();
                         drop(entry);
@@ -1477,7 +1485,8 @@ mod tests {
             Duration::from_secs(5),
             limits,
         );
-        let ctx = TransportContext::new(TransportKind::Udp, "127.0.0.1:5060".parse().unwrap(), None);
+        let ctx =
+            TransportContext::new(TransportKind::Udp, "127.0.0.1:5060".parse().unwrap(), None);
 
         // Create 5 transactions (at limit)
         for i in 0..5 {
@@ -1516,7 +1525,8 @@ mod tests {
             Duration::from_secs(5),
             limits,
         );
-        let ctx = TransportContext::new(TransportKind::Udp, "127.0.0.1:5060".parse().unwrap(), None);
+        let ctx =
+            TransportContext::new(TransportKind::Udp, "127.0.0.1:5060".parse().unwrap(), None);
         let tu = Arc::new(TestClientTu::default());
 
         // Create 3 client transactions (at limit)
@@ -1559,7 +1569,8 @@ mod tests {
             Duration::from_secs(5),
             limits,
         );
-        let ctx = TransportContext::new(TransportKind::Udp, "127.0.0.1:5060".parse().unwrap(), None);
+        let ctx =
+            TransportContext::new(TransportKind::Udp, "127.0.0.1:5060".parse().unwrap(), None);
 
         // Create 3 transactions with small delays to ensure ordering
         for i in 0..3 {
@@ -1605,7 +1616,8 @@ mod tests {
         let dispatcher = Arc::new(TestDispatcher::default());
         let limits = TransactionLimits::unlimited();
         let manager = TransactionManager::with_limits(dispatcher.clone(), limits);
-        let ctx = TransportContext::new(TransportKind::Udp, "127.0.0.1:5060".parse().unwrap(), None);
+        let ctx =
+            TransportContext::new(TransportKind::Udp, "127.0.0.1:5060".parse().unwrap(), None);
 
         // Create many transactions without hitting limit
         for i in 0..100 {

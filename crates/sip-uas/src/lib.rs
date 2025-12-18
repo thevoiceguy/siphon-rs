@@ -7,11 +7,11 @@ use sip_core::{Headers, Method, Request, RequestLine, Response, SipUri, StatusLi
 use sip_dialog::session_timer_manager::validate_session_expires;
 use sip_dialog::{Dialog, DialogManager, RSeqManager, Subscription, SubscriptionManager};
 use sip_parse::{header, parse_session_expires};
+pub use sip_sdp::profiles::{MediaProfileBuilder, SdpProfile};
 use smol_str::SmolStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::info;
-pub use sip_sdp::profiles::{MediaProfileBuilder, SdpProfile};
 
 /// Trait implemented by SIP applications that consume transactions.
 pub trait TransactionUser: Send + Sync {

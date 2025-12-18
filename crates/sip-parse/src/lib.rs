@@ -364,28 +364,26 @@ const MAX_CONTENT_LENGTH: usize = 64 * 1024 * 1024; // 64 MB
 /// - Value exceeds MAX_CONTENT_LENGTH (64 MB)
 /// - Value would cause integer overflow
 fn content_length(headers: &Headers) -> Option<usize> {
-    headers
-        .get("Content-Length")
-        .and_then(|value| {
-            let trimmed = value.trim();
+    headers.get("Content-Length").and_then(|value| {
+        let trimmed = value.trim();
 
-            // Parse to u64 first to detect overflow on 32-bit systems
-            let value_u64 = trimmed.parse::<u64>().ok()?;
+        // Parse to u64 first to detect overflow on 32-bit systems
+        let value_u64 = trimmed.parse::<u64>().ok()?;
 
-            // Check if value fits in usize (prevents overflow on 32-bit)
-            if value_u64 > usize::MAX as u64 {
-                return None;
-            }
+        // Check if value fits in usize (prevents overflow on 32-bit)
+        if value_u64 > usize::MAX as u64 {
+            return None;
+        }
 
-            let length = value_u64 as usize;
+        let length = value_u64 as usize;
 
-            // Enforce security limit
-            if length > MAX_CONTENT_LENGTH {
-                return None;
-            }
+        // Enforce security limit
+        if length > MAX_CONTENT_LENGTH {
+            return None;
+        }
 
-            Some(length)
-        })
+        Some(length)
+    })
 }
 
 fn is_token_char(c: char) -> bool {
@@ -963,7 +961,12 @@ Content-Length: 0\r\n\r\n",
         for (input, expected) in test_cases {
             let mut headers = Headers::new();
             headers.push(SmolStr::new("Content-Length"), SmolStr::new(input));
-            assert_eq!(content_length(&headers), expected, "Failed for input: {}", input);
+            assert_eq!(
+                content_length(&headers),
+                expected,
+                "Failed for input: {}",
+                input
+            );
         }
     }
 
@@ -971,13 +974,13 @@ Content-Length: 0\r\n\r\n",
     fn content_length_rejects_invalid_formats() {
         // Test invalid formats
         let invalid_cases = vec![
-            "-1",           // Negative
-            "abc",          // Non-numeric
-            "123abc",       // Mixed
-            "12.34",        // Decimal
-            "  ",           // Whitespace only
-            "",             // Empty
-            "0x100",        // Hex notation
+            "-1",     // Negative
+            "abc",    // Non-numeric
+            "123abc", // Mixed
+            "12.34",  // Decimal
+            "  ",     // Whitespace only
+            "",       // Empty
+            "0x100",  // Hex notation
         ];
 
         for input in invalid_cases {
@@ -1014,11 +1017,13 @@ Content-Length: 0\r\n\r\n",
     #[test]
     fn parse_request_with_oversized_content_length() {
         // Test full message parsing with oversized Content-Length
-        let message = Bytes::from_static(b"INVITE sip:bob@example.com SIP/2.0\r\n\
+        let message = Bytes::from_static(
+            b"INVITE sip:bob@example.com SIP/2.0\r\n\
 Via: SIP/2.0/UDP pc33.example.com;branch=z9hG4bK776\r\n\
 Content-Length: 999999999999999\r\n\
 \r\n\
-Small body");
+Small body",
+        );
 
         // Should parse successfully but ignore the invalid Content-Length
         let result = parse_request(&message);

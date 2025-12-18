@@ -32,10 +32,7 @@ impl MediaProfileBuilder {
     /// Audio-only profile with PCMU/PCMA + telephone-event.
     pub fn audio_only() -> Self {
         Self {
-            audio_codecs: vec![
-                (0, "PCMU".to_string(), 8000),
-                (8, "PCMA".to_string(), 8000),
-            ],
+            audio_codecs: vec![(0, "PCMU".to_string(), 8000), (8, "PCMA".to_string(), 8000)],
             video_codecs: Vec::new(),
             include_telephone_event: true,
             direction: "sendrecv",
@@ -47,10 +44,7 @@ impl MediaProfileBuilder {
     /// Audio+video profile with PCMU/PCMA, H264, VP8.
     pub fn audio_video() -> Self {
         Self {
-            audio_codecs: vec![
-                (0, "PCMU".to_string(), 8000),
-                (8, "PCMA".to_string(), 8000),
-            ],
+            audio_codecs: vec![(0, "PCMU".to_string(), 8000), (8, "PCMA".to_string(), 8000)],
             video_codecs: vec![
                 (96, "H264".to_string(), 90000),
                 (97, "VP8".to_string(), 90000),
@@ -257,7 +251,11 @@ pub fn negotiate_answer(
                 for pt in &m.formats {
                     if desired_audio.contains(pt) {
                         if let Some(rtp) = m.rtpmaps.get(pt) {
-                            builder = builder.add_audio_codec(*pt, rtp.encoding_name.to_string(), rtp.clock_rate);
+                            builder = builder.add_audio_codec(
+                                *pt,
+                                rtp.encoding_name.to_string(),
+                                rtp.clock_rate,
+                            );
                         }
                     }
                     if *pt == 101 && profile.include_telephone_event {
@@ -272,7 +270,11 @@ pub fn negotiate_answer(
                     for pt in &m.formats {
                         if desired_video.contains(pt) {
                             if let Some(rtp) = m.rtpmaps.get(pt) {
-                                builder = builder.add_video_codec(*pt, rtp.encoding_name.to_string(), rtp.clock_rate);
+                                builder = builder.add_video_codec(
+                                    *pt,
+                                    rtp.encoding_name.to_string(),
+                                    rtp.clock_rate,
+                                );
                             }
                         }
                     }
@@ -329,9 +331,15 @@ mod tests {
         let sdp = builder.build("alice", "192.0.2.1", 5004, Some(5006));
         assert_eq!(sdp.media.len(), 2);
         assert_eq!(sdp.media[0].media_type, MediaType::Audio);
-        assert!(sdp.media[0].attributes.iter().any(|a| matches!(a, Attribute::Property(name) if name == "rtcp-mux")));
+        assert!(sdp.media[0]
+            .attributes
+            .iter()
+            .any(|a| matches!(a, Attribute::Property(name) if name == "rtcp-mux")));
         assert_eq!(sdp.media[1].media_type, MediaType::Video);
-        assert!(sdp.media[1].attributes.iter().any(|a| matches!(a, Attribute::Property(name) if name == "rtcp-mux")));
+        assert!(sdp.media[1]
+            .attributes
+            .iter()
+            .any(|a| matches!(a, Attribute::Property(name) if name == "rtcp-mux")));
     }
 
     #[test]
