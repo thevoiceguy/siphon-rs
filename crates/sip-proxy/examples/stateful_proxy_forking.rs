@@ -156,6 +156,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         invite.clone(),
         "call-12345".into(),
         "z9hG4bKclient123".into(),
+        "proxy.example.com".into(),
+        "UDP".into(),
         ForkMode::Parallel,
     );
     println!(

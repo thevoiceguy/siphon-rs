@@ -132,6 +132,12 @@ pub struct ProxyContext {
     /// Client transaction branch (from client's Via header)
     pub client_branch: SmolStr,
 
+    /// Proxy hostname used for forwarding on this context
+    pub proxy_host: SmolStr,
+
+    /// Transport used for forwarding on this context
+    pub transport: SmolStr,
+
     /// Branches created for forwarding (branch_id → info)
     branches: RwLock<HashMap<SmolStr, BranchInfo>>,
 
@@ -158,6 +164,8 @@ impl ProxyContext {
         original_request: Request,
         call_id: SmolStr,
         client_branch: SmolStr,
+        proxy_host: SmolStr,
+        transport: SmolStr,
         fork_mode: ForkMode,
         response_tx: mpsc::UnboundedSender<Response>,
     ) -> Self {
@@ -165,6 +173,8 @@ impl ProxyContext {
             original_request,
             call_id,
             client_branch,
+            proxy_host,
+            transport,
             branches: RwLock::new(HashMap::new()),
             fork_mode,
             best_final: RwLock::new(None),
@@ -392,6 +402,8 @@ impl StatefulProxy {
         request: Request,
         call_id: SmolStr,
         client_branch: SmolStr,
+        proxy_host: SmolStr,
+        transport: SmolStr,
         fork_mode: ForkMode,
     ) -> (Arc<ProxyContext>, mpsc::UnboundedReceiver<Response>) {
         let (response_tx, response_rx) = mpsc::unbounded_channel();
@@ -400,6 +412,8 @@ impl StatefulProxy {
             request,
             call_id,
             client_branch.clone(),
+            proxy_host,
+            transport,
             fork_mode,
             response_tx,
         ));
@@ -556,6 +570,8 @@ mod tests {
             request,
             "test-call-123".into(),
             "z9hG4bKclient".into(),
+            "proxy.example.com".into(),
+            "UDP".into(),
             ForkMode::Parallel,
         );
 
@@ -572,6 +588,8 @@ mod tests {
             request,
             "test-call-123".into(),
             "z9hG4bKclient".into(),
+            "proxy.example.com".into(),
+            "UDP".into(),
             ForkMode::Parallel,
         );
 
@@ -637,6 +655,8 @@ mod tests {
             invite,
             "test-call-123".into(),
             "z9hG4bKclient".into(),
+            "proxy.example.com".into(),
+            "UDP".into(),
             ForkMode::None,
         );
 
@@ -695,6 +715,8 @@ mod tests {
             invite.clone(),
             "call-123".into(),
             "z9hG4bKclient".into(),
+            "proxy.example.com".into(),
+            "UDP".into(),
             ForkMode::Parallel,
         );
 

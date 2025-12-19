@@ -4,7 +4,8 @@ use crate::{
     },
     ProxyHelpers,
 };
-use sip_core::{Method, Request, SipUri};
+use anyhow::{anyhow, Result};
+use sip_core::{is_valid_branch, Method, Request, SipUri};
 use smol_str::SmolStr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -37,7 +38,7 @@ impl ProxyService {
     ///
     /// Returns the proxy context, an upstream response receiver, and the prepared outbound
     /// requests to dispatch to each target.
-    pub fn start_forking(
+    pub async fn start_forking(
         &self,
         original: Request,
         targets: Vec<ProxyTarget>,
@@ -46,27 +47,41 @@ impl ProxyService {
         add_record_route: bool,
         proxy_uri: Option<&SipUri>,
         fork_mode: ForkMode,
-    ) -> (
+    ) -> Result<(
         Arc<ProxyContext>,
         mpsc::UnboundedReceiver<sip_core::Response>,
         Vec<(SmolStr, Request)>,
-    ) {
+    )> {
         let call_id = original
             .headers
             .get("Call-ID")
             .cloned()
-            .unwrap_or_else(|| SmolStr::new("unknown-callid"));
-        let client_branch = ProxyHelpers::add_via(&mut original.clone(), proxy_host, transport);
+            .ok_or_else(|| anyhow!("Missing Call-ID header"))?;
+        let client_branch = extract_top_via_branch(&original)?;
 
         let (context, response_rx) = self.proxy.start_context(
             original.clone(),
             call_id.clone(),
-            SmolStr::new(client_branch.clone()),
+            SmolStr::new(client_branch),
+            SmolStr::new(proxy_host),
+            SmolStr::new(transport),
             fork_mode,
         );
 
         let mut forwarded = Vec::new();
-        for target in targets {
+        let mut ordered_targets = targets;
+        if matches!(fork_mode, ForkMode::Sequential) {
+            ordered_targets.sort_by(|a, b| {
+                a.priority
+                    .cmp(&b.priority)
+                    .then_with(|| b.q_value.partial_cmp(&a.q_value).unwrap_or(std::cmp::Ordering::Equal))
+            });
+        }
+        if matches!(fork_mode, ForkMode::None | ForkMode::Sequential) {
+            ordered_targets.truncate(1);
+        }
+
+        for target in ordered_targets {
             if let Ok((request, branch)) = forwarding::prepare_forward(
                 &original,
                 &target.uri,
@@ -84,14 +99,11 @@ impl ProxyService {
                 };
                 forwarded.push((branch.clone(), request.clone()));
                 // Track branch in context
-                let ctx_clone = context.clone();
-                tokio::spawn(async move {
-                    ctx_clone.add_branch(branch_info).await;
-                });
+                context.add_branch(branch_info).await;
             }
         }
 
-        (context, response_rx, forwarded)
+        Ok((context, response_rx, forwarded))
     }
 
     /// Process a response from a branch and produce actions (forward upstream, send CANCELs).
@@ -106,7 +118,11 @@ impl ProxyService {
         // Build CANCELs for losing branches if we have a winning 2xx
         let cancels = if let Some(ref resp) = forward {
             if resp.start.code >= 200 && resp.start.code < 300 {
-                let cancel_template = build_cancel_template(&context.original_request);
+                let cancel_template = build_cancel_template(
+                    &context.original_request,
+                    context.proxy_host.as_str(),
+                    context.transport.as_str(),
+                );
                 context.build_cancel_requests(&cancel_template).await
             } else {
                 Vec::new()
@@ -128,9 +144,15 @@ impl ProxyService {
 }
 
 /// Build a CANCEL template from the original INVITE.
-fn build_cancel_template(original: &Request) -> Request {
+fn build_cancel_template(original: &Request, proxy_host: &str, transport: &str) -> Request {
     let mut cancel = original.clone();
     cancel.start.method = Method::Cancel;
+    cancel.body = bytes::Bytes::new();
+    cancel.headers.remove("Content-Type");
+    cancel.headers.remove("Content-Length");
+
+    // Ensure the proxy is the top Via for downstream CANCELs.
+    ProxyHelpers::add_via(&mut cancel, proxy_host, transport);
 
     // Update CSeq to CANCEL with same sequence number
     if let Some(cseq_val) = cancel.headers.get("CSeq").cloned() {
@@ -145,4 +167,25 @@ fn build_cancel_template(original: &Request) -> Request {
     }
 
     cancel
+}
+
+fn extract_top_via_branch(request: &Request) -> Result<SmolStr> {
+    let via = request
+        .headers
+        .iter()
+        .find(|h| h.name.as_str().eq_ignore_ascii_case("Via"))
+        .ok_or_else(|| anyhow!("Missing Via header"))?;
+
+    for part in via.value.split(';') {
+        let trimmed = part.trim();
+        if trimmed.len() >= 7 && trimmed[..7].eq_ignore_ascii_case("branch=") {
+            let branch = &trimmed[7..];
+            if is_valid_branch(branch) {
+                return Ok(SmolStr::new(branch));
+            }
+            return Err(anyhow!("Invalid Via branch parameter"));
+        }
+    }
+
+    Err(anyhow!("Via header missing branch parameter"))
 }

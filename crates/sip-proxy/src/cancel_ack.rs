@@ -175,10 +175,10 @@ impl AckForwarder {
 
                     if let Some(uri) = SipUri::parse(uri_str) {
                         crate::ProxyHelpers::set_request_uri(&mut ack, uri);
+                        used_route = true;
+                        // Skip the consumed Route header
+                        continue;
                     }
-                    used_route = true;
-                    // Skip the consumed Route header
-                    continue;
                 }
 
                 new_headers.push(header);
