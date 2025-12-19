@@ -218,6 +218,9 @@ fn split_host_port(input: &str) -> Option<(&str, Option<u16>)> {
             Some((host, None))
         }
     } else if let Some(idx) = input.rfind(':') {
+        if input.matches(':').count() > 1 {
+            return None;
+        }
         let (host, port_str) = input.split_at(idx);
         if port_str.len() > 1 && port_str[1..].chars().all(|c| c.is_ascii_digit()) {
             let port = port_str[1..].parse().ok()?;
@@ -274,5 +277,11 @@ mod tests {
         let tel = TelUri::parse("tel:+15551234567").unwrap();
         let uri: Uri = tel.into();
         assert!(uri.is_tel());
+    }
+
+    #[test]
+    fn rejects_unbracketed_ipv6_host() {
+        let uri = SipUri::parse("sip:2001:db8::1");
+        assert!(uri.is_none());
     }
 }

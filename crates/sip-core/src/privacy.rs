@@ -327,16 +327,47 @@ fn anonymize_identity_headers(headers: &mut crate::Headers) {
 /// Replaces the URI with "anonymous@anonymous.invalid" while preserving
 /// display name (if "Anonymous"), tags, and parameters.
 fn anonymize_identity_header(header_value: &str) -> String {
-    // Simple anonymization: replace the URI with anonymous.invalid
-    // Preserve tags and parameters if present
-
-    // Check if there's a tag parameter
-    if let Some(semicolon_pos) = header_value.find(';') {
-        let params = &header_value[semicolon_pos..];
-        format!("\"Anonymous\" <sip:anonymous@anonymous.invalid>{}", params)
-    } else {
+    // Replace the URI with anonymous.invalid, preserving only header parameters.
+    let (_, params) = split_header_params(header_value);
+    if params.is_empty() {
         "\"Anonymous\" <sip:anonymous@anonymous.invalid>".to_string()
+    } else {
+        format!("\"Anonymous\" <sip:anonymous@anonymous.invalid>{}", params)
     }
+}
+
+fn split_header_params(value: &str) -> (&str, &str) {
+    let mut in_quotes = false;
+    let mut in_angle = false;
+    let mut escape = false;
+
+    for (idx, ch) in value.char_indices() {
+        if escape {
+            escape = false;
+            continue;
+        }
+
+        match ch {
+            '\\' if in_quotes => {
+                escape = true;
+            }
+            '"' => {
+                in_quotes = !in_quotes;
+            }
+            '<' if !in_quotes => {
+                in_angle = true;
+            }
+            '>' if !in_quotes => {
+                in_angle = false;
+            }
+            ';' if !in_quotes && !in_angle => {
+                return (&value[..idx], &value[idx..]);
+            }
+            _ => {}
+        }
+    }
+
+    (value, "")
 }
 
 /// Checks if privacy enforcement is required.
@@ -689,6 +720,16 @@ mod tests {
             anonymized,
             "\"Anonymous\" <sip:anonymous@anonymous.invalid>"
         );
+    }
+
+    #[test]
+    fn anonymize_identity_ignores_semicolon_in_quotes() {
+        let original = "\"Bob;CEO\" <sip:alice@example.com>;tag=xyz";
+        let anonymized = anonymize_identity_header(original);
+        assert!(anonymized.contains("anonymous@anonymous.invalid"));
+        assert!(anonymized.contains("tag=xyz"));
+        assert!(!anonymized.contains("alice@example.com"));
+        assert!(!anonymized.contains("Bob;CEO"));
     }
 
     #[test]

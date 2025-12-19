@@ -219,9 +219,8 @@ impl CpimMessage {
         result.push_str("\r\n");
 
         // Body
-        if let Ok(body_str) = std::str::from_utf8(&self.body) {
-            result.push_str(body_str);
-        }
+        let body_str = String::from_utf8_lossy(&self.body);
+        result.push_str(&body_str);
 
         result
     }
@@ -325,8 +324,6 @@ fn unescape_header_value(value: &str) -> Option<String> {
 ///
 /// Returns `None` if the message is malformed or doesn't follow the CPIM format.
 pub fn parse_cpim(input: &str) -> Option<CpimMessage> {
-    let input = input.trim();
-
     // Split into sections by blank lines (CRLF CRLF or LF LF)
     let sections: Vec<&str> = if input.contains("\r\n\r\n") {
         input.split("\r\n\r\n").collect()

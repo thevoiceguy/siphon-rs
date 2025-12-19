@@ -129,7 +129,7 @@ impl SecurityEntry {
     pub fn preference(&self) -> Option<f32> {
         self.get_param("q")
             .and_then(|v| v.as_ref())
-            .and_then(|s| s.parse::<f32>().ok())
+            .and_then(|s| parse_q_value(s.as_str()))
     }
 
     /// Creates a TLS security entry with default parameters.
@@ -225,7 +225,7 @@ impl SecurityClientHeader {
         entries.sort_by(|a, b| {
             let qa = a.preference().unwrap_or(0.001);
             let qb = b.preference().unwrap_or(0.001);
-            qb.partial_cmp(&qa).unwrap()
+            qb.total_cmp(&qa)
         });
         entries
     }
@@ -297,7 +297,7 @@ impl SecurityServerHeader {
         entries.sort_by(|a, b| {
             let qa = a.preference().unwrap_or(0.001);
             let qb = b.preference().unwrap_or(0.001);
-            qb.partial_cmp(&qa).unwrap()
+            qb.total_cmp(&qa)
         });
         entries
     }
@@ -307,19 +307,25 @@ impl SecurityServerHeader {
     /// Returns the entry with the highest combined preference that appears
     /// in both lists.
     pub fn find_best_match(&self, client: &SecurityClientHeader) -> Option<&SecurityEntry> {
-        let server_sorted = self.sorted_by_preference();
+        let mut best: Option<(&SecurityEntry, f32)> = None;
 
-        for server_entry in server_sorted {
-            // Check if client also supports this mechanism
-            if client
+        for server_entry in &self.entries {
+            if let Some(client_entry) = client
                 .entries
                 .iter()
-                .any(|c| c.mechanism == server_entry.mechanism)
+                .find(|c| c.mechanism == server_entry.mechanism)
             {
-                return Some(server_entry);
+                let server_q = server_entry.preference().unwrap_or(0.001);
+                let client_q = client_entry.preference().unwrap_or(0.001);
+                let combined = server_q * client_q;
+
+                if best.map_or(true, |(_, score)| combined > score) {
+                    best = Some((server_entry, combined));
+                }
             }
         }
-        None
+
+        best.map(|(entry, _)| entry)
     }
 }
 
@@ -457,13 +463,30 @@ fn parse_single_security_entry(value: &str) -> Option<SecurityEntry> {
         }
 
         if let Some((key, val)) = param.split_once('=') {
-            entry.set_param(key.trim(), Some(val.trim()));
+            let key = key.trim();
+            let val = val.trim();
+            if key.eq_ignore_ascii_case("q") {
+                if parse_q_value(val).is_some() {
+                    entry.set_param(key, Some(val));
+                }
+            } else {
+                entry.set_param(key, Some(val));
+            }
         } else {
             entry.set_param(param, None);
         }
     }
 
     Some(entry)
+}
+
+fn parse_q_value(value: &str) -> Option<f32> {
+    let q = value.parse::<f32>().ok()?;
+    if q.is_finite() && (0.0..=1.0).contains(&q) {
+        Some(q)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -587,6 +610,29 @@ mod tests {
     }
 
     #[test]
+    fn security_server_find_best_match_combines_preferences() {
+        let mut client_tls = SecurityEntry::tls();
+        client_tls.set_preference(0.2);
+
+        let mut client_digest = SecurityEntry::digest("MD5", Some("auth"));
+        client_digest.set_preference(0.9);
+
+        let client = SecurityClientHeader::new(vec![client_tls, client_digest]);
+
+        let mut server_tls = SecurityEntry::tls();
+        server_tls.set_preference(0.9);
+
+        let mut server_digest = SecurityEntry::digest("MD5", Some("auth"));
+        server_digest.set_preference(0.4);
+
+        let server = SecurityServerHeader::new(vec![server_tls, server_digest]);
+
+        let best = server.find_best_match(&client);
+        assert!(best.is_some());
+        assert_eq!(best.unwrap().mechanism, SecurityMechanism::Digest);
+    }
+
+    #[test]
     fn security_verify_matches() {
         let tls = SecurityEntry::tls();
         let verify = SecurityVerifyHeader::single(tls.clone());
@@ -645,5 +691,19 @@ mod tests {
         assert_eq!(sorted[0].mechanism, SecurityMechanism::Digest);
         assert_eq!(sorted[1].mechanism, SecurityMechanism::IpsecIke);
         assert_eq!(sorted[2].mechanism, SecurityMechanism::Tls);
+    }
+
+    #[test]
+    fn security_sorted_by_preference_ignores_invalid_q() {
+        let mut tls = SecurityEntry::tls();
+        tls.set_param("q", Some("NaN"));
+
+        let mut digest = SecurityEntry::digest("MD5", None);
+        digest.set_preference(0.8);
+
+        let header = SecurityClientHeader::new(vec![tls, digest]);
+        let sorted = header.sorted_by_preference();
+
+        assert_eq!(sorted[0].mechanism, SecurityMechanism::Digest);
     }
 }
