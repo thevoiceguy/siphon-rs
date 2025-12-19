@@ -222,7 +222,7 @@ use sip_ratelimit::{RateLimiter, RateLimitConfig};
 let config = RateLimitConfig::new(100, 60);
 let limiter = RateLimiter::new(config);
 
-// Trigger cleanup manually (automatic cleanup happens when checking limits)
+// Trigger cleanup manually (automatic cleanup runs opportunistically every 1024 checks)
 let removed = limiter.cleanup_idle();
 println!("Removed {} idle rate limiters", removed);
 

@@ -42,7 +42,9 @@ use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tracing::{debug, warn};
+use tracing::debug;
+
+const CLEANUP_EVERY_CHECKS: u64 = 1024;
 
 /// Configuration for rate limiting
 #[derive(Debug, Clone)]
@@ -89,10 +91,11 @@ impl RateLimitConfig {
     /// ```
     pub fn new(max_requests: u32, window_secs: u64) -> Self {
         // Calculate refill interval: distribute tokens evenly across window
-        let refill_interval_ms = if max_requests > 0 {
-            (window_secs * 1000) / max_requests as u64
+        let refill_interval_ms = if max_requests == 0 || window_secs == 0 {
+            0
         } else {
-            1000
+            let interval = (window_secs * 1000) / max_requests as u64;
+            if interval == 0 { 1 } else { interval }
         };
 
         Self {
@@ -208,6 +211,13 @@ impl TokenBucket {
 
     /// Refill tokens based on elapsed time
     fn refill(&mut self, config: &RateLimitConfig) {
+        if config.refill_interval_ms == 0
+            || config.tokens_per_refill == 0
+            || config.burst_capacity == 0
+        {
+            return;
+        }
+
         let now = Instant::now();
         let elapsed = now.duration_since(self.last_refill);
         let refill_interval = Duration::from_millis(config.refill_interval_ms);
@@ -333,7 +343,7 @@ impl RateLimiter {
     /// * `key` - Identifier for rate limiting (IP address, username, etc.)
     pub fn check_rate_limit(&self, key: &str) -> bool {
         // Track total checks
-        self.metrics.total_checks.fetch_add(1, Ordering::Relaxed);
+        let check_count = self.metrics.total_checks.fetch_add(1, Ordering::Relaxed) + 1;
 
         // If disabled, allow all requests
         if !self.config.enabled {
@@ -341,6 +351,10 @@ impl RateLimiter {
                 .allowed_requests
                 .fetch_add(1, Ordering::Relaxed);
             return true;
+        }
+
+        if check_count % CLEANUP_EVERY_CHECKS == 0 {
+            self.cleanup_idle();
         }
 
         // Get or create bucket for this key
@@ -412,9 +426,11 @@ impl RateLimiter {
     ///
     /// Returns None if the key doesn't exist yet
     pub fn remaining_tokens(&self, key: &str) -> Option<u32> {
-        self.buckets
-            .get(key)
-            .map(|bucket| bucket.read().tokens as u32)
+        self.buckets.get(key).map(|bucket| {
+            let mut bucket = bucket.write();
+            bucket.refill(&self.config);
+            bucket.tokens as u32
+        })
     }
 
     /// Reset rate limit for a specific key
@@ -440,8 +456,30 @@ impl RateLimiter {
     ///
     /// Returns `None` if the key doesn't exist yet (hasn't made any requests).
     pub fn get_limit_info(&self, key: &str) -> Option<RateLimitInfo> {
+        if !self.config.enabled {
+            return None;
+        }
+
         let bucket = self.buckets.get(key)?;
-        let bucket = bucket.read();
+        let mut bucket = bucket.write();
+        bucket.refill(&self.config);
+
+        if self.config.refill_interval_ms == 0
+            || self.config.tokens_per_refill == 0
+            || self.config.burst_capacity == 0
+        {
+            let reset_at = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+
+            return Some(RateLimitInfo {
+                limit: self.config.max_requests,
+                remaining: bucket.tokens as u32,
+                reset_at,
+                retry_after: 0,
+            });
+        }
 
         // Calculate when the bucket will be fully refilled
         let time_to_full = if bucket.tokens < self.config.burst_capacity as f64 {
