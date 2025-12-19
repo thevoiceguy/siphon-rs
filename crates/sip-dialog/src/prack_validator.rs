@@ -73,7 +73,7 @@ impl RAck {
 
     /// Format RAck header value
     pub fn to_string(&self) -> String {
-        format!("{} {} {:?}", self.rseq, self.cseq, self.method)
+        format!("{} {} {}", self.rseq, self.cseq, self.method.as_str())
     }
 }
 
@@ -320,7 +320,7 @@ mod tests {
             cseq: 314159,
             method: Method::Invite,
         };
-        assert_eq!(rack.to_string(), "1776 314159 Invite");
+        assert_eq!(rack.to_string(), "1776 314159 INVITE");
     }
 
     #[test]
