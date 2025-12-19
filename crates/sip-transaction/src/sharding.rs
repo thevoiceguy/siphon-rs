@@ -21,7 +21,7 @@ pub fn shard_by_call_id(call_id: &str) -> u64 {
 pub fn shard_by_transaction_key(key: &TransactionKey) -> u64 {
     let mut base = siphash_str(key.branch.as_str());
     // Mix method and direction
-    base ^= (key.method as u64) << 32;
+    base ^= siphash_str(key.method.as_str()) << 32;
     if key.is_server {
         base ^= 0x1;
     }
