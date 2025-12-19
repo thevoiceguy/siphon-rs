@@ -181,7 +181,7 @@ impl TransactionKey {
         let branch = request_branch_id(req)?;
         Some(Self {
             branch,
-            method: req.start.method,
+            method: req.start.method.clone(),
             is_server,
         })
     }

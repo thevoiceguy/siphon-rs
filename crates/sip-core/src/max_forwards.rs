@@ -6,13 +6,19 @@ use crate::Headers;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MaxForwardsError {
     Exhausted,
+    Invalid,
 }
 
 /// Decrements Max-Forwards per RFC 3261 §8.1.1.6, inserting a default when missing.
 pub fn decrement_max_forwards(headers: &mut Headers) -> Result<u32, MaxForwardsError> {
     for header in headers.iter_mut() {
         if header.name.eq_ignore_ascii_case("Max-Forwards") {
-            let value = header.value.as_str().trim().parse::<u32>().unwrap_or(70);
+            let value = header
+                .value
+                .as_str()
+                .trim()
+                .parse::<u32>()
+                .map_err(|_| MaxForwardsError::Invalid)?;
             if value == 0 {
                 return Err(MaxForwardsError::Exhausted);
             }
@@ -61,6 +67,16 @@ mod tests {
         assert_eq!(
             decrement_max_forwards(&mut headers),
             Err(MaxForwardsError::Exhausted)
+        );
+    }
+
+    #[test]
+    fn returns_error_when_invalid() {
+        let mut headers = Headers::new();
+        headers.push("Max-Forwards".into(), "bogus".into());
+        assert_eq!(
+            decrement_max_forwards(&mut headers),
+            Err(MaxForwardsError::Invalid)
         );
     }
 

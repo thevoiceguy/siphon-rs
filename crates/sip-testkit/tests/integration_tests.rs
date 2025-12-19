@@ -22,7 +22,7 @@ fn options_request_roundtrip() {
     let parsed = parse_request(&bytes).expect("Should parse OPTIONS request");
 
     // Verify method
-    assert_eq!(parsed.start.method, Method::Options);
+    assert_eq!(parsed.start.method.as_str(), Method::Options.as_str());
     assert_eq!(parsed.start.uri.as_str(), "sip:example.com");
 
     // Verify essential headers are present
@@ -45,7 +45,7 @@ fn invite_request_creation_and_parsing() {
     let bytes = serialize_request(&original);
     let parsed = parse_request(&bytes).expect("Should parse INVITE request");
 
-    assert_eq!(parsed.start.method, Method::Invite);
+    assert_eq!(parsed.start.method.as_str(), Method::Invite.as_str());
     assert_eq!(parsed.start.uri.as_str(), "sip:bob@example.com");
 
     // Verify INVITE-specific headers
@@ -68,7 +68,7 @@ fn register_request_structure() {
     let bytes = serialize_request(&original);
     let parsed = parse_request(&bytes).expect("Should parse REGISTER request");
 
-    assert_eq!(parsed.start.method, Method::Register);
+    assert_eq!(parsed.start.method.as_str(), Method::Register.as_str());
 
     // Verify REGISTER-specific headers
     assert!(parsed.headers.get("Contact").is_some());
@@ -220,7 +220,7 @@ fn prack_roundtrip() {
     let (invite, provisional, prack) = scenario_invite_prack("sip:bob@example.com");
     let invite_bytes = serialize_request(&invite);
     let parsed_invite = parse_request(&invite_bytes).expect("invite parse");
-    assert_eq!(parsed_invite.start.method, Method::Invite);
+    assert_eq!(parsed_invite.start.method.as_str(), Method::Invite.as_str());
 
     let prov_bytes = serialize_response(&provisional);
     let parsed_prov = parse_response(&prov_bytes).expect("prov parse");
@@ -229,7 +229,7 @@ fn prack_roundtrip() {
 
     let prack_bytes = serialize_request(&prack);
     let parsed_prack = parse_request(&prack_bytes).expect("prack parse");
-    assert_eq!(parsed_prack.start.method, Method::Prack);
+    assert_eq!(parsed_prack.start.method.as_str(), Method::Prack.as_str());
     assert!(parsed_prack.headers.get("RAck").is_some());
 }
 
@@ -243,7 +243,7 @@ fn refer_contains_refer_to() {
         4,
     );
     let parsed = parse_request(&serialize_request(&refer)).expect("refer parse");
-    assert_eq!(parsed.start.method, Method::Refer);
+    assert_eq!(parsed.start.method.as_str(), Method::Refer.as_str());
     assert!(parsed.headers.get("Refer-To").is_some());
 }
 
@@ -268,10 +268,17 @@ fn refer_notify_scenario() {
         "sip:bob@example.com",
         "<sip:carol@example.com>",
     );
-    assert_eq!(parse_request(&serialize_request(&refer)).unwrap().start.method, Method::Refer);
+    assert_eq!(
+        parse_request(&serialize_request(&refer))
+            .unwrap()
+            .start
+            .method
+            .as_str(),
+        Method::Refer.as_str()
+    );
     assert_eq!(parse_response(&serialize_response(&accepted)).unwrap().start.code, 202);
     let parsed_notify = parse_request(&serialize_request(&notify)).unwrap();
-    assert_eq!(parsed_notify.start.method, Method::Notify);
+    assert_eq!(parsed_notify.start.method.as_str(), Method::Notify.as_str());
     assert!(parsed_notify.headers.get("Subscription-State").unwrap().contains("active"));
 }
 
@@ -283,11 +290,18 @@ fn register_auth_scenario() {
         "<sip:alice@client.example.com:5060>",
         "example.com",
     );
-    assert_eq!(parse_request(&serialize_request(&first)).unwrap().start.method, Method::Register);
+    assert_eq!(
+        parse_request(&serialize_request(&first))
+            .unwrap()
+            .start
+            .method
+            .as_str(),
+        Method::Register.as_str()
+    );
     let parsed_chal = parse_response(&serialize_response(&challenge)).unwrap();
     assert_eq!(parsed_chal.start.code, 401);
     let parsed_retry = parse_request(&serialize_request(&retry)).unwrap();
-    assert_eq!(parsed_retry.start.method, Method::Register);
+    assert_eq!(parsed_retry.start.method.as_str(), Method::Register.as_str());
     assert!(parsed_retry.headers.get("Authorization").is_some());
 }
 
@@ -306,7 +320,7 @@ Content-Length: 0\r\n\
 
     let parsed = parse_request(&Bytes::from_static(raw)).expect("Should parse raw OPTIONS");
 
-    assert_eq!(parsed.start.method, Method::Options);
+    assert_eq!(parsed.start.method.as_str(), Method::Options.as_str());
     assert_eq!(parsed.start.uri.as_str(), "sip:example.com");
 }
 

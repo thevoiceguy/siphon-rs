@@ -2,7 +2,6 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
 use dashmap::DashMap;
-use md5::Context;
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use sha2::{Digest, Sha256, Sha512};
 use sip_core::{Headers, Method, Request, Response, StatusLine};
@@ -27,7 +26,7 @@ pub struct Credentials {
 pub trait Authenticator: Send + Sync {
     fn challenge(&self, request: &Request) -> Result<Response>;
     fn verify(&self, request: &Request, headers: &Headers) -> Result<bool>;
-    fn credentials_for(&self, method: Method, uri: &str) -> Option<Credentials>;
+    fn credentials_for(&self, method: &Method, uri: &str) -> Option<Credentials>;
 }
 
 /// Credential store abstraction for server-side verification.
@@ -229,7 +228,7 @@ impl Nonce {
     pub fn validate_nc_with_request(
         &mut self,
         nc: u32,
-        method: Method,
+        method: &Method,
         uri: &str,
         body: &[u8],
     ) -> bool {
@@ -241,14 +240,14 @@ impl Nonce {
             // since the last successful auth, reject as potential replay
             return false;
         }
-        // Compute hash of request (method:uri:body bytes)
-        let mut ctx = Context::new();
-        ctx.consume(method.as_str().as_bytes());
-        ctx.consume(b":");
-        ctx.consume(uri.as_bytes());
-        ctx.consume(b":");
-        ctx.consume(body);
-        let request_hash = format!("{:x}", ctx.compute());
+        // Compute hash of request (method:uri:body bytes).
+        let mut ctx = Sha256::new();
+        ctx.update(method.as_str().as_bytes());
+        ctx.update(b":");
+        ctx.update(uri.as_bytes());
+        ctx.update(b":");
+        ctx.update(body);
+        let request_hash = hex::encode(ctx.finalize());
 
         if nc > self.last_nc {
             // New request with incrementing nc - accept and store
@@ -323,7 +322,7 @@ impl NonceManager {
         &self,
         value: &str,
         nc: u32,
-        method: Method,
+        method: &Method,
         uri: &str,
         body: &[u8],
     ) -> bool {
@@ -381,11 +380,11 @@ impl Default for NonceManager {
     }
 }
 
-/// Extract IP address from the top Via header
+/// Extract rate-limiting key from the top Via header.
 ///
-/// Returns the IP address portion from a Via header like:
-/// "SIP/2.0/UDP 192.168.1.100:5060;branch=z9hG4bK..."
-fn extract_ip_from_via(headers: &Headers) -> Option<String> {
+/// Prefer the `received` parameter if present (added by the receiving server),
+/// falling back to the host portion of the Via header.
+fn extract_rate_limit_key(headers: &Headers) -> Option<String> {
     let via = headers.get("Via")?;
 
     // Via format: SIP/2.0/TRANSPORT host[:port];params
@@ -395,13 +394,40 @@ fn extract_ip_from_via(headers: &Headers) -> Option<String> {
         return None;
     }
 
-    // Extract host[:port];params
-    let host_part = parts[1];
+    // Extract host[:port] and params
+    let mut host_part = parts[1];
+    let mut params = "";
+    if let Some((host, params_part)) = host_part.split_once(';') {
+        host_part = host;
+        params = params_part;
+    }
 
-    // Remove port and parameters
-    let host = host_part.split(':').next()?.split(';').next()?;
+    if !params.is_empty() {
+        for param in params.split(';') {
+            if let Some(value) = param.strip_prefix("received=") {
+                return Some(extract_via_host(value)?.to_string());
+            }
+        }
+    }
+
+    // Remove port from host part.
+    let host = extract_via_host(host_part)?;
 
     Some(host.to_string())
+}
+
+fn extract_via_host(host_part: &str) -> Option<&str> {
+    if host_part.starts_with('[') {
+        let end = host_part.find(']')?;
+        return Some(&host_part[1..end]);
+    }
+
+    let colon_count = host_part.matches(':').count();
+    if colon_count == 1 {
+        return host_part.split_once(':').map(|(host, _)| host);
+    }
+
+    Some(host_part)
 }
 
 struct DigestParams {
@@ -430,9 +456,9 @@ pub struct DigestAuthenticator<S> {
 impl<S> DigestAuthenticator<S> {
     fn prepare_digest(&self, request: &Request, headers: &Headers) -> Result<Option<DigestParams>> {
         if let Some(ref limiter) = self.rate_limiter {
-            if let Some(ip) = extract_ip_from_via(headers) {
-                if !limiter.check_rate_limit(&ip) {
-                    warn!(ip = %ip, "authentication rate limit exceeded");
+            if let Some(key) = extract_rate_limit_key(headers) {
+                if !limiter.check_rate_limit(&key) {
+                    warn!(key = %key, "authentication rate limit exceeded");
                     return Err(anyhow!("rate limit exceeded"));
                 }
             }
@@ -487,6 +513,11 @@ impl<S> DigestAuthenticator<S> {
             return Ok(None);
         }
 
+        if uri.as_str() != request.start.uri.as_str() {
+            info!(auth_uri = %uri, request_uri = %request.start.uri, "digest uri mismatch");
+            return Ok(None);
+        }
+
         if let Some(client_opaque) = opaque {
             if client_opaque.as_str() != self.opaque.as_str() {
                 info!("digest opaque mismatch");
@@ -497,6 +528,16 @@ impl<S> DigestAuthenticator<S> {
             return Ok(None);
         }
 
+        if qop != Some(self.qop) {
+            info!("digest qop missing or mismatch");
+            return Ok(None);
+        }
+
+        if nc.is_none() || cnonce.is_none() {
+            info!("digest missing nc/cnonce with qop");
+            return Ok(None);
+        }
+
         let _validated_nc = if let Some(nc_str) = nc {
             let nc_value = u32::from_str_radix(nc_str.as_str(), 16)
                 .map_err(|_| anyhow!("invalid nc format"))?;
@@ -504,8 +545,8 @@ impl<S> DigestAuthenticator<S> {
             if !self.nonce_manager.verify_with_nc(
                 nonce,
                 nc_value,
-                request.start.method,
-                uri.as_str(),
+                &request.start.method,
+                request.start.uri.as_str(),
                 &request.body,
             ) {
                 info!("digest nonce invalid/expired, nc decreasing (replay), or request hash mismatch (different request with same nc)");
@@ -513,11 +554,6 @@ impl<S> DigestAuthenticator<S> {
             }
             Some(nc_value)
         } else {
-            if qop.is_some() {
-                info!("digest missing nc parameter with qop");
-                return Ok(None);
-            }
-
             if !self.nonce_manager.verify(nonce) {
                 info!("digest nonce invalid/expired");
                 return Ok(None);
@@ -629,7 +665,7 @@ impl<S> DigestAuthenticator<S> {
         Self::hash(&self.algorithm, ha1_input.as_bytes())
     }
 
-    fn compute_ha2(&self, method: Method, uri: &str, body: &[u8]) -> String {
+    fn compute_ha2(&self, method: &Method, uri: &str, body: &[u8]) -> String {
         let ha2_input = match self.qop {
             Qop::Auth => format!("{}:{}", method.as_str(), uri),
             Qop::AuthInt => {
@@ -652,7 +688,7 @@ impl<S> DigestAuthenticator<S> {
         &self,
         username: &str,
         password: &str,
-        method: Method,
+        method: &Method,
         uri: &str,
         nonce: &str,
         nc: Option<&str>,
@@ -732,7 +768,7 @@ impl<S: CredentialStore> Authenticator for DigestAuthenticator<S> {
         let response_calc = self.compute_response(
             params.username.as_str(),
             creds.password.as_str(),
-            request.start.method,
+            &request.start.method,
             params.uri.as_str(),
             params.nonce.as_str(),
             params.nc_raw.as_deref(),
@@ -741,10 +777,10 @@ impl<S: CredentialStore> Authenticator for DigestAuthenticator<S> {
             request.body.as_ref(),
         );
 
-        Ok(response_calc == params.response.as_str())
+        Ok(constant_time_eq(response_calc.as_bytes(), params.response.as_bytes()))
     }
 
-    fn credentials_for(&self, _method: Method, _uri: &str) -> Option<Credentials> {
+    fn credentials_for(&self, _method: &Method, _uri: &str) -> Option<Credentials> {
         None
     }
 }
@@ -766,7 +802,7 @@ impl<S: AsyncCredentialStore> DigestAuthenticator<S> {
         let response_calc = self.compute_response(
             params.username.as_str(),
             creds.password.as_str(),
-            request.start.method,
+            &request.start.method,
             params.uri.as_str(),
             params.nonce.as_str(),
             params.nc_raw.as_deref(),
@@ -775,8 +811,20 @@ impl<S: AsyncCredentialStore> DigestAuthenticator<S> {
             request.body.as_ref(),
         );
 
-        Ok(response_calc == params.response.as_str())
+        Ok(constant_time_eq(response_calc.as_bytes(), params.response.as_bytes()))
     }
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 /// Client-side authentication helper for generating Authorization headers.
@@ -817,7 +865,7 @@ impl DigestClient {
     /// Generates Authorization header value from a 401/407 challenge.
     pub fn generate_authorization(
         &mut self,
-        method: Method,
+        method: &Method,
         uri: &str,
         realm: &str,
         nonce: &str,
@@ -1023,7 +1071,7 @@ mod tests {
         let response = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             uri,
             &nonce.value,
             Some(nc),
@@ -1070,7 +1118,7 @@ mod tests {
         let response = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             uri,
             &nonce.value,
             Some(nc),
@@ -1117,7 +1165,7 @@ mod tests {
         let response = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             uri,
             &nonce.value,
             Some(nc),
@@ -1207,10 +1255,101 @@ mod tests {
     }
 
     #[test]
+    fn digest_auth_rejects_mismatched_uri() {
+        let creds = Credentials {
+            username: SmolStr::new("alice"),
+            password: SmolStr::new("secret"),
+            realm: SmolStr::new("example.com"),
+        };
+        let store = MemoryCredentialStore::with(vec![creds.clone()]);
+        let auth = DigestAuthenticator::new("example.com", store);
+
+        let nonce = auth.nonce_manager.generate();
+        let method = Method::Invite;
+        let auth_uri = "sip:alice@example.com";
+        let request_uri = "sip:bob@example.com";
+        let nc = "00000001";
+        let cnonce = "abc123";
+
+        let response = auth.compute_response(
+            creds.username.as_str(),
+            creds.password.as_str(),
+            &method,
+            auth_uri,
+            &nonce.value,
+            Some(nc),
+            Some(cnonce),
+            Some(Qop::Auth),
+            b"",
+        );
+
+        let mut headers = Headers::new();
+        headers.push(
+            SmolStr::new("Authorization"),
+            SmolStr::new(format!(
+                "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
+                creds.username, creds.realm, nonce.value, auth_uri, response, cnonce, nc, auth.opaque
+            )),
+        );
+
+        let request = Request::new(
+            RequestLine::new(method, SipUri::parse(request_uri).unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        assert!(!auth.verify(&request, &request.headers).unwrap());
+    }
+
+    #[test]
+    fn digest_auth_rejects_missing_qop() {
+        let creds = Credentials {
+            username: SmolStr::new("alice"),
+            password: SmolStr::new("secret"),
+            realm: SmolStr::new("example.com"),
+        };
+        let store = MemoryCredentialStore::with(vec![creds.clone()]);
+        let auth = DigestAuthenticator::new("example.com", store);
+
+        let nonce = auth.nonce_manager.generate();
+        let method = Method::Invite;
+        let uri = "sip:bob@example.com";
+
+        let response = auth.compute_response(
+            creds.username.as_str(),
+            creds.password.as_str(),
+            &method,
+            uri,
+            &nonce.value,
+            None,
+            None,
+            None,
+            b"",
+        );
+
+        let mut headers = Headers::new();
+        headers.push(
+            SmolStr::new("Authorization"),
+            SmolStr::new(format!(
+                "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, opaque=\"{}\"",
+                creds.username, creds.realm, nonce.value, uri, response, auth.opaque
+            )),
+        );
+
+        let request = Request::new(
+            RequestLine::new(method, SipUri::parse(uri).unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        assert!(!auth.verify(&request, &request.headers).unwrap());
+    }
+
+    #[test]
     fn digest_client_generates_authorization() {
         let mut client = DigestClient::new("alice", "secret");
         let auth = client.generate_authorization(
-            Method::Register,
+            &Method::Register,
             "sip:example.com",
             "example.com",
             "testnonce123",
@@ -1237,7 +1376,7 @@ mod tests {
         let mut client = DigestClient::new("alice", "secret");
 
         let auth1 = client.generate_authorization(
-            Method::Register,
+            &Method::Register,
             "sip:example.com",
             "example.com",
             "nonce1",
@@ -1249,7 +1388,7 @@ mod tests {
         assert!(auth1.contains("nc=00000001"));
 
         let auth2 = client.generate_authorization(
-            Method::Register,
+            &Method::Register,
             "sip:example.com",
             "example.com",
             "nonce1",
@@ -1280,7 +1419,7 @@ mod tests {
         let mut client = DigestClient::new("testuser", "testpass");
         let uri = "sip:bob@example.com";
         let auth_header = client.generate_authorization(
-            Method::Invite,
+            &Method::Invite,
             uri,
             "sip.example.com",
             &nonce.value,
@@ -1324,7 +1463,7 @@ mod tests {
         let response = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             uri,
             &nonce.value,
             Some(nc),
@@ -1370,7 +1509,7 @@ mod tests {
         let response = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             uri,
             &nonce.value,
             Some(nc),
@@ -1390,7 +1529,7 @@ mod tests {
         );
 
         let request = Request::new(
-            RequestLine::new(method, SipUri::parse(uri).unwrap()),
+            RequestLine::new(method.clone(), SipUri::parse(uri).unwrap()),
             headers.clone(),
             Bytes::new(),
         );
@@ -1399,7 +1538,7 @@ mod tests {
 
         // Retransmission with same nc=00000001 should be accepted (legitimate retransmit over UDP)
         let retransmit = Request::new(
-            RequestLine::new(method, SipUri::parse(uri).unwrap()),
+            RequestLine::new(method.clone(), SipUri::parse(uri).unwrap()),
             headers,
             Bytes::new(),
         );
@@ -1431,7 +1570,7 @@ mod tests {
         let response2 = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             uri,
             &nonce.value,
             Some(nc2),
@@ -1450,7 +1589,7 @@ mod tests {
         );
 
         let request2 = Request::new(
-            RequestLine::new(method, SipUri::parse(uri).unwrap()),
+            RequestLine::new(method.clone(), SipUri::parse(uri).unwrap()),
             headers2,
             Bytes::new(),
         );
@@ -1465,7 +1604,7 @@ mod tests {
         let response1 = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             uri,
             &nonce.value,
             Some(nc1),
@@ -1518,7 +1657,7 @@ mod tests {
         let response1 = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             uri1,
             &nonce.value,
             Some(nc),
@@ -1537,7 +1676,7 @@ mod tests {
         );
 
         let request1 = Request::new(
-            RequestLine::new(method, SipUri::parse(uri1).unwrap()),
+            RequestLine::new(method.clone(), SipUri::parse(uri1).unwrap()),
             headers1,
             Bytes::new(),
         );
@@ -1551,7 +1690,7 @@ mod tests {
         let response2 = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             uri2,
             &nonce.value,
             Some(nc),
@@ -1603,7 +1742,7 @@ mod tests {
         let response1 = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             uri,
             &nonce.value,
             Some(nc),
@@ -1622,7 +1761,7 @@ mod tests {
         );
 
         let request1 = Request::new(
-            RequestLine::new(method, SipUri::parse(uri).unwrap()),
+            RequestLine::new(method.clone(), SipUri::parse(uri).unwrap()),
             headers1,
             Bytes::from_static(body1),
         );
@@ -1636,7 +1775,7 @@ mod tests {
         let response2 = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             uri,
             &nonce.value,
             Some(nc),
@@ -1687,7 +1826,7 @@ mod tests {
         let response = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             uri,
             &nonce.value,
             Some(nc),
@@ -1705,7 +1844,7 @@ mod tests {
         let mut headers1 = Headers::new();
         headers1.push(SmolStr::new("Authorization"), auth_header.clone());
         let request1 = Request::new(
-            RequestLine::new(method, SipUri::parse(uri).unwrap()),
+            RequestLine::new(method.clone(), SipUri::parse(uri).unwrap()),
             headers1,
             Bytes::from_static(body1),
         );
@@ -1718,7 +1857,7 @@ mod tests {
         let mut headers2 = Headers::new();
         headers2.push(SmolStr::new("Authorization"), auth_header);
         let request2 = Request::new(
-            RequestLine::new(method, SipUri::parse(uri).unwrap()),
+            RequestLine::new(method.clone(), SipUri::parse(uri).unwrap()),
             headers2,
             Bytes::from_static(body2),
         );
@@ -1747,7 +1886,7 @@ mod tests {
         let response = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             uri,
             &nonce.value,
             Some(nc),
@@ -1794,7 +1933,7 @@ mod tests {
         let response = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             uri,
             &nonce.value,
             Some(nc),

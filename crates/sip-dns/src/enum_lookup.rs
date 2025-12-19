@@ -193,16 +193,36 @@ impl EnumNaptrRecord {
         // Find the delimiter (first character)
         let delimiter = regexp.chars().next()?;
 
-        // Split by delimiter
-        let parts: Vec<&str> = regexp.split(delimiter).collect();
+        let mut parts = Vec::new();
+        let mut current = String::new();
+        let mut escaped = false;
+        for ch in regexp.chars().skip(1) {
+            if escaped {
+                current.push(ch);
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                current.push(ch);
+                continue;
+            }
+            if ch == delimiter {
+                parts.push(current);
+                current = String::new();
+                continue;
+            }
+            current.push(ch);
+        }
+        parts.push(current);
 
-        // Should have at least 4 parts: ["", "pattern", "replacement", "flags" or ""]
-        if parts.len() < 3 {
+        // Should have at least 2 parts: ["pattern", "replacement", ...]
+        if parts.len() < 2 {
             return None;
         }
 
-        // The replacement is the third part (index 2)
-        let replacement = parts[2];
+        // The replacement is the second part (index 1)
+        let replacement = parts[1].as_str();
 
         if replacement.is_empty() {
             return None;
@@ -380,6 +400,23 @@ mod tests {
         assert_eq!(
             record.extract_uri(),
             Some("sip:\\1@example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn extracts_uri_with_escaped_delimiter() {
+        let record = EnumNaptrRecord::new(
+            100,
+            10,
+            "u",
+            "E2U+sip",
+            "!^.*$!sip:user\\!name@example.com!",
+            "",
+        );
+
+        assert_eq!(
+            record.extract_uri(),
+            Some("sip:user\\!name@example.com".to_string())
         );
     }
 

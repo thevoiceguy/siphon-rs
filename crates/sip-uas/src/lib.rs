@@ -287,7 +287,7 @@ impl UserAgentServer {
         request: &Request,
         sdp_body: Option<&str>,
     ) -> Result<(Response, Dialog)> {
-        if request.start.method != Method::Invite {
+        if request.start.method.as_str() != "INVITE" {
             return Err(anyhow!("Not an INVITE request"));
         }
 
@@ -344,7 +344,7 @@ impl UserAgentServer {
     /// # Returns
     /// A 200 OK response
     pub fn handle_bye(&self, request: &Request, dialog: &Dialog) -> Result<Response> {
-        if request.start.method != Method::Bye {
+        if request.start.method.as_str() != "BYE" {
             return Err(anyhow!("Not a BYE request"));
         }
 
@@ -407,7 +407,7 @@ impl UserAgentServer {
     /// }
     /// ```
     pub fn handle_info(&self, request: &Request, dialog: &Dialog) -> Result<Response> {
-        if request.start.method != Method::Info {
+        if request.start.method.as_str() != "INFO" {
             return Err(anyhow!("Not an INFO request"));
         }
 
@@ -438,7 +438,7 @@ impl UserAgentServer {
     /// # Returns
     /// A 200 OK response for the CANCEL
     pub fn handle_cancel(&self, request: &Request) -> Result<Response> {
-        if request.start.method != Method::Cancel {
+        if request.start.method.as_str() != "CANCEL" {
             return Err(anyhow!("Not a CANCEL request"));
         }
 
@@ -476,7 +476,7 @@ impl UserAgentServer {
         request: &Request,
         expires: Option<u32>,
     ) -> Result<(Response, Subscription)> {
-        if request.start.method != Method::Subscribe {
+        if request.start.method.as_str() != "SUBSCRIBE" {
             return Err(anyhow!("Not a SUBSCRIBE request"));
         }
 
@@ -643,7 +643,7 @@ impl UserAgentServer {
     /// 3. Attempt the transfer (send INVITE to Refer-To target)
     /// 4. Send NOTIFY messages with sipfrag bodies reporting progress
     pub fn accept_refer(&self, request: &Request, dialog: &Dialog) -> Result<(Response, String)> {
-        if request.start.method != Method::Refer {
+        if request.start.method.as_str() != "REFER" {
             return Err(anyhow!("Not a REFER request"));
         }
 
@@ -774,7 +774,7 @@ impl UserAgentServer {
     /// # Returns
     /// A 200 OK response
     pub fn handle_prack(&self, request: &Request, dialog: &Dialog) -> Result<Response> {
-        if request.start.method != Method::Prack {
+        if request.start.method.as_str() != "PRACK" {
             return Err(anyhow!("Not a PRACK request"));
         }
 

@@ -7,9 +7,9 @@ use sip_core::{
     GeolocationErrorHeader, GeolocationHeader, GeolocationRoutingHeader, GeolocationValue, Headers,
     HistoryInfoEntry, HistoryInfoHeader, MimeType, MinSessionExpires, NameAddr, NameAddrHeader,
     PAccessNetworkInfo, PAssertedIdentityHeader, PPreferredIdentityHeader, PVisitedNetworkIdHeader,
-    PathHeader, PriorityValue, RAckHeader, RSeqHeader, ReasonHeader, RefresherRole,
+    PathHeader, PriorityValue, RAckHeader, RSeqHeader, ReasonHeader, RefresherRole, Uri,
     ResourcePriorityHeader, ResourcePriorityValue, RouteHeader, SdpSession, ServiceRouteHeader,
-    SessionExpires, SipETagHeader, SipUri, SubjectHeader, SubscriptionState,
+    SessionExpires, SipETagHeader, SubjectHeader, SubscriptionState,
     SubscriptionStateHeader, SupportedHeader, ToHeader, TokenList, ViaHeader,
 };
 use smol_str::SmolStr;
@@ -519,7 +519,7 @@ fn parse_name_addr(value: &SmolStr) -> Option<NameAddr> {
         let display = input[..start].trim();
         let uri = input[start + 1..end].trim();
         let params = parse_params(input[end + 1..].trim());
-        let uri = SipUri::parse(uri)?;
+        let uri = Uri::parse(uri)?;
         Some(NameAddr {
             display_name: if display.is_empty() {
                 None
@@ -531,7 +531,7 @@ fn parse_name_addr(value: &SmolStr) -> Option<NameAddr> {
         })
     } else {
         let (uri_part, param_part) = input.split_once(';').unwrap_or((input, ""));
-        let uri = SipUri::parse(uri_part.trim())?;
+        let uri = Uri::parse(uri_part.trim())?;
         Some(NameAddr {
             display_name: None,
             uri,

@@ -259,8 +259,8 @@ impl Dialog {
         let remote_target =
             extract_contact_uri(&req.headers).or_else(|| Some(remote_uri.clone()))?;
 
-        // Build route set from Record-Route
-        let route_set = build_route_set(&resp.headers);
+        // Build route set from Record-Route (from initial request for UAS)
+        let route_set = build_route_set(&req.headers);
 
         // Parse CSeq from request (this is remote CSeq since they sent it)
         let remote_cseq = parse_cseq_number(&req.headers)?;
@@ -362,40 +362,31 @@ impl Dialog {
     /// # Security Considerations
     ///
     /// - First CSeq must be >= 1 (RFC 3261 requires non-zero initial CSeq)
-    /// - CSeq must not jump by more than 100 (prevents CSeq exhaustion attacks)
-    /// - ACK CSeq is tracked separately to prevent ACK replay attacks
+    /// - ACK CSeq must match the INVITE/re-INVITE CSeq for the dialog
     pub fn update_from_request(&mut self, req: &Request) -> Result<(), DialogError> {
         // Validate and update remote CSeq
-        if let Some(cseq) = parse_cseq_number(&req.headers) {
-            // RFC 3261 requires CSeq >= 1
-            if cseq == 0 {
+        let cseq = parse_cseq_number(&req.headers).ok_or(DialogError::MissingHeader)?;
+
+        // RFC 3261 requires CSeq >= 1
+        if cseq == 0 {
+            return Err(DialogError::InvalidCSeq);
+        }
+
+        if req.start.method.as_str() == "ACK" {
+            // ACK for an INVITE dialog must reuse the INVITE's CSeq.
+            if cseq != self.remote_cseq || self.remote_cseq == 0 {
                 return Err(DialogError::InvalidCSeq);
             }
 
-            if req.start.method == Method::Ack {
-                // ACK special handling: ACKs must have monotonically increasing CSeq
-                // This prevents both replay attacks and old ACK delivery
-                if let Some(last_ack) = self.last_ack_cseq {
-                    if cseq <= last_ack {
-                        return Err(DialogError::InvalidCSeq);
-                    }
-                }
-                self.last_ack_cseq = Some(cseq);
-            } else {
-                // Non-ACK requests must have strictly increasing CSeq
-                if cseq <= self.remote_cseq {
-                    return Err(DialogError::InvalidCSeq);
-                }
-
-                // Prevent CSeq exhaustion: reject unreasonable jumps
-                // Allow up to 100 increment for retransmissions and client restarts
-                const MAX_CSEQ_JUMP: u32 = 100;
-                if self.remote_cseq > 0 && cseq > self.remote_cseq + MAX_CSEQ_JUMP {
-                    return Err(DialogError::InvalidCSeq);
-                }
-
-                self.remote_cseq = cseq;
+            // Allow retransmitted ACKs with identical CSeq.
+            self.last_ack_cseq = Some(cseq);
+        } else {
+            // Non-ACK requests must have strictly increasing CSeq
+            if cseq <= self.remote_cseq {
+                return Err(DialogError::InvalidCSeq);
             }
+
+            self.remote_cseq = cseq;
         }
 
         // Update remote target from Contact
@@ -535,7 +526,7 @@ impl std::error::Error for DialogError {}
 fn extract_tag(value: &SmolStr) -> Option<SmolStr> {
     value.split(';').find_map(|segment| {
         let trimmed = segment.trim();
-        if trimmed.starts_with("tag=") {
+        if trimmed.len() >= 4 && trimmed[..4].eq_ignore_ascii_case("tag=") {
             Some(SmolStr::new(trimmed[4..].to_owned()))
         } else {
             None
@@ -547,6 +538,7 @@ fn extract_tag(value: &SmolStr) -> Option<SmolStr> {
 fn build_route_set(headers: &Headers) -> Vec<SipUri> {
     let mut routes: Vec<SipUri> = headers
         .get_all("Record-Route")
+        .flat_map(|v| split_header_values(v.as_str()))
         .filter_map(|v| parse_uri_from_header(v.as_str()))
         .collect();
 
@@ -593,6 +585,45 @@ fn parse_uri_from_header(raw: &str) -> Option<SipUri> {
         trimmed.split(';').next()?
     };
     SipUri::parse(uri_part.trim())
+}
+
+/// Splits a header value into comma-separated elements, respecting quotes and <>.
+fn split_header_values(raw: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut in_quotes = false;
+    let mut angle_depth = 0usize;
+    let mut start = 0usize;
+
+    for (idx, ch) in raw.char_indices() {
+        match ch {
+            '"' => {
+                in_quotes = !in_quotes;
+            }
+            '<' => {
+                angle_depth = angle_depth.saturating_add(1);
+            }
+            '>' => {
+                if angle_depth > 0 {
+                    angle_depth -= 1;
+                }
+            }
+            ',' if !in_quotes && angle_depth == 0 => {
+                let part = raw[start..idx].trim();
+                if !part.is_empty() {
+                    parts.push(part.to_owned());
+                }
+                start = idx + 1;
+            }
+            _ => {}
+        }
+    }
+
+    let part = raw[start..].trim();
+    if !part.is_empty() {
+        parts.push(part.to_owned());
+    }
+
+    parts
 }
 
 // ============================================================================
@@ -1294,7 +1325,7 @@ mod tests {
     }
 
     #[test]
-    fn cseq_validation_rejects_large_jumps() {
+    fn cseq_validation_allows_large_jumps() {
         let req = make_request(Method::Invite, "call123", "alice-tag", None, 10);
         let resp = make_response(200, &req, "bob-tag");
         let mut dialog = Dialog::new_uas(
@@ -1310,18 +1341,14 @@ mod tests {
         assert!(dialog.update_from_request(&req110).is_ok());
         assert_eq!(dialog.remote_cseq, 110);
 
-        // CSeq=212 (jump of 102, exceeds MAX_CSEQ_JUMP) should fail
+        // CSeq=212 (jump of 102) should succeed
         let req212 = make_request(Method::Bye, "call123", "alice-tag", Some("bob-tag"), 212);
-        assert!(dialog.update_from_request(&req212).is_err());
-
-        // CSeq=210 (jump of 100 exactly) should succeed
-        let req210 = make_request(Method::Bye, "call123", "alice-tag", Some("bob-tag"), 210);
-        assert!(dialog.update_from_request(&req210).is_ok());
-        assert_eq!(dialog.remote_cseq, 210);
+        assert!(dialog.update_from_request(&req212).is_ok());
+        assert_eq!(dialog.remote_cseq, 212);
     }
 
     #[test]
-    fn cseq_validation_prevents_ack_replay() {
+    fn cseq_validation_allows_ack_retransmission() {
         let req = make_request(Method::Invite, "call123", "alice-tag", None, 10);
         let resp = make_response(200, &req, "bob-tag");
         let mut dialog = Dialog::new_uas(
@@ -1337,9 +1364,9 @@ mod tests {
         assert!(dialog.update_from_request(&ack1).is_ok());
         assert_eq!(dialog.last_ack_cseq, Some(10));
 
-        // Replayed ACK with same CSeq=10 should fail
+        // Replayed ACK with same CSeq=10 should succeed
         let ack1_replay = make_request(Method::Ack, "call123", "alice-tag", Some("bob-tag"), 10);
-        assert!(dialog.update_from_request(&ack1_replay).is_err());
+        assert!(dialog.update_from_request(&ack1_replay).is_ok());
 
         // New re-INVITE with higher CSeq
         let reinvite = make_request(Method::Invite, "call123", "alice-tag", Some("bob-tag"), 11);
