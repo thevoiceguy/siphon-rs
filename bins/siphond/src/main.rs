@@ -157,7 +157,9 @@ async fn main() -> Result<()> {
         .init();
 
     // Set up observability
-    set_transport_metrics(Arc::new(TracingTransportMetrics::default()));
+    if !set_transport_metrics(Arc::new(TracingTransportMetrics::default())) {
+        tracing::warn!("transport metrics already configured");
+    }
 
     let args = Args::parse();
 
