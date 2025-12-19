@@ -29,7 +29,7 @@ use std::fmt;
 use smol_str::SmolStr;
 
 use crate::name_addr::NameAddr;
-use crate::SipUri;
+use crate::{SipUri, Uri};
 
 /// The Referred-By header (RFC 3892).
 ///
@@ -98,7 +98,7 @@ impl ReferredByHeader {
         Self {
             name_addr: NameAddr {
                 display_name: None,
-                uri: parsed_uri,
+                uri: Uri::from(parsed_uri),
                 params: BTreeMap::new(),
             },
             cid: None,
@@ -128,7 +128,7 @@ impl ReferredByHeader {
         Self {
             name_addr: NameAddr {
                 display_name: Some(SmolStr::new(display_name)),
-                uri: parsed_uri,
+                uri: Uri::from(parsed_uri),
                 params: BTreeMap::new(),
             },
             cid: None,
@@ -264,7 +264,7 @@ impl ReferredByHeader {
             (None, name_addr_str)
         };
 
-        let uri = SipUri::parse(uri_str)?;
+        let uri = Uri::parse(uri_str)?;
 
         let name_addr = NameAddr {
             display_name,
@@ -317,7 +317,7 @@ impl fmt::Display for ReferredByHeader {
         if let Some(ref display_name) = self.name_addr.display_name {
             write!(f, "\"{}\" ", display_name)?;
         }
-        write!(f, "<{}>", self.name_addr.uri.raw)?;
+        write!(f, "<{}>", self.name_addr.uri.as_str())?;
 
         // Write cid parameter if present
         if let Some(ref cid) = self.cid {
@@ -342,7 +342,7 @@ mod tests {
         let referred_by = ReferredByHeader::new("sip:alice@example.com");
         let expected_uri = SipUri::parse("sip:alice@example.com").unwrap();
 
-        assert_eq!(referred_by.name_addr.uri, expected_uri);
+        assert_eq!(referred_by.name_addr.uri, Uri::Sip(expected_uri));
         assert_eq!(referred_by.name_addr.display_name, None);
         assert!(!referred_by.has_signature());
         assert_eq!(referred_by.cid, None);
@@ -354,7 +354,7 @@ mod tests {
         let expected_uri = SipUri::parse("sip:alice@example.com").unwrap();
 
         assert_eq!(referred_by.name_addr.display_name.as_deref(), Some("Alice"));
-        assert_eq!(referred_by.name_addr.uri, expected_uri);
+        assert_eq!(referred_by.name_addr.uri, Uri::Sip(expected_uri));
     }
 
     #[test]
@@ -426,7 +426,7 @@ mod tests {
         let referred_by = ReferredByHeader::parse(input).unwrap();
         let expected_uri = SipUri::parse("sip:alice@example.com").unwrap();
 
-        assert_eq!(referred_by.name_addr.uri, expected_uri);
+        assert_eq!(referred_by.name_addr.uri, Uri::Sip(expected_uri));
         assert_eq!(referred_by.name_addr.display_name, None);
         assert!(!referred_by.has_signature());
     }
@@ -438,7 +438,7 @@ mod tests {
         let expected_uri = SipUri::parse("sip:alice@example.com").unwrap();
 
         assert_eq!(referred_by.name_addr.display_name.as_deref(), Some("Alice"));
-        assert_eq!(referred_by.name_addr.uri, expected_uri);
+        assert_eq!(referred_by.name_addr.uri, Uri::Sip(expected_uri));
     }
 
     #[test]
@@ -447,7 +447,7 @@ mod tests {
         let referred_by = ReferredByHeader::parse(input).unwrap();
         let expected_uri = SipUri::parse("sip:alice@example.com").unwrap();
 
-        assert_eq!(referred_by.name_addr.uri, expected_uri);
+        assert_eq!(referred_by.name_addr.uri, Uri::Sip(expected_uri));
         assert_eq!(referred_by.get_cid(), Some("sig123@example.com"));
     }
 
@@ -458,7 +458,7 @@ mod tests {
         let expected_uri = SipUri::parse("sip:alice@example.com").unwrap();
 
         assert_eq!(referred_by.name_addr.display_name.as_deref(), Some("Alice"));
-        assert_eq!(referred_by.name_addr.uri, expected_uri);
+        assert_eq!(referred_by.name_addr.uri, Uri::Sip(expected_uri));
         assert_eq!(referred_by.get_cid(), Some("sig123@example.com"));
         assert_eq!(referred_by.get_param("tag"), Some("abc"));
     }

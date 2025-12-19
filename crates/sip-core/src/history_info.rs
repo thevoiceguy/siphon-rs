@@ -2,12 +2,12 @@ use std::collections::BTreeMap;
 
 use smol_str::SmolStr;
 
-use crate::SipUri;
+use crate::Uri;
 
 /// Represents a single History-Info entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryInfoEntry {
-    pub uri: SipUri,
+    pub uri: Uri,
     pub params: BTreeMap<SmolStr, Option<SmolStr>>,
 }
 

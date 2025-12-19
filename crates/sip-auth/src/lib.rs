@@ -26,7 +26,7 @@ pub struct Credentials {
 pub trait Authenticator: Send + Sync {
     fn challenge(&self, request: &Request) -> Result<Response>;
     fn verify(&self, request: &Request, headers: &Headers) -> Result<bool>;
-    fn credentials_for(&self, method: Method, uri: &str) -> Option<Credentials>;
+    fn credentials_for(&self, method: &Method, uri: &str) -> Option<Credentials>;
 }
 
 /// Credential store abstraction for server-side verification.
@@ -228,7 +228,7 @@ impl Nonce {
     pub fn validate_nc_with_request(
         &mut self,
         nc: u32,
-        method: Method,
+        method: &Method,
         uri: &str,
         body: &[u8],
     ) -> bool {
@@ -322,7 +322,7 @@ impl NonceManager {
         &self,
         value: &str,
         nc: u32,
-        method: Method,
+        method: &Method,
         uri: &str,
         body: &[u8],
     ) -> bool {
@@ -549,7 +549,7 @@ impl<S> DigestAuthenticator<S> {
             if !self.nonce_manager.verify_with_nc(
                 nonce,
                 nc_value,
-                request.start.method,
+                &request.start.method,
                 request.start.uri.as_str(),
                 &request.body,
             ) {
@@ -669,7 +669,7 @@ impl<S> DigestAuthenticator<S> {
         Self::hash(&self.algorithm, ha1_input.as_bytes())
     }
 
-    fn compute_ha2(&self, method: Method, uri: &str, body: &[u8]) -> String {
+    fn compute_ha2(&self, method: &Method, uri: &str, body: &[u8]) -> String {
         let ha2_input = match self.qop {
             Qop::Auth => format!("{}:{}", method.as_str(), uri),
             Qop::AuthInt => {
@@ -692,7 +692,7 @@ impl<S> DigestAuthenticator<S> {
         &self,
         username: &str,
         password: &str,
-        method: Method,
+        method: &Method,
         uri: &str,
         nonce: &str,
         nc: Option<&str>,
@@ -772,7 +772,7 @@ impl<S: CredentialStore> Authenticator for DigestAuthenticator<S> {
         let response_calc = self.compute_response(
             params.username.as_str(),
             creds.password.as_str(),
-            request.start.method,
+            &request.start.method,
             params.uri.as_str(),
             params.nonce.as_str(),
             params.nc_raw.as_deref(),
@@ -784,7 +784,7 @@ impl<S: CredentialStore> Authenticator for DigestAuthenticator<S> {
         Ok(constant_time_eq(response_calc.as_bytes(), params.response.as_bytes()))
     }
 
-    fn credentials_for(&self, _method: Method, _uri: &str) -> Option<Credentials> {
+    fn credentials_for(&self, _method: &Method, _uri: &str) -> Option<Credentials> {
         None
     }
 }
@@ -806,7 +806,7 @@ impl<S: AsyncCredentialStore> DigestAuthenticator<S> {
         let response_calc = self.compute_response(
             params.username.as_str(),
             creds.password.as_str(),
-            request.start.method,
+            &request.start.method,
             params.uri.as_str(),
             params.nonce.as_str(),
             params.nc_raw.as_deref(),
@@ -869,7 +869,7 @@ impl DigestClient {
     /// Generates Authorization header value from a 401/407 challenge.
     pub fn generate_authorization(
         &mut self,
-        method: Method,
+        method: &Method,
         uri: &str,
         realm: &str,
         nonce: &str,
@@ -1075,7 +1075,7 @@ mod tests {
         let response = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             uri,
             &nonce.value,
             Some(nc),
@@ -1122,7 +1122,7 @@ mod tests {
         let response = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             uri,
             &nonce.value,
             Some(nc),
@@ -1169,7 +1169,7 @@ mod tests {
         let response = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             uri,
             &nonce.value,
             Some(nc),
@@ -1278,7 +1278,7 @@ mod tests {
         let response = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             auth_uri,
             &nonce.value,
             Some(nc),
@@ -1322,7 +1322,7 @@ mod tests {
         let response = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             uri,
             &nonce.value,
             None,
@@ -1353,7 +1353,7 @@ mod tests {
     fn digest_client_generates_authorization() {
         let mut client = DigestClient::new("alice", "secret");
         let auth = client.generate_authorization(
-            Method::Register,
+            &Method::Register,
             "sip:example.com",
             "example.com",
             "testnonce123",
@@ -1380,7 +1380,7 @@ mod tests {
         let mut client = DigestClient::new("alice", "secret");
 
         let auth1 = client.generate_authorization(
-            Method::Register,
+            &Method::Register,
             "sip:example.com",
             "example.com",
             "nonce1",
@@ -1392,7 +1392,7 @@ mod tests {
         assert!(auth1.contains("nc=00000001"));
 
         let auth2 = client.generate_authorization(
-            Method::Register,
+            &Method::Register,
             "sip:example.com",
             "example.com",
             "nonce1",
@@ -1423,7 +1423,7 @@ mod tests {
         let mut client = DigestClient::new("testuser", "testpass");
         let uri = "sip:bob@example.com";
         let auth_header = client.generate_authorization(
-            Method::Invite,
+            &Method::Invite,
             uri,
             "sip.example.com",
             &nonce.value,
@@ -1467,7 +1467,7 @@ mod tests {
         let response = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             uri,
             &nonce.value,
             Some(nc),
@@ -1513,7 +1513,7 @@ mod tests {
         let response = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             uri,
             &nonce.value,
             Some(nc),
@@ -1533,7 +1533,7 @@ mod tests {
         );
 
         let request = Request::new(
-            RequestLine::new(method, SipUri::parse(uri).unwrap()),
+            RequestLine::new(method.clone(), SipUri::parse(uri).unwrap()),
             headers.clone(),
             Bytes::new(),
         );
@@ -1542,7 +1542,7 @@ mod tests {
 
         // Retransmission with same nc=00000001 should be accepted (legitimate retransmit over UDP)
         let retransmit = Request::new(
-            RequestLine::new(method, SipUri::parse(uri).unwrap()),
+            RequestLine::new(method.clone(), SipUri::parse(uri).unwrap()),
             headers,
             Bytes::new(),
         );
@@ -1574,7 +1574,7 @@ mod tests {
         let response2 = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             uri,
             &nonce.value,
             Some(nc2),
@@ -1593,7 +1593,7 @@ mod tests {
         );
 
         let request2 = Request::new(
-            RequestLine::new(method, SipUri::parse(uri).unwrap()),
+            RequestLine::new(method.clone(), SipUri::parse(uri).unwrap()),
             headers2,
             Bytes::new(),
         );
@@ -1608,7 +1608,7 @@ mod tests {
         let response1 = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             uri,
             &nonce.value,
             Some(nc1),
@@ -1661,7 +1661,7 @@ mod tests {
         let response1 = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             uri1,
             &nonce.value,
             Some(nc),
@@ -1680,7 +1680,7 @@ mod tests {
         );
 
         let request1 = Request::new(
-            RequestLine::new(method, SipUri::parse(uri1).unwrap()),
+            RequestLine::new(method.clone(), SipUri::parse(uri1).unwrap()),
             headers1,
             Bytes::new(),
         );
@@ -1694,7 +1694,7 @@ mod tests {
         let response2 = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             uri2,
             &nonce.value,
             Some(nc),
@@ -1746,7 +1746,7 @@ mod tests {
         let response1 = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             uri,
             &nonce.value,
             Some(nc),
@@ -1765,7 +1765,7 @@ mod tests {
         );
 
         let request1 = Request::new(
-            RequestLine::new(method, SipUri::parse(uri).unwrap()),
+            RequestLine::new(method.clone(), SipUri::parse(uri).unwrap()),
             headers1,
             Bytes::from_static(body1),
         );
@@ -1779,7 +1779,7 @@ mod tests {
         let response2 = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             uri,
             &nonce.value,
             Some(nc),
@@ -1830,7 +1830,7 @@ mod tests {
         let response = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             uri,
             &nonce.value,
             Some(nc),
@@ -1848,7 +1848,7 @@ mod tests {
         let mut headers1 = Headers::new();
         headers1.push(SmolStr::new("Authorization"), auth_header.clone());
         let request1 = Request::new(
-            RequestLine::new(method, SipUri::parse(uri).unwrap()),
+            RequestLine::new(method.clone(), SipUri::parse(uri).unwrap()),
             headers1,
             Bytes::from_static(body1),
         );
@@ -1861,7 +1861,7 @@ mod tests {
         let mut headers2 = Headers::new();
         headers2.push(SmolStr::new("Authorization"), auth_header);
         let request2 = Request::new(
-            RequestLine::new(method, SipUri::parse(uri).unwrap()),
+            RequestLine::new(method.clone(), SipUri::parse(uri).unwrap()),
             headers2,
             Bytes::from_static(body2),
         );
@@ -1890,7 +1890,7 @@ mod tests {
         let response = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             uri,
             &nonce.value,
             Some(nc),
@@ -1937,7 +1937,7 @@ mod tests {
         let response = auth.compute_response(
             creds.username.as_str(),
             creds.password.as_str(),
-            method,
+            &method,
             uri,
             &nonce.value,
             Some(nc),

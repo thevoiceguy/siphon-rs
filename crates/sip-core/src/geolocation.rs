@@ -2,12 +2,12 @@ use std::collections::BTreeMap;
 
 use smol_str::SmolStr;
 
-use crate::SipUri;
+use crate::Uri;
 
 /// Represents a single Geolocation header value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GeolocationValue {
-    pub uri: SipUri,
+    pub uri: Uri,
     pub params: BTreeMap<SmolStr, Option<SmolStr>>,
 }
 

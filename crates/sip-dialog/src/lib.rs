@@ -372,7 +372,7 @@ impl Dialog {
             return Err(DialogError::InvalidCSeq);
         }
 
-        if req.start.method == Method::Ack {
+        if req.start.method.as_str() == "ACK" {
             // ACK for an INVITE dialog must reuse the INVITE's CSeq.
             if cseq != self.remote_cseq || self.remote_cseq == 0 {
                 return Err(DialogError::InvalidCSeq);

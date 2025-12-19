@@ -31,7 +31,7 @@ fn parse_method(s: &str) -> Option<Method> {
 }
 
 /// RAck header components per RFC 3262 §7.2
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RAck {
     /// RSeq number from the provisional response being acknowledged
     pub rseq: u32,

@@ -947,7 +947,8 @@ impl IntegratedUAC {
 
         info!(
             "Started client transaction {} for {:?}",
-            key.branch, request.start.method
+            key.branch,
+            &request.start.method
         );
 
         // Wait for final response or termination
@@ -1021,7 +1022,8 @@ impl IntegratedUAC {
 
         info!(
             "Started authenticated client transaction {} for {:?}",
-            key.branch, auth_request.start.method
+            key.branch,
+            &auth_request.start.method
         );
 
         tokio::select! {

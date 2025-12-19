@@ -1,5 +1,5 @@
 use crate::name_addr::NameAddr;
-use crate::SipUri;
+use crate::{SipUri, Uri};
 use std::fmt;
 
 /// RFC 3327 Path header.
@@ -19,16 +19,16 @@ use std::fmt;
 /// # Examples
 ///
 /// ```
-/// use sip_core::{PathHeader, SipUri};
+/// use sip_core::{PathHeader, SipUri, Uri};
 ///
 /// // Single Path entry
 /// let proxy_uri = SipUri::parse("sip:proxy.example.com;lr").unwrap();
-/// let path = PathHeader::single(proxy_uri);
+/// let path = PathHeader::single(Uri::from(proxy_uri));
 ///
 /// // Multiple Path entries
 /// let proxy1 = SipUri::parse("sip:proxy1.example.com;lr").unwrap();
 /// let proxy2 = SipUri::parse("sip:proxy2.example.com;lr").unwrap();
-/// let path = PathHeader::from_uris(vec![proxy1, proxy2]);
+/// let path = PathHeader::from_uris(vec![Uri::from(proxy1), Uri::from(proxy2)]);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathHeader {
@@ -42,7 +42,7 @@ impl PathHeader {
     }
 
     /// Creates a Path header with a single route.
-    pub fn single(uri: SipUri) -> Self {
+    pub fn single(uri: Uri) -> Self {
         Self {
             routes: vec![NameAddr {
                 display_name: None,
@@ -53,7 +53,7 @@ impl PathHeader {
     }
 
     /// Creates a Path header from a list of URIs.
-    pub fn from_uris(uris: Vec<SipUri>) -> Self {
+    pub fn from_uris(uris: Vec<Uri>) -> Self {
         Self {
             routes: uris
                 .into_iter()
@@ -77,7 +77,7 @@ impl PathHeader {
     }
 
     /// Adds a route to the end of the Path header.
-    pub fn add_route(&mut self, uri: SipUri) {
+    pub fn add_route(&mut self, uri: Uri) {
         self.routes.push(NameAddr {
             display_name: None,
             uri,
@@ -86,7 +86,7 @@ impl PathHeader {
     }
 
     /// Returns an iterator over the route URIs.
-    pub fn uris(&self) -> impl Iterator<Item = &SipUri> {
+    pub fn uris(&self) -> impl Iterator<Item = &Uri> {
         self.routes.iter().map(|r| &r.uri)
     }
 
@@ -95,7 +95,9 @@ impl PathHeader {
     /// Per RFC 3327, Path URIs should typically include the 'lr' parameter
     /// to indicate loose routing support.
     pub fn all_loose_routing(&self) -> bool {
-        self.routes.iter().all(|r| r.uri.params.contains_key("lr"))
+        self.routes
+            .iter()
+            .all(|r| r.uri.as_sip().map(|sip| sip.params.contains_key("lr")).unwrap_or(false))
     }
 }
 
@@ -135,16 +137,16 @@ impl fmt::Display for PathHeader {
 /// # Examples
 ///
 /// ```
-/// use sip_core::{ServiceRouteHeader, SipUri};
+/// use sip_core::{ServiceRouteHeader, SipUri, Uri};
 ///
 /// // Single Service-Route entry
 /// let service_uri = SipUri::parse("sip:service.example.com;lr").unwrap();
-/// let sr = ServiceRouteHeader::single(service_uri);
+/// let sr = ServiceRouteHeader::single(Uri::from(service_uri));
 ///
 /// // Multiple Service-Route entries
 /// let service1 = SipUri::parse("sip:service1.example.com;lr").unwrap();
 /// let service2 = SipUri::parse("sip:service2.example.com;lr").unwrap();
-/// let sr = ServiceRouteHeader::from_uris(vec![service1, service2]);
+/// let sr = ServiceRouteHeader::from_uris(vec![Uri::from(service1), Uri::from(service2)]);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceRouteHeader {
@@ -158,7 +160,7 @@ impl ServiceRouteHeader {
     }
 
     /// Creates a Service-Route header with a single route.
-    pub fn single(uri: SipUri) -> Self {
+    pub fn single(uri: Uri) -> Self {
         Self {
             routes: vec![NameAddr {
                 display_name: None,
@@ -169,7 +171,7 @@ impl ServiceRouteHeader {
     }
 
     /// Creates a Service-Route header from a list of URIs.
-    pub fn from_uris(uris: Vec<SipUri>) -> Self {
+    pub fn from_uris(uris: Vec<Uri>) -> Self {
         Self {
             routes: uris
                 .into_iter()
@@ -193,7 +195,7 @@ impl ServiceRouteHeader {
     }
 
     /// Adds a route to the end of the Service-Route header.
-    pub fn add_route(&mut self, uri: SipUri) {
+    pub fn add_route(&mut self, uri: Uri) {
         self.routes.push(NameAddr {
             display_name: None,
             uri,
@@ -202,13 +204,15 @@ impl ServiceRouteHeader {
     }
 
     /// Returns an iterator over the route URIs.
-    pub fn uris(&self) -> impl Iterator<Item = &SipUri> {
+    pub fn uris(&self) -> impl Iterator<Item = &Uri> {
         self.routes.iter().map(|r| &r.uri)
     }
 
     /// Checks if all routes have the 'lr' (loose routing) parameter.
     pub fn all_loose_routing(&self) -> bool {
-        self.routes.iter().all(|r| r.uri.params.contains_key("lr"))
+        self.routes
+            .iter()
+            .all(|r| r.uri.as_sip().map(|sip| sip.params.contains_key("lr")).unwrap_or(false))
     }
 }
 
@@ -239,7 +243,7 @@ mod tests {
     #[test]
     fn path_header_single() {
         let uri = SipUri::parse("sip:proxy.example.com;lr").unwrap();
-        let path = PathHeader::single(uri);
+        let path = PathHeader::single(Uri::from(uri));
 
         assert_eq!(path.len(), 1);
         assert!(!path.is_empty());
@@ -250,7 +254,7 @@ mod tests {
     fn path_header_from_uris() {
         let uri1 = SipUri::parse("sip:proxy1.example.com;lr").unwrap();
         let uri2 = SipUri::parse("sip:proxy2.example.com;lr").unwrap();
-        let path = PathHeader::from_uris(vec![uri1, uri2]);
+        let path = PathHeader::from_uris(vec![Uri::from(uri1), Uri::from(uri2)]);
 
         assert_eq!(path.len(), 2);
         assert!(!path.is_empty());
@@ -261,10 +265,10 @@ mod tests {
     #[test]
     fn path_header_add_route() {
         let uri1 = SipUri::parse("sip:proxy1.example.com;lr").unwrap();
-        let mut path = PathHeader::single(uri1);
+        let mut path = PathHeader::single(Uri::from(uri1));
 
         let uri2 = SipUri::parse("sip:proxy2.example.com;lr").unwrap();
-        path.add_route(uri2);
+        path.add_route(Uri::from(uri2));
 
         assert_eq!(path.len(), 2);
         assert_eq!(path.routes[1].uri.as_str(), "sip:proxy2.example.com;lr");
@@ -281,7 +285,7 @@ mod tests {
     fn path_header_display() {
         let uri1 = SipUri::parse("sip:proxy1.example.com;lr").unwrap();
         let uri2 = SipUri::parse("sip:proxy2.example.com;lr").unwrap();
-        let path = PathHeader::from_uris(vec![uri1, uri2]);
+        let path = PathHeader::from_uris(vec![Uri::from(uri1), Uri::from(uri2)]);
 
         let display = path.to_string();
         assert!(display.contains("sip:proxy1.example.com"));
@@ -294,13 +298,13 @@ mod tests {
         // All routes have lr
         let uri1 = SipUri::parse("sip:proxy1.example.com;lr").unwrap();
         let uri2 = SipUri::parse("sip:proxy2.example.com;lr").unwrap();
-        let path = PathHeader::from_uris(vec![uri1, uri2]);
+        let path = PathHeader::from_uris(vec![Uri::from(uri1), Uri::from(uri2)]);
         assert!(path.all_loose_routing());
 
         // One route missing lr
         let uri3 = SipUri::parse("sip:proxy1.example.com;lr").unwrap();
         let uri4 = SipUri::parse("sip:proxy2.example.com").unwrap();
-        let path2 = PathHeader::from_uris(vec![uri3, uri4]);
+        let path2 = PathHeader::from_uris(vec![Uri::from(uri3), Uri::from(uri4)]);
         assert!(!path2.all_loose_routing());
     }
 
@@ -308,7 +312,7 @@ mod tests {
     fn path_header_uris_iterator() {
         let uri1 = SipUri::parse("sip:proxy1.example.com;lr").unwrap();
         let uri2 = SipUri::parse("sip:proxy2.example.com;lr").unwrap();
-        let path = PathHeader::from_uris(vec![uri1, uri2]);
+        let path = PathHeader::from_uris(vec![Uri::from(uri1), Uri::from(uri2)]);
 
         let uris: Vec<&str> = path.uris().map(|u| u.as_str()).collect();
         assert_eq!(uris.len(), 2);
@@ -319,7 +323,7 @@ mod tests {
     #[test]
     fn service_route_header_single() {
         let uri = SipUri::parse("sip:service.example.com;lr").unwrap();
-        let sr = ServiceRouteHeader::single(uri);
+        let sr = ServiceRouteHeader::single(Uri::from(uri));
 
         assert_eq!(sr.len(), 1);
         assert!(!sr.is_empty());
@@ -330,7 +334,7 @@ mod tests {
     fn service_route_header_from_uris() {
         let uri1 = SipUri::parse("sip:service1.example.com;lr").unwrap();
         let uri2 = SipUri::parse("sip:service2.example.com;lr").unwrap();
-        let sr = ServiceRouteHeader::from_uris(vec![uri1, uri2]);
+        let sr = ServiceRouteHeader::from_uris(vec![Uri::from(uri1), Uri::from(uri2)]);
 
         assert_eq!(sr.len(), 2);
         assert!(!sr.is_empty());
@@ -341,10 +345,10 @@ mod tests {
     #[test]
     fn service_route_header_add_route() {
         let uri1 = SipUri::parse("sip:service1.example.com;lr").unwrap();
-        let mut sr = ServiceRouteHeader::single(uri1);
+        let mut sr = ServiceRouteHeader::single(Uri::from(uri1));
 
         let uri2 = SipUri::parse("sip:service2.example.com;lr").unwrap();
-        sr.add_route(uri2);
+        sr.add_route(Uri::from(uri2));
 
         assert_eq!(sr.len(), 2);
         assert_eq!(sr.routes[1].uri.as_str(), "sip:service2.example.com;lr");
@@ -361,7 +365,7 @@ mod tests {
     fn service_route_header_display() {
         let uri1 = SipUri::parse("sip:service1.example.com;lr").unwrap();
         let uri2 = SipUri::parse("sip:service2.example.com;lr").unwrap();
-        let sr = ServiceRouteHeader::from_uris(vec![uri1, uri2]);
+        let sr = ServiceRouteHeader::from_uris(vec![Uri::from(uri1), Uri::from(uri2)]);
 
         let display = sr.to_string();
         assert!(display.contains("sip:service1.example.com"));
@@ -374,13 +378,13 @@ mod tests {
         // All routes have lr
         let uri1 = SipUri::parse("sip:service1.example.com;lr").unwrap();
         let uri2 = SipUri::parse("sip:service2.example.com;lr").unwrap();
-        let sr = ServiceRouteHeader::from_uris(vec![uri1, uri2]);
+        let sr = ServiceRouteHeader::from_uris(vec![Uri::from(uri1), Uri::from(uri2)]);
         assert!(sr.all_loose_routing());
 
         // One route missing lr
         let uri3 = SipUri::parse("sip:service1.example.com;lr").unwrap();
         let uri4 = SipUri::parse("sip:service2.example.com").unwrap();
-        let sr2 = ServiceRouteHeader::from_uris(vec![uri3, uri4]);
+        let sr2 = ServiceRouteHeader::from_uris(vec![Uri::from(uri3), Uri::from(uri4)]);
         assert!(!sr2.all_loose_routing());
     }
 
@@ -388,7 +392,7 @@ mod tests {
     fn service_route_header_uris_iterator() {
         let uri1 = SipUri::parse("sip:service1.example.com;lr").unwrap();
         let uri2 = SipUri::parse("sip:service2.example.com;lr").unwrap();
-        let sr = ServiceRouteHeader::from_uris(vec![uri1, uri2]);
+        let sr = ServiceRouteHeader::from_uris(vec![Uri::from(uri1), Uri::from(uri2)]);
 
         let uris: Vec<&str> = sr.uris().map(|u| u.as_str()).collect();
         assert_eq!(uris.len(), 2);
@@ -399,7 +403,7 @@ mod tests {
     #[test]
     fn path_header_display_with_params() {
         let uri = SipUri::parse("sip:proxy.example.com").unwrap();
-        let mut path = PathHeader::single(uri);
+        let mut path = PathHeader::single(Uri::from(uri));
 
         // Manually add lr param to the NameAddr
         path.routes[0].params.insert(SmolStr::new("lr"), None);

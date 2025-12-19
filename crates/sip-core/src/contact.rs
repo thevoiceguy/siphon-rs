@@ -10,7 +10,7 @@ pub struct ContactHeader(pub NameAddr);
 
 impl ContactHeader {
     /// Returns the contact URI.
-    pub fn uri(&self) -> &crate::SipUri {
+    pub fn uri(&self) -> &crate::Uri {
         self.0.uri()
     }
 
@@ -32,7 +32,7 @@ impl ContactHeader {
     /// # Examples
     ///
     /// ```
-    /// use sip_core::{ContactHeader, NameAddr, SipUri, FeatureTag};
+    /// use sip_core::{ContactHeader, NameAddr, SipUri, Uri, FeatureTag};
     /// use std::collections::BTreeMap;
     /// use smol_str::SmolStr;
     ///
@@ -42,7 +42,7 @@ impl ContactHeader {
     ///
     /// let name_addr = NameAddr {
     ///     display_name: None,
-    ///     uri: SipUri::parse("sip:alice@example.com").unwrap(),
+    ///     uri: Uri::from(SipUri::parse("sip:alice@example.com").unwrap()),
     ///     params,
     /// };
     ///

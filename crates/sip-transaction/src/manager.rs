@@ -494,7 +494,7 @@ impl TransactionManager {
         let branch = request_branch_id(&request).unwrap_or_else(|| crate::generate_branch_id());
         let key = TransactionKey {
             branch,
-            method: request.start.method,
+            method: request.start.method.clone(),
             is_server: true,
         };
 
@@ -512,7 +512,7 @@ impl TransactionManager {
         }
 
         // If a CANCEL arrives, notify the matching INVITE transaction (if any).
-        if request.start.method == Method::Cancel {
+        if request.start.method.as_str() == "CANCEL" {
             let invite_key = TransactionKey {
                 branch: key.branch.clone(),
                 method: Method::Invite,
@@ -531,7 +531,7 @@ impl TransactionManager {
         let transport = transport_kind_to_transport(ctx.transport);
         let timers = TransportAwareTimers::with_defaults(transport, self.inner.timer_defaults);
 
-        let method = request.start.method;
+        let method = request.start.method.clone();
         let transport_type = TransportType::from(transport);
         self.inner
             .metrics
@@ -578,9 +578,10 @@ impl TransactionManager {
     ) -> Result<TransactionKey> {
         let branch = request_branch_id(&request)
             .ok_or_else(|| anyhow!("missing Via branch for client transaction"))?;
+        let method = request.start.method.clone();
         let key = TransactionKey {
             branch: branch.clone(),
-            method: request.start.method,
+            method: method.clone(),
             is_server: false,
         };
 
@@ -589,23 +590,20 @@ impl TransactionManager {
         let timers = TransportAwareTimers::with_defaults(transport, self.inner.timer_defaults);
         let transport_type = TransportType::from(transport);
 
-        let (kind, actions) = match (request.start.method, request) {
-            (Method::Invite, request) => {
-                let mut fsm = ClientInviteFsm::new(timers);
-                let actions = fsm.on_event(ClientInviteEvent::SendInvite(request));
-                (
-                    ClientKind::Invite(fsm),
-                    ClientRuntimeActions::Invite(actions),
-                )
-            }
-            (_, request) => {
-                let mut fsm = ClientNonInviteFsm::new(timers);
-                let actions = fsm.on_event(ClientNonInviteEvent::SendRequest(request));
-                (
-                    ClientKind::NonInvite(fsm),
-                    ClientRuntimeActions::NonInvite(actions),
-                )
-            }
+        let (kind, actions) = if method == Method::Invite {
+            let mut fsm = ClientInviteFsm::new(timers);
+            let actions = fsm.on_event(ClientInviteEvent::SendInvite(request));
+            (
+                ClientKind::Invite(fsm),
+                ClientRuntimeActions::Invite(actions),
+            )
+        } else {
+            let mut fsm = ClientNonInviteFsm::new(timers);
+            let actions = fsm.on_event(ClientNonInviteEvent::SendRequest(request));
+            (
+                ClientKind::NonInvite(fsm),
+                ClientRuntimeActions::NonInvite(actions),
+            )
         };
 
         let entry = ClientEntry {
@@ -615,7 +613,7 @@ impl TransactionManager {
             timers: HashMap::new(),
             branch: branch.clone(),
             start_time: Instant::now(),
-            method: key.method,
+            method: key.method.clone(),
         };
 
         // Enforce transaction limits (evict oldest if at limit)

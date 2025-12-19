@@ -414,7 +414,7 @@ impl UserAgentClient {
         // Generate authorization
         let uri = original_request.start.uri.as_str();
         let auth_value = digest_client.generate_authorization(
-            original_request.start.method,
+            &original_request.start.method,
             uri,
             realm,
             nonce,
@@ -2318,7 +2318,7 @@ mod tests {
         let registrar_uri = SipUri::parse("sip:example.com").unwrap();
         let request = uac.create_register(&registrar_uri, 3600);
 
-        assert_eq!(request.start.method, Method::Register);
+        assert_eq!(request.start.method.as_str(), Method::Register.as_str());
         assert!(request.headers.get("From").is_some());
         assert!(request.headers.get("To").is_some());
         assert!(request.headers.get("Call-ID").is_some());
@@ -2339,7 +2339,7 @@ mod tests {
         let target_uri = SipUri::parse("sip:bob@example.com").unwrap();
         let request = uac.create_invite(&target_uri, None);
 
-        assert_eq!(request.start.method, Method::Invite);
+        assert_eq!(request.start.method.as_str(), Method::Invite.as_str());
         assert!(request.headers.get("From").is_some());
         assert!(request.headers.get("To").is_some());
         assert!(request.headers.get("Contact").is_some());
@@ -2484,7 +2484,7 @@ mod tests {
         // Create ACK without SDP (early offer - answer was in 200 OK)
         let ack = uac.create_ack(&invite, &response, &dialog, None);
 
-        assert_eq!(ack.start.method, Method::Ack);
+        assert_eq!(ack.start.method.as_str(), Method::Ack.as_str());
         assert_eq!(ack.body.len(), 0);
         assert_eq!(ack.headers.get("Content-Length").unwrap().as_str(), "0");
         assert!(ack.headers.get("Content-Type").is_none());
@@ -2539,7 +2539,7 @@ mod tests {
         let sdp_answer = "v=0\r\no=- 345 678 IN IP4 192.168.1.100\r\n";
         let ack = uac.create_ack(&invite, &response, &dialog, Some(sdp_answer));
 
-        assert_eq!(ack.start.method, Method::Ack);
+        assert_eq!(ack.start.method.as_str(), Method::Ack.as_str());
         assert_eq!(ack.body.len(), sdp_answer.len());
         assert_eq!(
             ack.headers.get("Content-Type").unwrap().as_str(),
@@ -2561,7 +2561,7 @@ mod tests {
         let target_uri = SipUri::parse("sip:bob@example.com").unwrap();
         let request = uac.create_subscribe(&target_uri, "refer", 3600);
 
-        assert_eq!(request.start.method, Method::Subscribe);
+        assert_eq!(request.start.method.as_str(), Method::Subscribe.as_str());
         assert_eq!(request.headers.get("Event").unwrap().as_str(), "refer");
         assert_eq!(request.headers.get("Expires").unwrap().as_str(), "3600");
         assert!(request.headers.get("Contact").is_some());
@@ -2612,7 +2612,7 @@ mod tests {
         let transfer_target = SipUri::parse("sip:charlie@example.com").unwrap();
         let refer = uac.create_refer(&dialog, &transfer_target);
 
-        assert_eq!(refer.start.method, Method::Refer);
+        assert_eq!(refer.start.method.as_str(), Method::Refer.as_str());
         assert!(refer
             .headers
             .get("Refer-To")
@@ -2703,7 +2703,7 @@ mod tests {
         let transfer_target = SipUri::parse("sip:charlie@example.com").unwrap();
         let refer = uac.create_refer_with_replaces(&dialog1, &transfer_target, &dialog2);
 
-        assert_eq!(refer.start.method, Method::Refer);
+        assert_eq!(refer.start.method.as_str(), Method::Refer.as_str());
         let refer_to = refer.headers.get("Refer-To").unwrap();
         assert!(refer_to.contains("charlie@example.com"));
         assert!(refer_to.contains("Replaces="));
@@ -2763,7 +2763,7 @@ mod tests {
         // Create NOTIFY
         let notify = uac.create_notify(&subscription, SubscriptionState::Active, Some("test body"));
 
-        assert_eq!(notify.start.method, Method::Notify);
+        assert_eq!(notify.start.method.as_str(), Method::Notify.as_str());
         assert_eq!(notify.headers.get("Event").unwrap().as_str(), "refer");
         assert_eq!(
             notify.headers.get("Subscription-State").unwrap().as_str(),
@@ -2843,7 +2843,7 @@ mod tests {
             .unwrap();
 
         // Verify PRACK request
-        assert_eq!(prack.start.method, Method::Prack);
+        assert_eq!(prack.start.method.as_str(), Method::Prack.as_str());
         assert_eq!(prack.start.uri.as_str(), "sip:bob@192.168.1.200:5060");
 
         // Verify RAck header: RSeq CSeq-number Method
@@ -2901,7 +2901,7 @@ mod tests {
         let info = uac.create_info(&dialog, "application/dtmf-relay", dtmf_body);
 
         // Verify INFO request
-        assert_eq!(info.start.method, Method::Info);
+        assert_eq!(info.start.method.as_str(), Method::Info.as_str());
         assert_eq!(info.start.uri.as_str(), "sip:bob@192.168.1.200:5060");
 
         // Verify headers
@@ -2968,7 +2968,7 @@ mod tests {
         let info = uac.create_info(&dialog, "application/json", json_body);
 
         // Verify method
-        assert_eq!(info.start.method, Method::Info);
+        assert_eq!(info.start.method.as_str(), Method::Info.as_str());
 
         // Verify Content-Type
         assert_eq!(
@@ -3045,7 +3045,7 @@ mod tests {
         // Verify Privacy header
         let privacy = private_invite.headers.get("Privacy").unwrap();
         assert_eq!(privacy.as_str(), "header; session");
-        assert_eq!(private_invite.start.method, Method::Invite);
+        assert_eq!(private_invite.start.method.as_str(), Method::Invite.as_str());
     }
 
     #[test]
@@ -3063,7 +3063,7 @@ mod tests {
         UserAgentClient::add_privacy_header(&mut register, vec![PrivacyValue::Id]);
 
         // Verify
-        assert_eq!(register.start.method, Method::Register);
+        assert_eq!(register.start.method.as_str(), Method::Register.as_str());
         let privacy = register.headers.get("Privacy").unwrap();
         assert_eq!(privacy.as_str(), "id");
     }
@@ -3151,7 +3151,7 @@ mod tests {
         let bye = uac.create_bye_with_reason(&dialog, reason);
 
         // Verify BYE request
-        assert_eq!(bye.start.method, Method::Bye);
+        assert_eq!(bye.start.method.as_str(), Method::Bye.as_str());
         assert_eq!(bye.start.uri.as_str(), "sip:bob@192.168.1.200:5060");
 
         // Verify Reason header
@@ -3201,7 +3201,7 @@ mod tests {
         let bye = uac.create_bye_with_reason(&dialog, reason);
 
         // Verify method
-        assert_eq!(bye.start.method, Method::Bye);
+        assert_eq!(bye.start.method.as_str(), Method::Bye.as_str());
 
         // Verify Reason header
         let reason_header = bye.headers.get("Reason").unwrap();
@@ -3227,7 +3227,7 @@ mod tests {
         UserAgentClient::add_reason_header(&mut invite, reason);
 
         // Verify
-        assert_eq!(invite.start.method, Method::Invite);
+        assert_eq!(invite.start.method.as_str(), Method::Invite.as_str());
         let reason_header = invite.headers.get("Reason").unwrap();
         assert_eq!(
             reason_header.as_str(),
@@ -3252,7 +3252,7 @@ mod tests {
         UserAgentClient::add_p_preferred_identity_header(&mut invite, ppi);
 
         // Verify
-        assert_eq!(invite.start.method, Method::Invite);
+        assert_eq!(invite.start.method.as_str(), Method::Invite.as_str());
         let ppi_header = invite.headers.get("P-Preferred-Identity").unwrap();
         assert!(ppi_header.as_str().contains("sip:alice.smith@company.com"));
     }
@@ -3273,7 +3273,7 @@ mod tests {
         UserAgentClient::add_p_preferred_identity_header(&mut invite, ppi);
 
         // Verify
-        assert_eq!(invite.start.method, Method::Invite);
+        assert_eq!(invite.start.method.as_str(), Method::Invite.as_str());
         let ppi_header = invite.headers.get("P-Preferred-Identity").unwrap();
         assert!(ppi_header.as_str().contains("tel:+15551234567"));
     }
@@ -3295,7 +3295,7 @@ mod tests {
         let invite = UserAgentClient::with_p_preferred_identity(invite, ppi);
 
         // Verify
-        assert_eq!(invite.start.method, Method::Invite);
+        assert_eq!(invite.start.method.as_str(), Method::Invite.as_str());
         let ppi_header = invite.headers.get("P-Preferred-Identity").unwrap();
         assert!(ppi_header.as_str().contains("sip:alice.smith@company.com"));
     }
@@ -3317,7 +3317,7 @@ mod tests {
         UserAgentClient::add_p_asserted_identity_header(&mut invite, pai);
 
         // Verify
-        assert_eq!(invite.start.method, Method::Invite);
+        assert_eq!(invite.start.method.as_str(), Method::Invite.as_str());
         let pai_header = invite.headers.get("P-Asserted-Identity").unwrap();
         assert!(pai_header.as_str().contains("sip:alice@example.com"));
         assert!(pai_header.as_str().contains("tel:+15551234567"));
@@ -3333,7 +3333,7 @@ mod tests {
         let target_uri = SipUri::parse("sip:bob@example.com").unwrap();
         let request = uac.create_message(&target_uri, "text/plain", "Hello, Bob!");
 
-        assert_eq!(request.start.method, Method::Message);
+        assert_eq!(request.start.method.as_str(), Method::Message.as_str());
         assert_eq!(request.body.len(), 11); // "Hello, Bob!" length
         assert!(request.headers.get("From").is_some());
         assert!(request.headers.get("To").is_some());
@@ -3376,7 +3376,7 @@ mod tests {
         let html_body = "<html><body><h1>Hello</h1></body></html>";
         let request = uac.create_message(&target_uri, "text/html", html_body);
 
-        assert_eq!(request.start.method, Method::Message);
+        assert_eq!(request.start.method.as_str(), Method::Message.as_str());
         assert_eq!(
             request.headers.get("Content-Type").unwrap().as_str(),
             "text/html"
@@ -3409,7 +3409,7 @@ mod tests {
             extra_headers,
         );
 
-        assert_eq!(request.start.method, Method::Message);
+        assert_eq!(request.start.method.as_str(), Method::Message.as_str());
         assert!(request.headers.get("Date").is_some());
         assert_eq!(
             request.headers.get("Date").unwrap().as_str(),
@@ -3804,7 +3804,7 @@ mod tests {
             .create_prack_from_provisional(&provisional, &dialog)
             .expect("should build prack");
 
-        assert_eq!(prack.start.method, Method::Prack);
+        assert_eq!(prack.start.method.as_str(), Method::Prack.as_str());
         assert_eq!(
             prack.headers.get("RAck").map(|v| v.as_str()),
             Some("42 7 INVITE")

@@ -127,6 +127,8 @@ pub enum Uri {
     Sip(SipUri),
     /// Telephone URI (e.g., tel:+1-555-123-4567, tel:5551234;phone-context=example.com)
     Tel(TelUri),
+    /// Absolute URI (e.g., http://example.com/info, https://example.com/loc)
+    Absolute(SmolStr),
 }
 
 impl Uri {
@@ -146,9 +148,10 @@ impl Uri {
         // Try tel URI first (more specific prefix)
         if input.starts_with("tel:") {
             TelUri::parse(input).map(Uri::Tel)
-        } else {
-            // Try SIP/SIPS URI
+        } else if input.starts_with("sip:") || input.starts_with("sips:") {
             SipUri::parse(input).map(Uri::Sip)
+        } else {
+            parse_absolute_uri(input).map(Uri::Absolute)
         }
     }
 
@@ -157,6 +160,7 @@ impl Uri {
         match self {
             Uri::Sip(uri) => uri.as_str(),
             Uri::Tel(uri) => uri.as_str(),
+            Uri::Absolute(uri) => uri.as_str(),
         }
     }
 
@@ -170,11 +174,17 @@ impl Uri {
         matches!(self, Uri::Tel(_))
     }
 
+    /// Returns true if this is an absolute URI (non-sip, non-tel).
+    pub fn is_absolute(&self) -> bool {
+        matches!(self, Uri::Absolute(_))
+    }
+
     /// Returns the inner SipUri if this is a SIP URI, None otherwise.
     pub fn as_sip(&self) -> Option<&SipUri> {
         match self {
             Uri::Sip(uri) => Some(uri),
             Uri::Tel(_) => None,
+            Uri::Absolute(_) => None,
         }
     }
 
@@ -183,6 +193,15 @@ impl Uri {
         match self {
             Uri::Tel(uri) => Some(uri),
             Uri::Sip(_) => None,
+            Uri::Absolute(_) => None,
+        }
+    }
+
+    /// Returns the absolute URI string if present.
+    pub fn as_absolute(&self) -> Option<&str> {
+        match self {
+            Uri::Absolute(uri) => Some(uri.as_str()),
+            _ => None,
         }
     }
 }
@@ -203,6 +222,33 @@ impl From<TelUri> for Uri {
     fn from(uri: TelUri) -> Self {
         Uri::Tel(uri)
     }
+}
+
+fn parse_absolute_uri(input: &str) -> Option<SmolStr> {
+    let trimmed = input.trim();
+    let mut chars = trimmed.chars();
+    let first = chars.next()?;
+    if !first.is_ascii_alphabetic() {
+        return None;
+    }
+    let mut idx = 1;
+    for ch in chars {
+        if ch == ':' {
+            break;
+        }
+        if !(ch.is_ascii_alphanumeric() || ch == '+' || ch == '-' || ch == '.') {
+            return None;
+        }
+        idx += ch.len_utf8();
+    }
+    if !trimmed[idx..].starts_with(':') {
+        return None;
+    }
+    let remainder = &trimmed[idx + 1..];
+    if remainder.is_empty() {
+        return None;
+    }
+    Some(SmolStr::new(trimmed.to_owned()))
 }
 
 /// Splits a host[:port] or IPv6 literal "[host]:port" string.

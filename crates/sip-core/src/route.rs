@@ -1,13 +1,13 @@
 use smol_str::SmolStr;
 
-use crate::{name_addr::NameAddr, SipUri};
+use crate::{name_addr::NameAddr, Uri};
 
 /// Parsed Route/Record-Route header value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RouteHeader(pub NameAddr);
 
 impl RouteHeader {
-    pub fn uri(&self) -> &SipUri {
+    pub fn uri(&self) -> &Uri {
         self.0.uri()
     }
 

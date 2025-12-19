@@ -267,12 +267,13 @@ impl IntegratedUAS {
     ) -> Result<()> {
         info!(
             "Dispatching {:?} request from {}",
-            request.start.method, ctx.peer
+            &request.start.method,
+            ctx.peer
         );
 
         // Route based on method
-        match request.start.method {
-            Method::Invite => {
+        match request.start.method.as_str() {
+            "INVITE" => {
                 let helper = self.helper.lock().await;
                 let dialog = helper.dialog_manager.find_by_request(request);
                 drop(helper);
@@ -287,7 +288,7 @@ impl IntegratedUAS {
                     .on_invite(request, handle, ctx, dialog.as_ref())
                     .await?;
             }
-            Method::Ack => {
+            "ACK" => {
                 // ACK doesn't get a response
                 let helper = self.helper.lock().await;
                 if let Some(dialog) = helper.dialog_manager.find_by_request(request) {
@@ -297,7 +298,7 @@ impl IntegratedUAS {
                     warn!("Received ACK for unknown dialog");
                 }
             }
-            Method::Bye => {
+            "BYE" => {
                 let helper = self.helper.lock().await;
                 if let Some(dialog) = helper.dialog_manager.find_by_request(request) {
                     drop(helper);
@@ -314,22 +315,22 @@ impl IntegratedUAS {
                     handle.send_final(response).await;
                 }
             }
-            Method::Cancel => {
+            "CANCEL" => {
                 self.request_handler.on_cancel(request, handle).await?;
             }
-            Method::Register => {
+            "REGISTER" => {
                 self.request_handler.on_register(request, handle).await?;
             }
-            Method::Options => {
+            "OPTIONS" => {
                 self.request_handler.on_options(request, handle).await?;
             }
-            Method::Subscribe => {
+            "SUBSCRIBE" => {
                 self.request_handler.on_subscribe(request, handle).await?;
             }
-            Method::Notify => {
+            "NOTIFY" => {
                 self.request_handler.on_notify(request, handle).await?;
             }
-            Method::Refer => {
+            "REFER" => {
                 let helper = self.helper.lock().await;
                 if let Some(dialog) = helper.dialog_manager.find_by_request(request) {
                     drop(helper);
@@ -346,7 +347,7 @@ impl IntegratedUAS {
                     handle.send_final(response).await;
                 }
             }
-            Method::Update => {
+            "UPDATE" => {
                 let helper = self.helper.lock().await;
                 if let Some(dialog) = helper.dialog_manager.find_by_request(request) {
                     drop(helper);
@@ -363,7 +364,7 @@ impl IntegratedUAS {
                     handle.send_final(response).await;
                 }
             }
-            Method::Prack => {
+            "PRACK" => {
                 let helper = self.helper.lock().await;
                 if let Some(dialog) = helper.dialog_manager.find_by_request(request) {
                     drop(helper);
@@ -380,7 +381,7 @@ impl IntegratedUAS {
                     handle.send_final(response).await;
                 }
             }
-            Method::Info => {
+            "INFO" => {
                 let helper = self.helper.lock().await;
                 if let Some(dialog) = helper.dialog_manager.find_by_request(request) {
                     drop(helper);
@@ -398,7 +399,7 @@ impl IntegratedUAS {
                 }
             }
             _ => {
-                warn!("Unsupported method: {:?}", request.start.method);
+                warn!("Unsupported method: {:?}", &request.start.method);
                 let response = UserAgentServer::create_response(request, 501, "Not Implemented");
                 handle.send_final(response).await;
             }

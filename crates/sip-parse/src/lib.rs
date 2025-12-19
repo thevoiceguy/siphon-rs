@@ -29,6 +29,11 @@ pub fn parse_request(datagram: &Bytes) -> Option<Request> {
     parse_request_with_limit(datagram, DEFAULT_MAX_MESSAGE_SIZE)
 }
 
+/// Parses a SIP request in strict mode, rejecting invalid or ambiguous framing.
+pub fn parse_request_strict(datagram: &Bytes) -> Option<Request> {
+    parse_request_with_limit_strict(datagram, DEFAULT_MAX_MESSAGE_SIZE)
+}
+
 /// Parses a SIP request with an explicit max size check.
 pub fn parse_request_with_limit(datagram: &Bytes, max_size: usize) -> Option<Request> {
     if datagram.len() > max_size {
@@ -54,7 +59,59 @@ pub fn parse_request_with_limit(datagram: &Bytes, max_size: usize) -> Option<Req
         }
     }
     let body = extract_body(body_bytes, &headers)?;
-    if !cseq_matches(&headers, method)? {
+    if !cseq_matches(&headers, &method)? {
+        return None;
+    }
+
+    Some(Request::new(
+        RequestLine {
+            method,
+            uri,
+            version: SipVersion::V2,
+        },
+        headers,
+        body,
+    ))
+}
+
+/// Parses a SIP request with strict Content-Length handling and explicit size checks.
+pub fn parse_request_with_limit_strict(datagram: &Bytes, max_size: usize) -> Option<Request> {
+    if datagram.len() > max_size {
+        return None;
+    }
+    let (head, body_bytes) = split_head_body(datagram)?;
+    let mut lines = head.split("\r\n");
+    let first = lines.next()?.trim();
+    if first.is_empty() {
+        return None;
+    }
+
+    let (method, uri) = parse_request_line(first)?;
+    let headers = parse_headers(lines)?;
+    if let Some(via) = headers.get("Via") {
+        if let Some(branch) = via
+            .split(';')
+            .find_map(|p| p.trim().strip_prefix("branch="))
+        {
+            if !is_valid_branch(branch.trim()) {
+                return None;
+            }
+        }
+    }
+
+    let declared = match strict_content_length(&headers).ok()? {
+        Some(length) => length,
+        None => {
+            if body_bytes.is_empty() {
+                0
+            } else {
+                return None;
+            }
+        }
+    };
+
+    let body = extract_body_strict(body_bytes, declared)?;
+    if !cseq_matches(&headers, &method)? {
         return None;
     }
 
@@ -84,6 +141,35 @@ pub fn parse_response(datagram: &Bytes) -> Option<Response> {
     let status = parse_status_line(first)?;
     let headers = parse_headers(lines)?;
     let body = extract_body(body_bytes, &headers)?;
+
+    Some(Response::new(status, headers, body))
+}
+
+/// Parses a SIP response in strict mode, rejecting invalid or ambiguous framing.
+pub fn parse_response_strict(datagram: &Bytes) -> Option<Response> {
+    if datagram.len() > DEFAULT_MAX_MESSAGE_SIZE {
+        return None;
+    }
+    let (head, body_bytes) = split_head_body(datagram)?;
+    let mut lines = head.split("\r\n");
+    let first = lines.next()?.trim();
+    if first.is_empty() {
+        return None;
+    }
+
+    let status = parse_status_line(first)?;
+    let headers = parse_headers(lines)?;
+    let declared = match strict_content_length(&headers).ok()? {
+        Some(length) => length,
+        None => {
+            if body_bytes.is_empty() {
+                0
+            } else {
+                return None;
+            }
+        }
+    };
+    let body = extract_body_strict(body_bytes, declared)?;
 
     Some(Response::new(status, headers, body))
 }
@@ -209,25 +295,9 @@ fn parse_status_line(line: &str) -> Option<StatusLine> {
     })
 }
 
-/// Maps an uppercase method token to the [`Method`] enum.
+/// Maps a method token to the [`Method`] enum, including extension methods.
 pub(crate) fn detect_method(token: &str) -> Option<Method> {
-    match token {
-        "OPTIONS" => Some(Method::Options),
-        "INVITE" => Some(Method::Invite),
-        "ACK" => Some(Method::Ack),
-        "BYE" => Some(Method::Bye),
-        "CANCEL" => Some(Method::Cancel),
-        "REGISTER" => Some(Method::Register),
-        "INFO" => Some(Method::Info),
-        "UPDATE" => Some(Method::Update),
-        "MESSAGE" => Some(Method::Message),
-        "PRACK" => Some(Method::Prack),
-        "REFER" => Some(Method::Refer),
-        "SUBSCRIBE" => Some(Method::Subscribe),
-        "NOTIFY" => Some(Method::Notify),
-        "PUBLISH" => Some(Method::Publish),
-        _ => None,
-    }
+    Some(Method::from_token(token))
 }
 
 /// Returns the first header value matching `name` (case insensitive).
@@ -289,14 +359,8 @@ where
             }
             current_name = Some(canonical_header_name(name.trim()));
             current_value = value.trim().to_owned();
-        } else if current_name.is_some() {
-            let value = line.trim();
-            if !value.is_empty() {
-                if !current_value.is_empty() {
-                    current_value.push(' ');
-                }
-                current_value.push_str(value);
-            }
+        } else {
+            return None;
         }
     }
 
@@ -341,6 +405,13 @@ fn extract_body(body_bytes: &[u8], headers: &Headers) -> Option<Bytes> {
     Some(Bytes::copy_from_slice(&body_bytes[..declared]))
 }
 
+fn extract_body_strict(body_bytes: &[u8], declared: usize) -> Option<Bytes> {
+    if declared != body_bytes.len() {
+        return None;
+    }
+    Some(Bytes::copy_from_slice(body_bytes))
+}
+
 /// Maximum allowed Content-Length value (64 MB).
 ///
 /// # Security Rationale
@@ -366,26 +437,43 @@ const MAX_CONTENT_LENGTH: usize = 64 * 1024 * 1024; // 64 MB
 fn content_length(headers: &Headers) -> Option<usize> {
     headers
         .get("Content-Length")
-        .and_then(|value| {
-            let trimmed = value.trim();
+        .and_then(parse_content_length_value)
+}
 
-            // Parse to u64 first to detect overflow on 32-bit systems
-            let value_u64 = trimmed.parse::<u64>().ok()?;
+fn parse_content_length_value(value: &SmolStr) -> Option<usize> {
+    let trimmed = value.trim();
 
-            // Check if value fits in usize (prevents overflow on 32-bit)
-            if value_u64 > usize::MAX as u64 {
-                return None;
+    // Parse to u64 first to detect overflow on 32-bit systems
+    let value_u64 = trimmed.parse::<u64>().ok()?;
+
+    // Check if value fits in usize (prevents overflow on 32-bit)
+    if value_u64 > usize::MAX as u64 {
+        return None;
+    }
+
+    let length = value_u64 as usize;
+
+    // Enforce security limit
+    if length > MAX_CONTENT_LENGTH {
+        return None;
+    }
+
+    Some(length)
+}
+
+fn strict_content_length(headers: &Headers) -> Result<Option<usize>, ()> {
+    let mut length: Option<usize> = None;
+    for value in headers.get_all("Content-Length") {
+        let parsed = parse_content_length_value(value).ok_or(())?;
+        if let Some(existing) = length {
+            if existing != parsed {
+                return Err(());
             }
-
-            let length = value_u64 as usize;
-
-            // Enforce security limit
-            if length > MAX_CONTENT_LENGTH {
-                return None;
-            }
-
-            Some(length)
-        })
+        } else {
+            length = Some(parsed);
+        }
+    }
+    Ok(length)
 }
 
 fn is_token_char(c: char) -> bool {
@@ -414,7 +502,7 @@ fn is_uri_char(c: char) -> bool {
     !c.is_whitespace()
 }
 
-fn cseq_matches(headers: &Headers, method: Method) -> Option<bool> {
+fn cseq_matches(headers: &Headers, method: &Method) -> Option<bool> {
     let cseq = match headers.get("CSeq") {
         Some(v) => v,
         None => return Some(true),
@@ -422,7 +510,7 @@ fn cseq_matches(headers: &Headers, method: Method) -> Option<bool> {
     let mut parts = cseq.split_whitespace();
     let _number = parts.next()?;
     let m = parts.next().unwrap_or("");
-    Some(detect_method(m)? == method)
+    Some(method.as_str().eq_ignore_ascii_case(m))
 }
 
 fn canonical_name(name: &SmolStr) -> SmolStr {
@@ -509,7 +597,7 @@ t=0 0",
     #[test]
     fn parses_basic_request() {
         let req = parse_request(&sample_request_bytes()).expect("parse");
-        assert_eq!(req.start.method, Method::Options);
+        assert_eq!(req.start.method.as_str(), "OPTIONS");
         assert_eq!(req.start.uri.as_str(), "sip:example.com");
         assert_eq!(
             header(&req.headers, "via").unwrap().as_str(),
@@ -559,7 +647,7 @@ t=0 0",
     }
 
     #[test]
-    fn parses_folded_header_lines() {
+    fn parse_request_rejects_folded_header_lines() {
         let raw = Bytes::from_static(
             b"OPTIONS sip:example.com SIP/2.0\r\n\
 Via: SIP/2.0/UDP host;branch=z9hG4bK\r\n\
@@ -569,9 +657,8 @@ Subject: first line\r\n\
 Content-Length: 0\r\n\r\n",
         );
 
-        let req = parse_request(&raw).expect("parse");
-        let subject = header(&req.headers, "Subject").expect("subject");
-        assert_eq!(subject.as_str(), "first line second line max forwards");
+        // Folded headers are now rejected for security/robustness
+        assert!(parse_request(&raw).is_none());
     }
 
     #[test]
@@ -620,6 +707,117 @@ Content-Length: 10\r\n\r\n\
 body",
         );
         assert!(parse_request(&raw).is_none());
+    }
+
+    #[test]
+    fn parse_request_rejects_non_folded_header_lines() {
+        let raw = Bytes::from_static(
+            b"OPTIONS sip:example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP host;branch=z9hG4bK\r\n\
+BadHeader\r\n\
+Content-Length: 0\r\n\r\n",
+        );
+        assert!(parse_request(&raw).is_none());
+    }
+
+    #[test]
+    fn parse_request_strict_rejects_missing_content_length_with_body() {
+        let raw = Bytes::from_static(
+            b"OPTIONS sip:example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP host;branch=z9hG4bK\r\n\
+\r\n\
+body",
+        );
+        assert!(parse_request_strict(&raw).is_none());
+    }
+
+    #[test]
+    fn parse_request_strict_rejects_invalid_content_length() {
+        let raw = Bytes::from_static(
+            b"OPTIONS sip:example.com SIP/2.0\r\n\
+Content-Length: nope\r\n\r\n",
+        );
+        assert!(parse_request_strict(&raw).is_none());
+    }
+
+    #[test]
+    fn parse_request_strict_rejects_mismatched_content_length() {
+        let raw = Bytes::from_static(
+            b"OPTIONS sip:example.com SIP/2.0\r\n\
+Content-Length: 4\r\n\
+Content-Length: 5\r\n\r\n\
+body",
+        );
+        assert!(parse_request_strict(&raw).is_none());
+    }
+
+    #[test]
+    fn parse_request_strict_rejects_extra_body_bytes() {
+        let raw = Bytes::from_static(
+            b"OPTIONS sip:example.com SIP/2.0\r\n\
+Content-Length: 4\r\n\r\n\
+bodyEXTRA",
+        );
+        assert!(parse_request_strict(&raw).is_none());
+    }
+
+    #[test]
+    fn parse_request_strict_accepts_exact_body() {
+        let raw = Bytes::from_static(
+            b"OPTIONS sip:example.com SIP/2.0\r\n\
+Content-Length: 4\r\n\r\n\
+body",
+        );
+        let req = parse_request_strict(&raw).expect("parse strict");
+        assert_eq!(req.body.as_ref(), b"body");
+    }
+
+    #[test]
+    fn parse_request_accepts_extension_method() {
+        let raw = Bytes::from_static(
+            b"FOO sip:example.com SIP/2.0\r\n\
+CSeq: 1 FOO\r\n\
+Content-Length: 0\r\n\r\n",
+        );
+        let req = parse_request(&raw).expect("parse");
+        assert_eq!(req.start.method.as_str(), "FOO");
+    }
+
+    #[test]
+    fn parse_request_rejects_cseq_mismatch_for_extension_method() {
+        let raw = Bytes::from_static(
+            b"FOO sip:example.com SIP/2.0\r\n\
+CSeq: 1 BAR\r\n\
+Content-Length: 0\r\n\r\n",
+        );
+        assert!(parse_request(&raw).is_none());
+    }
+
+    #[test]
+    fn parse_call_info_accepts_absolute_uri() {
+        let call_info = SmolStr::new("<https://example.com/info>".to_owned());
+        let parsed = parse_call_info_header(&call_info).expect("call-info");
+        assert!(parsed.inner().uri.is_absolute());
+        assert_eq!(
+            parsed.inner().uri.as_absolute(),
+            Some("https://example.com/info")
+        );
+    }
+
+    #[test]
+    fn parse_geolocation_accepts_absolute_uri() {
+        let raw = Bytes::from_static(
+            b"OPTIONS sip:example.com SIP/2.0\r\n\
+Geolocation: <https://example.com/loc>;purpose=emergency\r\n\
+Content-Length: 0\r\n\r\n",
+        );
+        let req = parse_request(&raw).expect("parse");
+        let geo = parse_geolocation_header(&req.headers);
+        assert_eq!(geo.values.len(), 1);
+        assert_eq!(
+            geo.values[0].uri.as_absolute(),
+            Some("https://example.com/loc")
+        );
     }
 
     #[test]

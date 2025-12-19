@@ -609,7 +609,13 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
                 return self.build_error_response(request, 400, "Bad Request - Invalid To header");
             }
         };
-        let aor = normalize_aor(to_parsed.inner().uri());
+        let aor = match to_parsed.inner().sip_uri() {
+            Some(uri) => normalize_aor(uri),
+            None => {
+                warn!("REGISTER To header is not a SIP URI");
+                return self.build_error_response(request, 400, "Bad Request - Invalid To URI");
+            }
+        };
 
         let call_id = header(&request.headers, "Call-ID")
             .cloned()
@@ -776,7 +782,13 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
                 return self.build_error_response(request, 400, "Bad Request - Invalid To header");
             }
         };
-        let aor = to_parsed.inner().uri().as_str().to_owned();
+        let aor = match to_parsed.inner().sip_uri() {
+            Some(uri) => uri.as_str().to_owned(),
+            None => {
+                warn!("REGISTER To header is not a SIP URI");
+                return self.build_error_response(request, 400, "Bad Request - Invalid To URI");
+            }
+        };
 
         // Extract Call-ID and CSeq
         let call_id = header(&request.headers, "Call-ID")

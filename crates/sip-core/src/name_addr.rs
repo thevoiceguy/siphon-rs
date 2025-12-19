@@ -2,19 +2,27 @@ use std::collections::BTreeMap;
 
 use smol_str::SmolStr;
 
-use crate::SipUri;
+use crate::{SipUri, TelUri, Uri};
 
 /// Generic SIP name-addr structure used by many headers (From/To/Contact/etc.).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NameAddr {
     pub display_name: Option<SmolStr>,
-    pub uri: SipUri,
+    pub uri: Uri,
     pub params: BTreeMap<SmolStr, Option<SmolStr>>,
 }
 
 impl NameAddr {
-    pub fn uri(&self) -> &SipUri {
+    pub fn uri(&self) -> &Uri {
         &self.uri
+    }
+
+    pub fn sip_uri(&self) -> Option<&SipUri> {
+        self.uri.as_sip()
+    }
+
+    pub fn tel_uri(&self) -> Option<&TelUri> {
+        self.uri.as_tel()
     }
 
     pub fn params(&self) -> impl Iterator<Item = (&SmolStr, &Option<SmolStr>)> {
