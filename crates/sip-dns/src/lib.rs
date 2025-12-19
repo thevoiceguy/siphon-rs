@@ -136,7 +136,7 @@ struct NaptrRecord {
     order: u16,
     preference: u16,
     transport: Transport,
-    replacement: SmolStr,
+    replacement: Option<SmolStr>,
 }
 
 /// Trait for DNS resolution backends.
@@ -208,6 +208,21 @@ impl SipResolver {
         }
     }
 
+    /// Returns the transport parameter from the URI, if present.
+    fn transport_param(uri: &SipUri) -> Option<Transport> {
+        let transport_param = uri.params.get(&SmolStr::new("transport".to_owned()))?;
+        let param = transport_param.as_ref()?;
+        Some(match param.as_str().to_ascii_lowercase().as_str() {
+            "tcp" => Transport::Tcp,
+            "tls" => Transport::Tls,
+            "ws" => Transport::Ws,
+            "wss" => Transport::Wss,
+            "sctp" => Transport::Sctp,
+            "tls-sctp" => Transport::TlsSctp,
+            _ => Transport::Udp,
+        })
+    }
+
     /// Checks if the host is a numeric IP address.
     fn is_numeric_ip(host: &str) -> bool {
         host.parse::<IpAddr>().is_ok()
@@ -237,20 +252,41 @@ impl SipResolver {
         }
 
         // RFC 3263 §4.1: Perform NAPTR lookup
-        let transports = if self.enable_naptr {
-            self.lookup_naptr(uri).await.unwrap_or_else(|_| {
-                // NAPTR failed, use default transport ordering
-                self.default_transport_order(uri)
-            })
+        let transport_override = if uri.sips {
+            Some(Transport::Tls)
         } else {
-            self.default_transport_order(uri)
+            Self::transport_param(uri)
+        };
+        let naptr_records = if self.enable_naptr {
+            self.lookup_naptr(uri, transport_override)
+                .await
+                .ok()
+        } else {
+            None
         };
 
         // RFC 3263 §4.2: Perform SRV lookups for each transport
         let mut all_targets = Vec::new();
-        for transport in transports {
-            if let Ok(targets) = self.lookup_srv(host, transport, uri.sips).await {
-                all_targets.extend(targets);
+        if let Some(records) = naptr_records {
+            for record in records {
+                let lookup_host = record
+                    .replacement
+                    .as_ref()
+                    .map(|replacement| replacement.as_str())
+                    .unwrap_or(host);
+                if let Ok(targets) = self
+                    .lookup_srv(lookup_host, record.transport, uri.sips)
+                    .await
+                {
+                    all_targets.extend(targets);
+                }
+            }
+        } else {
+            let transports = self.default_transport_order(uri);
+            for transport in transports {
+                if let Ok(targets) = self.lookup_srv(host, transport, uri.sips).await {
+                    all_targets.extend(targets);
+                }
             }
         }
 
@@ -301,7 +337,11 @@ impl SipResolver {
     }
 
     /// Performs NAPTR lookup per RFC 3263 §4.1.
-    async fn lookup_naptr(&self, uri: &SipUri) -> Result<Vec<Transport>> {
+    async fn lookup_naptr(
+        &self,
+        uri: &SipUri,
+        allowed_transport: Option<Transport>,
+    ) -> Result<Vec<NaptrRecord>> {
         let host = uri.host.as_str();
         let lookup = self
             .resolver
@@ -336,11 +376,25 @@ impl SipResolver {
                 };
 
                 if let Some(transport) = transport {
+                    if let Some(allowed) = allowed_transport {
+                        if transport != allowed {
+                            continue;
+                        }
+                    }
+                    if replacement == "." {
+                        continue;
+                    }
+                    let replacement = replacement.trim_end_matches('.');
+                    let replacement = if replacement.is_empty() {
+                        None
+                    } else {
+                        Some(SmolStr::new(replacement.to_owned()))
+                    };
                     records.push(NaptrRecord {
                         order: rdata.order(),
                         preference: rdata.preference(),
                         transport,
-                        replacement: SmolStr::new(replacement.trim_end_matches('.').to_owned()),
+                        replacement,
                     });
                 }
             }
@@ -354,7 +408,7 @@ impl SipResolver {
         records.sort();
 
         // Extract transports in priority order
-        Ok(records.into_iter().map(|r| r.transport).collect())
+        Ok(records)
     }
 
     /// Performs SRV lookup per RFC 3263 §4.2.
@@ -374,9 +428,16 @@ impl SipResolver {
         let mut priority_groups: BTreeMap<u16, Vec<(u16, SmolStr, u16)>> = BTreeMap::new();
         for rec in lookup.iter() {
             let target = rec.target().to_utf8();
+            if target == "." {
+                continue;
+            }
+            let target = target.trim_end_matches('.');
+            if target.is_empty() {
+                continue;
+            }
             priority_groups.entry(rec.priority()).or_default().push((
                 rec.weight(),
-                SmolStr::new(target.trim_end_matches('.').to_owned()),
+                SmolStr::new(target.to_owned()),
                 rec.port(),
             ));
         }
@@ -689,11 +750,12 @@ fn parse_dhcp_domain_names(data: &[u8]) -> Result<Vec<DhcpSipServer>> {
 
     while pos < data.len() {
         let mut labels = Vec::new();
+        let mut terminated = false;
 
         // Parse labels until we hit a zero-length label or end of data
         loop {
             if pos >= data.len() {
-                break;
+                return Err(anyhow!("Truncated domain name"));
             }
 
             let len = data[pos] as usize;
@@ -701,7 +763,12 @@ fn parse_dhcp_domain_names(data: &[u8]) -> Result<Vec<DhcpSipServer>> {
 
             if len == 0 {
                 // End of this domain name
+                terminated = true;
                 break;
+            }
+
+            if len > 63 {
+                return Err(anyhow!("Invalid domain name label length"));
             }
 
             if pos + len > data.len() {
@@ -713,7 +780,13 @@ fn parse_dhcp_domain_names(data: &[u8]) -> Result<Vec<DhcpSipServer>> {
             pos += len;
         }
 
-        if !labels.is_empty() {
+        if !terminated {
+            return Err(anyhow!("Truncated domain name"));
+        }
+
+        if labels.is_empty() {
+            return Err(anyhow!("Empty domain name"));
+        } else {
             let domain = labels.join(".");
             servers.push(DhcpSipServer::Domain(SmolStr::new(domain)));
         }
@@ -1093,19 +1166,19 @@ mod tests {
                 order: 10,
                 preference: 20,
                 transport: Transport::Tcp,
-                replacement: SmolStr::new("tcp.example.com".to_owned()),
+                replacement: Some(SmolStr::new("tcp.example.com".to_owned())),
             },
             NaptrRecord {
                 order: 10,
                 preference: 10,
                 transport: Transport::Udp,
-                replacement: SmolStr::new("udp.example.com".to_owned()),
+                replacement: Some(SmolStr::new("udp.example.com".to_owned())),
             },
             NaptrRecord {
                 order: 5,
                 preference: 50,
                 transport: Transport::Tls,
-                replacement: SmolStr::new("tls.example.com".to_owned()),
+                replacement: Some(SmolStr::new("tls.example.com".to_owned())),
             },
         ];
 
@@ -1324,6 +1397,23 @@ mod tests {
     fn parse_dhcp_option_120_domain_invalid_length() {
         // Label length exceeds available data
         let data = vec![0, 10, b'a', b'b', b'c']; // Says 10 bytes but only 3 available
+        let result = parse_dhcp_option_120(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_dhcp_option_120_domain_missing_terminator() {
+        // "example.com" without terminating zero-length label
+        let data = vec![0, 7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm'];
+        let result = parse_dhcp_option_120(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_dhcp_option_120_domain_label_too_long() {
+        let mut data = vec![0, 64];
+        data.extend(std::iter::repeat(b'a').take(64));
+        data.push(0);
         let result = parse_dhcp_option_120(&data);
         assert!(result.is_err());
     }
