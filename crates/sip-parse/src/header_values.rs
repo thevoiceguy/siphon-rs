@@ -478,33 +478,35 @@ fn parse_p_identity(value: &SmolStr) -> Option<sip_core::PIdentity> {
     if input.is_empty() {
         return None;
     }
-    if let Some(start) = input.find('<') {
-        let end_rel = input[start + 1..].find('>')?;
-        let end = start + 1 + end_rel;
-        let display = input[..start].trim();
-        let uri_str = input[start + 1..end].trim();
-        let params = parse_params(input[end + 1..].trim());
+    match find_unquoted_angle_brackets(input) {
+        Ok(Some((start, end))) => {
+            let display = input[..start].trim();
+            let uri_str = input[start + 1..end].trim();
+            let params = parse_params(input[end + 1..].trim());
 
-        // Parse as Uri (supports both SIP and Tel)
-        let uri = Uri::parse(uri_str)?;
+            // Parse as Uri (supports both SIP and Tel)
+            let uri = Uri::parse(uri_str)?;
 
-        Some(PIdentity {
-            display_name: if display.is_empty() {
-                None
-            } else {
-                Some(SmolStr::new(display.trim_matches('"').to_owned()))
-            },
-            uri,
-            params,
-        })
-    } else {
-        let (uri_part, param_part) = input.split_once(';').unwrap_or((input, ""));
-        let uri = Uri::parse(uri_part.trim())?;
-        Some(PIdentity {
-            display_name: None,
-            uri,
-            params: parse_params(param_part),
-        })
+            Some(PIdentity {
+                display_name: if display.is_empty() {
+                    None
+                } else {
+                    Some(SmolStr::new(display.trim_matches('"').to_owned()))
+                },
+                uri,
+                params,
+            })
+        }
+        Ok(None) => {
+            let (uri_part, param_part) = input.split_once(';').unwrap_or((input, ""));
+            let uri = Uri::parse(uri_part.trim())?;
+            Some(PIdentity {
+                display_name: None,
+                uri,
+                params: parse_params(param_part),
+            })
+        }
+        Err(()) => None,
     }
 }
 
@@ -513,30 +515,32 @@ fn parse_name_addr(value: &SmolStr) -> Option<NameAddr> {
     if input.is_empty() {
         return None;
     }
-    if let Some(start) = input.find('<') {
-        let end_rel = input[start + 1..].find('>')?;
-        let end = start + 1 + end_rel;
-        let display = input[..start].trim();
-        let uri = input[start + 1..end].trim();
-        let params = parse_params(input[end + 1..].trim());
-        let uri = Uri::parse(uri)?;
-        Some(NameAddr {
-            display_name: if display.is_empty() {
-                None
-            } else {
-                Some(SmolStr::new(display.trim_matches('"').to_owned()))
-            },
-            uri,
-            params,
-        })
-    } else {
-        let (uri_part, param_part) = input.split_once(';').unwrap_or((input, ""));
-        let uri = Uri::parse(uri_part.trim())?;
-        Some(NameAddr {
-            display_name: None,
-            uri,
-            params: parse_params(param_part),
-        })
+    match find_unquoted_angle_brackets(input) {
+        Ok(Some((start, end))) => {
+            let display = input[..start].trim();
+            let uri = input[start + 1..end].trim();
+            let params = parse_params(input[end + 1..].trim());
+            let uri = Uri::parse(uri)?;
+            Some(NameAddr {
+                display_name: if display.is_empty() {
+                    None
+                } else {
+                    Some(SmolStr::new(display.trim_matches('"').to_owned()))
+                },
+                uri,
+                params,
+            })
+        }
+        Ok(None) => {
+            let (uri_part, param_part) = input.split_once(';').unwrap_or((input, ""));
+            let uri = Uri::parse(uri_part.trim())?;
+            Some(NameAddr {
+                display_name: None,
+                uri,
+                params: parse_params(param_part),
+            })
+        }
+        Err(()) => None,
     }
 }
 
@@ -557,6 +561,60 @@ fn parse_params(input: &str) -> BTreeMap<SmolStr, Option<SmolStr>> {
         }
     }
     params
+}
+
+fn find_unquoted_angle_brackets(input: &str) -> Result<Option<(usize, usize)>, ()> {
+    let mut in_quotes = false;
+    let mut escape_next = false;
+    let mut start: Option<usize> = None;
+    for (idx, ch) in input.char_indices() {
+        if escape_next {
+            escape_next = false;
+            continue;
+        }
+        if in_quotes && ch == '\\' {
+            escape_next = true;
+            continue;
+        }
+        if ch == '"' {
+            in_quotes = !in_quotes;
+            continue;
+        }
+        if in_quotes {
+            continue;
+        }
+        if ch == '<' {
+            start = Some(idx);
+            break;
+        }
+    }
+    let start = match start {
+        Some(value) => value,
+        None => return Ok(None),
+    };
+    in_quotes = false;
+    escape_next = false;
+    for (idx, ch) in input[start + 1..].char_indices() {
+        if escape_next {
+            escape_next = false;
+            continue;
+        }
+        if in_quotes && ch == '\\' {
+            escape_next = true;
+            continue;
+        }
+        if ch == '"' {
+            in_quotes = !in_quotes;
+            continue;
+        }
+        if in_quotes {
+            continue;
+        }
+        if ch == '>' {
+            return Ok(Some((start, start + 1 + idx)));
+        }
+    }
+    Err(())
 }
 
 fn parse_token_list(value: &SmolStr) -> Vec<SmolStr> {
@@ -598,8 +656,18 @@ fn split_quoted_commas(input: &str) -> Vec<String> {
     let mut parts = Vec::new();
     let mut current = String::new();
     let mut in_quotes = false;
+    let mut escape_next = false;
     for ch in input.chars() {
+        if escape_next {
+            current.push(ch);
+            escape_next = false;
+            continue;
+        }
         match ch {
+            '\\' if in_quotes => {
+                current.push(ch);
+                escape_next = true;
+            }
             '"' => {
                 in_quotes = !in_quotes;
                 current.push(ch);

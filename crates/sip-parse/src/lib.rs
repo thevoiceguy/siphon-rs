@@ -189,7 +189,8 @@ pub fn serialize_request(req: &Request) -> Bytes {
 
     let mut has_max_forwards = false;
     for header in req.headers.iter() {
-        if header.name.eq_ignore_ascii_case("Content-Length") {
+        // Skip Content-Length (and compact form "l")
+        if header.name.eq_ignore_ascii_case("Content-Length") || header.name.eq_ignore_ascii_case("l") {
             continue;
         }
         if header.name.eq_ignore_ascii_case("Max-Forwards") {
@@ -228,7 +229,8 @@ pub fn serialize_response(res: &sip_core::Response) -> Bytes {
     );
 
     for header in res.headers.iter() {
-        if header.name.eq_ignore_ascii_case("Content-Length") {
+        // Skip Content-Length (and compact form "l")
+        if header.name.eq_ignore_ascii_case("Content-Length") || header.name.eq_ignore_ascii_case("l") {
             continue;
         }
         let _ = write!(buf, "{}: {}\r\n", header.name, header.value);
@@ -323,14 +325,12 @@ fn split_head_body(datagram: &Bytes) -> Option<(&str, &[u8])> {
     }
 }
 
-/// Parses SIP headers, handling folded continuation lines per RFC 3261 §7.3.1.
+/// Parses SIP headers, rejecting folded continuation lines per RFC 3261 §7.3.1.
 fn parse_headers<'a, I>(lines: I) -> Option<Headers>
 where
     I: IntoIterator<Item = &'a str>,
 {
     let mut headers = Headers::new();
-    let mut current_name: Option<SmolStr> = None;
-    let mut current_value = String::new();
 
     for line in lines {
         if line.is_empty() {
@@ -338,34 +338,17 @@ where
         }
 
         if line.starts_with(' ') || line.starts_with('\t') {
-            let value = line.trim();
-            if value.is_empty() {
-                continue;
-            }
-            if current_name.is_none() {
-                return None;
-            }
-            if !current_value.is_empty() {
-                current_value.push(' ');
-            }
-            current_value.push_str(value);
-            continue;
+            return None;
         }
 
         if let Some((name, value)) = line.split_once(':') {
-            if let Some(prev_name) = current_name.take() {
-                headers.push(prev_name, SmolStr::new(current_value.trim().to_owned()));
-                current_value.clear();
-            }
-            current_name = Some(canonical_header_name(name.trim()));
-            current_value = value.trim().to_owned();
+            headers.push(
+                canonical_header_name(name.trim()),
+                SmolStr::new(value.trim().to_owned()),
+            );
         } else {
             return None;
         }
-    }
-
-    if let Some(name) = current_name.take() {
-        headers.push(name, SmolStr::new(current_value.trim().to_owned()));
     }
 
     Some(headers)
@@ -397,8 +380,47 @@ fn canonical_header_name(name: &str) -> SmolStr {
 }
 
 /// Returns the body truncated to the declared `Content-Length`, or [`None`] if shorter.
+///
+/// Non-strict mode behavior:
+/// - Multiple mismatched Content-Length headers → reject
+/// - Oversized Content-Length (> MAX_CONTENT_LENGTH) → reject (security)
+/// - Invalid/non-numeric Content-Length → ignore, use body_bytes.len()
+/// - Missing Content-Length → use body_bytes.len()
 fn extract_body(body_bytes: &[u8], headers: &Headers) -> Option<Bytes> {
-    let declared = content_length(headers).unwrap_or(body_bytes.len());
+    // Check for multiple mismatched Content-Length headers (reject even in non-strict mode)
+    let values: Vec<_> = headers.get_all("Content-Length").collect();
+
+    let declared = if values.is_empty() {
+        // No Content-Length header
+        body_bytes.len()
+    } else if values.len() == 1 {
+        // Single Content-Length header
+        match parse_content_length_detailed(values[0]) {
+            Ok(len) => len,
+            Err(ContentLengthError::Oversized) => return None, // Reject oversized (security)
+            Err(ContentLengthError::Invalid) => body_bytes.len(), // Ignore invalid, use body length
+        }
+    } else {
+        // Multiple Content-Length headers - validate all valid ones match
+        let mut first_valid: Option<usize> = None;
+        for value in &values {
+            match parse_content_length_detailed(value) {
+                Ok(len) => {
+                    if let Some(existing) = first_valid {
+                        if existing != len {
+                            return None; // Mismatched valid values
+                        }
+                    } else {
+                        first_valid = Some(len);
+                    }
+                }
+                Err(ContentLengthError::Oversized) => return None, // Reject oversized
+                Err(ContentLengthError::Invalid) => continue, // Ignore invalid values
+            }
+        }
+        first_valid.unwrap_or(body_bytes.len())
+    };
+
     if declared > body_bytes.len() {
         return None;
     }
@@ -440,25 +462,36 @@ fn content_length(headers: &Headers) -> Option<usize> {
         .and_then(parse_content_length_value)
 }
 
+enum ContentLengthError {
+    Invalid,   // Non-numeric or malformed
+    Oversized, // Exceeds MAX_CONTENT_LENGTH (security limit)
+}
+
 fn parse_content_length_value(value: &SmolStr) -> Option<usize> {
+    parse_content_length_detailed(value).ok()
+}
+
+fn parse_content_length_detailed(value: &SmolStr) -> Result<usize, ContentLengthError> {
     let trimmed = value.trim();
 
     // Parse to u64 first to detect overflow on 32-bit systems
-    let value_u64 = trimmed.parse::<u64>().ok()?;
+    let value_u64 = trimmed
+        .parse::<u64>()
+        .map_err(|_| ContentLengthError::Invalid)?;
 
     // Check if value fits in usize (prevents overflow on 32-bit)
     if value_u64 > usize::MAX as u64 {
-        return None;
+        return Err(ContentLengthError::Oversized);
     }
 
     let length = value_u64 as usize;
 
     // Enforce security limit
     if length > MAX_CONTENT_LENGTH {
-        return None;
+        return Err(ContentLengthError::Oversized);
     }
 
-    Some(length)
+    Ok(length)
 }
 
 fn strict_content_length(headers: &Headers) -> Result<Option<usize>, ()> {
@@ -967,6 +1000,42 @@ l: 0\r\n\r\n",
     }
 
     #[test]
+    fn name_addr_parses_quoted_display_with_angle_brackets() {
+        let value = SmolStr::new("\"Alice <Admin>\" <sip:alice@example.com>".to_owned());
+        let contact = parse_contact_header(&value).expect("contact");
+        assert_eq!(
+            contact.inner().display_name.as_deref(),
+            Some("Alice <Admin>")
+        );
+        assert_eq!(contact.uri().as_str(), "sip:alice@example.com");
+
+        let mut headers = Headers::new();
+        headers.push(
+            SmolStr::new("P-Asserted-Identity"),
+            SmolStr::new("\"Bob <Ops>\" <sip:bob@example.com>".to_owned()),
+        );
+        let asserted = parse_p_asserted_identity(&headers);
+        assert_eq!(asserted.identities.len(), 1);
+        assert_eq!(
+            asserted.identities[0].display_name.as_deref(),
+            Some("Bob <Ops>")
+        );
+        assert_eq!(asserted.identities[0].uri.as_str(), "sip:bob@example.com");
+    }
+
+    #[test]
+    fn authorization_handles_escaped_quotes_and_commas() {
+        let auth_value =
+            SmolStr::new(r#"Digest realm="a\"b, c", nonce="n""#.to_owned());
+        let auth = parse_authorization_header(&auth_value).expect("auth");
+        assert_eq!(
+            auth.param("realm").map(|v| v.as_str()),
+            Some(r#"a\"b, c"#)
+        );
+        assert_eq!(auth.param("nonce").map(|v| v.as_str()), Some("n"));
+    }
+
+    #[test]
     fn parses_mime_type_and_sdp_payload() {
         let resp = parse_response(&sample_response_bytes()).expect("parse");
         let mime = parse_mime_type(header(&resp.headers, "Content-Type").unwrap()).expect("mime");
@@ -1199,8 +1268,7 @@ Content-Length: 0\r\n\r\n",
     }
 
     #[test]
-    fn extract_body_respects_content_length_limit() {
-        // Test that extract_body handles oversized Content-Length gracefully
+    fn extract_body_rejects_oversized_content_length() {
         let mut headers = Headers::new();
         headers.push(
             SmolStr::new("Content-Length"),
@@ -1208,15 +1276,12 @@ Content-Length: 0\r\n\r\n",
         );
 
         let body_data = b"small body";
-        // content_length() returns None, so extract_body uses body_data.len()
         let result = extract_body(body_data, &headers);
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().len(), body_data.len());
+        assert!(result.is_none());
     }
 
     #[test]
-    fn parse_request_with_oversized_content_length() {
-        // Test full message parsing with oversized Content-Length
+    fn parse_request_rejects_oversized_content_length() {
         let message = Bytes::from_static(
             b"INVITE sip:bob@example.com SIP/2.0\r\n\
 Via: SIP/2.0/UDP pc33.example.com;branch=z9hG4bK776\r\n\
@@ -1225,11 +1290,19 @@ Content-Length: 999999999999999\r\n\
 Small body",
         );
 
-        // Should parse successfully but ignore the invalid Content-Length
         let result = parse_request(&message);
-        assert!(result.is_some());
-        let req = result.unwrap();
-        assert_eq!(req.body.as_ref(), b"Small body");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn parse_request_rejects_mismatched_content_length_even_non_strict() {
+        let raw = Bytes::from_static(
+            b"OPTIONS sip:example.com SIP/2.0\r\n\
+Content-Length: 4\r\n\
+Content-Length: 5\r\n\r\n\
+body",
+        );
+        assert!(parse_request(&raw).is_none());
     }
 
     proptest! {
@@ -1263,6 +1336,9 @@ Small body",
         ) {
             prop_assume!(!name.is_empty());
             prop_assume!(value.trim() == value);
+            // Exclude Content-Length and its compact form "l" (specially handled by serializer)
+            prop_assume!(!name.eq_ignore_ascii_case("Content-Length"));
+            prop_assume!(!name.eq_ignore_ascii_case("l"));
 
             let uri = SipUri::parse("sip:example.com").unwrap();
             let mut headers = Headers::new();
