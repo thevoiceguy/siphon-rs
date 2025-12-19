@@ -1,7 +1,6 @@
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use dashmap::DashMap;
-use md5::Context;
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use async_trait::async_trait;
 use sha2::{Digest, Sha256, Sha512};
@@ -241,14 +240,14 @@ impl Nonce {
             // since the last successful auth, reject as potential replay
             return false;
         }
-        // Compute hash of request (method:uri:body bytes)
-        let mut ctx = Context::new();
-        ctx.consume(method.as_str().as_bytes());
-        ctx.consume(b":");
-        ctx.consume(uri.as_bytes());
-        ctx.consume(b":");
-        ctx.consume(body);
-        let request_hash = format!("{:x}", ctx.compute());
+        // Compute hash of request (method:uri:body bytes).
+        let mut ctx = Sha256::new();
+        ctx.update(method.as_str().as_bytes());
+        ctx.update(b":");
+        ctx.update(uri.as_bytes());
+        ctx.update(b":");
+        ctx.update(body);
+        let request_hash = hex::encode(ctx.finalize());
 
         if nc > self.last_nc {
             // New request with incrementing nc - accept and store
@@ -381,11 +380,11 @@ impl Default for NonceManager {
     }
 }
 
-/// Extract IP address from the top Via header
+/// Extract rate-limiting key from the top Via header.
 ///
-/// Returns the IP address portion from a Via header like:
-/// "SIP/2.0/UDP 192.168.1.100:5060;branch=z9hG4bK..."
-fn extract_ip_from_via(headers: &Headers) -> Option<String> {
+/// Prefer the `received` parameter if present (added by the receiving server),
+/// falling back to the host portion of the Via header.
+fn extract_rate_limit_key(headers: &Headers) -> Option<String> {
     let via = headers.get("Via")?;
 
     // Via format: SIP/2.0/TRANSPORT host[:port];params
@@ -395,17 +394,40 @@ fn extract_ip_from_via(headers: &Headers) -> Option<String> {
         return None;
     }
 
-    // Extract host[:port];params
-    let host_part = parts[1];
+    // Extract host[:port] and params
+    let mut host_part = parts[1];
+    let mut params = "";
+    if let Some((host, params_part)) = host_part.split_once(';') {
+        host_part = host;
+        params = params_part;
+    }
 
-    // Remove port and parameters
-    let host = host_part
-        .split(':')
-        .next()?
-        .split(';')
-        .next()?;
+    if !params.is_empty() {
+        for param in params.split(';') {
+            if let Some(value) = param.strip_prefix("received=") {
+                return Some(extract_via_host(value)?.to_string());
+            }
+        }
+    }
+
+    // Remove port from host part.
+    let host = extract_via_host(host_part)?;
 
     Some(host.to_string())
+}
+
+fn extract_via_host(host_part: &str) -> Option<&str> {
+    if host_part.starts_with('[') {
+        let end = host_part.find(']')?;
+        return Some(&host_part[1..end]);
+    }
+
+    let colon_count = host_part.matches(':').count();
+    if colon_count == 1 {
+        return host_part.split_once(':').map(|(host, _)| host);
+    }
+
+    Some(host_part)
 }
 
 struct DigestParams {
@@ -438,9 +460,9 @@ impl<S> DigestAuthenticator<S> {
         headers: &Headers,
     ) -> Result<Option<DigestParams>> {
         if let Some(ref limiter) = self.rate_limiter {
-            if let Some(ip) = extract_ip_from_via(headers) {
-                if !limiter.check_rate_limit(&ip) {
-                    warn!(ip = %ip, "authentication rate limit exceeded");
+            if let Some(key) = extract_rate_limit_key(headers) {
+                if !limiter.check_rate_limit(&key) {
+                    warn!(key = %key, "authentication rate limit exceeded");
                     return Err(anyhow!("rate limit exceeded"));
                 }
             }
@@ -495,6 +517,11 @@ impl<S> DigestAuthenticator<S> {
             return Ok(None);
         }
 
+        if uri.as_str() != request.start.uri.as_str() {
+            info!(auth_uri = %uri, request_uri = %request.start.uri, "digest uri mismatch");
+            return Ok(None);
+        }
+
         if let Some(client_opaque) = opaque {
             if client_opaque.as_str() != self.opaque.as_str() {
                 info!("digest opaque mismatch");
@@ -502,6 +529,16 @@ impl<S> DigestAuthenticator<S> {
             }
         } else {
             info!("digest missing opaque parameter");
+            return Ok(None);
+        }
+
+        if qop != Some(self.qop) {
+            info!("digest qop missing or mismatch");
+            return Ok(None);
+        }
+
+        if nc.is_none() || cnonce.is_none() {
+            info!("digest missing nc/cnonce with qop");
             return Ok(None);
         }
 
@@ -513,7 +550,7 @@ impl<S> DigestAuthenticator<S> {
                 nonce,
                 nc_value,
                 request.start.method,
-                uri.as_str(),
+                request.start.uri.as_str(),
                 &request.body,
             ) {
                 info!("digest nonce invalid/expired, nc decreasing (replay), or request hash mismatch (different request with same nc)");
@@ -521,11 +558,6 @@ impl<S> DigestAuthenticator<S> {
             }
             Some(nc_value)
         } else {
-            if qop.is_some() {
-                info!("digest missing nc parameter with qop");
-                return Ok(None);
-            }
-
             if !self.nonce_manager.verify(nonce) {
                 info!("digest nonce invalid/expired");
                 return Ok(None);
@@ -749,7 +781,7 @@ impl<S: CredentialStore> Authenticator for DigestAuthenticator<S> {
             request.body.as_ref(),
         );
 
-        Ok(response_calc == params.response.as_str())
+        Ok(constant_time_eq(response_calc.as_bytes(), params.response.as_bytes()))
     }
 
     fn credentials_for(&self, _method: Method, _uri: &str) -> Option<Credentials> {
@@ -783,8 +815,20 @@ impl<S: AsyncCredentialStore> DigestAuthenticator<S> {
             request.body.as_ref(),
         );
 
-        Ok(response_calc == params.response.as_str())
+        Ok(constant_time_eq(response_calc.as_bytes(), params.response.as_bytes()))
     }
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 /// Client-side authentication helper for generating Authorization headers.
@@ -1207,6 +1251,97 @@ mod tests {
                 Method::Invite,
                 SipUri::parse("sip:bob@example.com").unwrap(),
             ),
+            headers,
+            Bytes::new(),
+        );
+
+        assert!(!auth.verify(&request, &request.headers).unwrap());
+    }
+
+    #[test]
+    fn digest_auth_rejects_mismatched_uri() {
+        let creds = Credentials {
+            username: SmolStr::new("alice"),
+            password: SmolStr::new("secret"),
+            realm: SmolStr::new("example.com"),
+        };
+        let store = MemoryCredentialStore::with(vec![creds.clone()]);
+        let auth = DigestAuthenticator::new("example.com", store);
+
+        let nonce = auth.nonce_manager.generate();
+        let method = Method::Invite;
+        let auth_uri = "sip:alice@example.com";
+        let request_uri = "sip:bob@example.com";
+        let nc = "00000001";
+        let cnonce = "abc123";
+
+        let response = auth.compute_response(
+            creds.username.as_str(),
+            creds.password.as_str(),
+            method,
+            auth_uri,
+            &nonce.value,
+            Some(nc),
+            Some(cnonce),
+            Some(Qop::Auth),
+            b"",
+        );
+
+        let mut headers = Headers::new();
+        headers.push(
+            SmolStr::new("Authorization"),
+            SmolStr::new(format!(
+                "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
+                creds.username, creds.realm, nonce.value, auth_uri, response, cnonce, nc, auth.opaque
+            )),
+        );
+
+        let request = Request::new(
+            RequestLine::new(method, SipUri::parse(request_uri).unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        assert!(!auth.verify(&request, &request.headers).unwrap());
+    }
+
+    #[test]
+    fn digest_auth_rejects_missing_qop() {
+        let creds = Credentials {
+            username: SmolStr::new("alice"),
+            password: SmolStr::new("secret"),
+            realm: SmolStr::new("example.com"),
+        };
+        let store = MemoryCredentialStore::with(vec![creds.clone()]);
+        let auth = DigestAuthenticator::new("example.com", store);
+
+        let nonce = auth.nonce_manager.generate();
+        let method = Method::Invite;
+        let uri = "sip:bob@example.com";
+
+        let response = auth.compute_response(
+            creds.username.as_str(),
+            creds.password.as_str(),
+            method,
+            uri,
+            &nonce.value,
+            None,
+            None,
+            None,
+            b"",
+        );
+
+        let mut headers = Headers::new();
+        headers.push(
+            SmolStr::new("Authorization"),
+            SmolStr::new(format!(
+                "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, opaque=\"{}\"",
+                creds.username, creds.realm, nonce.value, uri, response, auth.opaque
+            )),
+        );
+
+        let request = Request::new(
+            RequestLine::new(method, SipUri::parse(uri).unwrap()),
             headers,
             Bytes::new(),
         );
