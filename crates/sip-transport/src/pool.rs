@@ -138,22 +138,26 @@ impl ConnectionPool {
         }
 
         // Create new connection
+        let mut stream = TcpStream::connect(addr).await?;
         let (tx, mut rx) = mpsc::channel::<Bytes>(64);
         self.tcp.insert(addr, PoolEntry::new(tx.clone()));
 
         tokio::spawn(async move {
-            if let Ok(mut stream) = TcpStream::connect(addr).await {
-                while let Some(buf) = rx.recv().await {
-                    if stream.write_all(&buf).await.is_err() {
-                        break;
-                    }
+            while let Some(buf) = rx.recv().await {
+                if stream.write_all(&buf).await.is_err() {
+                    break;
                 }
             }
         });
 
-        tx.send(payload)
+        let result = tx
+            .send(payload)
             .await
-            .map_err(|_| anyhow!("connection writer closed"))
+            .map_err(|_| anyhow!("connection writer closed"));
+        if result.is_err() {
+            self.tcp.remove(&addr);
+        }
+        result
     }
 }
 
@@ -272,30 +276,31 @@ impl TlsPool {
         }
 
         // Create new connection
+        let connector = TlsConnector::from(config.clone());
+        let server_name = ServerName::try_from(server_name)
+            .map_err(|_| anyhow!("invalid TLS server name"))?;
+        let stream = TcpStream::connect(addr).await?;
+        let mut tls_stream = connector.connect(server_name, stream).await?;
+
         let (tx, mut rx) = mpsc::channel::<Bytes>(64);
         self.inner.insert(key.clone(), PoolEntry::new(tx.clone()));
 
-        let connector = TlsConnector::from(config.clone());
         tokio::spawn(async move {
-            let stream = TcpStream::connect(addr).await;
-            let server_name = match ServerName::try_from(server_name.clone()) {
-                Ok(sn) => sn,
-                Err(_) => return,
-            };
-            if let Ok(stream) = stream {
-                if let Ok(mut tls_stream) = connector.connect(server_name, stream).await {
-                    while let Some(buf) = rx.recv().await {
-                        if tls_stream.write_all(&buf).await.is_err() {
-                            break;
-                        }
-                    }
+            while let Some(buf) = rx.recv().await {
+                if tls_stream.write_all(&buf).await.is_err() {
+                    break;
                 }
             }
         });
 
-        tx.send(payload)
+        let result = tx
+            .send(payload)
             .await
-            .map_err(|_| anyhow!("tls connection writer closed"))
+            .map_err(|_| anyhow!("tls connection writer closed"));
+        if result.is_err() {
+            self.inner.remove(&key);
+        }
+        result
     }
 }
 

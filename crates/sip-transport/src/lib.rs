@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use bytes::{Bytes, BytesMut};
+use bytes::{Buf, Bytes, BytesMut};
 use sip_observe::{span_with_transport, transport_metrics};
 pub mod pool;
 use std::net::SocketAddr;
@@ -32,6 +32,9 @@ const MAX_BODY_SIZE: usize = 10 * 1024 * 1024;
 /// Maximum total buffer size before we stop reading from peer (16 MB).
 /// Protects against accumulation of multiple large messages in buffer.
 const MAX_BUFFER_SIZE: usize = 16 * 1024 * 1024;
+
+/// Maximum number of concurrent inbound sessions per listener.
+const MAX_CONCURRENT_SESSIONS: usize = 1024;
 
 /// Indicates which transport carried an inbound or outbound message.
 ///
@@ -255,6 +258,7 @@ pub async fn run_tcp(bind: &str, tx: mpsc::Sender<InboundPacket>) -> Result<()> 
     };
     info!(%bind, "listening (tcp)");
     transport_metrics().on_accept(TransportKind::Tcp.as_str());
+    let limiter = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_SESSIONS));
 
     loop {
         let start = Instant::now();
@@ -271,8 +275,17 @@ pub async fn run_tcp(bind: &str, tx: mpsc::Sender<InboundPacket>) -> Result<()> 
             "accept",
             start.elapsed().as_nanos() as u64,
         );
+        let permit = match limiter.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) => {
+                warn!(%peer, "tcp session limit reached; dropping connection");
+                transport_metrics().on_error(TransportKind::Tcp.as_str(), "session_limit");
+                continue;
+            }
+        };
         let tx = tx.clone();
         tokio::spawn(async move {
+            let _permit = permit;
             let span = span_with_transport("tcp_session", TransportKind::Tcp.as_str());
             let _entered = span.enter();
             spawn_stream_session(
@@ -321,7 +334,17 @@ pub struct TlsConfig {
 #[cfg(feature = "ws")]
 /// Sends bytes over a WebSocket (plaintext).
 pub async fn send_ws(url: &str, data: Bytes) -> Result<()> {
-    let (mut stream, _) = tokio_tungstenite::connect_async(url).await?;
+    use tokio_tungstenite::tungstenite::{
+        client::IntoClientRequest,
+        http::header::HeaderValue,
+    };
+
+    let mut request = url.into_client_request()?;
+    request
+        .headers_mut()
+        .insert("Sec-WebSocket-Protocol", HeaderValue::from_static("sip"));
+    let (mut stream, response) = tokio_tungstenite::connect_async(request).await?;
+    ensure_ws_subprotocol(&response)?;
     transport_metrics().on_connect(TransportKind::Ws.as_str());
     stream
         .send(tokio_tungstenite::tungstenite::Message::Binary(
@@ -335,7 +358,17 @@ pub async fn send_ws(url: &str, data: Bytes) -> Result<()> {
 #[cfg(feature = "ws")]
 /// Sends bytes over a secure WebSocket (WSS).
 pub async fn send_wss(url: &str, data: Bytes) -> Result<()> {
-    let (mut stream, _) = tokio_tungstenite::connect_async(url).await?;
+    use tokio_tungstenite::tungstenite::{
+        client::IntoClientRequest,
+        http::header::HeaderValue,
+    };
+
+    let mut request = url.into_client_request()?;
+    request
+        .headers_mut()
+        .insert("Sec-WebSocket-Protocol", HeaderValue::from_static("sip"));
+    let (mut stream, response) = tokio_tungstenite::connect_async(request).await?;
+    ensure_ws_subprotocol(&response)?;
     transport_metrics().on_connect(TransportKind::Wss.as_str());
     stream
         .send(tokio_tungstenite::tungstenite::Message::Binary(
@@ -356,7 +389,7 @@ async fn handle_ws_connection<S>(
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    // RFC 7118 requires the "sip" subprotocol; honor if offered, accept otherwise for flexibility.
+    // RFC 7118 requires the "sip" subprotocol; reject peers that do not offer it.
     let mut selected_sip = false;
     let ws_stream = accept_hdr_async(
         stream,
@@ -376,14 +409,13 @@ where
                     }
                 }
             }
+            if !selected_sip {
+                return Err(ws_subprotocol_error_response());
+            }
             Ok(resp)
         },
     )
     .await?;
-
-    if !selected_sip {
-        warn!(%peer, "WS connection without Sec-WebSocket-Protocol: sip; accepting for compatibility");
-    }
 
     let (mut sink, mut stream) = ws_stream.split();
     let (writer_tx, mut writer_rx) = mpsc::channel::<Bytes>(64);
@@ -457,6 +489,7 @@ pub async fn run_ws(bind: &str, tx: mpsc::Sender<InboundPacket>) -> Result<()> {
     let listener = TcpListener::bind(bind).await?;
     info!(%bind, "listening (ws)");
     transport_metrics().on_accept(TransportKind::Ws.as_str());
+    let limiter = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_SESSIONS));
     loop {
         let (stream, peer) = match listener.accept().await {
             Ok(pair) => pair,
@@ -466,8 +499,17 @@ pub async fn run_ws(bind: &str, tx: mpsc::Sender<InboundPacket>) -> Result<()> {
             }
         };
 
+        let permit = match limiter.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) => {
+                warn!(%peer, "ws session limit reached; dropping connection");
+                transport_metrics().on_error(TransportKind::Ws.as_str(), "session_limit");
+                continue;
+            }
+        };
         let tx = tx.clone();
         tokio::spawn(async move {
+            let _permit = permit;
             if let Err(e) = handle_ws_connection(peer, stream, TransportKind::Ws, tx).await {
                 warn!(%peer, %e, "ws session ended with error");
             }
@@ -488,6 +530,7 @@ pub async fn run_wss(
     let acceptor = TlsAcceptor::from(config);
     info!(%bind, "listening (wss)");
     transport_metrics().on_accept(TransportKind::Wss.as_str());
+    let limiter = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_SESSIONS));
 
     loop {
         let (stream, peer) = match listener.accept().await {
@@ -497,9 +540,18 @@ pub async fn run_wss(
                 continue;
             }
         };
+        let permit = match limiter.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) => {
+                warn!(%peer, "wss session limit reached; dropping connection");
+                transport_metrics().on_error(TransportKind::Wss.as_str(), "session_limit");
+                continue;
+            }
+        };
         let tx = tx.clone();
         let acceptor = acceptor.clone();
         tokio::spawn(async move {
+            let _permit = permit;
             match acceptor.accept(stream).await {
                 Ok(tls_stream) => {
                     if let Err(e) =
@@ -543,6 +595,7 @@ pub async fn run_tls(
     let acceptor = TlsAcceptor::from(config);
     info!(%bind, "listening (tls)");
     transport_metrics().on_accept(TransportKind::Tls.as_str());
+    let limiter = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_SESSIONS));
 
     loop {
         let (stream, peer) = match listener.accept().await {
@@ -553,9 +606,18 @@ pub async fn run_tls(
                 continue;
             }
         };
+        let permit = match limiter.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) => {
+                warn!(%peer, "tls session limit reached; dropping connection");
+                transport_metrics().on_error(TransportKind::Tls.as_str(), "session_limit");
+                continue;
+            }
+        };
         let tx = tx.clone();
         let acceptor = acceptor.clone();
         tokio::spawn(async move {
+            let _permit = permit;
             let span = span_with_transport("tls_session", TransportKind::Tls.as_str());
             let _entered = span.enter();
             let tls_stream = match acceptor.accept(stream).await {
@@ -754,8 +816,8 @@ fn drain_sip_frames(buf: &mut BytesMut) -> Result<Vec<Bytes>> {
     let mut frames = Vec::new();
     loop {
         // Handle CRLF keep-alive pings (RFC 5626)
-        if buf.len() <= 2 && buf.iter().all(|b| *b == b'\r' || *b == b'\n') {
-            buf.clear();
+        consume_leading_crlf(buf);
+        if buf.is_empty() {
             break;
         }
 
@@ -784,7 +846,7 @@ fn drain_sip_frames(buf: &mut BytesMut) -> Result<Vec<Bytes>> {
         }
 
         let header_bytes = &buf[..head_end];
-        let content_length = parse_content_length(header_bytes);
+        let content_length = parse_content_length(header_bytes)?;
 
         // Check body size limit
         if let Some(cl) = content_length {
@@ -808,16 +870,123 @@ fn drain_sip_frames(buf: &mut BytesMut) -> Result<Vec<Bytes>> {
     Ok(frames)
 }
 
-fn parse_content_length(headers: &[u8]) -> Option<usize> {
-    let text = std::str::from_utf8(headers).ok()?;
-    for line in text.lines() {
-        if let Some((name, value)) = line.split_once(':') {
-            if name.trim().eq_ignore_ascii_case("content-length") {
-                return value.trim().parse().ok();
+fn consume_leading_crlf(buf: &mut BytesMut) {
+    loop {
+        if buf.starts_with(b"\r\n") {
+            buf.advance(2);
+            continue;
+        }
+        if buf.starts_with(b"\n") {
+            buf.advance(1);
+            continue;
+        }
+        if buf.starts_with(b"\r") {
+            buf.advance(1);
+            continue;
+        }
+        break;
+    }
+}
+
+fn parse_content_length(headers: &[u8]) -> Result<Option<usize>> {
+    let mut found: Option<usize> = None;
+    for line in headers.split(|b| *b == b'\n') {
+        let line = if line.ends_with(b"\r") {
+            &line[..line.len().saturating_sub(1)]
+        } else {
+            line
+        };
+        let Some(colon) = memchr::memchr(b':', line) else {
+            continue;
+        };
+        let name = trim_ascii_whitespace(&line[..colon]);
+        if !ascii_eq_ignore_case(name, b"content-length") {
+            continue;
+        }
+        let value = trim_ascii_whitespace(&line[colon + 1..]);
+        let parsed = parse_ascii_usize(value)?;
+        if let Some(existing) = found {
+            if existing != parsed {
+                return Err(anyhow!(
+                    "multiple Content-Length headers with different values"
+                ));
             }
+        } else {
+            found = Some(parsed);
         }
     }
-    None
+    Ok(found)
+}
+
+fn trim_ascii_whitespace(input: &[u8]) -> &[u8] {
+    let mut start = 0;
+    let mut end = input.len();
+    while start < end && input[start].is_ascii_whitespace() {
+        start += 1;
+    }
+    while end > start && input[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+    &input[start..end]
+}
+
+fn ascii_eq_ignore_case(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter()
+        .zip(b.iter())
+        .all(|(x, y)| x.to_ascii_lowercase() == y.to_ascii_lowercase())
+}
+
+fn parse_ascii_usize(value: &[u8]) -> Result<usize> {
+    if value.is_empty() {
+        return Err(anyhow!("Content-Length header value is empty"));
+    }
+    let mut acc: usize = 0;
+    for &b in value {
+        if !b.is_ascii_digit() {
+            return Err(anyhow!("Content-Length contains non-digit characters"));
+        }
+        let digit = (b - b'0') as usize;
+        acc = acc
+            .checked_mul(10)
+            .and_then(|v| v.checked_add(digit))
+            .ok_or_else(|| anyhow!("Content-Length value overflows usize"))?;
+    }
+    Ok(acc)
+}
+
+#[cfg(feature = "ws")]
+fn ensure_ws_subprotocol(
+    response: &tokio_tungstenite::tungstenite::handshake::client::Response,
+) -> Result<()> {
+    match response.headers().get("Sec-WebSocket-Protocol") {
+        Some(value) => {
+            let proto = value
+                .to_str()
+                .map_err(|_| anyhow!("invalid Sec-WebSocket-Protocol header"))?;
+            if proto.eq_ignore_ascii_case("sip") {
+                Ok(())
+            } else {
+                Err(anyhow!(
+                    "server did not accept Sec-WebSocket-Protocol: sip"
+                ))
+            }
+        }
+        None => Err(anyhow!(
+            "server did not negotiate Sec-WebSocket-Protocol: sip"
+        )),
+    }
+}
+
+#[cfg(feature = "ws")]
+fn ws_subprotocol_error_response() -> tungstenite::handshake::server::ErrorResponse {
+    use tokio_tungstenite::tungstenite::http::{Response, StatusCode};
+    Response::builder()
+        .status(StatusCode::BAD_REQUEST)
+        .body(Some("Missing Sec-WebSocket-Protocol: sip".to_string()))
+        .unwrap_or_else(|_| Response::builder().status(StatusCode::BAD_REQUEST).body(None).unwrap())
 }
 
 #[cfg(test)]
@@ -852,6 +1021,16 @@ mod tests {
         let frames = drain_sip_frames(&mut buf).unwrap();
         assert!(frames.is_empty());
         assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn strips_multiple_crlf_keepalives() {
+        let msg = b"\r\n\r\nOPTIONS sip:a SIP/2.0\r\nContent-Length: 0\r\n\r\n";
+        let mut buf = BytesMut::from(&msg[..]);
+        let frames = drain_sip_frames(&mut buf).unwrap();
+        assert_eq!(frames.len(), 1);
+        assert!(buf.is_empty());
+        assert_eq!(frames[0].as_ref(), &msg[4..]);
     }
 
     // Security tests - memory exhaustion protections
@@ -906,6 +1085,38 @@ mod tests {
         assert!(result.is_err(), "should reject oversized Content-Length");
         let err = result.unwrap_err();
         assert!(err.to_string().contains("MAX_BODY_SIZE"));
+    }
+
+    #[test]
+    fn rejects_multiple_content_length_mismatch() {
+        let msg = b"OPTIONS sip:a SIP/2.0\r\nContent-Length: 4\r\nContent-Length: 5\r\n\r\nbody";
+        let mut buf = BytesMut::from(&msg[..]);
+        let result = drain_sip_frames(&mut buf);
+        assert!(result.is_err(), "should reject mismatched Content-Length");
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Content-Length"));
+    }
+
+    #[test]
+    fn accepts_multiple_content_length_same_value() {
+        let msg = b"OPTIONS sip:a SIP/2.0\r\nContent-Length: 4\r\nContent-Length: 4\r\n\r\nbody";
+        let mut buf = BytesMut::from(&msg[..]);
+        let result = drain_sip_frames(&mut buf);
+        assert!(result.is_ok(), "should accept repeated Content-Length");
+        let frames = result.unwrap();
+        assert_eq!(frames.len(), 1);
+    }
+
+    #[test]
+    fn handles_invalid_utf8_headers() {
+        let mut msg = b"OPTIONS sip:a SIP/2.0\r\nX-Bad: ".to_vec();
+        msg.extend_from_slice(&[0xff, 0xfe]);
+        msg.extend_from_slice(b"\r\nContent-Length: 0\r\n\r\n");
+        let mut buf = BytesMut::from(&msg[..]);
+        let result = drain_sip_frames(&mut buf);
+        assert!(result.is_ok(), "should parse Content-Length with invalid UTF-8 elsewhere");
+        let frames = result.unwrap();
+        assert_eq!(frames.len(), 1);
     }
 
     #[test]
