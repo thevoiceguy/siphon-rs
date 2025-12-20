@@ -223,9 +223,10 @@ fn client_invite_provisional_with_rseq() {
 
     fsm.on_event(ClientInviteEvent::SendInvite(invite));
 
-    // Receive reliable provisional (with RSeq)
+    // Receive reliable provisional (with RSeq and Require: 100rel per RFC 3262)
     let mut headers = Headers::new();
     headers.push(SmolStr::new("RSeq"), SmolStr::new("1"));
+    headers.push(SmolStr::new("Require"), SmolStr::new("100rel"));
     let mut resp = sample_response(183);
     resp.headers = headers;
 

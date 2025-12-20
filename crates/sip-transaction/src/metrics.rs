@@ -227,6 +227,10 @@ pub struct MetricsSnapshot {
     pub retransmissions: HashMap<TransportType, u64>,
     pub auth_retries: u64,
     pub via_transport_counts: HashMap<String, u64>,
+    /// Number of server transactions rejected due to limits
+    pub server_transactions_rejected: u64,
+    /// Number of client transactions rejected due to limits
+    pub client_transactions_rejected: u64,
 }
 
 /// Internal metrics storage.
@@ -251,6 +255,8 @@ struct MetricsData {
     retransmissions: HashMap<TransportType, u64>,
     auth_retries: u64,
     via_transport_counts: HashMap<String, u64>,
+    server_transactions_rejected: u64,
+    client_transactions_rejected: u64,
 }
 
 /// Thread-safe transaction metrics collector.
@@ -356,6 +362,26 @@ impl TransactionMetrics {
             .or_insert(0) += 1;
     }
 
+    /// Records a server transaction rejection due to transaction limits.
+    ///
+    /// This metric tracks when incoming requests cannot be processed because
+    /// the server transaction limit has been reached. High rejection rates
+    /// indicate the server is under heavy load and limits should be increased.
+    pub fn record_server_transaction_rejected(&self) {
+        let mut data = self.data.write();
+        data.server_transactions_rejected += 1;
+    }
+
+    /// Records a client transaction rejection due to transaction limits.
+    ///
+    /// This metric tracks when outgoing requests cannot be sent because
+    /// the client transaction limit has been reached. This typically indicates
+    /// the application is generating requests faster than they can complete.
+    pub fn record_client_transaction_rejected(&self) {
+        let mut data = self.data.write();
+        data.client_transactions_rejected += 1;
+    }
+
     /// Gets the current metrics snapshot.
     pub fn snapshot(&self) -> MetricsSnapshot {
         let data = self.data.read();
@@ -406,6 +432,8 @@ impl TransactionMetrics {
             retransmissions: data.retransmissions.clone(),
             auth_retries: data.auth_retries,
             via_transport_counts: data.via_transport_counts.clone(),
+            server_transactions_rejected: data.server_transactions_rejected,
+            client_transactions_rejected: data.client_transactions_rejected,
         }
     }
 

@@ -131,6 +131,140 @@
 //! - **Timer H**: Wait for ACK (64*T1 = 32s for all transports)
 //! - **Timer I**: Wait for ACK retransmissions (0 for TCP/TLS, T4=5s for UDP)
 //!
+//! # State Transition Diagrams
+//!
+//! ## Client Non-INVITE Transaction FSM
+//!
+//! ```text
+//!                    +----------+
+//!                    |          |
+//!          +-------->|  Trying  |
+//!          |         |          |
+//!          |         +----------+
+//!          |              |
+//!          |              | 1xx response
+//!          |              v
+//!          |         +------------+
+//!          | Timer E |            |
+//!          +---------|Proceeding  |
+//!                    |            |
+//!                    +------------+
+//!                         |
+//!                         | 2xx-6xx response
+//!                         v
+//!                    +------------+
+//!                    |            |
+//!                    | Completed  |
+//!                    |            |
+//!                    +------------+
+//!                         |
+//!                         | Timer K
+//!                         v
+//!                    +------------+
+//!                    | Terminated |
+//!                    +------------+
+//! ```
+//!
+//! ## Client INVITE Transaction FSM
+//!
+//! ```text
+//!                    +----------+
+//!                    |          |
+//!          +-------->| Calling  |<------+
+//!          |         |          |       |
+//!          |         +----------+       | Timer A
+//!          |              |             |
+//!          |              | 1xx response|
+//!          |              v             |
+//!          |         +------------+     |
+//!          |         |            |-----+
+//!          |         |Proceeding  |
+//!          |         |            |
+//!          |         +------------+
+//!          |              |
+//!          |              | 3xx-6xx response
+//!          |              v
+//!          |         +------------+
+//!          | Timer B |            |
+//!          +---------|  Completed |
+//!          timeout   |            |
+//!             |      +------------+
+//!             |           |
+//!             |           | Timer D
+//!             |           v
+//!             |      +------------+
+//!             +----->| Terminated |<---+
+//!                    +------------+    |
+//!                         ^            | 2xx response
+//!                         +------------+ (immediate)
+//! ```
+//!
+//! ## Server Non-INVITE Transaction FSM
+//!
+//! ```text
+//!                    +----------+
+//!          request   |          |
+//!        +---------->|  Trying  |
+//!                    |          |
+//!                    +----------+
+//!                         |
+//!                         | send provisional (optional)
+//!                         v
+//!                    +------------+
+//!                    |            |
+//!                    |Proceeding  |
+//!                    |            |
+//!                    +------------+
+//!                         |
+//!                         | send final response
+//!                         v
+//!                    +------------+
+//!                    |            |
+//!                    | Completed  |
+//!                    |            |
+//!                    +------------+
+//!                         |
+//!                         | Timer J
+//!                         v
+//!                    +------------+
+//!                    | Terminated |
+//!                    +------------+
+//! ```
+//!
+//! ## Server INVITE Transaction FSM
+//!
+//! ```text
+//!                    +------------+
+//!          INVITE    |            |
+//!        +---------->|Proceeding  |
+//!                    |            |
+//!                    +------------+
+//!                         |
+//!                         | send 3xx-6xx response
+//!                         v
+//!                    +------------+
+//!                    |            |<------+
+//!                    | Completed  |       | Timer G
+//!                    |            |-------+ (retransmit)
+//!                    +------------+
+//!                         |
+//!                         | receive ACK
+//!                         v
+//!                    +------------+
+//!                    |            |
+//!                    | Confirmed  |
+//!                    |            |
+//!                    +------------+
+//!                         |
+//!                         | Timer I
+//!                         v
+//!                    +------------+
+//!                    | Terminated |<---+
+//!                    +------------+    |
+//!                         ^            | send 2xx response
+//!                         +------------+ (immediate)
+//! ```
+//!
 //! # RFC 3261 Compliance
 //!
 //! These FSMs strictly follow RFC 3261 state machine diagrams:
@@ -269,6 +403,18 @@ pub enum ServerInviteAction {
     },
 }
 
+fn response_requires_prack(response: &Response) -> bool {
+    let has_rseq = response.headers.get("RSeq").is_some();
+    if !has_rseq {
+        return false;
+    }
+    response
+        .headers
+        .get_all("Require")
+        .flat_map(|value| value.split(','))
+        .any(|token| token.trim().eq_ignore_ascii_case("100rel"))
+}
+
 /// Implements RFC 3261 Figure 7 for non-INVITE client transactions.
 ///
 /// # RFC 4320 Compliance
@@ -360,11 +506,14 @@ impl ClientInviteFsm {
 
     fn handle_provisional(&mut self, response: Response) -> Vec<ClientInviteAction> {
         self.state = crate::ClientInviteState::Proceeding;
-        vec![
+        let mut actions = vec![
             ClientInviteAction::Cancel(TransactionTimer::A),
             ClientInviteAction::Deliver(response.clone()),
-            ClientInviteAction::ExpectPrack(response),
-        ]
+        ];
+        if response_requires_prack(&response) {
+            actions.push(ClientInviteAction::ExpectPrack(response));
+        }
+        actions
     }
 
     fn handle_final(
@@ -638,7 +787,7 @@ impl ClientNonInviteFsm {
 pub struct ServerNonInviteFsm {
     pub state: ServerNonInviteState,
     timers: TransportAwareTimers,
-    last_final: Option<Bytes>,
+    last_response: Option<Bytes>,
 }
 
 impl ServerNonInviteFsm {
@@ -647,7 +796,7 @@ impl ServerNonInviteFsm {
         Self {
             state: ServerNonInviteState::Trying,
             timers,
-            last_final: None,
+            last_response: None,
         }
     }
 
@@ -677,8 +826,11 @@ impl ServerNonInviteFsm {
     }
 
     pub fn on_retransmit(&self) -> Vec<ServerAction> {
-        if matches!(self.state, ServerNonInviteState::Completed) {
-            if let Some(bytes) = &self.last_final {
+        if matches!(
+            self.state,
+            ServerNonInviteState::Proceeding | ServerNonInviteState::Completed
+        ) {
+            if let Some(bytes) = &self.last_response {
                 return vec![ServerAction::Transmit {
                     bytes: bytes.clone(),
                     transport: TransportKind::Udp,
@@ -696,6 +848,7 @@ impl ServerNonInviteFsm {
 
     fn handle_provisional(&mut self, response: Response) -> Vec<ServerAction> {
         let bytes = serialize_response(&response);
+        self.last_response = Some(bytes.clone());
         vec![ServerAction::Transmit {
             bytes,
             transport: TransportKind::Udp,
@@ -705,7 +858,7 @@ impl ServerNonInviteFsm {
     fn handle_final(&mut self, response: Response) -> Vec<ServerAction> {
         self.state = ServerNonInviteState::Completed;
         let bytes = serialize_response(&response);
-        self.last_final = Some(bytes.clone());
+        self.last_response = Some(bytes.clone());
         vec![
             ServerAction::Transmit {
                 bytes,
@@ -765,6 +918,7 @@ pub struct ServerInviteFsm {
     pub state: crate::ServerInviteState,
     timers: TransportAwareTimers,
     g_interval: Duration,
+    last_response: Option<Bytes>,
     last_final: Option<Bytes>,
 }
 
@@ -776,6 +930,7 @@ impl ServerInviteFsm {
             state: crate::ServerInviteState::Proceeding,
             timers,
             g_interval: g_initial,
+            last_response: None,
             last_final: None,
         }
     }
@@ -813,30 +968,28 @@ impl ServerInviteFsm {
     }
 
     pub fn on_retransmit(&self) -> Vec<ServerInviteAction> {
-        if let Some(bytes) = &self.last_final {
-            return vec![ServerInviteAction::Transmit {
-                bytes: bytes.clone(),
-                transport: TransportKind::Udp,
-            }];
+        if matches!(
+            self.state,
+            crate::ServerInviteState::Proceeding | crate::ServerInviteState::Completed
+        ) {
+            if let Some(bytes) = &self.last_response {
+                return vec![ServerInviteAction::Transmit {
+                    bytes: bytes.clone(),
+                    transport: TransportKind::Udp,
+                }];
+            }
         }
         Vec::new()
     }
 
     fn handle_cancel(&mut self) -> Vec<ServerInviteAction> {
-        // RFC 3261: TU should generate 487; transaction terminates.
-        self.state = crate::ServerInviteState::Terminated;
-        vec![
-            ServerInviteAction::Cancel(TransactionTimer::G),
-            ServerInviteAction::Cancel(TransactionTimer::H),
-            ServerInviteAction::Cancel(TransactionTimer::I),
-            ServerInviteAction::Terminate {
-                reason: SmolStr::new("CANCEL received"),
-            },
-        ]
+        // RFC 3261: TU should generate 487; transaction remains active until ACK.
+        Vec::new()
     }
 
     fn send_provisional(&mut self, response: Response) -> Vec<ServerInviteAction> {
         let bytes = serialize_response(&response);
+        self.last_response = Some(bytes.clone());
         vec![ServerInviteAction::Transmit {
             bytes,
             transport: TransportKind::Udp,
@@ -846,6 +999,7 @@ impl ServerInviteFsm {
     fn send_final(&mut self, response: Response) -> Vec<ServerInviteAction> {
         let code = response.start.code;
         let bytes = serialize_response(&response);
+        self.last_response = Some(bytes.clone());
         if (200..=299).contains(&code) {
             self.state = crate::ServerInviteState::Terminated;
             vec![
@@ -970,6 +1124,17 @@ mod tests {
         )
     }
 
+    fn reliable_provisional(code: u16) -> Response {
+        let mut response = sample_response(code);
+        response
+            .headers
+            .push(SmolStr::new("Require"), SmolStr::new("100rel"));
+        response
+            .headers
+            .push(SmolStr::new("RSeq"), SmolStr::new("1"));
+        response
+    }
+
     fn sample_invite() -> Request {
         Request::new(
             RequestLine::new(Method::Invite, SipUri::parse("sip:example.com").unwrap()),
@@ -1022,7 +1187,7 @@ mod tests {
             .iter()
             .any(|a| matches!(a, ClientInviteAction::Transmit { .. })));
 
-        let actions = fsm.on_event(ClientInviteEvent::ReceiveProvisional(sample_response(180)));
+        let actions = fsm.on_event(ClientInviteEvent::ReceiveProvisional(reliable_provisional(180)));
         assert!(matches!(fsm.state, crate::ClientInviteState::Proceeding));
         assert!(actions
             .iter()

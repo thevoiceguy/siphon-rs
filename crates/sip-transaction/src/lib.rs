@@ -239,7 +239,7 @@ pub mod storage;
 mod tests {
     use super::*;
     use bytes::Bytes;
-    use sip_core::{Headers, Method, RequestLine, SipUri, SipVersion};
+    use sip_core::{Headers, Method, RequestLine, SipUri};
 
     fn build_request(headers: Vec<(&str, &str)>) -> Request {
         let mut hdrs = Headers::new();

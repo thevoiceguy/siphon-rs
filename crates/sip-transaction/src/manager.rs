@@ -57,6 +57,44 @@ const T4_DEFAULT: Duration = Duration::from_secs(5); // Maximum duration a messa
 /// ## Memory Impact:
 /// Each transaction consumes approximately 1-2 KB of memory. At the default
 /// limit of 10,000 transactions, this is ~10-20 MB of memory.
+///
+/// # Examples
+///
+/// Using preset configurations:
+/// ```
+/// use sip_transaction::TransactionLimits;
+///
+/// // Small server (1-10 concurrent calls)
+/// let small = TransactionLimits::small();
+/// assert_eq!(small.max_server_transactions, 1_000);
+/// assert_eq!(small.max_client_transactions, 1_000);
+///
+/// // Medium server (10-100 concurrent calls) - default
+/// let medium = TransactionLimits::medium();
+/// assert_eq!(medium.max_server_transactions, 10_000);
+///
+/// // Large server (100-1000 concurrent calls)
+/// let large = TransactionLimits::large();
+/// assert_eq!(large.max_server_transactions, 100_000);
+///
+/// // Carrier-grade (1000+ concurrent calls)
+/// let carrier = TransactionLimits::carrier_grade();
+/// assert_eq!(carrier.max_server_transactions, 500_000);
+/// ```
+///
+/// Custom limits:
+/// ```
+/// use sip_transaction::TransactionLimits;
+///
+/// // Different limits for client and server
+/// let custom = TransactionLimits::new(5_000, 2_000);
+/// assert_eq!(custom.max_server_transactions, 5_000);
+/// assert_eq!(custom.max_client_transactions, 2_000);
+///
+/// // Unlimited (testing only - NOT for production)
+/// let unlimited = TransactionLimits::unlimited();
+/// assert_eq!(unlimited.max_server_transactions, usize::MAX);
+/// ```
 #[derive(Debug, Clone, Copy)]
 pub struct TransactionLimits {
     /// Maximum number of server transactions (incoming requests)
@@ -213,7 +251,6 @@ struct ClientEntry {
     ctx: TransportContext,
     tu: Arc<dyn ClientTransactionUser>,
     timers: HashMap<TransactionTimer, oneshot::Sender<()>>,
-    branch: SmolStr,
     start_time: Instant,
     method: Method,
 }
@@ -447,24 +484,7 @@ impl TransactionManager {
         let cseq = headers.get("CSeq")?;
         // CSeq format: "123 INVITE" or "456 CANCEL"
         let method_str = cseq.split_whitespace().nth(1)?;
-        // Parse method string
-        match method_str.to_uppercase().as_str() {
-            "INVITE" => Some(Method::Invite),
-            "ACK" => Some(Method::Ack),
-            "BYE" => Some(Method::Bye),
-            "CANCEL" => Some(Method::Cancel),
-            "REGISTER" => Some(Method::Register),
-            "OPTIONS" => Some(Method::Options),
-            "INFO" => Some(Method::Info),
-            "UPDATE" => Some(Method::Update),
-            "MESSAGE" => Some(Method::Message),
-            "PRACK" => Some(Method::Prack),
-            "REFER" => Some(Method::Refer),
-            "SUBSCRIBE" => Some(Method::Subscribe),
-            "NOTIFY" => Some(Method::Notify),
-            "PUBLISH" => Some(Method::Publish),
-            _ => None,
-        }
+        Some(Method::from_token(method_str))
     }
 
     fn spawn_command_loop(&self, mut rx: mpsc::Receiver<ManagerCommand>) {
@@ -501,6 +521,29 @@ impl TransactionManager {
             method: request.start.method.clone(),
             is_server: true,
         };
+
+        if request.start.method == Method::Ack {
+            let invite_key = TransactionKey {
+                branch: key.branch.clone(),
+                method: Method::Invite,
+                is_server: true,
+            };
+            if let Some(mut entry) = self.inner.server.get_mut(&invite_key) {
+                if let ServerKind::Invite(fsm) = &mut entry.kind {
+                    let actions = fsm.on_event(ServerInviteEvent::ReceiveAck);
+                    drop(entry);
+                    self.apply_server_actions(&invite_key, actions).await;
+                    return ServerTransactionHandle {
+                        manager: self.clone(),
+                        key: invite_key,
+                    };
+                }
+            }
+            return ServerTransactionHandle {
+                manager: self.clone(),
+                key,
+            };
+        }
 
         if let Some(mut entry) = self.inner.server.get_mut(&key) {
             let actions = match &mut entry.kind {
@@ -617,7 +660,6 @@ impl TransactionManager {
             ctx: ctx.clone(),
             tu,
             timers: HashMap::new(),
-            branch: branch.clone(),
             start_time: Instant::now(),
             method: key.method.clone(),
         };
@@ -995,6 +1037,12 @@ impl TransactionManager {
         timer: TransactionTimer,
         duration: Duration,
     ) {
+        if duration.is_zero() {
+            if let Some(mut entry) = self.inner.client.get_mut(&key) {
+                entry.cancel_timer(timer);
+            }
+            return;
+        }
         if let Some(mut entry) = self.inner.client.get_mut(&key) {
             entry.cancel_timer(timer);
             let (cancel_tx, mut cancel_rx) = oneshot::channel();
@@ -1017,6 +1065,12 @@ impl TransactionManager {
     }
 
     fn schedule_timer(&self, key: TransactionKey, timer: TransactionTimer, duration: Duration) {
+        if duration.is_zero() {
+            if let Some(mut entry) = self.inner.server.get_mut(&key) {
+                entry.cancel_timer(timer);
+            }
+            return;
+        }
         if let Some(mut entry) = self.inner.server.get_mut(&key) {
             entry.cancel_timer(timer);
             let (cancel_tx, mut cancel_rx) = oneshot::channel();
@@ -1137,7 +1191,6 @@ mod tests {
         method::Method,
         msg::{RequestLine, StatusLine},
         uri::SipUri,
-        version::SipVersion,
     };
     use smol_str::SmolStr;
     use tokio::sync::Mutex;
@@ -1251,6 +1304,17 @@ mod tests {
         )
     }
 
+    fn build_response_with_branch_reliable(code: u16, branch: &str, method: Method) -> Response {
+        let mut response = build_response_with_branch(code, branch, method);
+        response
+            .headers
+            .push(SmolStr::new("Require"), SmolStr::new("100rel"));
+        response
+            .headers
+            .push(SmolStr::new("RSeq"), SmolStr::new("1"));
+        response
+    }
+
     async fn expect_termination(tu: &Arc<TestClientTu>, needle: &str) {
         for _ in 0..50 {
             {
@@ -1334,7 +1398,11 @@ mod tests {
             .unwrap();
 
         manager
-            .receive_response(build_response_with_branch(183, branch, Method::Invite))
+            .receive_response(build_response_with_branch_reliable(
+                183,
+                branch,
+                Method::Invite,
+            ))
             .await;
         manager
             .receive_response(build_response_with_branch(200, branch, Method::Invite))
