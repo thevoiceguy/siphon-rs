@@ -77,9 +77,10 @@ pub fn normalize_aor(uri: &Uri) -> Result<String, NormalizeError> {
 fn normalize_sip_aor(uri: &SipUri) -> String {
     let scheme = if uri.sips { "sips" } else { "sip" };
 
+    let host = uri.host.as_str().to_ascii_lowercase();
     let host_port = match uri.port {
-        Some(port) => format!("{}:{}", uri.host, port),
-        None => uri.host.to_string(),
+        Some(port) => format!("{}:{}", host, port),
+        None => host.clone(),
     };
 
     let user = uri.user.as_ref().map(|u| {
@@ -541,6 +542,7 @@ pub struct BasicRegistrar<S, A> {
     min_expires: Duration,
     max_expires: Duration,
     rate_limiter: Option<RateLimiter>,
+    rate_limit_key_fn: Option<Arc<dyn Fn(&Request) -> Option<SmolStr> + Send + Sync>>,
 }
 
 impl<S, A> BasicRegistrar<S, A> {
@@ -552,6 +554,7 @@ impl<S, A> BasicRegistrar<S, A> {
             min_expires: Duration::from_secs(60),
             max_expires: Duration::from_secs(86400),
             rate_limiter: None,
+            rate_limit_key_fn: None,
         }
     }
 
@@ -572,7 +575,8 @@ impl<S, A> BasicRegistrar<S, A> {
 
     /// Configure rate limiting for REGISTER requests
     ///
-    /// Rate limiting is applied per IP address to prevent registration flooding.
+    /// Rate limiting is applied based on a caller-provided key function to avoid
+    /// trusting unverified headers for client identity.
     ///
     /// # Example
     ///
@@ -585,11 +589,22 @@ impl<S, A> BasicRegistrar<S, A> {
     /// let auth_store = MemoryCredentialStore::new();
     /// let auth = DigestAuthenticator::new("example.com", auth_store);
     /// let config = RateLimitConfig::register_preset(); // 60 per hour
+    /// let key_fn = std::sync::Arc::new(|_req| Some("192.0.2.10".into()));
     /// let registrar = BasicRegistrar::new(store, Some(auth))
-    ///     .with_rate_limiter(RateLimiter::new(config));
+    ///     .with_rate_limiter_key_fn(RateLimiter::new(config), key_fn);
     /// ```
     pub fn with_rate_limiter(mut self, limiter: RateLimiter) -> Self {
         self.rate_limiter = Some(limiter);
+        self
+    }
+
+    pub fn with_rate_limiter_key_fn(
+        mut self,
+        limiter: RateLimiter,
+        key_fn: Arc<dyn Fn(&Request) -> Option<SmolStr> + Send + Sync>,
+    ) -> Self {
+        self.rate_limiter = Some(limiter);
+        self.rate_limit_key_fn = Some(key_fn);
         self
     }
 
@@ -598,22 +613,25 @@ impl<S, A> BasicRegistrar<S, A> {
         &self.store
     }
 
-    fn parse_expires(&self, request: &Request, contact_value: &str) -> Result<Duration, ExpiresError> {
-        // Check Contact parameter first
-        let contact_expires = contact_value.split(';').find_map(|p| {
-            let trimmed = p.trim();
-            if trimmed.starts_with("expires=") {
-                trimmed[8..].parse::<u64>().ok()
-            } else {
-                None
-            }
-        });
+    fn parse_expires(
+        &self,
+        request: &Request,
+        contact_value: &str,
+    ) -> Result<Duration, ExpiresError> {
+        let contact_expires = match self.contact_param_value(contact_value, "expires") {
+            Ok(Some(value)) => Some(
+                value
+                    .parse::<u64>()
+                    .map_err(|_| ExpiresError::Invalid)?,
+            ),
+            Ok(None) => None,
+            Err(ContactParamError::Invalid) => return Err(ExpiresError::Invalid),
+        };
 
-        // Fall back to Expires header
-        let header_expires = request
-            .headers
-            .get("Expires")
-            .and_then(|v| v.parse::<u64>().ok());
+        let header_expires = match request.headers.get("Expires") {
+            Some(value) => Some(value.parse::<u64>().map_err(|_| ExpiresError::Invalid)?),
+            None => None,
+        };
 
         let seconds = contact_expires
             .or(header_expires)
@@ -635,37 +653,170 @@ impl<S, A> BasicRegistrar<S, A> {
         Ok(Duration::from_secs(seconds))
     }
 
-    fn parse_q_value(&self, contact_value: &str) -> f32 {
-        contact_value
-            .split(';')
-            .find_map(|p| {
-                let trimmed = p.trim();
-                if trimmed.starts_with("q=") {
-                    trimmed[2..].parse::<f32>().ok()
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(1.0)
-            .clamp(0.0, 1.0)
+    fn parse_q_value(&self, contact_value: &str) -> Result<f32, ContactParamError> {
+        let value = match self.contact_param_value(contact_value, "q")? {
+            Some(value) => value
+                .parse::<f32>()
+                .map_err(|_| ContactParamError::Invalid)?,
+            None => return Ok(1.0),
+        };
+        if (0.0..=1.0).contains(&value) {
+            Ok(value)
+        } else {
+            Err(ContactParamError::Invalid)
+        }
     }
 
-    fn extract_contact_uri(&self, contact_header: &str) -> SmolStr {
+    fn extract_contact_uri(&self, contact_header: &str) -> Result<SmolStr, ContactHeaderError> {
         let trimmed = contact_header.trim();
 
         // Handle <uri> format
         if let Some(start) = trimmed.find('<') {
-            if let Some(end) = trimmed[start + 1..].find('>') {
-                return SmolStr::new(trimmed[start + 1..start + 1 + end].to_owned());
+            let end = trimmed[start + 1..]
+                .find('>')
+                .ok_or(ContactHeaderError::Invalid)?;
+            let uri = trimmed[start + 1..start + 1 + end].trim();
+            if uri.is_empty() {
+                return Err(ContactHeaderError::Invalid);
             }
+            return Ok(SmolStr::new(uri.to_owned()));
         }
 
         // Handle uri without brackets (stop at first semicolon)
         if let Some(pos) = trimmed.find(';') {
-            SmolStr::new(trimmed[..pos].trim().to_owned())
+            let uri = trimmed[..pos].trim();
+            if uri.is_empty() {
+                return Err(ContactHeaderError::Invalid);
+            }
+            Ok(SmolStr::new(uri.to_owned()))
+        } else if trimmed.is_empty() {
+            Err(ContactHeaderError::Invalid)
         } else {
-            SmolStr::new(trimmed.to_owned())
+            Ok(SmolStr::new(trimmed.to_owned()))
         }
+    }
+
+    fn contact_param_value<'a>(
+        &self,
+        contact_value: &'a str,
+        name: &str,
+    ) -> Result<Option<&'a str>, ContactParamError> {
+        let trimmed = contact_value.trim();
+        if trimmed == "*" {
+            return Ok(None);
+        }
+
+        let params_section = if let Some(start) = trimmed.find('<') {
+            let end = trimmed[start + 1..]
+                .find('>')
+                .ok_or(ContactParamError::Invalid)?;
+            let after = &trimmed[start + 1 + end + 1..];
+            after.trim()
+        } else if let Some(pos) = trimmed.find(';') {
+            &trimmed[pos..]
+        } else {
+            return Ok(None);
+        };
+
+        let mut params = params_section.trim();
+        params = params.strip_prefix(';').unwrap_or(params);
+        if params.is_empty() {
+            return Ok(None);
+        }
+
+        for param in params.split(';') {
+            let param = param.trim();
+            if param.is_empty() {
+                continue;
+            }
+            let (key, value) = match param.split_once('=') {
+                Some((key, value)) => (key.trim(), value.trim()),
+                None => {
+                    if param.eq_ignore_ascii_case(name) {
+                        return Err(ContactParamError::Invalid);
+                    }
+                    continue;
+                }
+            };
+            if key.eq_ignore_ascii_case(name) {
+                if value.is_empty() {
+                    return Err(ContactParamError::Invalid);
+                }
+                return Ok(Some(value));
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn validate_required_headers(&self, request: &Request) -> Result<(), Response> {
+        let required = [
+            ("Via", "Bad Request - Missing Via header"),
+            ("From", "Bad Request - Missing From header"),
+            ("Call-ID", "Bad Request - Missing Call-ID header"),
+            ("CSeq", "Bad Request - Missing CSeq header"),
+        ];
+        for (name, reason) in required {
+            if request.headers.get(name).is_none() {
+                return Err(self
+                    .build_error_response(request, 400, reason)
+                    .unwrap_or_else(|_| {
+                        Response::new(
+                            StatusLine::new(400, SmolStr::new(reason.to_owned())),
+                            Headers::new(),
+                            Bytes::new(),
+                        )
+                    }));
+            }
+        }
+        Ok(())
+    }
+
+    fn parse_cseq_number(&self, request: &Request) -> Result<u32, Response> {
+        let cseq = match header(&request.headers, "CSeq") {
+            Some(value) => value,
+            None => {
+                return Err(self
+                    .build_error_response(request, 400, "Bad Request - Missing CSeq header")
+                    .unwrap_or_else(|_| {
+                        Response::new(
+                            StatusLine::new(400, SmolStr::new("Bad Request - Missing CSeq".to_owned())),
+                            Headers::new(),
+                            Bytes::new(),
+                        )
+                    }))
+            }
+        };
+
+        let mut parts = cseq.split_whitespace();
+        let number = match parts.next().and_then(|n| n.parse::<u32>().ok()) {
+            Some(number) => number,
+            None => {
+                return Err(self.build_error_response(
+                    request,
+                    400,
+                    "Bad Request - Invalid CSeq",
+                ).unwrap_or_else(|_| {
+                    Response::new(
+                        StatusLine::new(400, SmolStr::new("Bad Request - Invalid CSeq".to_owned())),
+                        Headers::new(),
+                        Bytes::new(),
+                    )
+                }))
+            }
+        };
+        let method = parts.next().unwrap_or("");
+        if !method.eq_ignore_ascii_case("REGISTER") {
+            return Err(self.build_error_response(request, 400, "Bad Request - Invalid CSeq")
+                .unwrap_or_else(|_| {
+                    Response::new(
+                        StatusLine::new(400, SmolStr::new("Bad Request - Invalid CSeq".to_owned())),
+                        Headers::new(),
+                        Bytes::new(),
+                    )
+                }));
+        }
+        Ok(number)
     }
 
     /// Builds an error response for malformed REGISTER requests.
@@ -717,6 +868,17 @@ impl<S, A> BasicRegistrar<S, A> {
 enum ExpiresError {
     TooBrief(u64),
     TooLong(u64),
+    Invalid,
+}
+
+#[derive(Debug)]
+enum ContactHeaderError {
+    Invalid,
+}
+
+#[derive(Debug)]
+enum ContactParamError {
+    Invalid,
 }
 
 /// Error type for AOR normalization failures.
@@ -741,58 +903,28 @@ impl std::fmt::Display for NormalizeError {
 
 impl std::error::Error for NormalizeError {}
 
-/// Extract IP address from the top Via header
-///
-/// Returns the IP address portion from a Via header like:
-/// "SIP/2.0/UDP 192.168.1.100:5060;branch=z9hG4bK..."
-fn extract_ip_from_via(headers: &Headers) -> Option<String> {
-    let via = headers.get("Via")?;
-
-    // Via format: SIP/2.0/TRANSPORT host[:port];params
-    // Skip "SIP/2.0/TRANSPORT " part
-    let mut parts = via.split_whitespace();
-    parts.next()?;
-    let host_part = parts.next()?;
-
-    // Extract host[:port];params
-    let (host_with_port, params) = host_part
-        .split_once(';')
-        .map(|(host, params)| (host, Some(params)))
-        .unwrap_or((host_part, None));
-
-    if let Some(params) = params {
-        for param in params.split(';') {
-            if let Some(received) = param.strip_prefix("received=") {
-                if !received.is_empty() {
-                    return Some(received.to_string());
-                }
-            }
-        }
-    }
-
-    let host = if let Some(stripped) = host_with_port.strip_prefix('[') {
-        stripped.split(']').next().unwrap_or(stripped)
-    } else {
-        host_with_port.split(':').next().unwrap_or(host_with_port)
-    };
-
-    Some(host.to_string())
-}
-
 impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
     /// Async variant of REGISTER handling for async storage backends.
     pub async fn handle_register_async(&self, request: &Request) -> Result<Response> {
+        if let Err(response) = self.validate_required_headers(request) {
+            return Ok(response);
+        }
+
         // Rate limiting
         if let Some(ref limiter) = self.rate_limiter {
-            if let Some(ip) = extract_ip_from_via(&request.headers) {
-                if !limiter.check_rate_limit(&ip) {
-                    warn!(ip = %ip, "REGISTER rate limit exceeded");
-                    return self.build_error_response(
-                        request,
-                        503,
-                        "Service Unavailable - Rate Limit Exceeded",
-                    );
+            if let Some(ref key_fn) = self.rate_limit_key_fn {
+                if let Some(key) = key_fn(request) {
+                    if !limiter.check_rate_limit(key.as_str()) {
+                        warn!(key = %key, "REGISTER rate limit exceeded");
+                        return self.build_error_response(
+                            request,
+                            503,
+                            "Service Unavailable - Rate Limit Exceeded",
+                        );
+                    }
                 }
+            } else {
+                warn!("REGISTER rate limiting configured without a trusted key function");
             }
         }
 
@@ -842,13 +974,10 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
             .cloned()
             .unwrap_or_else(|| SmolStr::new(""));
 
-        let cseq = header(&request.headers, "CSeq")
-            .and_then(|v| {
-                v.split_whitespace()
-                    .next()
-                    .and_then(|n| n.parse::<u32>().ok())
-            })
-            .unwrap_or(0);
+        let cseq = match self.parse_cseq_number(request) {
+            Ok(cseq) => cseq,
+            Err(response) => return Ok(response),
+        };
 
         let contacts = contact_headers(&request.headers);
         if contacts.is_empty() {
@@ -856,10 +985,28 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
             return self.build_error_response(request, 400, "Bad Request - Missing Contact header");
         }
 
+        if contacts.iter().any(|c| c.trim() == "*") && contacts.len() != 1 {
+            return self.build_error_response(
+                request,
+                400,
+                "Bad Request - Wildcard Contact must be the only Contact",
+            );
+        }
+
         if contacts.len() == 1 && contacts[0].trim() == "*" {
-            let expires = header(&request.headers, "Expires")
-                .and_then(|v| v.parse::<u64>().ok())
-                .unwrap_or(1);
+            let expires = match header(&request.headers, "Expires") {
+                Some(value) => match value.parse::<u64>() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return self.build_error_response(
+                            request,
+                            400,
+                            "Bad Request - Invalid Expires",
+                        );
+                    }
+                },
+                None => 1,
+            };
             if expires != 0 {
                 return self.build_error_response(
                     request,
@@ -905,9 +1052,27 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
             existing_by_contact.insert(binding.contact.clone(), binding);
         }
 
-        let mut processed_contacts = Vec::new();
-
         for contact in &contacts {
+            let contact_uri = match self.extract_contact_uri(contact.as_str()) {
+                Ok(uri) => uri,
+                Err(ContactHeaderError::Invalid) => {
+                    return self.build_error_response(
+                        request,
+                        400,
+                        "Bad Request - Invalid Contact header",
+                    );
+                }
+            };
+            match Uri::parse(contact_uri.as_str()) {
+                Some(Uri::Sip(_)) => {}
+                _ => {
+                    return self.build_error_response(
+                        request,
+                        400,
+                        "Bad Request - Unsupported Contact URI scheme",
+                    );
+                }
+            }
             let expires = match self.parse_expires(request, contact.as_str()) {
                 Ok(expires) => expires,
                 Err(ExpiresError::TooBrief(min)) => {
@@ -920,9 +1085,24 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
                         "Bad Request - Expires too long",
                     );
                 }
+                Err(ExpiresError::Invalid) => {
+                    return self.build_error_response(
+                        request,
+                        400,
+                        "Bad Request - Invalid Expires",
+                    );
+                }
             };
-            let q_value = self.parse_q_value(contact.as_str());
-            let contact_uri = self.extract_contact_uri(contact.as_str());
+            let q_value = match self.parse_q_value(contact.as_str()) {
+                Ok(value) => value,
+                Err(ContactParamError::Invalid) => {
+                    return self.build_error_response(
+                        request,
+                        400,
+                        "Bad Request - Invalid q value",
+                    );
+                }
+            };
 
             if let Some(existing) = existing_by_contact.get(&contact_uri) {
                 if existing.call_id == call_id && cseq <= existing.cseq {
@@ -947,7 +1127,6 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
                 info!(aor = %aor, contact = %contact_uri, expires = %expires.as_secs(), "REGISTER stored binding");
             }
 
-            processed_contacts.push(format_contact(&contact_uri, expires, q_value));
         }
 
         let mut headers = Headers::new();
@@ -969,21 +1148,11 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
         }
 
         let bindings = self.store.lookup(&aor).await?;
-        let mut seen = std::collections::HashSet::new();
         for binding in &bindings {
             headers.push(
                 SmolStr::new("Contact"),
                 format_contact(&binding.contact, binding.expires, binding.q_value),
             );
-            seen.insert(binding.contact.clone());
-        }
-        for contact in &processed_contacts {
-            if let Some((uri, _)) = contact.split_once(';') {
-                let uri = SmolStr::new(uri.to_owned());
-                if !seen.contains(&uri) {
-                    headers.push(SmolStr::new("Contact"), contact.clone());
-                }
-            }
         }
 
         headers.push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()));
@@ -999,18 +1168,25 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
 
 impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
     fn handle_register(&self, request: &Request) -> Result<Response> {
+        if let Err(response) = self.validate_required_headers(request) {
+            return Ok(response);
+        }
+
         // Check rate limit first (before authentication and processing)
         if let Some(ref limiter) = self.rate_limiter {
-            // Extract IP from top Via header (sender's IP)
-            if let Some(ip) = extract_ip_from_via(&request.headers) {
-                if !limiter.check_rate_limit(&ip) {
-                    warn!(ip = %ip, "REGISTER rate limit exceeded");
-                    return self.build_error_response(
-                        request,
-                        503,
-                        "Service Unavailable - Rate Limit Exceeded",
-                    );
+            if let Some(ref key_fn) = self.rate_limit_key_fn {
+                if let Some(key) = key_fn(request) {
+                    if !limiter.check_rate_limit(key.as_str()) {
+                        warn!(key = %key, "REGISTER rate limit exceeded");
+                        return self.build_error_response(
+                            request,
+                            503,
+                            "Service Unavailable - Rate Limit Exceeded",
+                        );
+                    }
                 }
+            } else {
+                warn!("REGISTER rate limiting configured without a trusted key function");
             }
         }
 
@@ -1067,13 +1243,10 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
             .cloned()
             .unwrap_or_else(|| SmolStr::new(""));
 
-        let cseq = header(&request.headers, "CSeq")
-            .and_then(|v| {
-                v.split_whitespace()
-                    .next()
-                    .and_then(|n| n.parse::<u32>().ok())
-            })
-            .unwrap_or(0);
+        let cseq = match self.parse_cseq_number(request) {
+            Ok(cseq) => cseq,
+            Err(response) => return Ok(response),
+        };
 
         // Get all Contact headers
         let contacts = contact_headers(&request.headers);
@@ -1082,11 +1255,29 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
             return self.build_error_response(request, 400, "Bad Request - Missing Contact header");
         }
 
+        if contacts.iter().any(|c| c.trim() == "*") && contacts.len() != 1 {
+            return self.build_error_response(
+                request,
+                400,
+                "Bad Request - Wildcard Contact must be the only Contact",
+            );
+        }
+
         // Check for wildcard Contact (*)
         if contacts.len() == 1 && contacts[0].trim() == "*" {
-            let expires = header(&request.headers, "Expires")
-                .and_then(|v| v.parse::<u64>().ok())
-                .unwrap_or(1);
+            let expires = match header(&request.headers, "Expires") {
+                Some(value) => match value.parse::<u64>() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return self.build_error_response(
+                            request,
+                            400,
+                            "Bad Request - Invalid Expires",
+                        );
+                    }
+                },
+                None => 1,
+            };
             if expires != 0 {
                 return self.build_error_response(
                     request,
@@ -1130,8 +1321,6 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
         }
 
         // Process each contact
-        let mut processed_contacts = Vec::new();
-
         let existing = self.store.lookup(&aor)?;
         let mut existing_by_contact = std::collections::HashMap::new();
         for binding in existing {
@@ -1139,6 +1328,26 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
         }
 
         for contact in &contacts {
+            let contact_uri = match self.extract_contact_uri(contact.as_str()) {
+                Ok(uri) => uri,
+                Err(ContactHeaderError::Invalid) => {
+                    return self.build_error_response(
+                        request,
+                        400,
+                        "Bad Request - Invalid Contact header",
+                    );
+                }
+            };
+            match Uri::parse(contact_uri.as_str()) {
+                Some(Uri::Sip(_)) => {}
+                _ => {
+                    return self.build_error_response(
+                        request,
+                        400,
+                        "Bad Request - Unsupported Contact URI scheme",
+                    );
+                }
+            }
             let expires = match self.parse_expires(request, contact.as_str()) {
                 Ok(expires) => expires,
                 Err(ExpiresError::TooBrief(min)) => {
@@ -1151,9 +1360,24 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
                         "Bad Request - Expires too long",
                     );
                 }
+                Err(ExpiresError::Invalid) => {
+                    return self.build_error_response(
+                        request,
+                        400,
+                        "Bad Request - Invalid Expires",
+                    );
+                }
             };
-            let q_value = self.parse_q_value(contact.as_str());
-            let contact_uri = self.extract_contact_uri(contact.as_str());
+            let q_value = match self.parse_q_value(contact.as_str()) {
+                Ok(value) => value,
+                Err(ContactParamError::Invalid) => {
+                    return self.build_error_response(
+                        request,
+                        400,
+                        "Bad Request - Invalid q value",
+                    );
+                }
+            };
 
             if let Some(existing) = existing_by_contact.get(&contact_uri) {
                 if existing.call_id == call_id && cseq <= existing.cseq {
@@ -1180,7 +1404,6 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
                 info!(aor = %aor, contact = %contact_uri, expires = %expires.as_secs(), "REGISTER stored binding");
             }
 
-            processed_contacts.push(format_contact(&contact_uri, expires, q_value));
         }
 
         // Build response
@@ -1205,21 +1428,11 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
         }
 
         let bindings = self.store.lookup(&aor)?;
-        let mut seen = std::collections::HashSet::new();
         for binding in &bindings {
             headers.push(
                 SmolStr::new("Contact"),
                 format_contact(&binding.contact, binding.expires, binding.q_value),
             );
-            seen.insert(binding.contact.clone());
-        }
-        for contact in &processed_contacts {
-            if let Some((uri, _)) = contact.split_once(';') {
-                let uri = SmolStr::new(uri.to_owned());
-                if !seen.contains(&uri) {
-                    headers.push(SmolStr::new("Contact"), contact.clone());
-                }
-            }
         }
 
         headers.push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()));
@@ -1235,7 +1448,16 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
 
 /// Collects all Contact header values from the provided headers.
 pub fn contact_headers(headers: &Headers) -> Vec<SmolStr> {
-    headers.get_all("Contact").map(|v| v.clone()).collect()
+    let mut contacts = Vec::new();
+    for value in headers.get_all("Contact") {
+        for part in split_quoted_commas(value.as_str()) {
+            let trimmed = part.trim();
+            if !trimmed.is_empty() {
+                contacts.push(SmolStr::new(trimmed.to_owned()));
+            }
+        }
+    }
+    contacts
 }
 
 fn format_contact(contact_uri: &SmolStr, expires: Duration, q_value: f32) -> SmolStr {
@@ -1270,12 +1492,58 @@ fn ensure_to_tag(to_header: &str) -> SmolStr {
     SmolStr::new(format!("{};tag={}", to_header, tag))
 }
 
+fn split_quoted_commas(input: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut escape_next = false;
+
+    for ch in input.chars() {
+        if escape_next {
+            current.push(ch);
+            escape_next = false;
+            continue;
+        }
+        match ch {
+            '\\' if in_quotes => {
+                current.push(ch);
+                escape_next = true;
+            }
+            '"' => {
+                in_quotes = !in_quotes;
+                current.push(ch);
+            }
+            ',' if !in_quotes => {
+                if !current.trim().is_empty() {
+                    parts.push(current.trim().to_owned());
+                }
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+    if !current.trim().is_empty() {
+        parts.push(current.trim().to_owned());
+    }
+    parts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use bytes::Bytes;
     use sip_auth::{Credentials, DigestAuthenticator, MemoryCredentialStore};
     use sip_core::{Headers, Method, RequestLine, SipUri};
+
+    fn base_headers() -> Headers {
+        let mut headers = Headers::new();
+        headers.push(
+            "Via".into(),
+            "SIP/2.0/UDP client.example.com;branch=z9hG4bKtest".into(),
+        );
+        headers.push("From".into(), "<sip:alice@example.com>;tag=from123".into());
+        headers
+    }
 
     #[test]
     fn collects_contact_headers() {
@@ -1284,6 +1552,19 @@ mod tests {
         headers.push("Contact".into(), "<sip:b@example.com>".into());
         let contacts = contact_headers(&headers);
         assert_eq!(contacts.len(), 2);
+    }
+
+    #[test]
+    fn contact_headers_split_commas() {
+        let mut headers = Headers::new();
+        headers.push(
+            "Contact".into(),
+            "\"Alice, A\" <sip:alice@example.com>, <sip:bob@example.com>".into(),
+        );
+        let contacts = contact_headers(&headers);
+        assert_eq!(contacts.len(), 2);
+        assert_eq!(contacts[0].as_str(), "\"Alice, A\" <sip:alice@example.com>");
+        assert_eq!(contacts[1].as_str(), "<sip:bob@example.com>");
     }
 
     #[test]
@@ -1417,7 +1698,7 @@ mod tests {
         let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
             BasicRegistrar::new(store.clone(), None);
 
-        let mut headers = Headers::new();
+        let mut headers = base_headers();
         headers.push("To".into(), "<sip:alice@example.com>".into());
         headers.push("Contact".into(), "<sip:ua.example.com>;expires=60".into());
         headers.push("Call-ID".into(), "call123".into());
@@ -1445,7 +1726,7 @@ mod tests {
         let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
             BasicRegistrar::new(store.clone(), None);
 
-        let mut headers = Headers::new();
+        let mut headers = base_headers();
         headers.push("To".into(), "<sip:alice@example.com>".into());
         headers.push("Contact".into(), "<sip:ua1.example.com>;expires=60".into());
         headers.push("Contact".into(), "<sip:ua2.example.com>;expires=120".into());
@@ -1472,7 +1753,7 @@ mod tests {
             BasicRegistrar::new(store.clone(), None);
 
         // First register
-        let mut headers = Headers::new();
+        let mut headers = base_headers();
         headers.push("To".into(), "<sip:alice@example.com>".into());
         headers.push("Contact".into(), "<sip:ua.example.com>;expires=60".into());
         headers.push("Call-ID".into(), "call123".into());
@@ -1488,7 +1769,7 @@ mod tests {
         assert_eq!(store.lookup("sip:alice@example.com").unwrap().len(), 1);
 
         // Now deregister with expires=0
-        let mut headers = Headers::new();
+        let mut headers = base_headers();
         headers.push("To".into(), "<sip:alice@example.com>".into());
         headers.push("Contact".into(), "<sip:ua.example.com>;expires=0".into());
         headers.push("Call-ID".into(), "call123".into());
@@ -1512,7 +1793,7 @@ mod tests {
             BasicRegistrar::new(store.clone(), None);
 
         // Register multiple contacts
-        let mut headers = Headers::new();
+        let mut headers = base_headers();
         headers.push("To".into(), "<sip:alice@example.com>".into());
         headers.push("Contact".into(), "<sip:ua1.example.com>;expires=60".into());
         headers.push("Contact".into(), "<sip:ua2.example.com>;expires=60".into());
@@ -1529,7 +1810,7 @@ mod tests {
         assert_eq!(store.lookup("sip:alice@example.com").unwrap().len(), 2);
 
         // Deregister all with wildcard
-        let mut headers = Headers::new();
+        let mut headers = base_headers();
         headers.push("To".into(), "<sip:alice@example.com>".into());
         headers.push("Contact".into(), "*".into());
         headers.push("Expires".into(), "0".into());
@@ -1553,7 +1834,7 @@ mod tests {
         let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
             BasicRegistrar::new(store.clone(), None);
 
-        let mut headers = Headers::new();
+        let mut headers = base_headers();
         headers.push("To".into(), "<sip:alice@example.com>".into());
         headers.push(
             "Contact".into(),
@@ -1581,7 +1862,7 @@ mod tests {
         let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
             BasicRegistrar::new(store.clone(), None).with_min_expires(Duration::from_secs(100));
 
-        let mut headers = Headers::new();
+        let mut headers = base_headers();
         headers.push("To".into(), "<sip:alice@example.com>".into());
         headers.push("Contact".into(), "<sip:ua.example.com>;expires=10".into());
         headers.push("Call-ID".into(), "call123".into());
@@ -1607,7 +1888,7 @@ mod tests {
         let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
             BasicRegistrar::new(store.clone(), None).with_max_expires(Duration::from_secs(1000));
 
-        let mut headers = Headers::new();
+        let mut headers = base_headers();
         headers.push("To".into(), "<sip:alice@example.com>".into());
         headers.push(
             "Contact".into(),
@@ -1710,7 +1991,9 @@ mod tests {
         let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
             BasicRegistrar::new(store, None);
 
-        let uri = registrar.extract_contact_uri("<sip:alice@example.com>;expires=3600");
+        let uri = registrar
+            .extract_contact_uri("<sip:alice@example.com>;expires=3600")
+            .expect("contact uri");
         assert_eq!(uri.as_str(), "sip:alice@example.com");
     }
 
@@ -1720,7 +2003,9 @@ mod tests {
         let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
             BasicRegistrar::new(store, None);
 
-        let uri = registrar.extract_contact_uri("sip:alice@example.com;expires=3600");
+        let uri = registrar
+            .extract_contact_uri("sip:alice@example.com;expires=3600")
+            .expect("contact uri");
         assert_eq!(uri.as_str(), "sip:alice@example.com");
     }
 
@@ -1978,6 +2263,215 @@ mod tests {
     }
 
     #[test]
+    fn registrar_returns_400_for_missing_via_header() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store, None);
+
+        let mut headers = Headers::new();
+        headers.push("From".into(), "<sip:alice@example.com>;tag=1234".into());
+        headers.push("To".into(), "<sip:alice@example.com>".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+        headers.push("Contact".into(), "<sip:ua.example.com>".into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar
+            .handle_register(&request)
+            .expect("should return response");
+        assert_eq!(response.start.code, 400);
+        assert!(response.start.reason.contains("Via"));
+    }
+
+    #[test]
+    fn registrar_returns_400_for_missing_from_header() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store, None);
+
+        let mut headers = Headers::new();
+        headers.push(
+            "Via".into(),
+            "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8".into(),
+        );
+        headers.push("To".into(), "<sip:alice@example.com>".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+        headers.push("Contact".into(), "<sip:ua.example.com>".into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar
+            .handle_register(&request)
+            .expect("should return response");
+        assert_eq!(response.start.code, 400);
+        assert!(response.start.reason.contains("From"));
+    }
+
+    #[test]
+    fn registrar_returns_400_for_missing_call_id_header() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store, None);
+
+        let mut headers = base_headers();
+        headers.push("To".into(), "<sip:alice@example.com>".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+        headers.push("Contact".into(), "<sip:ua.example.com>".into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar
+            .handle_register(&request)
+            .expect("should return response");
+        assert_eq!(response.start.code, 400);
+        assert!(response.start.reason.contains("Call-ID"));
+    }
+
+    #[test]
+    fn registrar_returns_400_for_missing_cseq_header() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store, None);
+
+        let mut headers = base_headers();
+        headers.push("To".into(), "<sip:alice@example.com>".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("Contact".into(), "<sip:ua.example.com>".into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar
+            .handle_register(&request)
+            .expect("should return response");
+        assert_eq!(response.start.code, 400);
+        assert!(response.start.reason.contains("CSeq"));
+    }
+
+    #[test]
+    fn registrar_rejects_invalid_cseq_method() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store, None);
+
+        let mut headers = base_headers();
+        headers.push("To".into(), "<sip:alice@example.com>".into());
+        headers.push("Contact".into(), "<sip:ua.example.com>".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 INVITE".into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar
+            .handle_register(&request)
+            .expect("should return response");
+        assert_eq!(response.start.code, 400);
+        assert!(response.start.reason.contains("CSeq"));
+    }
+
+    #[test]
+    fn registrar_rejects_invalid_expires_param() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store, None);
+
+        let mut headers = base_headers();
+        headers.push("To".into(), "<sip:alice@example.com>".into());
+        headers.push(
+            "Contact".into(),
+            "<sip:ua.example.com>;expires=abc".into(),
+        );
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar
+            .handle_register(&request)
+            .expect("should return response");
+        assert_eq!(response.start.code, 400);
+        assert!(response.start.reason.contains("Expires"));
+    }
+
+    #[test]
+    fn registrar_rejects_invalid_q_param() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store, None);
+
+        let mut headers = base_headers();
+        headers.push("To".into(), "<sip:alice@example.com>".into());
+        headers.push(
+            "Contact".into(),
+            "<sip:ua.example.com>;q=abc;expires=60".into(),
+        );
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar
+            .handle_register(&request)
+            .expect("should return response");
+        assert_eq!(response.start.code, 400);
+        assert!(response.start.reason.contains("q"));
+    }
+
+    #[test]
+    fn registrar_rejects_unsupported_contact_uri_scheme() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store, None);
+
+        let mut headers = base_headers();
+        headers.push("To".into(), "<sip:alice@example.com>".into());
+        headers.push("Contact".into(), "<mailto:alice@example.com>;expires=60".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar
+            .handle_register(&request)
+            .expect("should return response");
+        assert_eq!(response.start.code, 400);
+        assert!(response.start.reason.contains("Contact"));
+    }
+
+    #[test]
     fn registrar_400_response_includes_required_headers() {
         let store = MemoryLocationStore::new();
         let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
@@ -2086,7 +2580,7 @@ mod tests {
         let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
             BasicRegistrar::new(store.clone(), None);
 
-        let mut headers = Headers::new();
+        let mut headers = base_headers();
         headers.push("To".into(), "<tel:+1-555-123-4567>".into());
         headers.push("Contact".into(), "<sip:ua.example.com>;expires=60".into());
         headers.push("Call-ID".into(), "call123".into());
@@ -2114,7 +2608,7 @@ mod tests {
         let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
             BasicRegistrar::new(store.clone(), None);
 
-        let mut headers = Headers::new();
+        let mut headers = base_headers();
         headers.push("To".into(), "<tel:5551234;phone-context=example.com>".into());
         headers.push("Contact".into(), "<sip:ua.example.com>;expires=60".into());
         headers.push("Call-ID".into(), "call123".into());
@@ -2142,7 +2636,7 @@ mod tests {
             BasicRegistrar::new(store.clone(), None);
 
         // First register
-        let mut headers = Headers::new();
+        let mut headers = base_headers();
         headers.push("To".into(), "<tel:+15551234567>".into());
         headers.push("Contact".into(), "<sip:ua.example.com>;expires=60".into());
         headers.push("Call-ID".into(), "call123".into());
@@ -2158,7 +2652,7 @@ mod tests {
         assert_eq!(store.lookup("tel:+15551234567").unwrap().len(), 1);
 
         // Now deregister with expires=0
-        let mut headers = Headers::new();
+        let mut headers = base_headers();
         headers.push("To".into(), "<tel:+1-555-123-4567>".into()); // Different format, same number
         headers.push("Contact".into(), "<sip:ua.example.com>;expires=0".into());
         headers.push("Call-ID".into(), "call123".into());
@@ -2183,7 +2677,7 @@ mod tests {
         let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
             BasicRegistrar::new(store.clone(), None);
 
-        let mut headers = Headers::new();
+        let mut headers = base_headers();
         headers.push("To".into(), "<tel:+15551234567>".into());
         headers.push("Contact".into(), "<sip:ua1.example.com>;expires=60".into());
         headers.push("Contact".into(), "<sip:ua2.example.com>;expires=120".into());
@@ -2214,7 +2708,7 @@ mod tests {
             BasicRegistrar::new(store.clone(), None);
 
         // Register multiple contacts
-        let mut headers = Headers::new();
+        let mut headers = base_headers();
         headers.push("To".into(), "<tel:+15551234567>".into());
         headers.push("Contact".into(), "<sip:ua1.example.com>;expires=60".into());
         headers.push("Contact".into(), "<sip:ua2.example.com>;expires=60".into());
@@ -2231,7 +2725,7 @@ mod tests {
         assert_eq!(store.lookup("tel:+15551234567").unwrap().len(), 2);
 
         // Deregister all with wildcard
-        let mut headers = Headers::new();
+        let mut headers = base_headers();
         headers.push("To".into(), "<tel:+1-555-123-4567>".into());
         headers.push("Contact".into(), "*".into());
         headers.push("Expires".into(), "0".into());
@@ -2255,7 +2749,7 @@ mod tests {
         let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
             BasicRegistrar::new(store, None);
 
-        let mut headers = Headers::new();
+        let mut headers = base_headers();
         headers.push("To".into(), "<mailto:alice@example.com>".into());
         headers.push("Contact".into(), "<sip:ua.example.com>;expires=60".into());
         headers.push("Call-ID".into(), "call123".into());
@@ -2299,5 +2793,444 @@ mod tests {
         let error: Box<dyn Error> = Box::new(NormalizeError::UnsupportedScheme);
         let display = format!("{}", error);
         assert!(display.contains("not supported"));
+    }
+
+    // ========== Edge Case Tests ==========
+
+    #[test]
+    fn registrar_handles_multiple_commas_in_contact() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store.clone(), None);
+
+        let mut headers = base_headers();
+        headers.push("To".into(), "<sip:alice@example.com>".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+        // Multiple commas and empty entries
+        headers.push("Contact".into(), "<sip:a@example.com>,,<sip:b@example.com>".into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar.handle_register(&request).expect("response");
+        assert_eq!(response.start.code, 200);
+
+        // Should have 2 bindings (empty entries ignored)
+        let bindings = store.lookup("sip:alice@example.com").unwrap();
+        assert_eq!(bindings.len(), 2);
+    }
+
+    #[test]
+    fn registrar_handles_contact_with_escaped_quotes() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store.clone(), None);
+
+        let mut headers = base_headers();
+        headers.push("To".into(), "<sip:alice@example.com>".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+        // Display name with escaped quote
+        headers.push("Contact".into(), r#""Alice \"CEO\"" <sip:alice@example.com>"#.into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar.handle_register(&request).expect("response");
+        assert_eq!(response.start.code, 200);
+
+        let bindings = store.lookup("sip:alice@example.com").unwrap();
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].contact.as_str(), "sip:alice@example.com");
+    }
+
+    #[test]
+    fn registrar_rejects_empty_contact_uri() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store, None);
+
+        let mut headers = base_headers();
+        headers.push("To".into(), "<sip:alice@example.com>".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+        headers.push("Contact".into(), "<>".into()); // Empty URI
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar.handle_register(&request).expect("response");
+        assert_eq!(response.start.code, 400);
+        assert!(response.start.reason.contains("Contact"));
+    }
+
+    #[test]
+    fn registrar_rejects_unclosed_angle_bracket() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store, None);
+
+        let mut headers = base_headers();
+        headers.push("To".into(), "<sip:alice@example.com>".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+        headers.push("Contact".into(), "<sip:alice@example.com".into()); // Missing >
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar.handle_register(&request).expect("response");
+        assert_eq!(response.start.code, 400);
+        assert!(response.start.reason.contains("Contact"));
+    }
+
+    #[test]
+    fn registrar_rejects_wildcard_with_other_contacts() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store, None);
+
+        let mut headers = base_headers();
+        headers.push("To".into(), "<sip:alice@example.com>".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+        headers.push("Expires".into(), "0".into());
+        headers.push("Contact".into(), "*".into());
+        headers.push("Contact".into(), "<sip:bob@example.com>".into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar.handle_register(&request).expect("response");
+        assert_eq!(response.start.code, 400);
+        assert!(response.start.reason.contains("Wildcard"));
+    }
+
+    #[test]
+    fn registrar_rejects_wildcard_without_expires_zero() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store, None);
+
+        let mut headers = base_headers();
+        headers.push("To".into(), "<sip:alice@example.com>".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+        headers.push("Expires".into(), "3600".into()); // Non-zero
+        headers.push("Contact".into(), "*".into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar.handle_register(&request).expect("response");
+        assert_eq!(response.start.code, 400);
+        assert!(response.start.reason.contains("Expires: 0"));
+    }
+
+    #[test]
+    fn registrar_handles_case_insensitive_sip_host() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store.clone(), None);
+
+        // Register with uppercase domain
+        let mut headers = base_headers();
+        headers.push("To".into(), "<sip:alice@EXAMPLE.COM>".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+        headers.push("Contact".into(), "<sip:alice@device.com>".into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        registrar.handle_register(&request).expect("response");
+
+        // Lookup with lowercase should work
+        let bindings = store.lookup("sip:alice@example.com").unwrap();
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].contact.as_str(), "sip:alice@device.com");
+    }
+
+    #[test]
+    fn registrar_rejects_negative_expires() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store, None);
+
+        let mut headers = base_headers();
+        headers.push("To".into(), "<sip:alice@example.com>".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+        headers.push("Contact".into(), "<sip:alice@device.com>;expires=-1".into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar.handle_register(&request).expect("response");
+        assert_eq!(response.start.code, 400);
+        assert!(response.start.reason.contains("Expires"));
+    }
+
+    #[test]
+    fn registrar_rejects_non_numeric_expires() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store, None);
+
+        let mut headers = base_headers();
+        headers.push("To".into(), "<sip:alice@example.com>".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+        headers.push("Contact".into(), "<sip:alice@device.com>;expires=abc".into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar.handle_register(&request).expect("response");
+        assert_eq!(response.start.code, 400);
+        assert!(response.start.reason.contains("Expires"));
+    }
+
+    #[test]
+    fn registrar_rejects_q_value_out_of_range() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store, None);
+
+        let mut headers = base_headers();
+        headers.push("To".into(), "<sip:alice@example.com>".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+        headers.push("Contact".into(), "<sip:alice@device.com>;q=1.5".into()); // > 1.0
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar.handle_register(&request).expect("response");
+        assert_eq!(response.start.code, 400);
+        assert!(response.start.reason.contains("q value"));
+    }
+
+    #[test]
+    fn registrar_rejects_non_numeric_q_value() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store, None);
+
+        let mut headers = base_headers();
+        headers.push("To".into(), "<sip:alice@example.com>".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+        headers.push("Contact".into(), "<sip:alice@device.com>;q=high".into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar.handle_register(&request).expect("response");
+        assert_eq!(response.start.code, 400);
+        assert!(response.start.reason.contains("q value"));
+    }
+
+    #[test]
+    fn registrar_handles_cseq_with_extra_whitespace() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store.clone(), None);
+
+        let mut headers = base_headers();
+        headers.push("To".into(), "<sip:alice@example.com>".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "  1   REGISTER  ".into()); // Extra whitespace
+        headers.push("Contact".into(), "<sip:alice@device.com>".into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar.handle_register(&request).expect("response");
+        assert_eq!(response.start.code, 200);
+
+        let bindings = store.lookup("sip:alice@example.com").unwrap();
+        assert_eq!(bindings.len(), 1);
+    }
+
+    #[test]
+    fn registrar_rejects_cseq_with_wrong_method() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store, None);
+
+        let mut headers = base_headers();
+        headers.push("To".into(), "<sip:alice@example.com>".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 INVITE".into()); // Wrong method
+        headers.push("Contact".into(), "<sip:alice@device.com>".into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar.handle_register(&request).expect("response");
+        assert_eq!(response.start.code, 400);
+        assert!(response.start.reason.contains("CSeq"));
+    }
+
+    #[test]
+    fn registrar_rejects_cseq_with_missing_method() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store, None);
+
+        let mut headers = base_headers();
+        headers.push("To".into(), "<sip:alice@example.com>".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1".into()); // Missing method
+        headers.push("Contact".into(), "<sip:alice@device.com>".into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar.handle_register(&request).expect("response");
+        assert_eq!(response.start.code, 400);
+        assert!(response.start.reason.contains("CSeq"));
+    }
+
+    #[test]
+    fn registrar_rejects_tel_uri_in_contact() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store, None);
+
+        let mut headers = base_headers();
+        headers.push("To".into(), "<sip:alice@example.com>".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+        headers.push("Contact".into(), "<tel:+15551234567>".into()); // tel URI not allowed
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar.handle_register(&request).expect("response");
+        assert_eq!(response.start.code, 400);
+        assert!(response.start.reason.contains("Unsupported Contact URI"));
+    }
+
+    #[test]
+    fn registrar_handles_contact_without_angle_brackets() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store.clone(), None);
+
+        let mut headers = base_headers();
+        headers.push("To".into(), "<sip:alice@example.com>".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+        headers.push("Contact".into(), "sip:alice@device.com;expires=60".into()); // No angle brackets
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar.handle_register(&request).expect("response");
+        assert_eq!(response.start.code, 200);
+
+        let bindings = store.lookup("sip:alice@example.com").unwrap();
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].contact.as_str(), "sip:alice@device.com");
+    }
+
+    #[test]
+    fn split_quoted_commas_handles_escaped_quotes() {
+        let input = r#""Alice \"CEO\"" <sip:alice@example.com>, <sip:bob@example.com>"#;
+        let parts = split_quoted_commas(input);
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0], r#""Alice \"CEO\"" <sip:alice@example.com>"#);
+        assert_eq!(parts[1], "<sip:bob@example.com>");
+    }
+
+    #[test]
+    fn split_quoted_commas_handles_nested_commas() {
+        let input = r#""Smith, John" <sip:john@example.com>, "Doe, Jane" <sip:jane@example.com>"#;
+        let parts = split_quoted_commas(input);
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0], r#""Smith, John" <sip:john@example.com>"#);
+        assert_eq!(parts[1], r#""Doe, Jane" <sip:jane@example.com>"#);
+    }
+
+    #[test]
+    fn split_quoted_commas_handles_empty_entries() {
+        let input = "<sip:a@example.com>,,<sip:b@example.com>";
+        let parts = split_quoted_commas(input);
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0], "<sip:a@example.com>");
+        assert_eq!(parts[1], "<sip:b@example.com>");
+    }
+
+    #[test]
+    fn normalize_aor_lowercases_sip_host() {
+        use sip_core::{SipUri, Uri};
+
+        let sip = SipUri::parse("sip:alice@EXAMPLE.COM").unwrap();
+        let uri = Uri::Sip(sip);
+        let normalized = normalize_aor(&uri).expect("normalize_aor");
+
+        assert_eq!(normalized, "sip:alice@example.com");
+    }
+
+    #[test]
+    fn normalize_aor_lowercases_sip_host_with_port() {
+        use sip_core::{SipUri, Uri};
+
+        let sip = SipUri::parse("sip:alice@EXAMPLE.COM:5060").unwrap();
+        let uri = Uri::Sip(sip);
+        let normalized = normalize_aor(&uri).expect("normalize_aor");
+
+        assert_eq!(normalized, "sip:alice@example.com:5060");
     }
 }
