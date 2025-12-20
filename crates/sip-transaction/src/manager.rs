@@ -539,10 +539,6 @@ impl TransactionManager {
                     };
                 }
             }
-            return ServerTransactionHandle {
-                manager: self.clone(),
-                key,
-            };
         }
 
         if let Some(mut entry) = self.inner.server.get_mut(&key) {
@@ -1038,8 +1034,18 @@ impl TransactionManager {
         duration: Duration,
     ) {
         if duration.is_zero() {
+            let mut should_fire = false;
             if let Some(mut entry) = self.inner.client.get_mut(&key) {
                 entry.cancel_timer(timer);
+                should_fire = true;
+            }
+            if should_fire {
+                let cmd_tx = self.cmd_tx.clone();
+                tokio::spawn(async move {
+                    let _ = cmd_tx
+                        .send(ManagerCommand::ClientTimerFired { key, timer })
+                        .await;
+                });
             }
             return;
         }
@@ -1066,8 +1072,18 @@ impl TransactionManager {
 
     fn schedule_timer(&self, key: TransactionKey, timer: TransactionTimer, duration: Duration) {
         if duration.is_zero() {
+            let mut should_fire = false;
             if let Some(mut entry) = self.inner.server.get_mut(&key) {
                 entry.cancel_timer(timer);
+                should_fire = true;
+            }
+            if should_fire {
+                let cmd_tx = self.cmd_tx.clone();
+                tokio::spawn(async move {
+                    let _ = cmd_tx
+                        .send(ManagerCommand::ServerTimerFired { key, timer })
+                        .await;
+                });
             }
             return;
         }

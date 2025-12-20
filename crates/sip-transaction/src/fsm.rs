@@ -408,11 +408,18 @@ fn response_requires_prack(response: &Response) -> bool {
     if !has_rseq {
         return false;
     }
-    response
+    let has_require = response.headers.get("Require").is_some();
+    let has_require_100rel = response
         .headers
         .get_all("Require")
         .flat_map(|value| value.split(','))
-        .any(|token| token.trim().eq_ignore_ascii_case("100rel"))
+        .any(|token| token.trim().eq_ignore_ascii_case("100rel"));
+    let has_supported_100rel = response
+        .headers
+        .get_all("Supported")
+        .flat_map(|value| value.split(','))
+        .any(|token| token.trim().eq_ignore_ascii_case("100rel"));
+    has_require_100rel || has_supported_100rel || !has_require
 }
 
 /// Implements RFC 3261 Figure 7 for non-INVITE client transactions.
@@ -471,6 +478,13 @@ impl ClientInviteFsm {
                 state @ (Calling | Proceeding | Completed),
                 ClientInviteEvent::ReceiveFinal(response),
             ) => self.handle_final(*state, response),
+            (Terminated, ClientInviteEvent::ReceiveFinal(response)) => {
+                if (200..=299).contains(&response.start.code) {
+                    self.handle_final_2xx(response)
+                } else {
+                    Vec::new()
+                }
+            }
             (Calling, ClientInviteEvent::TimerFired(TransactionTimer::A)) => self.handle_timer_a(),
             (Calling | Proceeding, ClientInviteEvent::TimerFired(TransactionTimer::B)) => {
                 self.handle_timer_b()
