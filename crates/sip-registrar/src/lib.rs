@@ -5,7 +5,7 @@ use dashmap::DashMap;
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use async_trait::async_trait;
 use sip_auth::Authenticator;
-use sip_core::{Headers, Request, Response, SipUri, StatusLine};
+use sip_core::{Headers, Request, Response, SipUri, StatusLine, TelUri, Uri};
 use sip_parse::{header, parse_to_header};
 use sip_ratelimit::RateLimiter;
 use smol_str::SmolStr;
@@ -16,11 +16,65 @@ use tokio::{runtime::Handle, task};
 
 /// Normalize an AOR for consistent storage and lookup.
 ///
+/// Supports both SIP and tel URIs; rejects other schemes.
+///
+/// **SIP URIs:**
 /// - Percent-decodes user/host (handled by `SipUri::parse`).
 /// - Strips URI parameters by rebuilding without them.
 /// - If the user contains an embedded `@domain` that matches the host, drop
 ///   the suffix (e.g., `bob%40192.168.1.81@192.168.1.81` → `bob`).
-pub fn normalize_aor(uri: &SipUri) -> String {
+///
+/// **tel URIs:**
+/// - Uses the normalized number (visual separators removed).
+/// - Includes phone-context for local numbers.
+/// - Preserves other tel URI parameters (ext, isub, etc.) in canonical form.
+/// - Parameters are sorted alphabetically for consistent normalization.
+/// - phone-context domains are lowercased (ASCII domains only; use punycode for IDN).
+///
+/// # Examples
+///
+/// ```rust
+/// use sip_registrar::normalize_aor;
+/// use sip_core::Uri;
+///
+/// // SIP URI - parameters stripped
+/// let uri = Uri::parse("sip:alice@example.com;transport=tcp").unwrap();
+/// assert_eq!(normalize_aor(&uri).unwrap(), "sip:alice@example.com");
+///
+/// // Global tel URI - visual separators removed
+/// let uri = Uri::parse("tel:+1-555-123-4567").unwrap();
+/// assert_eq!(normalize_aor(&uri).unwrap(), "tel:+15551234567");
+///
+/// // Global tel URI with extension - parameters sorted
+/// let uri = Uri::parse("tel:+1-555-123-4567;ext=123").unwrap();
+/// assert_eq!(normalize_aor(&uri).unwrap(), "tel:+15551234567;ext=123");
+///
+/// // Different parameter order normalizes identically
+/// let uri1 = Uri::parse("tel:+15551234567;ext=123;isub=xyz").unwrap();
+/// let uri2 = Uri::parse("tel:+1.555.123.4567;isub=xyz;ext=123").unwrap();
+/// assert_eq!(normalize_aor(&uri1).unwrap(), normalize_aor(&uri2).unwrap());
+///
+/// // Local tel URI - phone-context preserved and normalized
+/// let uri = Uri::parse("tel:5551234;phone-context=EXAMPLE.COM").unwrap();
+/// assert_eq!(normalize_aor(&uri).unwrap(), "tel:5551234;phone-context=example.com");
+///
+/// // Unsupported scheme - returns error
+/// let uri = Uri::Absolute("mailto:alice@example.com".into());
+/// assert!(normalize_aor(&uri).is_err());
+/// ```
+///
+/// # Errors
+///
+/// Returns `NormalizeError::UnsupportedScheme` for non-SIP/non-tel URIs (e.g., mailto:, http:).
+pub fn normalize_aor(uri: &Uri) -> Result<String, NormalizeError> {
+    match uri {
+        Uri::Sip(sip_uri) => Ok(normalize_sip_aor(sip_uri)),
+        Uri::Tel(tel_uri) => Ok(normalize_tel_aor(tel_uri)),
+        Uri::Absolute(_) => Err(NormalizeError::UnsupportedScheme),
+    }
+}
+
+fn normalize_sip_aor(uri: &SipUri) -> String {
     let scheme = if uri.sips { "sips" } else { "sip" };
 
     let host_port = match uri.port {
@@ -41,6 +95,112 @@ pub fn normalize_aor(uri: &SipUri) -> String {
         Some(user) if !user.is_empty() => format!("{}:{}@{}", scheme, user, host_port),
         _ => format!("{}:{}", scheme, host_port),
     }
+}
+
+/// Normalize a tel URI to canonical form per RFC 3966.
+///
+/// - Removes visual separators from the number
+/// - Normalizes phone-context:
+///   - If it starts with '+' (global number context), removes visual separators
+///   - Otherwise (domain-based context), converts to lowercase (ASCII only)
+/// - Preserves all parameters (ext, isub, etc.) in sorted order
+/// - Returns canonical string representation
+fn normalize_tel_aor(uri: &TelUri) -> String {
+    // For tel URIs, remove visual separators and include phone-context for local numbers per RFC 3966.
+    // Include all other tel URI parameters to avoid collisions (ext, isub, etc.).
+    let number = normalize_tel_number(uri.number.as_str());
+    let mut params = Vec::new();
+
+    // Normalize phone-context value based on its format
+    // RFC 3966 allows phone-context to be either a global number or a domain name
+    let phone_context = uri.phone_context.as_ref().map(|context| {
+        let context = context.as_str();
+        if context.starts_with('+') {
+            // Global number context: remove visual separators
+            // Example: tel:123;phone-context=+1-555 -> tel:123;phone-context=+1555
+            normalize_tel_number(context).to_string()
+        } else {
+            // Domain-based context: lowercase for case-insensitive comparison
+            // Example: tel:123;phone-context=EXAMPLE.COM -> tel:123;phone-context=example.com
+            // Note: This only handles ASCII domains. Use punycode for internationalized domains.
+            context.to_ascii_lowercase()
+        }
+    });
+
+    // Collect all parameters except phone-context (handled separately)
+    // Normalize parameter keys to lowercase for canonical form
+    for (key, value) in &uri.parameters {
+        if key.as_str().eq_ignore_ascii_case("phone-context") {
+            continue; // Skip phone-context, handled separately above
+        }
+        let key = key.as_str().to_ascii_lowercase();
+        let value = value.as_ref().map(|v| v.as_str().to_owned());
+        params.push((key, value));
+    }
+
+    // Sort parameters alphabetically for canonical ordering
+    // This ensures tel:+1...;ext=123;isub=xyz and tel:+1...;isub=xyz;ext=123 normalize identically
+    params.sort_by(|a, b| a.0.cmp(&b.0));
+
+    if uri.is_global {
+        // Global number: tel:+15551234567
+        let mut out = format!("tel:{}", number);
+        for (key, value) in params {
+            match value {
+                Some(value) => {
+                    out.push(';');
+                    out.push_str(&key);
+                    out.push('=');
+                    out.push_str(&value);
+                }
+                None => {
+                    out.push(';');
+                    out.push_str(&key);
+                }
+            }
+        }
+        out
+    } else {
+        // Local number: tel:5551234;phone-context=example.com
+        let mut out = format!("tel:{}", number);
+        if let Some(context) = phone_context {
+            out.push_str(";phone-context=");
+            out.push_str(&context);
+        }
+        for (key, value) in params {
+            match value {
+                Some(value) => {
+                    out.push(';');
+                    out.push_str(&key);
+                    out.push('=');
+                    out.push_str(&value);
+                }
+                None => {
+                    out.push(';');
+                    out.push_str(&key);
+                }
+            }
+        }
+        out
+    }
+}
+
+/// Remove visual separators from a telephone number per RFC 3966 §5.1.1.
+///
+/// Visual separators (-, ., space, parentheses) are removed to create the canonical form.
+/// These separators are for human readability only and not significant for comparison.
+///
+/// # Examples
+///
+/// - `+1-555-123-4567` → `+15551234567`
+/// - `+1.555.123.4567` → `+15551234567`
+/// - `+1 (555) 123-4567` → `+15551234567`
+fn normalize_tel_number(number: &str) -> SmolStr {
+    let normalized: String = number
+        .chars()
+        .filter(|c| !matches!(c, '-' | '.' | ' ' | '(' | ')'))
+        .collect();
+    SmolStr::new(normalized)
 }
 
 /// Registration binding for an address-of-record (AOR).
@@ -438,7 +598,7 @@ impl<S, A> BasicRegistrar<S, A> {
         &self.store
     }
 
-    fn parse_expires(&self, request: &Request, contact_value: &str) -> Duration {
+    fn parse_expires(&self, request: &Request, contact_value: &str) -> Result<Duration, ExpiresError> {
         // Check Contact parameter first
         let contact_expires = contact_value.split(';').find_map(|p| {
             let trimmed = p.trim();
@@ -460,14 +620,19 @@ impl<S, A> BasicRegistrar<S, A> {
             .unwrap_or(self.default_expires.as_secs());
 
         if seconds == 0 {
-            Duration::from_secs(0)
-        } else {
-            // Clamp between min and max
-            let clamped = seconds
-                .max(self.min_expires.as_secs())
-                .min(self.max_expires.as_secs());
-            Duration::from_secs(clamped)
+            return Ok(Duration::from_secs(0));
         }
+
+        let min = self.min_expires.as_secs();
+        let max = self.max_expires.as_secs();
+        if seconds < min {
+            return Err(ExpiresError::TooBrief(min));
+        }
+        if seconds > max {
+            return Err(ExpiresError::TooLong(max));
+        }
+
+        Ok(Duration::from_secs(seconds))
     }
 
     fn parse_q_value(&self, contact_value: &str) -> f32 {
@@ -533,7 +698,48 @@ impl<S, A> BasicRegistrar<S, A> {
             Bytes::new(),
         ))
     }
+
+    fn build_interval_too_brief(
+        &self,
+        request: &Request,
+        min_expires: u64,
+    ) -> Result<Response> {
+        let mut response = self.build_error_response(request, 423, "Interval Too Brief")?;
+        response.headers.push(
+            SmolStr::new("Min-Expires"),
+            SmolStr::new(min_expires.to_string()),
+        );
+        Ok(response)
+    }
 }
+
+#[derive(Debug)]
+enum ExpiresError {
+    TooBrief(u64),
+    TooLong(u64),
+}
+
+/// Error type for AOR normalization failures.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NormalizeError {
+    /// The URI scheme is not supported for registration.
+    ///
+    /// Only SIP, SIPS, and tel URIs are supported as AORs.
+    /// Other schemes (mailto:, http:, etc.) are rejected.
+    UnsupportedScheme,
+}
+
+impl std::fmt::Display for NormalizeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NormalizeError::UnsupportedScheme => {
+                write!(f, "URI scheme not supported for registration (only SIP/SIPS/tel URIs allowed)")
+            }
+        }
+    }
+}
+
+impl std::error::Error for NormalizeError {}
 
 /// Extract IP address from the top Via header
 ///
@@ -544,20 +750,31 @@ fn extract_ip_from_via(headers: &Headers) -> Option<String> {
 
     // Via format: SIP/2.0/TRANSPORT host[:port];params
     // Skip "SIP/2.0/TRANSPORT " part
-    let parts: Vec<&str> = via.split_whitespace().collect();
-    if parts.len() < 2 {
-        return None;
-    }
+    let mut parts = via.split_whitespace();
+    parts.next()?;
+    let host_part = parts.next()?;
 
     // Extract host[:port];params
-    let host_part = parts[1];
+    let (host_with_port, params) = host_part
+        .split_once(';')
+        .map(|(host, params)| (host, Some(params)))
+        .unwrap_or((host_part, None));
 
-    // Remove port and parameters
-    let host = host_part
-        .split(':')
-        .next()?
-        .split(';')
-        .next()?;
+    if let Some(params) = params {
+        for param in params.split(';') {
+            if let Some(received) = param.strip_prefix("received=") {
+                if !received.is_empty() {
+                    return Some(received.to_string());
+                }
+            }
+        }
+    }
+
+    let host = if let Some(stripped) = host_with_port.strip_prefix('[') {
+        stripped.split(']').next().unwrap_or(stripped)
+    } else {
+        host_with_port.split(':').next().unwrap_or(host_with_port)
+    };
 
     Some(host.to_string())
 }
@@ -609,11 +826,15 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
                 return self.build_error_response(request, 400, "Bad Request - Invalid To header");
             }
         };
-        let aor = match to_parsed.inner().sip_uri() {
-            Some(uri) => normalize_aor(uri),
-            None => {
-                warn!("REGISTER To header is not a SIP URI");
-                return self.build_error_response(request, 400, "Bad Request - Invalid To URI");
+        let aor = match normalize_aor(to_parsed.inner().uri()) {
+            Ok(aor) => aor,
+            Err(NormalizeError::UnsupportedScheme) => {
+                warn!("REGISTER To header has unsupported URI scheme");
+                return self.build_error_response(
+                    request,
+                    400,
+                    "Bad Request - Unsupported To URI scheme",
+                );
             }
         };
 
@@ -636,6 +857,16 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
         }
 
         if contacts.len() == 1 && contacts[0].trim() == "*" {
+            let expires = header(&request.headers, "Expires")
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(1);
+            if expires != 0 {
+                return self.build_error_response(
+                    request,
+                    400,
+                    "Bad Request - Wildcard Contact requires Expires: 0",
+                );
+            }
             self.store.remove_all(&aor).await?;
             info!(aor = %aor, "REGISTER removed all bindings (wildcard)");
 
@@ -668,10 +899,40 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
             ));
         }
 
+        let existing = self.store.lookup(&aor).await?;
+        let mut existing_by_contact = std::collections::HashMap::new();
+        for binding in existing {
+            existing_by_contact.insert(binding.contact.clone(), binding);
+        }
+
+        let mut processed_contacts = Vec::new();
+
         for contact in &contacts {
-            let expires = self.parse_expires(request, contact.as_str());
+            let expires = match self.parse_expires(request, contact.as_str()) {
+                Ok(expires) => expires,
+                Err(ExpiresError::TooBrief(min)) => {
+                    return self.build_interval_too_brief(request, min);
+                }
+                Err(ExpiresError::TooLong(_max)) => {
+                    return self.build_error_response(
+                        request,
+                        400,
+                        "Bad Request - Expires too long",
+                    );
+                }
+            };
             let q_value = self.parse_q_value(contact.as_str());
             let contact_uri = self.extract_contact_uri(contact.as_str());
+
+            if let Some(existing) = existing_by_contact.get(&contact_uri) {
+                if existing.call_id == call_id && cseq <= existing.cseq {
+                    return self.build_error_response(
+                        request,
+                        400,
+                        "Bad Request - CSeq out of order",
+                    );
+                }
+            }
 
             if expires.as_secs() == 0 {
                 self.store.remove(&aor, contact_uri.as_str()).await?;
@@ -685,6 +946,8 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
                 self.store.upsert(binding).await?;
                 info!(aor = %aor, contact = %contact_uri, expires = %expires.as_secs(), "REGISTER stored binding");
             }
+
+            processed_contacts.push(format_contact(&contact_uri, expires, q_value));
         }
 
         let mut headers = Headers::new();
@@ -706,16 +969,21 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
         }
 
         let bindings = self.store.lookup(&aor).await?;
+        let mut seen = std::collections::HashSet::new();
         for binding in &bindings {
             headers.push(
                 SmolStr::new("Contact"),
-                SmolStr::new(format!(
-                    "{};expires={};q={}",
-                    binding.contact,
-                    binding.expires.as_secs(),
-                    binding.q_value
-                )),
+                format_contact(&binding.contact, binding.expires, binding.q_value),
             );
+            seen.insert(binding.contact.clone());
+        }
+        for contact in &processed_contacts {
+            if let Some((uri, _)) = contact.split_once(';') {
+                let uri = SmolStr::new(uri.to_owned());
+                if !seen.contains(&uri) {
+                    headers.push(SmolStr::new("Contact"), contact.clone());
+                }
+            }
         }
 
         headers.push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()));
@@ -782,11 +1050,15 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
                 return self.build_error_response(request, 400, "Bad Request - Invalid To header");
             }
         };
-        let aor = match to_parsed.inner().sip_uri() {
-            Some(uri) => uri.as_str().to_owned(),
-            None => {
-                warn!("REGISTER To header is not a SIP URI");
-                return self.build_error_response(request, 400, "Bad Request - Invalid To URI");
+        let aor = match normalize_aor(to_parsed.inner().uri()) {
+            Ok(aor) => aor,
+            Err(NormalizeError::UnsupportedScheme) => {
+                warn!("REGISTER To header has unsupported URI scheme");
+                return self.build_error_response(
+                    request,
+                    400,
+                    "Bad Request - Unsupported To URI scheme",
+                );
             }
         };
 
@@ -812,6 +1084,16 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
 
         // Check for wildcard Contact (*)
         if contacts.len() == 1 && contacts[0].trim() == "*" {
+            let expires = header(&request.headers, "Expires")
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(1);
+            if expires != 0 {
+                return self.build_error_response(
+                    request,
+                    400,
+                    "Bad Request - Wildcard Contact requires Expires: 0",
+                );
+            }
             // Remove all bindings for this AOR
             self.store.remove_all(&aor)?;
             info!(aor = %aor, "REGISTER removed all bindings (wildcard)");
@@ -850,10 +1132,38 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
         // Process each contact
         let mut processed_contacts = Vec::new();
 
+        let existing = self.store.lookup(&aor)?;
+        let mut existing_by_contact = std::collections::HashMap::new();
+        for binding in existing {
+            existing_by_contact.insert(binding.contact.clone(), binding);
+        }
+
         for contact in &contacts {
-            let expires = self.parse_expires(request, contact.as_str());
+            let expires = match self.parse_expires(request, contact.as_str()) {
+                Ok(expires) => expires,
+                Err(ExpiresError::TooBrief(min)) => {
+                    return self.build_interval_too_brief(request, min);
+                }
+                Err(ExpiresError::TooLong(_max)) => {
+                    return self.build_error_response(
+                        request,
+                        400,
+                        "Bad Request - Expires too long",
+                    );
+                }
+            };
             let q_value = self.parse_q_value(contact.as_str());
             let contact_uri = self.extract_contact_uri(contact.as_str());
+
+            if let Some(existing) = existing_by_contact.get(&contact_uri) {
+                if existing.call_id == call_id && cseq <= existing.cseq {
+                    return self.build_error_response(
+                        request,
+                        400,
+                        "Bad Request - CSeq out of order",
+                    );
+                }
+            }
 
             if expires.as_secs() == 0 {
                 // Remove binding
@@ -870,13 +1180,7 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
                 info!(aor = %aor, contact = %contact_uri, expires = %expires.as_secs(), "REGISTER stored binding");
             }
 
-            // Build response contact with expires parameter
-            let response_contact = if expires.as_secs() == 0 {
-                contact.clone()
-            } else {
-                SmolStr::new(format!("{};expires={}", contact, expires.as_secs()))
-            };
-            processed_contacts.push(response_contact);
+            processed_contacts.push(format_contact(&contact_uri, expires, q_value));
         }
 
         // Build response
@@ -900,9 +1204,22 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
             headers.push(SmolStr::new("CSeq"), cseq.clone());
         }
 
-        // Add all processed contacts
+        let bindings = self.store.lookup(&aor)?;
+        let mut seen = std::collections::HashSet::new();
+        for binding in &bindings {
+            headers.push(
+                SmolStr::new("Contact"),
+                format_contact(&binding.contact, binding.expires, binding.q_value),
+            );
+            seen.insert(binding.contact.clone());
+        }
         for contact in &processed_contacts {
-            headers.push(SmolStr::new("Contact"), contact.clone());
+            if let Some((uri, _)) = contact.split_once(';') {
+                let uri = SmolStr::new(uri.to_owned());
+                if !seen.contains(&uri) {
+                    headers.push(SmolStr::new("Contact"), contact.clone());
+                }
+            }
         }
 
         headers.push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()));
@@ -919,6 +1236,19 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
 /// Collects all Contact header values from the provided headers.
 pub fn contact_headers(headers: &Headers) -> Vec<SmolStr> {
     headers.get_all("Contact").map(|v| v.clone()).collect()
+}
+
+fn format_contact(contact_uri: &SmolStr, expires: Duration, q_value: f32) -> SmolStr {
+    if expires.as_secs() == 0 {
+        SmolStr::new(format!("{};expires=0", contact_uri))
+    } else {
+        SmolStr::new(format!(
+            "{};expires={};q={}",
+            contact_uri,
+            expires.as_secs(),
+            q_value
+        ))
+    }
 }
 
 /// Ensures To header has a tag parameter (RFC 3261 §8.2.6.2)
@@ -1202,6 +1532,7 @@ mod tests {
         let mut headers = Headers::new();
         headers.push("To".into(), "<sip:alice@example.com>".into());
         headers.push("Contact".into(), "*".into());
+        headers.push("Expires".into(), "0".into());
         headers.push("Call-ID".into(), "call123".into());
         headers.push("CSeq".into(), "2 REGISTER".into());
 
@@ -1262,12 +1593,12 @@ mod tests {
             Bytes::new(),
         );
 
-        registrar.handle_register(&request).expect("response");
-
-        let bindings = store.lookup("sip:alice@example.com").unwrap();
-        assert_eq!(bindings.len(), 1);
-        // Should be close to 100 (accounting for small processing delay)
-        assert!(bindings[0].expires.as_secs() >= 95);
+        let response = registrar.handle_register(&request).expect("response");
+        assert_eq!(response.start.code, 423);
+        assert_eq!(
+            response.headers.get("Min-Expires").map(|v| v.as_str()),
+            Some("100")
+        );
     }
 
     #[test]
@@ -1291,11 +1622,9 @@ mod tests {
             Bytes::new(),
         );
 
-        registrar.handle_register(&request).expect("response");
-
-        let bindings = store.lookup("sip:alice@example.com").unwrap();
-        assert_eq!(bindings.len(), 1);
-        assert!(bindings[0].expires.as_secs() <= 1000);
+        let response = registrar.handle_register(&request).expect("response");
+        assert_eq!(response.start.code, 400);
+        assert!(store.lookup("sip:alice@example.com").unwrap().is_empty());
     }
 
     #[test]
@@ -1700,5 +2029,275 @@ mod tests {
             .get("To")
             .expect("To header should be present");
         assert!(to.contains(";tag="), "To header should have tag added");
+    }
+
+    // ========== tel URI Tests ==========
+
+    #[test]
+    fn normalize_aor_handles_global_tel_uri() {
+        use sip_core::{TelUri, Uri};
+
+        // Global tel URI with visual separators
+        let tel = TelUri::parse("tel:+1-555-123-4567").unwrap();
+        let uri = Uri::Tel(tel);
+        let normalized = normalize_aor(&uri).expect("normalize_aor");
+
+        // Should normalize to remove visual separators
+        assert_eq!(normalized, "tel:+15551234567");
+    }
+
+    #[test]
+    fn normalize_aor_handles_local_tel_uri() {
+        use sip_core::{TelUri, Uri};
+
+        // Local tel URI with phone-context
+        let tel = TelUri::parse("tel:5551234;phone-context=example.com").unwrap();
+        let uri = Uri::Tel(tel);
+        let normalized = normalize_aor(&uri).expect("normalize_aor");
+
+        assert_eq!(normalized, "tel:5551234;phone-context=example.com");
+    }
+
+    #[test]
+    fn normalize_aor_includes_tel_params() {
+        use sip_core::{TelUri, Uri};
+
+        let tel = TelUri::parse("tel:+1-555-123-4567;ext=123;isub=xyz").unwrap();
+        let uri = Uri::Tel(tel);
+        let normalized = normalize_aor(&uri).expect("normalize_aor");
+
+        assert_eq!(normalized, "tel:+15551234567;ext=123;isub=xyz");
+    }
+
+    #[test]
+    fn normalize_aor_normalizes_local_tel_context() {
+        use sip_core::{TelUri, Uri};
+
+        let tel = TelUri::parse("tel:555-1234;phone-context=EXAMPLE.com").unwrap();
+        let uri = Uri::Tel(tel);
+        let normalized = normalize_aor(&uri).expect("normalize_aor");
+
+        assert_eq!(normalized, "tel:5551234;phone-context=example.com");
+    }
+
+    #[test]
+    fn registrar_handles_global_tel_uri_registration() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store.clone(), None);
+
+        let mut headers = Headers::new();
+        headers.push("To".into(), "<tel:+1-555-123-4567>".into());
+        headers.push("Contact".into(), "<sip:ua.example.com>;expires=60".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar.handle_register(&request).expect("response");
+        assert_eq!(response.start.code, 200);
+
+        // Verify binding was stored with normalized tel URI
+        let bindings = store.lookup("tel:+15551234567").unwrap();
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].aor.as_str(), "tel:+15551234567");
+        assert_eq!(bindings[0].contact.as_str(), "sip:ua.example.com");
+    }
+
+    #[test]
+    fn registrar_handles_local_tel_uri_registration() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store.clone(), None);
+
+        let mut headers = Headers::new();
+        headers.push("To".into(), "<tel:5551234;phone-context=example.com>".into());
+        headers.push("Contact".into(), "<sip:ua.example.com>;expires=60".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar.handle_register(&request).expect("response");
+        assert_eq!(response.start.code, 200);
+
+        // Verify binding with phone-context
+        let bindings = store.lookup("tel:5551234;phone-context=example.com").unwrap();
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].contact.as_str(), "sip:ua.example.com");
+    }
+
+    #[test]
+    fn registrar_handles_tel_uri_deregistration() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store.clone(), None);
+
+        // First register
+        let mut headers = Headers::new();
+        headers.push("To".into(), "<tel:+15551234567>".into());
+        headers.push("Contact".into(), "<sip:ua.example.com>;expires=60".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        registrar.handle_register(&request).expect("response");
+        assert_eq!(store.lookup("tel:+15551234567").unwrap().len(), 1);
+
+        // Now deregister with expires=0
+        let mut headers = Headers::new();
+        headers.push("To".into(), "<tel:+1-555-123-4567>".into()); // Different format, same number
+        headers.push("Contact".into(), "<sip:ua.example.com>;expires=0".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "2 REGISTER".into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar.handle_register(&request).expect("response");
+        assert_eq!(response.start.code, 200);
+
+        // Should be removed (normalization makes them equivalent)
+        assert!(store.lookup("tel:+15551234567").unwrap().is_empty());
+    }
+
+    #[test]
+    fn registrar_handles_multiple_tel_uri_contacts() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store.clone(), None);
+
+        let mut headers = Headers::new();
+        headers.push("To".into(), "<tel:+15551234567>".into());
+        headers.push("Contact".into(), "<sip:ua1.example.com>;expires=60".into());
+        headers.push("Contact".into(), "<sip:ua2.example.com>;expires=120".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar.handle_register(&request).expect("response");
+        assert_eq!(response.start.code, 200);
+
+        let bindings = store.lookup("tel:+15551234567").unwrap();
+        assert_eq!(bindings.len(), 2);
+
+        let contacts: Vec<&str> = bindings.iter().map(|b| b.contact.as_str()).collect();
+        assert!(contacts.contains(&"sip:ua1.example.com"));
+        assert!(contacts.contains(&"sip:ua2.example.com"));
+    }
+
+    #[test]
+    fn registrar_handles_tel_uri_wildcard_deregistration() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store.clone(), None);
+
+        // Register multiple contacts
+        let mut headers = Headers::new();
+        headers.push("To".into(), "<tel:+15551234567>".into());
+        headers.push("Contact".into(), "<sip:ua1.example.com>;expires=60".into());
+        headers.push("Contact".into(), "<sip:ua2.example.com>;expires=60".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        registrar.handle_register(&request).expect("response");
+        assert_eq!(store.lookup("tel:+15551234567").unwrap().len(), 2);
+
+        // Deregister all with wildcard
+        let mut headers = Headers::new();
+        headers.push("To".into(), "<tel:+1-555-123-4567>".into());
+        headers.push("Contact".into(), "*".into());
+        headers.push("Expires".into(), "0".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "2 REGISTER".into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar.handle_register(&request).expect("response");
+        assert_eq!(response.start.code, 200);
+        assert!(store.lookup("tel:+15551234567").unwrap().is_empty());
+    }
+
+    #[test]
+    fn registrar_rejects_absolute_uri_in_to_header() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store, None);
+
+        let mut headers = Headers::new();
+        headers.push("To".into(), "<mailto:alice@example.com>".into());
+        headers.push("Contact".into(), "<sip:ua.example.com>;expires=60".into());
+        headers.push("Call-ID".into(), "call123".into());
+        headers.push("CSeq".into(), "1 REGISTER".into());
+
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        let response = registrar.handle_register(&request).expect("response");
+        assert_eq!(response.start.code, 400);
+        assert!(response.start.reason.contains("Unsupported"));
+    }
+
+    #[test]
+    fn normalize_aor_preserves_sip_uri_behavior() {
+        use sip_core::{SipUri, Uri};
+
+        // Test that SIP URI normalization still works as before
+        let sip = SipUri::parse("sip:alice@example.com;transport=tcp").unwrap();
+        let uri = Uri::Sip(sip);
+        let normalized = normalize_aor(&uri).expect("normalize_aor");
+
+        // Parameters should be stripped
+        assert_eq!(normalized, "sip:alice@example.com");
+    }
+
+    #[test]
+    fn normalize_error_display() {
+        let error = NormalizeError::UnsupportedScheme;
+        let display = format!("{}", error);
+        assert!(display.contains("not supported"));
+        assert!(display.contains("SIP/SIPS/tel"));
+    }
+
+    #[test]
+    fn normalize_error_is_error_trait() {
+        use std::error::Error;
+        let error: Box<dyn Error> = Box::new(NormalizeError::UnsupportedScheme);
+        let display = format!("{}", error);
+        assert!(display.contains("not supported"));
     }
 }
