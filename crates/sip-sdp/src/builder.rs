@@ -53,6 +53,21 @@ impl SessionDescriptionBuilder {
         self
     }
 
+    /// Sets the session encryption key
+    pub fn encryption_key(mut self, key: &str) -> Self {
+        self.sdp.encryption_key = Some(SmolStr::new(key));
+        self
+    }
+
+    /// Adds a time zone adjustment
+    pub fn time_zone_adjustment(mut self, adjustment_time: &str, offset: &str) -> Self {
+        self.sdp.time_zones.push(TimeZoneAdjustment {
+            adjustment_time: SmolStr::new(adjustment_time),
+            offset: SmolStr::new(offset),
+        });
+        self
+    }
+
     /// Adds a media description
     pub fn media(mut self, media: MediaDescription) -> Self {
         self.sdp.media.push(media);
@@ -61,10 +76,21 @@ impl SessionDescriptionBuilder {
 
     /// Sets the time description (default is 0 0 for permanent session)
     pub fn time(mut self, start: u64, stop: u64) -> Self {
-        self.sdp.time = TimeDescription {
+        self.sdp.times = vec![TimeDescription {
             start_time: start,
             stop_time: stop,
-        };
+            repeats: Vec::new(),
+        }];
+        self
+    }
+
+    /// Adds an additional time description
+    pub fn add_time(mut self, start: u64, stop: u64) -> Self {
+        self.sdp.times.push(TimeDescription {
+            start_time: start,
+            stop_time: stop,
+            repeats: Vec::new(),
+        });
         self
     }
 

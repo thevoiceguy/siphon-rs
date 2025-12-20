@@ -59,10 +59,39 @@ pub fn serialize_sdp(sdp: &SessionDescription) -> String {
     }
 
     // Time (required): t=<start-time> <stop-time>
-    output.push_str(&format!(
-        "t={} {}\r\n",
-        sdp.time.start_time, sdp.time.stop_time
-    ));
+    if sdp.times.is_empty() {
+        output.push_str("t=0 0\r\n");
+    }
+    for time in &sdp.times {
+        output.push_str(&format!("t={} {}\r\n", time.start_time, time.stop_time));
+        for repeat in &time.repeats {
+            output.push_str(&format!(
+                "r={} {}",
+                repeat.repeat_interval, repeat.active_duration
+            ));
+            for offset in &repeat.offsets {
+                output.push_str(&format!(" {}", offset));
+            }
+            output.push_str("\r\n");
+        }
+    }
+
+    // Time zone adjustments (optional): z=<adjustment-time> <offset> ...
+    if !sdp.time_zones.is_empty() {
+        output.push_str("z=");
+        for (idx, zone) in sdp.time_zones.iter().enumerate() {
+            if idx > 0 {
+                output.push(' ');
+            }
+            output.push_str(&format!("{} {}", zone.adjustment_time, zone.offset));
+        }
+        output.push_str("\r\n");
+    }
+
+    // Session encryption key (optional): k=<method>:<encryption key>
+    if let Some(ref key) = sdp.encryption_key {
+        output.push_str(&format!("k={}\r\n", key));
+    }
 
     // Session-level attributes: a=<attribute> or a=<attribute>:<value>
     for attr in &sdp.attributes {
@@ -90,9 +119,13 @@ fn serialize_media(output: &mut String, media: &MediaDescription) {
 
     output.push_str(&format!("{}", media.protocol));
 
-    // Format list (RTP payload types)
-    for fmt in &media.formats {
-        output.push_str(&format!(" {}", fmt));
+    // Format list (RTP payload types or tokens)
+    if media.formats.is_empty() {
+        output.push_str(" 0");
+    } else {
+        for fmt in &media.formats {
+            output.push_str(&format!(" {}", fmt));
+        }
     }
     output.push_str("\r\n");
 

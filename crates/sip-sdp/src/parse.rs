@@ -25,6 +25,8 @@ pub enum ParseError {
     ParseFailed(String),
     /// Invalid protocol version (must be 0)
     InvalidVersion(u8),
+    /// Input exceeds configured limits
+    LimitExceeded(&'static str, usize),
 }
 
 impl std::fmt::Display for ParseError {
@@ -36,6 +38,9 @@ impl std::fmt::Display for ParseError {
             }
             ParseError::ParseFailed(msg) => write!(f, "SDP parsing failed: {}", msg),
             ParseError::InvalidVersion(v) => write!(f, "Invalid SDP version: {} (must be 0)", v),
+            ParseError::LimitExceeded(what, limit) => {
+                write!(f, "SDP input exceeds limit for {}: {}", what, limit)
+            }
         }
     }
 }
@@ -44,6 +49,50 @@ impl std::error::Error for ParseError {}
 
 /// Parses a complete SDP session description
 pub fn parse_sdp(input: &str) -> Result<SessionDescription, ParseError> {
+    parse_sdp_with_limits(input, ParseLimits::default())
+}
+
+/// Limits for parsing SDP input
+#[derive(Debug, Clone, Copy)]
+pub struct ParseLimits {
+    pub max_bytes: usize,
+    pub max_lines: usize,
+    pub max_line_length: usize,
+}
+
+impl Default for ParseLimits {
+    fn default() -> Self {
+        Self {
+            max_bytes: 128 * 1024,
+            max_lines: 2048,
+            max_line_length: 4096,
+        }
+    }
+}
+
+/// Parses a complete SDP session description with limits
+pub fn parse_sdp_with_limits(
+    input: &str,
+    limits: ParseLimits,
+) -> Result<SessionDescription, ParseError> {
+    if input.len() > limits.max_bytes {
+        return Err(ParseError::LimitExceeded("bytes", limits.max_bytes));
+    }
+
+    let mut line_count = 0usize;
+    for line in input.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        line_count += 1;
+        if line_count > limits.max_lines {
+            return Err(ParseError::LimitExceeded("lines", limits.max_lines));
+        }
+        if line.len() > limits.max_line_length {
+            return Err(ParseError::LimitExceeded("line length", limits.max_line_length));
+        }
+    }
+
     // Parse all lines into a structured format first
     let (remaining, lines) =
         parse_sdp_lines(input).map_err(|e| ParseError::ParseFailed(e.to_string()))?;
@@ -66,13 +115,16 @@ enum SdpLine {
     Version(u8),
     Origin(Origin),
     SessionName(SmolStr),
-    SessionInfo(SmolStr),
+    Info(SmolStr),
     Uri(SmolStr),
     Email(SmolStr),
     Phone(SmolStr),
     Connection(Connection),
     Bandwidth(Bandwidth),
     Time(TimeDescription),
+    Repeat(RepeatTime),
+    TimeZone(Vec<TimeZoneAdjustment>),
+    EncryptionKey(SmolStr),
     Attribute(Attribute),
     Media(MediaBlock),
 }
@@ -84,7 +136,7 @@ struct MediaBlock {
     port: u16,
     num_ports: Option<u16>,
     protocol: Protocol,
-    formats: Vec<u8>,
+    formats: Vec<SmolStr>,
     title: Option<SmolStr>,
     connection: Option<Connection>,
     bandwidth: Vec<Bandwidth>,
@@ -103,13 +155,16 @@ fn parse_line(input: &str) -> IResult<&str, SdpLine> {
         map(parse_v_line, SdpLine::Version),
         map(parse_o_line, SdpLine::Origin),
         map(parse_s_line, SdpLine::SessionName),
-        map(parse_i_line, SdpLine::SessionInfo),
+        map(parse_i_line, SdpLine::Info),
         map(parse_u_line, SdpLine::Uri),
         map(parse_e_line, SdpLine::Email),
         map(parse_p_line, SdpLine::Phone),
         map(parse_c_line, SdpLine::Connection),
         map(parse_b_line, SdpLine::Bandwidth),
         map(parse_t_line, SdpLine::Time),
+        map(parse_r_line, SdpLine::Repeat),
+        map(parse_z_line, SdpLine::TimeZone),
+        map(parse_k_line, SdpLine::EncryptionKey),
         map(parse_a_line, SdpLine::Attribute),
         map(parse_m_line, SdpLine::Media),
     ))(input)
@@ -243,8 +298,69 @@ fn parse_t_line(input: &str) -> IResult<&str, TimeDescription> {
             |(start_time, stop_time)| TimeDescription {
                 start_time,
                 stop_time,
+                repeats: Vec::new(),
             },
         ),
+    )(input)
+}
+
+/// Parse repeat time line: r=<repeat interval> <active duration> <offsets...>
+fn parse_r_line(input: &str) -> IResult<&str, RepeatTime> {
+    preceded(
+        tag("r="),
+        map(take_till(|c| c == '\r' || c == '\n'), |s: &str| {
+            let parts: Vec<&str> = s.split_whitespace().collect();
+            let repeat_interval = parts.get(0).copied().unwrap_or("");
+            let active_duration = parts.get(1).copied().unwrap_or("");
+            let offsets = parts
+                .iter()
+                .skip(2)
+                .map(|v| SmolStr::new(*v))
+                .collect();
+
+            RepeatTime {
+                repeat_interval: SmolStr::new(repeat_interval),
+                active_duration: SmolStr::new(active_duration),
+                offsets,
+            }
+        }),
+    )(input)
+}
+
+/// Parse time zone adjustments: z=<adjustment-time> <offset> ...
+fn parse_z_line(input: &str) -> IResult<&str, Vec<TimeZoneAdjustment>> {
+    preceded(
+        tag("z="),
+        map(take_till(|c| c == '\r' || c == '\n'), |s: &str| {
+            let parts: Vec<&str> = s.split_whitespace().collect();
+            let mut adjustments = Vec::new();
+
+            let mut iter = parts.chunks_exact(2);
+            for chunk in &mut iter {
+                adjustments.push(TimeZoneAdjustment {
+                    adjustment_time: SmolStr::new(chunk[0]),
+                    offset: SmolStr::new(chunk[1]),
+                });
+            }
+            if !iter.remainder().is_empty() {
+                adjustments.push(TimeZoneAdjustment {
+                    adjustment_time: SmolStr::new(iter.remainder()[0]),
+                    offset: SmolStr::new(""),
+                });
+            }
+
+            adjustments
+        }),
+    )(input)
+}
+
+/// Parse encryption key line: k=<method> or k=<method>:<key>
+fn parse_k_line(input: &str) -> IResult<&str, SmolStr> {
+    preceded(
+        tag("k="),
+        map(take_till(|c| c == '\r' || c == '\n'), |s: &str| {
+            SmolStr::new(s.trim())
+        }),
     )(input)
 }
 
@@ -279,7 +395,12 @@ fn parse_m_line(input: &str) -> IResult<&str, MediaBlock> {
                 terminated(parse_media_type, space1),
                 terminated(parse_port, space1),
                 terminated(parse_protocol, space1),
-                separated_list0(space1, map_res(digit1, |s: &str| s.parse::<u8>())),
+                separated_list0(
+                    space1,
+                    map(take_till(|c| c == ' ' || c == '\r' || c == '\n'), |s: &str| {
+                        SmolStr::new(s)
+                    }),
+                ),
             )),
             |(media_type, (port, num_ports), protocol, formats)| MediaBlock {
                 media_type,
@@ -299,13 +420,17 @@ fn parse_m_line(input: &str) -> IResult<&str, MediaBlock> {
 
 /// Parse media type: audio, video, text, application, message
 fn parse_media_type(input: &str) -> IResult<&str, MediaType> {
-    alt((
-        map(tag("audio"), |_| MediaType::Audio),
-        map(tag("video"), |_| MediaType::Video),
-        map(tag("text"), |_| MediaType::Text),
-        map(tag("application"), |_| MediaType::Application),
-        map(tag("message"), |_| MediaType::Message),
-    ))(input)
+    map(
+        take_till(|c| c == ' ' || c == '\r' || c == '\n'),
+        |name: &str| match name {
+            "audio" => MediaType::Audio,
+            "video" => MediaType::Video,
+            "text" => MediaType::Text,
+            "application" => MediaType::Application,
+            "message" => MediaType::Message,
+            other => MediaType::Other(SmolStr::new(other)),
+        },
+    )(input)
 }
 
 /// Parse port with optional port count: <port> or <port>/<num_ports>
@@ -367,7 +492,10 @@ fn build_session_description(lines: Vec<SdpLine>) -> Result<SessionDescription, 
     let mut phone = None;
     let mut connection = None;
     let mut bandwidth = Vec::new();
-    let mut time = None;
+    let mut times = Vec::new();
+    let mut current_time: Option<TimeDescription> = None;
+    let mut time_zones = Vec::new();
+    let mut encryption_key = None;
     let mut attributes = Vec::new();
     let mut media_blocks = Vec::new();
     let mut current_media: Option<MediaBlock> = None;
@@ -377,7 +505,13 @@ fn build_session_description(lines: Vec<SdpLine>) -> Result<SessionDescription, 
             SdpLine::Version(v) => version = Some(v),
             SdpLine::Origin(o) => origin = Some(o),
             SdpLine::SessionName(s) => session_name = Some(s),
-            SdpLine::SessionInfo(i) => session_info = Some(i),
+            SdpLine::Info(i) => {
+                if let Some(ref mut m) = current_media {
+                    m.title = Some(i);
+                } else {
+                    session_info = Some(i);
+                }
+            }
             SdpLine::Uri(u) => uri = Some(u),
             SdpLine::Email(e) => email = Some(e),
             SdpLine::Phone(p) => phone = Some(p),
@@ -395,7 +529,34 @@ fn build_session_description(lines: Vec<SdpLine>) -> Result<SessionDescription, 
                     bandwidth.push(b);
                 }
             }
-            SdpLine::Time(t) => time = Some(t),
+            SdpLine::Time(t) => {
+                if let Some(finished) = current_time.take() {
+                    times.push(finished);
+                }
+                current_time = Some(t);
+            }
+            SdpLine::Repeat(r) => {
+                let repeat = normalize_repeat(r)?;
+                if let Some(ref mut time) = current_time {
+                    time.repeats.push(repeat);
+                } else {
+                    return Err(ParseError::InvalidFormat(
+                        "r=",
+                        "repeat without time description".to_string(),
+                    ));
+                }
+            }
+            SdpLine::TimeZone(z) => {
+                let normalized = normalize_time_zones(z)?;
+                time_zones.extend(normalized);
+            }
+            SdpLine::EncryptionKey(key) => {
+                if let Some(ref mut m) = current_media {
+                    m.encryption_key = Some(key);
+                } else {
+                    encryption_key = Some(key);
+                }
+            }
             SdpLine::Attribute(a) => {
                 if let Some(ref mut m) = current_media {
                     m.attributes.push(a);
@@ -418,6 +579,10 @@ fn build_session_description(lines: Vec<SdpLine>) -> Result<SessionDescription, 
         media_blocks.push(finished_media);
     }
 
+    if let Some(finished_time) = current_time.take() {
+        times.push(finished_time);
+    }
+
     // Validate required fields
     let version = version.ok_or(ParseError::MissingField("v= (version)"))?;
     if version != 0 {
@@ -426,12 +591,15 @@ fn build_session_description(lines: Vec<SdpLine>) -> Result<SessionDescription, 
 
     let origin = origin.ok_or(ParseError::MissingField("o= (origin)"))?;
     let session_name = session_name.ok_or(ParseError::MissingField("s= (session name)"))?;
-    let time = time.ok_or(ParseError::MissingField("t= (time)"))?;
+    if times.is_empty() {
+        return Err(ParseError::MissingField("t= (time)"));
+    }
 
     // Convert media blocks to MediaDescription
     let media = media_blocks
         .into_iter()
         .map(|block| {
+            validate_media_formats(&block)?;
             // Extract rtpmaps from attributes
             let mut rtpmaps = HashMap::new();
             for attr in &block.attributes {
@@ -444,7 +612,7 @@ fn build_session_description(lines: Vec<SdpLine>) -> Result<SessionDescription, 
                 }
             }
 
-            MediaDescription {
+            Ok(MediaDescription {
                 media_type: block.media_type,
                 port: block.port,
                 num_ports: block.num_ports,
@@ -456,9 +624,9 @@ fn build_session_description(lines: Vec<SdpLine>) -> Result<SessionDescription, 
                 encryption_key: block.encryption_key,
                 attributes: block.attributes,
                 rtpmaps,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, ParseError>>()?;
 
     Ok(SessionDescription {
         version,
@@ -470,10 +638,95 @@ fn build_session_description(lines: Vec<SdpLine>) -> Result<SessionDescription, 
         phone,
         connection,
         bandwidth,
-        time,
+        times,
+        time_zones,
+        encryption_key,
         attributes,
         media,
     })
+}
+
+fn normalize_repeat(repeat: RepeatTime) -> Result<RepeatTime, ParseError> {
+    if repeat.repeat_interval.is_empty() || repeat.active_duration.is_empty() {
+        return Err(ParseError::InvalidFormat(
+            "r=",
+            "repeat interval or duration missing".to_string(),
+        ));
+    }
+    Ok(repeat)
+}
+
+fn normalize_time_zones(
+    zones: Vec<TimeZoneAdjustment>,
+) -> Result<Vec<TimeZoneAdjustment>, ParseError> {
+    if zones.is_empty() {
+        return Err(ParseError::InvalidFormat(
+            "z=",
+            "missing time zone adjustments".to_string(),
+        ));
+    }
+    if zones
+        .iter()
+        .any(|z| z.adjustment_time.is_empty() || z.offset.is_empty())
+    {
+        return Err(ParseError::InvalidFormat(
+            "z=",
+            "invalid time zone adjustment pair".to_string(),
+        ));
+    }
+    Ok(zones)
+}
+
+fn validate_media_formats(block: &MediaBlock) -> Result<(), ParseError> {
+    if matches!(&block.media_type, MediaType::Other(name) if name.is_empty()) {
+        return Err(ParseError::InvalidFormat(
+            "m=",
+            "missing media type".to_string(),
+        ));
+    }
+    if block.formats.is_empty() {
+        return Err(ParseError::InvalidFormat(
+            "m=",
+            "missing format list".to_string(),
+        ));
+    }
+    if block.formats.iter().any(|f| f.is_empty()) {
+        return Err(ParseError::InvalidFormat(
+            "m=",
+            "empty format token".to_string(),
+        ));
+    }
+
+    if is_rtp_protocol(&block.protocol) {
+        for fmt in &block.formats {
+            let token = fmt.as_str();
+            let value = token.parse::<u16>().map_err(|_| {
+                ParseError::InvalidFormat(
+                    "m=",
+                    format!("non-numeric RTP payload type: {}", token),
+                )
+            })?;
+            if value > 127 {
+                return Err(ParseError::InvalidFormat(
+                    "m=",
+                    format!("RTP payload type out of range: {}", value),
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn is_rtp_protocol(protocol: &Protocol) -> bool {
+    matches!(
+        protocol,
+        Protocol::RtpAvp
+            | Protocol::RtpSavp
+            | Protocol::RtpSavpf
+            | Protocol::UdpTlsRtpSavpf
+            | Protocol::TcpTlsRtpSavpf
+    )
 }
 
 /// Parse rtpmap attribute value: <payload> <encoding>/<clock> or <payload> <encoding>/<clock>/<params>
@@ -526,7 +779,14 @@ mod tests {
         assert_eq!(result.media.len(), 1);
         assert_eq!(result.media[0].media_type, MediaType::Audio);
         assert_eq!(result.media[0].port, 8000);
-        assert_eq!(result.media[0].formats, vec![0, 8]);
+        assert_eq!(
+            result.media[0]
+                .formats
+                .iter()
+                .map(|f| f.as_str())
+                .collect::<Vec<_>>(),
+            vec!["0", "8"]
+        );
         assert_eq!(result.media[0].rtpmaps.len(), 2);
     }
 
@@ -604,5 +864,28 @@ mod tests {
             Err(ParseError::InvalidVersion(1)) => {}
             _ => panic!("Expected InvalidVersion error"),
         }
+    }
+
+    #[test]
+    fn parses_time_repeat_zones_and_keys() {
+        let sdp = "v=0\r\n\
+                   o=alice 123 0 IN IP4 192.0.2.1\r\n\
+                   s=Test\r\n\
+                   t=0 0\r\n\
+                   r=7d 1h 0 25h\r\n\
+                   z=2882844526 -1h 2898848070 0\r\n\
+                   k=clear:secret\r\n\
+                   m=audio 5004 RTP/AVP 0\r\n\
+                   i=Audio Stream\r\n\
+                   k=prompt\r\n";
+
+        let result = parse_sdp(sdp).unwrap();
+        assert_eq!(result.times.len(), 1);
+        assert_eq!(result.times[0].repeats.len(), 1);
+        assert_eq!(result.time_zones.len(), 2);
+        assert_eq!(result.encryption_key.as_deref(), Some("clear:secret"));
+        assert_eq!(result.media.len(), 1);
+        assert_eq!(result.media[0].title.as_deref(), Some("Audio Stream"));
+        assert_eq!(result.media[0].encryption_key.as_deref(), Some("prompt"));
     }
 }

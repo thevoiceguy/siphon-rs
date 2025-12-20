@@ -133,6 +133,38 @@ impl MediaProfileBuilder {
 }
 
 /// Creates an SDP session from a profile
+///
+/// Provides quick SDP generation for common scenarios.
+///
+/// # Example
+/// ```
+/// use sip_sdp::profiles::{SdpProfile, create_from_profile};
+///
+/// // Audio-only call with PCMU, PCMA, and telephone-event
+/// let sdp = create_from_profile(
+///     SdpProfile::AudioOnly,
+///     "alice",
+///     "192.168.1.100",
+///     8000,
+///     None,
+/// );
+///
+/// assert_eq!(sdp.media.len(), 1);
+/// assert!(sdp.media[0].formats.iter().any(|f| f == "0"));  // PCMU
+/// assert!(sdp.media[0].formats.iter().any(|f| f == "8"));  // PCMA
+/// assert!(sdp.media[0].formats.iter().any(|f| f == "101")); // telephone-event
+///
+/// // Audio+video call
+/// let av_sdp = create_from_profile(
+///     SdpProfile::AudioVideo,
+///     "bob",
+///     "10.0.0.1",
+///     9000,
+///     Some(9002),
+/// );
+///
+/// assert_eq!(av_sdp.media.len(), 2);
+/// ```
 pub fn create_from_profile(
     profile: SdpProfile,
     local_uri: &str,
@@ -246,19 +278,23 @@ pub fn negotiate_answer(
     let desired_video: HashSet<u8> = profile.video_codecs.iter().map(|c| c.0).collect();
 
     for m in &offer.media {
-        match m.media_type {
+        match &m.media_type {
             MediaType::Audio => {
-                for pt in &m.formats {
-                    if desired_audio.contains(pt) {
-                        if let Some(rtp) = m.rtpmaps.get(pt) {
+                for fmt in &m.formats {
+                    let pt = match parse_payload_type(fmt) {
+                        Some(pt) => pt,
+                        None => continue,
+                    };
+                    if desired_audio.contains(&pt) {
+                        if let Some(rtp) = m.rtpmaps.get(&pt) {
                             builder = builder.add_audio_codec(
-                                *pt,
+                                pt,
                                 rtp.encoding_name.to_string(),
                                 rtp.clock_rate,
                             );
                         }
                     }
-                    if *pt == 101 && profile.include_telephone_event {
+                    if pt == 101 && profile.include_telephone_event {
                         builder = builder.telephone_event(true);
                     }
                 }
@@ -267,11 +303,15 @@ pub fn negotiate_answer(
                 // Only enable video if the profile supports it
                 if profile.enable_video || !profile.video_codecs.is_empty() {
                     builder.enable_video = true;
-                    for pt in &m.formats {
-                        if desired_video.contains(pt) {
-                            if let Some(rtp) = m.rtpmaps.get(pt) {
+                    for fmt in &m.formats {
+                        let pt = match parse_payload_type(fmt) {
+                            Some(pt) => pt,
+                            None => continue,
+                        };
+                        if desired_video.contains(&pt) {
+                            if let Some(rtp) = m.rtpmaps.get(&pt) {
                                 builder = builder.add_video_codec(
-                                    *pt,
+                                    pt,
                                     rtp.encoding_name.to_string(),
                                     rtp.clock_rate,
                                 );
@@ -287,6 +327,15 @@ pub fn negotiate_answer(
     builder.build(username, addr, audio_port, video_port)
 }
 
+fn parse_payload_type(fmt: &SmolStr) -> Option<u8> {
+    let value = fmt.as_str().parse::<u16>().ok()?;
+    if value > 127 {
+        None
+    } else {
+        Some(value as u8)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,8 +347,8 @@ mod tests {
         assert_eq!(sdp.media.len(), 1);
         assert_eq!(sdp.media[0].media_type, MediaType::Audio);
         assert_eq!(sdp.media[0].port, 8000);
-        assert!(sdp.media[0].formats.contains(&0)); // PCMU
-        assert!(sdp.media[0].formats.contains(&8)); // PCMA
+        assert!(sdp.media[0].formats.iter().any(|f| f == "0")); // PCMU
+        assert!(sdp.media[0].formats.iter().any(|f| f == "8")); // PCMA
     }
 
     #[test]
@@ -317,7 +366,7 @@ mod tests {
     fn audio_profile_has_telephone_event() {
         let sdp = create_from_profile(SdpProfile::AudioOnly, "charlie", "172.16.0.1", 5004, None);
 
-        assert!(sdp.media[0].formats.contains(&101)); // telephone-event
+        assert!(sdp.media[0].formats.iter().any(|f| f == "101")); // telephone-event
         assert!(sdp.media[0].rtpmaps.contains_key(&101));
         assert_eq!(
             sdp.media[0].rtpmaps[&101].encoding_name.as_str(),
@@ -351,7 +400,7 @@ mod tests {
         let answer = negotiate_answer(&offer, &profile, "bob", "203.0.113.1", 7000, None);
         assert_eq!(answer.media.len(), 1);
         assert_eq!(answer.media[0].media_type, MediaType::Audio);
-        assert!(answer.media[0].formats.contains(&111));
+        assert!(answer.media[0].formats.iter().any(|f| f == "111"));
         assert!(answer.media[0].rtpmaps.contains_key(&111));
     }
 }

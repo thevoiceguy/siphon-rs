@@ -62,8 +62,14 @@ pub struct SessionDescription {
     /// Bandwidth information (optional): b=<bwtype>:<bandwidth>
     pub bandwidth: Vec<Bandwidth>,
 
-    /// Time description: t=<start-time> <stop-time>
-    pub time: TimeDescription,
+    /// Time descriptions: t=<start-time> <stop-time> (one or more)
+    pub times: Vec<TimeDescription>,
+
+    /// Time zone adjustments: z=<adjustment-time> <offset> ...
+    pub time_zones: Vec<TimeZoneAdjustment>,
+
+    /// Session encryption key (optional): k=<method> or k=<method>:<encryption key>
+    pub encryption_key: Option<SmolStr>,
 
     /// Session attributes: a=<attribute> or a=<attribute>:<value>
     pub attributes: Vec<Attribute>,
@@ -96,8 +102,23 @@ pub struct Connection {
 pub struct TimeDescription {
     pub start_time: u64, // NTP timestamp or 0 for permanent
     pub stop_time: u64,  // NTP timestamp or 0 for unbounded
+    pub repeats: Vec<RepeatTime>,
 }
 
+/// Repeat time (r=) per RFC 4566 §5.10
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepeatTime {
+    pub repeat_interval: SmolStr,
+    pub active_duration: SmolStr,
+    pub offsets: Vec<SmolStr>,
+}
+
+/// Time zone adjustment (z=) per RFC 4566 §5.11
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimeZoneAdjustment {
+    pub adjustment_time: SmolStr,
+    pub offset: SmolStr,
+}
 /// Bandwidth specification (b=) per RFC 4566 §5.8
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bandwidth {
@@ -121,7 +142,7 @@ pub struct MediaDescription {
     pub protocol: Protocol,
 
     /// Format list (RTP payload types or media format descriptions)
-    pub formats: Vec<u8>,
+    pub formats: Vec<SmolStr>,
 
     /// Media title (optional): i=<media title>
     pub title: Option<SmolStr>,
@@ -143,13 +164,14 @@ pub struct MediaDescription {
 }
 
 /// Media type per RFC 4566
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MediaType {
     Audio,
     Video,
     Text,
     Application,
     Message,
+    Other(SmolStr),
 }
 
 /// Transport protocol per RFC 4566
@@ -231,10 +253,13 @@ impl Default for SessionDescription {
             phone: None,
             connection: None,
             bandwidth: Vec::new(),
-            time: TimeDescription {
+            times: vec![TimeDescription {
                 start_time: 0,
                 stop_time: 0,
-            },
+                repeats: Vec::new(),
+            }],
+            time_zones: Vec::new(),
+            encryption_key: None,
             attributes: Vec::new(),
             media: Vec::new(),
         }
@@ -248,21 +273,95 @@ impl SessionDescription {
     }
 
     /// Parses SDP from a string
+    ///
+    /// # Example
+    /// ```
+    /// use sip_sdp::SessionDescription;
+    ///
+    /// let sdp_text = "v=0\r\n\
+    ///                 o=alice 123456 0 IN IP4 192.168.1.100\r\n\
+    ///                 s=VoIP Call\r\n\
+    ///                 c=IN IP4 192.168.1.100\r\n\
+    ///                 t=0 0\r\n\
+    ///                 m=audio 8000 RTP/AVP 0 8\r\n\
+    ///                 a=rtpmap:0 PCMU/8000\r\n\
+    ///                 a=rtpmap:8 PCMA/8000\r\n";
+    ///
+    /// let sdp = SessionDescription::parse(sdp_text).unwrap();
+    /// assert_eq!(sdp.origin.username.as_str(), "alice");
+    /// assert_eq!(sdp.media.len(), 1);
+    /// ```
     pub fn parse(sdp: &str) -> Result<Self, parse::ParseError> {
         parse::parse_sdp(sdp)
     }
 
     /// Serializes SDP to a string
+    ///
+    /// # Example
+    /// ```
+    /// use sip_sdp::{SessionDescription, MediaDescription};
+    ///
+    /// let sdp = SessionDescription::builder()
+    ///     .origin("alice", "123456", "192.168.1.100")
+    ///     .session_name("VoIP Call")
+    ///     .connection("192.168.1.100")
+    ///     .media(MediaDescription::audio(8000)
+    ///         .add_format(0)
+    ///         .add_rtpmap(0, "PCMU", 8000, None))
+    ///     .build();
+    ///
+    /// let sdp_text = sdp.to_string();
+    /// assert!(sdp_text.contains("v=0\r\n"));
+    /// assert!(sdp_text.contains("m=audio 8000 RTP/AVP 0\r\n"));
+    /// ```
     pub fn to_string(&self) -> String {
         serialize::serialize_sdp(self)
     }
 
     /// Finds a media description by type
+    ///
+    /// Returns the first media description matching the given type.
+    ///
+    /// # Example
+    /// ```
+    /// use sip_sdp::{SessionDescription, MediaDescription, MediaType};
+    ///
+    /// let sdp = SessionDescription::builder()
+    ///     .origin("bob", "456", "10.0.0.1")
+    ///     .session_name("Conference")
+    ///     .connection("10.0.0.1")
+    ///     .media(MediaDescription::audio(9000).add_format(0))
+    ///     .media(MediaDescription::video(9002).add_format(96))
+    ///     .build();
+    ///
+    /// let audio = sdp.find_media(MediaType::Audio).unwrap();
+    /// assert_eq!(audio.port, 9000);
+    /// ```
     pub fn find_media(&self, media_type: MediaType) -> Option<&MediaDescription> {
         self.media.iter().find(|m| m.media_type == media_type)
     }
 
     /// Finds all media descriptions of a given type
+    ///
+    /// Returns all media descriptions matching the given type (useful for multi-stream scenarios).
+    ///
+    /// # Example
+    /// ```
+    /// use sip_sdp::{SessionDescription, MediaDescription, MediaType};
+    ///
+    /// let sdp = SessionDescription::builder()
+    ///     .origin("charlie", "789", "172.16.0.1")
+    ///     .session_name("Multi-Audio")
+    ///     .connection("172.16.0.1")
+    ///     .media(MediaDescription::audio(5000).add_format(0))
+    ///     .media(MediaDescription::audio(5002).add_format(8))
+    ///     .build();
+    ///
+    /// let all_audio = sdp.find_all_media(MediaType::Audio);
+    /// assert_eq!(all_audio.len(), 2);
+    /// assert_eq!(all_audio[0].port, 5000);
+    /// assert_eq!(all_audio[1].port, 5002);
+    /// ```
     pub fn find_all_media(&self, media_type: MediaType) -> Vec<&MediaDescription> {
         self.media
             .iter()
@@ -308,7 +407,13 @@ impl MediaDescription {
 
     /// Adds a format (payload type)
     pub fn add_format(mut self, payload_type: u8) -> Self {
-        self.formats.push(payload_type);
+        self.formats.push(SmolStr::new(payload_type.to_string()));
+        self
+    }
+
+    /// Adds a format token (non-RTP or custom)
+    pub fn add_format_token(mut self, token: &str) -> Self {
+        self.formats.push(SmolStr::new(token));
         self
     }
 
@@ -423,6 +528,7 @@ impl std::fmt::Display for MediaType {
             MediaType::Text => write!(f, "text"),
             MediaType::Application => write!(f, "application"),
             MediaType::Message => write!(f, "message"),
+            MediaType::Other(name) => write!(f, "{}", name),
         }
     }
 }
@@ -471,7 +577,10 @@ mod tests {
 
         assert_eq!(media.media_type, MediaType::Audio);
         assert_eq!(media.port, 8000);
-        assert_eq!(media.formats, vec![0, 8]);
+        assert_eq!(
+            media.formats.iter().map(|f| f.as_str()).collect::<Vec<_>>(),
+            vec!["0", "8"]
+        );
         assert_eq!(media.rtpmaps.len(), 2);
     }
 
