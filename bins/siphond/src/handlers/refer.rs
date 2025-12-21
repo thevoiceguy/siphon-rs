@@ -4,19 +4,232 @@
 /// 1. Accept REFER requests
 /// 2. Create implicit subscription to "refer" event
 /// 3. Send 202 Accepted
-/// 4. (Future: Send NOTIFY with sipfrag progress)
-use anyhow::Result;
+/// 4. Initiate INVITE to transfer target
+/// 5. Send NOTIFY messages with sipfrag progress
+///
+/// ## UDP Limitation
+///
+/// **IMPORTANT**: REFER is not fully supported over UDP transport due to architectural
+/// constraints with ACK handling for 2xx responses to INVITE.
+///
+/// ### Background
+///
+/// Per RFC 3261 §13.2.2.4, the ACK for a 2xx response to INVITE is sent **outside**
+/// the transaction layer (unlike ACKs for error responses which are part of the
+/// transaction). This means the ACK must be sent directly via the transport layer.
+///
+/// ### The Problem
+///
+/// In the current architecture:
+/// - TCP/TLS: We have access to connection pools and can send ACK directly
+/// - WebSocket: We have the WS URI and can send ACK via WebSocket sender
+/// - UDP: **No socket access** - the UDP socket is owned by the transport layer
+///   and not accessible from the transaction user context
+///
+/// ### Impact
+///
+/// When a REFER is received and the transfer target is reachable only via UDP:
+/// - The initial INVITE will be sent successfully
+/// - If a 2xx response is received, the ACK **cannot be sent**
+/// - The transfer target will retransmit the 2xx response (up to Timer G = 32s)
+/// - Eventually the transfer target will give up and terminate the call
+/// - The REFER will fail even though both parties support the transfer
+///
+/// ### Workaround
+///
+/// To support REFER reliably:
+/// 1. Configure transfer targets to use TCP or TLS transport
+/// 2. Ensure DNS resolution prefers TCP over UDP for transfer targets
+/// 3. Set transport=tcp parameter in Refer-To URIs when possible
+///
+/// ### Future Solution
+///
+/// To support UDP REFER properly, we would need:
+/// 1. Pass UDP socket handle to transaction users, OR
+/// 2. Add ACK-sending capability to TransportDispatcher, OR
+/// 3. Handle 2xx ACKs at the transaction layer (non-standard but pragmatic)
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use sip_core::Request;
+use sip_core::{Request, Response, SipUri};
+use sip_dialog::{Subscription, SubscriptionId, SubscriptionState};
 use sip_parse::header;
-use sip_transaction::{ServerTransactionHandle, TransportContext};
+use sip_transaction::{
+    ClientTransactionUser, ServerTransactionHandle, TransactionKey, TransportContext,
+};
+use sip_uac::UserAgentClient;
 use sip_uas::UserAgentServer;
+use smol_str::SmolStr;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 use super::RequestHandler;
-use crate::services::ServiceRegistry;
+use crate::{sdp_utils, services::ServiceRegistry};
 
 pub struct ReferHandler;
+
+/// Transaction user for REFER NOTIFY messages.
+struct ReferNotifyTransactionUser;
+
+#[async_trait]
+impl ClientTransactionUser for ReferNotifyTransactionUser {
+    async fn on_provisional(&self, _key: &TransactionKey, _response: &Response) {}
+
+    async fn on_final(&self, _key: &TransactionKey, _response: &Response) {}
+
+    async fn on_terminated(&self, _key: &TransactionKey, _reason: &str) {}
+
+    async fn send_ack(
+        &self,
+        _key: &TransactionKey,
+        _response: Response,
+        _ctx: &TransportContext,
+        _is_2xx: bool,
+    ) {
+    }
+
+    async fn send_prack(
+        &self,
+        _key: &TransactionKey,
+        _response: Response,
+        _ctx: &TransportContext,
+    ) {
+    }
+
+    async fn on_transport_error(&self, _key: &TransactionKey) {
+        warn!("REFER NOTIFY transport error");
+    }
+}
+
+struct ReferTransferTransactionUser {
+    uac: UserAgentClient,
+    invite: Request,
+    uas: UserAgentServer,
+    subscription: Arc<Mutex<Subscription>>,
+    notify_ctx: TransportContext,
+    transaction_mgr: Arc<sip_transaction::TransactionManager>,
+    config: Arc<crate::config::DaemonConfig>,
+}
+
+impl ReferTransferTransactionUser {
+    async fn send_notify(&self, status_code: u16, reason: &str) {
+        let notify = {
+            let mut subscription = self.subscription.lock().await;
+            self.uas
+                .create_notify_sipfrag(&mut subscription, status_code, reason)
+        };
+
+        let tu = Arc::new(ReferNotifyTransactionUser);
+        if let Err(e) = self
+            .transaction_mgr
+            .start_client_transaction(notify, self.notify_ctx.clone(), tu)
+            .await
+        {
+            warn!(error = %e, "Failed to send REFER NOTIFY");
+        }
+    }
+}
+
+#[async_trait]
+impl ClientTransactionUser for ReferTransferTransactionUser {
+    async fn on_provisional(&self, _key: &TransactionKey, response: &Response) {
+        self.send_notify(response.start.code, response.start.reason.as_str())
+            .await;
+    }
+
+    async fn on_final(&self, _key: &TransactionKey, response: &Response) {
+        self.send_notify(response.start.code, response.start.reason.as_str())
+            .await;
+    }
+
+    async fn on_terminated(&self, _key: &TransactionKey, reason: &str) {
+        self.send_notify(503, reason).await;
+    }
+
+    async fn send_ack(
+        &self,
+        _key: &TransactionKey,
+        response: Response,
+        ctx: &TransportContext,
+        is_2xx: bool,
+    ) {
+        if !is_2xx {
+            return;
+        }
+
+        let invite_has_sdp = !self.invite.body.is_empty();
+        let response_has_sdp = !response.body.is_empty();
+        let late_offer = !invite_has_sdp && response_has_sdp;
+
+        let sdp_body = if late_offer {
+            match std::str::from_utf8(&response.body) {
+                Ok(offer_str) => match sdp_utils::generate_sdp_answer(&self.config, offer_str) {
+                    Ok(answer) => Some(answer),
+                    Err(e) => {
+                        warn!(error = %e, "Failed to generate SDP answer for REFER ACK");
+                        None
+                    }
+                },
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+
+        let ack = self.uac.create_ack(&self.invite, &response, sdp_body.as_deref());
+        let payload = sip_parse::serialize_request(&ack);
+
+        match ctx.transport {
+            sip_transaction::TransportKind::Tcp => {
+                if let Err(e) = sip_transport::send_tcp(&ctx.peer, &payload).await {
+                    warn!(error = %e, "Failed to send REFER ACK via TCP");
+                }
+            }
+            sip_transaction::TransportKind::Ws | sip_transaction::TransportKind::Wss => {
+                #[cfg(feature = "ws")]
+                {
+                    if let Some(ws_uri) = ctx.ws_uri.as_deref() {
+                        let data = bytes::Bytes::from(payload.to_vec());
+                        let result = if ctx.transport == sip_transaction::TransportKind::Wss {
+                            sip_transport::send_wss(ws_uri, data).await
+                        } else {
+                            sip_transport::send_ws(ws_uri, data).await
+                        };
+                        if let Err(e) = result {
+                            warn!(error = %e, "Failed to send REFER ACK via WS/WSS");
+                        }
+                    }
+                }
+            }
+            sip_transaction::TransportKind::Udp => {
+                // UDP ACK not supported - see module documentation for detailed explanation.
+                // The ACK for 2xx responses must be sent outside the transaction layer,
+                // but we have no access to the UDP socket from this context.
+                // Transfer will fail as the target will never receive our ACK.
+                warn!(
+                    "REFER ACK over UDP not supported (no socket access) - transfer will fail. \
+                     Use TCP/TLS transport for reliable REFER support. See module docs for details."
+                );
+            }
+            _ => {
+                warn!("REFER ACK transport not supported");
+            }
+        }
+    }
+
+    async fn send_prack(
+        &self,
+        _key: &TransactionKey,
+        _response: Response,
+        _ctx: &TransportContext,
+    ) {
+    }
+
+    async fn on_transport_error(&self, _key: &TransactionKey) {
+        self.send_notify(503, "Transport Error").await;
+    }
+}
 
 impl ReferHandler {
     pub fn new() -> Self {
@@ -32,6 +245,86 @@ impl ReferHandler {
     /// Check if this is an attended transfer (has Replaces header in Refer-To)
     fn is_attended_transfer(refer_to: &str) -> bool {
         refer_to.contains("Replaces=") || refer_to.contains("Replaces%3D")
+    }
+
+    fn extract_tag(value: &str) -> Option<SmolStr> {
+        value
+            .split(';')
+            .find_map(|part| {
+                let trimmed = part.trim();
+                trimmed
+                    .strip_prefix("tag=")
+                    .map(|tag| SmolStr::new(tag.to_owned()))
+            })
+    }
+
+    fn extract_replaces(value: &str) -> Option<String> {
+        let decoded = value.replace("%3D", "=");
+        let start = decoded.find("Replaces=")? + "Replaces=".len();
+        let tail = &decoded[start..];
+        let end = tail
+            .find(|c: char| c == ';' || c == '>' || c == '&')
+            .unwrap_or(tail.len());
+        Some(tail[..end].to_string())
+    }
+
+    fn build_refer_subscription(
+        request: &Request,
+        response: &Response,
+        local_uri: SipUri,
+    ) -> Result<Subscription> {
+        let call_id = header(&request.headers, "Call-ID")
+            .ok_or_else(|| anyhow!("Missing Call-ID"))?
+            .clone();
+        let from = header(&request.headers, "From").ok_or_else(|| anyhow!("Missing From"))?;
+        let to = header(&response.headers, "To").ok_or_else(|| anyhow!("Missing To"))?;
+        let from_tag = Self::extract_tag(from.as_str()).ok_or_else(|| anyhow!("Missing From tag"))?;
+        let to_tag = Self::extract_tag(to.as_str()).ok_or_else(|| anyhow!("Missing To tag"))?;
+
+        let remote_uri = sdp_utils::parse_name_addr_uri(from.as_str())
+            .ok_or_else(|| anyhow!("Invalid From URI"))?;
+
+        let contact = header(&request.headers, "Contact")
+            .and_then(|contact| sdp_utils::parse_name_addr_uri(contact.as_str()))
+            .unwrap_or_else(|| remote_uri.clone());
+
+        let local_cseq = header(&request.headers, "CSeq")
+            .and_then(|cseq| cseq.split_whitespace().next())
+            .and_then(|cseq| cseq.parse::<u32>().ok())
+            .unwrap_or(1);
+
+        Ok(Subscription {
+            id: SubscriptionId::new(call_id, from_tag, to_tag, "refer"),
+            state: SubscriptionState::Active,
+            local_uri,
+            remote_uri,
+            contact,
+            expires: Duration::from_secs(3600),
+            local_cseq,
+            remote_cseq: 0,
+        })
+    }
+
+    async fn send_notify(
+        uas: &UserAgentServer,
+        subscription: &mut Subscription,
+        status: u16,
+        reason: &str,
+        services: &ServiceRegistry,
+        ctx: &TransportContext,
+    ) {
+        let Some(transaction_mgr) = services.transaction_mgr.get() else {
+            warn!("Transaction manager not available, cannot send REFER NOTIFY");
+            return;
+        };
+        let notify = uas.create_notify_sipfrag(subscription, status, reason);
+        let tu = Arc::new(ReferNotifyTransactionUser);
+        if let Err(e) = transaction_mgr
+            .start_client_transaction(notify, ctx.clone(), tu)
+            .await
+        {
+            warn!(error = %e, "Failed to send REFER NOTIFY");
+        }
     }
 }
 
@@ -117,37 +410,185 @@ impl RequestHandler for ReferHandler {
         let contact_uri = local_uri.clone();
 
         // Create UAS and accept REFER
-        let uas = UserAgentServer::new(local_uri, contact_uri);
+        let uas = UserAgentServer::new(local_uri.clone(), contact_uri.clone());
         let result = uas.accept_refer(request, &dialog);
 
         match result {
             Ok((response, refer_to_target)) => {
                 info!(call_id, refer_to = refer_to_target, "REFER accepted");
 
+                let response_for_subscription = response.clone();
+
                 // Send 202 Accepted
                 handle.send_final(response).await;
 
-                // TODO: Create implicit subscription and send NOTIFY
-                // TODO: Initiate the referred call
-                // 1. Parse refer_to URI
-                // 2. Create new INVITE transaction
-                // 3. Send NOTIFY with sipfrag progress (100 Trying, 180 Ringing, 200 OK, etc.)
-                //
-                // For now, we just accept the REFER but don't actually perform the transfer.
-                // A full implementation would:
-                // - If attended: Send INVITE with Replaces header
-                // - If blind: Send INVITE to refer_to target
-                // - Send NOTIFYs with message/sipfrag body as call progresses
+                let mut uas = UserAgentServer::new(local_uri.clone(), contact_uri.clone());
+                uas.dialog_manager = services.dialog_mgr.clone();
+                uas.subscription_manager = services.subscription_mgr.clone();
+                uas.rseq_manager = services.rseq_mgr.clone();
+                uas.prack_validator = services.prack_validator.clone();
 
-                warn!(
+                let mut subscription =
+                    match Self::build_refer_subscription(
+                        request,
+                        &response_for_subscription,
+                        local_uri.clone(),
+                    ) {
+                        Ok(subscription) => subscription,
+                        Err(e) => {
+                            warn!(call_id, error = %e, "Failed to create REFER subscription");
+                            return Ok(());
+                        }
+                    };
+
+                services.subscription_mgr.insert(subscription.clone());
+
+                Self::send_notify(
+                    &uas,
+                    &mut subscription,
+                    100,
+                    "Trying",
+                    services,
+                    _ctx,
+                )
+                .await;
+
+                let refer_uri = match sdp_utils::parse_name_addr_uri(&refer_to_target) {
+                    Some(uri) => uri,
+                    None => {
+                        warn!(call_id, "Invalid Refer-To URI, sending failure NOTIFY");
+                        Self::send_notify(
+                            &uas,
+                            &mut subscription,
+                            400,
+                            "Bad Request",
+                            services,
+                            _ctx,
+                        )
+                        .await;
+                        return Ok(());
+                    }
+                };
+
+                let target_port = refer_uri.port.unwrap_or(5060);
+                let target_addr = format!("{}:{}", refer_uri.host, target_port);
+                let Ok(target_addr) = target_addr.parse::<std::net::SocketAddr>() else {
+                    warn!(call_id, "Invalid Refer-To target address");
+                    Self::send_notify(
+                        &uas,
+                        &mut subscription,
+                        400,
+                        "Bad Request",
+                        services,
+                        _ctx,
+                    )
+                    .await;
+                    return Ok(());
+                };
+
+                let transport_param = refer_uri
+                    .params
+                    .get("transport")
+                    .and_then(|value| value.as_ref())
+                    .map(|value| value.to_ascii_lowercase());
+                let transport = match transport_param.as_deref() {
+                    Some("ws") => sip_transaction::TransportKind::Ws,
+                    Some("wss") => sip_transaction::TransportKind::Wss,
+                    Some("tls") => sip_transaction::TransportKind::Tls,
+                    Some("udp") => sip_transaction::TransportKind::Udp,
+                    _ => sip_transaction::TransportKind::Tcp,
+                };
+
+                let ws_uri = match transport {
+                    sip_transaction::TransportKind::Ws => {
+                        Some(format!("ws://{}:{}", refer_uri.host, target_port))
+                    }
+                    sip_transaction::TransportKind::Wss => {
+                        Some(format!("wss://{}:{}", refer_uri.host, target_port))
+                    }
+                    _ => None,
+                };
+
+                let sdp_offer = match &services.config.sdp_profile {
+                    crate::config::SdpProfile::None => None,
+                    _ => match sdp_utils::generate_sdp_offer(&services.config) {
+                        Ok(offer) => Some(offer),
+                        Err(e) => {
+                            warn!(call_id, error = %e, "Failed to generate SDP offer");
+                            Self::send_notify(
+                                &uas,
+                                &mut subscription,
+                                488,
+                                "Not Acceptable Here",
+                                services,
+                                _ctx,
+                            )
+                            .await;
+                            return Ok(());
+                        }
+                    },
+                };
+
+                let uac = UserAgentClient::new(local_uri.clone(), contact_uri.clone());
+                let mut invite = uac.create_invite(&refer_uri, sdp_offer.as_deref());
+
+                if let Some(replaces) = Self::extract_replaces(&refer_to_target) {
+                    invite.headers.push("Replaces".into(), replaces.into());
+                }
+
+                let transport_name = match transport {
+                    sip_transaction::TransportKind::Udp => "UDP",
+                    sip_transaction::TransportKind::Tcp => "TCP",
+                    sip_transaction::TransportKind::Tls => "TLS",
+                    sip_transaction::TransportKind::Ws => "WS",
+                    sip_transaction::TransportKind::Wss => "WSS",
+                    sip_transaction::TransportKind::Sctp => "SCTP",
+                    sip_transaction::TransportKind::TlsSctp => "TLS-SCTP",
+                };
+
+                for header in invite.headers.iter_mut() {
+                    if header.name.as_str().eq_ignore_ascii_case("Via") {
+                        let branch =
+                            sip_transaction::branch_from_via(header.value.as_str())
+                                .unwrap_or("z9hG4bK");
+                        header.value = SmolStr::new(format!(
+                            "SIP/2.0/{} placeholder;branch={}",
+                            transport_name, branch
+                        ));
+                        break;
+                    }
+                }
+
+                let ctx = TransportContext::new(transport, target_addr, None).with_ws_uri(ws_uri);
+                let Some(transaction_mgr) = services.transaction_mgr.get() else {
+                    warn!(call_id, "Transaction manager not available, cannot initiate transfer");
+                    return Ok(());
+                };
+
+                let subscription = Arc::new(Mutex::new(subscription));
+                let transfer_user = ReferTransferTransactionUser {
+                    uac,
+                    invite: invite.clone(),
+                    uas,
+                    subscription,
+                    notify_ctx: _ctx.clone(),
+                    transaction_mgr: transaction_mgr.clone(),
+                    config: services.config.clone(),
+                };
+
+                info!(
                     call_id,
                     refer_to = refer_to_target,
                     attended = is_attended,
-                    "⚠️ REFER LIMITATION: 202 Accepted sent but transfer NOT performed. \
-                     Missing: (1) Implicit subscription creation, (2) Outgoing INVITE to {}, \
-                     (3) NOTIFY progress messages. See bins/siphond/README.md#limitations",
-                    refer_to_target
+                    "Initiating REFER transfer INVITE"
                 );
+
+                if let Err(e) = transaction_mgr
+                    .start_client_transaction(invite, ctx, Arc::new(transfer_user))
+                    .await
+                {
+                    warn!(call_id, error = %e, "Failed to start REFER transfer INVITE");
+                }
             }
             Err(e) => {
                 warn!(call_id, error = %e, "Failed to accept REFER");

@@ -1,6 +1,6 @@
 [package]
 name = "siphond"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license.workspace = true
 
@@ -21,6 +21,7 @@ sip-registrar = { path = "../../crates/sip-registrar" }
 sip-proxy = { path = "../../crates/sip-proxy" }
 sip-uas = { path = "../../crates/sip-uas" }
 sip-uac = { path = "../../crates/sip-uac" }
+sip-sdp = { path = "../../crates/sip-sdp" }
 sip-ratelimit = { path = "../../crates/sip-ratelimit" }
 clap = { version = "4", features = ["derive"] }
 smol_str = { workspace = true }

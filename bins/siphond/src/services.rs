@@ -5,9 +5,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 use sip_auth::{DigestAuthenticator, MemoryCredentialStore};
-use sip_dialog::{DialogManager, RSeqManager, SubscriptionManager};
+use sip_dialog::{prack_validator::PrackValidator, DialogManager, RSeqManager, SubscriptionManager};
 use sip_registrar::{BasicRegistrar, MemoryLocationStore};
-use sip_transaction::TransactionManager;
+use sip_transaction::{TransactionManager, TransportDispatcher};
 
 use crate::b2bua_state::B2BUAStateManager;
 use crate::config::DaemonConfig;
@@ -29,6 +29,10 @@ pub struct ServiceRegistry {
     #[allow(dead_code)]
     pub rseq_mgr: Arc<RSeqManager>,
 
+    /// PRACK validator for reliable provisional responses
+    #[allow(dead_code)]
+    pub prack_validator: Arc<PrackValidator>,
+
     /// Proxy state manager for tracking forwarded transactions
     pub proxy_state: Arc<ProxyStateManager>,
 
@@ -43,6 +47,9 @@ pub struct ServiceRegistry {
     /// Transaction manager for sending requests (set after initialization)
     pub transaction_mgr: OnceLock<Arc<TransactionManager>>,
 
+    /// Transport dispatcher for sending responses (set after initialization)
+    pub transport_dispatcher: OnceLock<Arc<dyn TransportDispatcher>>,
+
     /// Daemon configuration (immutable)
     pub config: Arc<DaemonConfig>,
 }
@@ -56,6 +63,7 @@ impl ServiceRegistry {
         let dialog_mgr = Arc::new(DialogManager::new());
         let subscription_mgr = Arc::new(SubscriptionManager::new());
         let rseq_mgr = Arc::new(RSeqManager::new());
+        let prack_validator = Arc::new(PrackValidator::new());
         let proxy_state = Arc::new(ProxyStateManager::new());
         let b2bua_state = Arc::new(B2BUAStateManager::new());
 
@@ -120,10 +128,12 @@ impl ServiceRegistry {
             dialog_mgr,
             subscription_mgr,
             rseq_mgr,
+            prack_validator,
             proxy_state,
             b2bua_state,
             registrar,
             transaction_mgr: OnceLock::new(),
+            transport_dispatcher: OnceLock::new(),
             config,
         }
     }
@@ -134,6 +144,14 @@ impl ServiceRegistry {
         mgr: Arc<TransactionManager>,
     ) -> Result<(), Arc<TransactionManager>> {
         self.transaction_mgr.set(mgr)
+    }
+
+    /// Set the transport dispatcher (can only be called once)
+    pub fn set_transport_dispatcher(
+        &self,
+        dispatcher: Arc<dyn TransportDispatcher>,
+    ) -> Result<(), Arc<dyn TransportDispatcher>> {
+        self.transport_dispatcher.set(dispatcher)
     }
 
     /// Check if authentication is required

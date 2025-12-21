@@ -170,6 +170,12 @@ pub struct DaemonConfig {
     /// SDP profile for calls
     pub sdp_profile: SdpProfile,
 
+    /// RTP audio port (default: 49170)
+    pub rtp_audio_port: u16,
+
+    /// RTP video port (default: 49172)
+    pub rtp_video_port: u16,
+
     /// Authentication configuration
     pub auth: AuthConfig,
 
@@ -189,6 +195,8 @@ impl Default for DaemonConfig {
             mode: DaemonMode::default(),
             features: FeatureFlags::default(),
             sdp_profile: SdpProfile::default(),
+            rtp_audio_port: 49170,
+            rtp_video_port: 49172,
             auth: AuthConfig::default(),
             registrar: RegistrarConfig::default(),
             local_uri: "sip:siphond@localhost".to_string(),

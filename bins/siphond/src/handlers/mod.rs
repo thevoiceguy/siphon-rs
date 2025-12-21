@@ -10,6 +10,7 @@ pub mod bye;
 pub mod cancel;
 pub mod invite;
 pub mod options;
+pub mod prack;
 pub mod refer;
 pub mod register;
 pub mod subscribe;

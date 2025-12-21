@@ -10,14 +10,15 @@
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use sip_core::Request;
+use sip_dialog::Dialog;
 use sip_parse::header;
-use sip_registrar::LocationStore;
 use sip_transaction::{ServerTransactionHandle, TransportContext};
 use sip_uas::UserAgentServer;
+use std::time::Duration;
 use tracing::{info, warn};
 
 use super::RequestHandler;
-use crate::services::ServiceRegistry;
+use crate::{sdp_utils, services::ServiceRegistry};
 
 pub struct InviteHandler;
 
@@ -26,82 +27,45 @@ impl InviteHandler {
         Self
     }
 
-    /// Generate SDP answer based on configured profile
-    fn generate_sdp_answer(services: &ServiceRegistry, offer: &str) -> Result<String> {
-        // TODO: Proper SDP negotiation using sip-sdp crate
-        // For now, simple pattern matching for audio codecs
+    fn dialog_id_key(id: &sip_dialog::DialogId) -> String {
+        format!("{}:{}:{}", id.call_id, id.local_tag, id.remote_tag)
+    }
 
-        let has_audio = offer.contains("m=audio");
-        let has_video = offer.contains("m=video");
-
-        // Extract IP address from local_uri configuration
-        let local_ip = if let Some(uri) = sip_core::SipUri::parse(&services.config.local_uri) {
-            uri.host.to_string()
-        } else {
-            warn!("Failed to parse local_uri, falling back to 127.0.0.1");
-            "127.0.0.1".to_string()
+    fn schedule_reliable_retransmit(
+        services: &ServiceRegistry,
+        key: sip_transaction::TransactionKey,
+        response: sip_core::Response,
+        dialog_key: String,
+        rseq: u32,
+    ) {
+        let Some(transaction_mgr) = services.transaction_mgr.get().cloned() else {
+            return;
         };
+        let prack_validator = services.prack_validator.clone();
 
-        match &services.config.sdp_profile {
-            crate::config::SdpProfile::None => {
-                Err(anyhow!("SDP not supported in current configuration"))
-            }
-            crate::config::SdpProfile::AudioOnly => {
-                if !has_audio {
-                    return Err(anyhow!("No audio in offer, but only audio supported"));
+        tokio::spawn(async move {
+            let mut interval = Duration::from_millis(500);
+            let max_interval = Duration::from_secs(4);
+            let max_total = Duration::from_secs(32);
+            let mut elapsed = Duration::from_millis(0);
+
+            loop {
+                tokio::time::sleep(interval).await;
+                elapsed += interval;
+
+                if prack_validator.is_pracked(&dialog_key, rseq) {
+                    break;
                 }
 
-                // Simple audio-only answer (PCMU)
-                let sdp = format!(
-                    "v=0\r\n\
-                     o=siphond {} {} IN IP4 {}\r\n\
-                     s=siphond call\r\n\
-                     c=IN IP4 {}\r\n\
-                     t=0 0\r\n\
-                     m=audio 49170 RTP/AVP 0\r\n\
-                     a=rtpmap:0 PCMU/8000\r\n",
-                    rand::random::<u32>(),
-                    rand::random::<u32>(),
-                    local_ip,
-                    local_ip
-                );
+                transaction_mgr.send_provisional(&key, response.clone()).await;
 
-                Ok(sdp)
-            }
-            crate::config::SdpProfile::AudioVideo => {
-                if !has_audio {
-                    return Err(anyhow!("No audio in offer"));
+                if elapsed >= max_total {
+                    break;
                 }
 
-                let mut sdp = format!(
-                    "v=0\r\n\
-                     o=siphond {} {} IN IP4 {}\r\n\
-                     s=siphond call\r\n\
-                     c=IN IP4 {}\r\n\
-                     t=0 0\r\n\
-                     m=audio 49170 RTP/AVP 0\r\n\
-                     a=rtpmap:0 PCMU/8000\r\n",
-                    rand::random::<u32>(),
-                    rand::random::<u32>(),
-                    local_ip,
-                    local_ip
-                );
-
-                if has_video {
-                    sdp.push_str("m=video 49172 RTP/AVP 96\r\n");
-                    sdp.push_str("a=rtpmap:96 H264/90000\r\n");
-                }
-
-                Ok(sdp)
+                interval = std::cmp::min(interval * 2, max_interval);
             }
-            crate::config::SdpProfile::Custom(path) => {
-                // TODO: Load custom SDP from file
-                Err(anyhow!(
-                    "Custom SDP profile not yet implemented: {:?}",
-                    path
-                ))
-            }
-        }
+        });
     }
 
     /// Check if this is an in-dialog request (re-INVITE)
@@ -845,6 +809,8 @@ impl InviteHandler {
                 branch: branch.clone(),
                 sender_addr: ctx.peer,
                 sender_transport: ctx.transport,
+                sender_stream: ctx.stream.clone(),
+                sender_ws_uri: ctx.ws_uri.clone(),
                 call_id: call_id.to_string(),
                 created_at: std::time::Instant::now(),
             });
@@ -1036,14 +1002,74 @@ impl RequestHandler for InviteHandler {
 
         // Handle in-dialog re-INVITE
         if self.is_in_dialog(request, services) {
-            warn!(
-                call_id,
-                "⚠️ re-INVITE LIMITATION: Accepting with 200 OK but NOT performing session modification. \
-                 Missing: (1) SDP renegotiation, (2) Hold/resume logic, (3) Codec changes, (4) ICE restart. \
-                 See bins/siphond/README.md#limitations"
-            );
-            // TODO: Handle session modification
-            let ok = UserAgentServer::create_response(request, 200, "OK");
+            let mut dialog = match services.dialog_mgr.find_by_request(request) {
+                Some(dialog) => dialog,
+                None => {
+                    warn!(call_id, "re-INVITE received for unknown dialog");
+                    let response = UserAgentServer::create_response(
+                        request,
+                        481,
+                        "Call/Transaction Does Not Exist",
+                    );
+                    handle.send_final(response).await;
+                    return Ok(());
+                }
+            };
+
+            if let Err(_) = dialog.update_from_request(request) {
+                warn!(call_id, "re-INVITE rejected: invalid CSeq or dialog state");
+                let response = UserAgentServer::create_response(request, 400, "Bad Request");
+                handle.send_final(response).await;
+                return Ok(());
+            }
+
+            let sdp_body = if !request.body.is_empty() {
+                match std::str::from_utf8(&request.body) {
+                    Ok(offer_str) => match sdp_utils::generate_sdp_answer(&services.config, offer_str) {
+                        Ok(answer) => Some(answer),
+                        Err(e) => {
+                            warn!(call_id, error = %e, "Failed to generate SDP answer for re-INVITE");
+                            let response =
+                                UserAgentServer::create_response(request, 488, "Not Acceptable Here");
+                            handle.send_final(response).await;
+                            return Ok(());
+                        }
+                    },
+                    Err(_) => None,
+                }
+            } else {
+                match sdp_utils::generate_sdp_offer(&services.config) {
+                    Ok(offer) => Some(offer),
+                    Err(e) => {
+                        warn!(call_id, error = %e, "Failed to generate SDP offer for re-INVITE");
+                        let response =
+                            UserAgentServer::create_response(request, 488, "Not Acceptable Here");
+                        handle.send_final(response).await;
+                        return Ok(());
+                    }
+                }
+            };
+
+            let local_uri = match sip_core::SipUri::parse(&services.config.local_uri) {
+                Some(uri) => uri,
+                None => {
+                    warn!("Invalid local_uri in config");
+                    let response = UserAgentServer::create_response(request, 500, "Server Error");
+                    handle.send_final(response).await;
+                    return Ok(());
+                }
+            };
+
+            let contact_uri = local_uri.clone();
+            let mut uas = UserAgentServer::new(local_uri, contact_uri);
+            uas.dialog_manager = services.dialog_mgr.clone();
+            uas.subscription_manager = services.subscription_mgr.clone();
+            uas.rseq_manager = services.rseq_mgr.clone();
+            uas.prack_validator = services.prack_validator.clone();
+
+            let ok = uas.create_ok(request, sdp_body.as_deref());
+            dialog.update_from_response(&ok);
+            services.dialog_mgr.insert(dialog);
             handle.send_final(ok).await;
             return Ok(());
         }
@@ -1068,7 +1094,11 @@ impl RequestHandler for InviteHandler {
         let contact_uri = local_uri.clone();
 
         // Create UAS early so it can be used for all responses
-        let uas = UserAgentServer::new(local_uri, contact_uri);
+        let mut uas = UserAgentServer::new(local_uri, contact_uri);
+        uas.dialog_manager = services.dialog_mgr.clone();
+        uas.subscription_manager = services.subscription_mgr.clone();
+        uas.rseq_manager = services.rseq_mgr.clone();
+        uas.prack_validator = services.prack_validator.clone();
 
         // Send 100 Trying
         let trying = UserAgentServer::create_trying(request);
@@ -1084,9 +1114,56 @@ impl RequestHandler for InviteHandler {
                 .map(|s| s.contains("100rel"))
                 .unwrap_or(false)
         {
-            // TODO: Send reliable 180 with RSeq
-            let ringing = uas.create_ringing(request);
+            let mut ringing = uas.create_ringing(request);
+            let mut reliable_info: Option<(String, u32)> = None;
+
+            let remote_uri = header(&request.headers, "From")
+                .and_then(|from| sdp_utils::parse_name_addr_uri(from.as_str()));
+
+            if let Some(remote_uri) = remote_uri {
+                if let Some(early_dialog) =
+                    Dialog::new_uas(request, &ringing, uas.local_uri.clone(), remote_uri)
+                {
+                    services.dialog_mgr.insert(early_dialog.clone());
+
+                    let rseq = services.rseq_mgr.next_rseq(&early_dialog.id);
+                    reliable_info = Some((Self::dialog_id_key(&early_dialog.id), rseq));
+                    ringing.headers.push("RSeq".into(), rseq.to_string().into());
+                    ringing
+                        .headers
+                        .push("Require".into(), "100rel".into());
+                    ringing.headers.push(
+                        "Contact".into(),
+                        format!("<{}>", services.config.local_uri).into(),
+                    );
+
+                    if let Some(cseq) = header(&request.headers, "CSeq")
+                        .and_then(|value| value.split_whitespace().next())
+                        .and_then(|value| value.parse::<u32>().ok())
+                    {
+                        services.prack_validator.register_reliable_provisional(
+                            &Self::dialog_id_key(&early_dialog.id),
+                            rseq,
+                            cseq,
+                            request.start.method.clone(),
+                            180,
+                        );
+                    }
+                }
+            }
+
+            let ringing_for_retransmit = ringing.clone();
             handle.send_provisional(ringing).await;
+
+            if let Some((dialog_key, rseq)) = reliable_info {
+                Self::schedule_reliable_retransmit(
+                    services,
+                    handle.key().clone(),
+                    ringing_for_retransmit,
+                    dialog_key,
+                    rseq,
+                );
+            }
         } else {
             let ringing = uas.create_ringing(request);
             handle.send_provisional(ringing).await;
@@ -1095,7 +1172,7 @@ impl RequestHandler for InviteHandler {
         // Generate SDP answer if offer was provided
         let sdp_answer = if !request.body.is_empty() {
             match std::str::from_utf8(&request.body) {
-                Ok(offer_str) => match Self::generate_sdp_answer(services, offer_str) {
+                Ok(offer_str) => match sdp_utils::generate_sdp_answer(&services.config, offer_str) {
                     Ok(answer) => Some(answer),
                     Err(e) => {
                         warn!(call_id, error = %e, "Failed to generate SDP answer");
@@ -1118,24 +1195,25 @@ impl RequestHandler for InviteHandler {
             }
         } else {
             // Late offer - should send SDP in 200 OK
-            // TODO: Generate offer in 200 OK
             warn!(
                 call_id,
-                "⚠️ LATE OFFER LIMITATION: INVITE has no SDP body. Should generate offer in 200 OK \
-                 and expect answer in ACK (RFC 3264 §5). Currently sending 488 Not Acceptable Here. \
-                 See bins/siphond/README.md#limitations"
+                "Late offer INVITE received - generating SDP offer in 200 OK and expecting answer in ACK"
             );
-
-            // Send 488 Not Acceptable Here for late offer
-            let mut headers = sip_core::Headers::new();
-            copy_dialog_headers(request, &mut headers);
-            let response = sip_core::Response::new(
-                sip_core::StatusLine::new(488, "Not Acceptable Here".into()),
-                headers,
-                bytes::Bytes::new(),
-            );
-            handle.send_final(response).await;
-            return Ok(());
+            match sdp_utils::generate_sdp_offer(&services.config) {
+                Ok(offer) => Some(offer),
+                Err(e) => {
+                    warn!(call_id, error = %e, "Failed to generate SDP offer");
+                    let mut headers = sip_core::Headers::new();
+                    copy_dialog_headers(request, &mut headers);
+                    let response = sip_core::Response::new(
+                        sip_core::StatusLine::new(488, "Not Acceptable Here".into()),
+                        headers,
+                        bytes::Bytes::new(),
+                    );
+                    handle.send_final(response).await;
+                    return Ok(());
+                }
+            }
         };
 
         // Accept the INVITE

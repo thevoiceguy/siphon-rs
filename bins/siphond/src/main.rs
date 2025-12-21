@@ -12,6 +12,7 @@ mod config;
 mod dispatcher;
 mod handlers;
 mod proxy_state;
+mod sdp_utils;
 mod services;
 mod transport;
 
@@ -98,6 +99,14 @@ struct Args {
     #[arg(long, default_value = "audio-only", value_parser = parse_sdp_profile)]
     sdp_profile: SdpProfile,
 
+    /// RTP audio port (default: 49170)
+    #[arg(long, default_value = "49170")]
+    rtp_audio_port: u16,
+
+    /// RTP video port (default: 49172)
+    #[arg(long, default_value = "49172")]
+    rtp_video_port: u16,
+
     /// Enable PRACK (reliable provisional responses)
     #[arg(long, default_value = "true", value_parser = clap::value_parser!(bool))]
     enable_prack: bool,
@@ -176,6 +185,8 @@ async fn main() -> Result<()> {
             enable_session_timers: false,
         },
         sdp_profile: args.sdp_profile,
+        rtp_audio_port: args.rtp_audio_port,
+        rtp_video_port: args.rtp_video_port,
         auth: AuthConfig {
             realm: args.auth_realm,
             algorithm: "SHA-256".to_string(),
@@ -238,11 +249,14 @@ async fn main() -> Result<()> {
     )
     .await?;
 
-    let transaction_mgr = Arc::new(TransactionManager::new(transport_dispatcher));
+    let transaction_mgr = Arc::new(TransactionManager::new(transport_dispatcher.clone()));
 
     // Set transaction manager in service registry for sending requests
     if let Err(_) = services.set_transaction_manager(transaction_mgr.clone()) {
         panic!("Failed to set transaction manager - already initialized");
+    }
+    if let Err(_) = services.set_transport_dispatcher(transport_dispatcher.clone()) {
+        panic!("Failed to set transport dispatcher - already initialized");
     }
 
     info!("siphond ready - listening for requests");
@@ -360,7 +374,7 @@ async fn handle_packet(
     use sip_core::Method;
     use sip_parse::{header, parse_request, parse_response};
     use sip_core::SipUri;
-    use sip_transaction::{request_branch_id, TransactionKey, TransportContext};
+    use sip_transaction::{branch_from_via, request_branch_id, TransactionKey, TransportContext};
 
     // Try parsing as a request
     if let Some(req) = parse_request(&packet.payload) {
@@ -503,6 +517,103 @@ async fn handle_packet(
                     // Also pass to transaction manager for UAC transaction state management
                     transaction_mgr.receive_response(response).await;
                     return;
+                }
+            }
+        }
+
+        if services.config.enable_proxy() {
+            if let Some(via) = header(&response.headers, "Via") {
+                if let Some(branch) = branch_from_via(via.as_str()) {
+                    if let Some(tx) = services.proxy_state.find_transaction(branch) {
+                        let mut forwarded = response.clone();
+                        sip_proxy::ProxyHelpers::remove_top_via(&mut forwarded.headers);
+
+                        let payload = sip_parse::serialize_response(&forwarded);
+
+                        match tx.sender_transport {
+                            sip_transaction::TransportKind::Tcp => {
+                                if let Err(e) =
+                                    sip_transport::send_tcp(&tx.sender_addr, &payload).await
+                                {
+                                    tracing::warn!(
+                                        error = %e,
+                                        "Proxy response forwarding over TCP failed"
+                                    );
+                                }
+                            }
+                            sip_transaction::TransportKind::Ws | sip_transaction::TransportKind::Wss => {
+                                #[cfg(feature = "ws")]
+                                {
+                                    let scheme = if tx.sender_transport
+                                        == sip_transaction::TransportKind::Wss
+                                    {
+                                        "wss"
+                                    } else {
+                                        "ws"
+                                    };
+                                    let ws_url = tx
+                                        .sender_ws_uri
+                                        .clone()
+                                        .unwrap_or_else(|| {
+                                            format!(
+                                                "{}://{}:{}",
+                                                scheme,
+                                                tx.sender_addr.ip(),
+                                                tx.sender_addr.port()
+                                            )
+                                        });
+                                    let data = bytes::Bytes::from(payload.to_vec());
+                                    let result = if scheme == "wss" {
+                                        sip_transport::send_wss(&ws_url, data).await
+                                    } else {
+                                        sip_transport::send_ws(&ws_url, data).await
+                                    };
+                                    if let Err(e) = result {
+                                        tracing::warn!(
+                                            error = %e,
+                                            url = %ws_url,
+                                            "Proxy response forwarding over WS/WSS failed"
+                                        );
+                                    }
+                                }
+                            }
+                            sip_transaction::TransportKind::Udp | sip_transaction::TransportKind::Tls => {
+                                let Some(dispatcher) =
+                                    services.transport_dispatcher.get().cloned()
+                                else {
+                                    tracing::warn!(
+                                        transport = ?tx.sender_transport,
+                                        "Transport dispatcher unavailable for proxy response forwarding"
+                                    );
+                                    return;
+                                };
+
+                                let ctx = TransportContext::new(
+                                    tx.sender_transport,
+                                    tx.sender_addr,
+                                    tx.sender_stream.clone(),
+                                )
+                                .with_ws_uri(tx.sender_ws_uri.clone());
+
+                                if let Err(e) = dispatcher.dispatch(&ctx, payload.clone()).await {
+                                    tracing::warn!(
+                                        error = %e,
+                                        transport = ?tx.sender_transport,
+                                        "Proxy response forwarding failed"
+                                    );
+                                }
+                            }
+                            _ => {
+                                tracing::warn!("Proxy response forwarding transport not supported");
+                            }
+                        }
+
+                        if response.start.code >= 200 {
+                            services.proxy_state.remove_transaction(branch);
+                        }
+
+                        return;
+                    }
                 }
             }
         }

@@ -8,8 +8,8 @@ use tracing::warn;
 use crate::{
     handlers::{
         bye::ByeHandler, cancel::CancelHandler, invite::InviteHandler, options::OptionsHandler,
-        refer::ReferHandler, register::RegisterHandler, subscribe::SubscribeHandler,
-        RequestHandler,
+        prack::PrackHandler, refer::ReferHandler, register::RegisterHandler,
+        subscribe::SubscribeHandler, RequestHandler,
     },
     services::ServiceRegistry,
 };
@@ -40,6 +40,7 @@ impl RequestDispatcher {
             handlers.insert(Method::Invite, Arc::new(InviteHandler::new()));
             handlers.insert(Method::Cancel, Arc::new(CancelHandler::new()));
             handlers.insert(Method::Bye, Arc::new(ByeHandler::new()));
+            handlers.insert(Method::Prack, Arc::new(PrackHandler::new()));
         }
 
         // REGISTER for registrar

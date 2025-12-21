@@ -9,6 +9,7 @@ use sip_transaction::TransportKind;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::mpsc;
 
 /// Information about a proxied transaction
 #[derive(Clone, Debug)]
@@ -23,6 +24,14 @@ pub struct ProxyTransaction {
     /// Transport to use for response
     #[allow(dead_code)]
     pub sender_transport: TransportKind,
+
+    /// Optional stream writer for connection-oriented transports
+    #[allow(dead_code)]
+    pub sender_stream: Option<mpsc::Sender<bytes::Bytes>>,
+
+    /// Optional WS/WSS target URI
+    #[allow(dead_code)]
+    pub sender_ws_uri: Option<String>,
 
     /// Call-ID for logging
     #[allow(dead_code)]
