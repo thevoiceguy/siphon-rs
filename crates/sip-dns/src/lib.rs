@@ -750,7 +750,6 @@ fn parse_dhcp_domain_names(data: &[u8]) -> Result<Vec<DhcpSipServer>> {
 
     while pos < data.len() {
         let mut labels = Vec::new();
-        let mut terminated = false;
 
         // Parse labels until we hit a zero-length label or end of data
         loop {
@@ -763,7 +762,6 @@ fn parse_dhcp_domain_names(data: &[u8]) -> Result<Vec<DhcpSipServer>> {
 
             if len == 0 {
                 // End of this domain name
-                terminated = true;
                 break;
             }
 
@@ -780,9 +778,8 @@ fn parse_dhcp_domain_names(data: &[u8]) -> Result<Vec<DhcpSipServer>> {
             pos += len;
         }
 
-        if !terminated {
-            return Err(anyhow!("Truncated domain name"));
-        }
+        // Loop only exits normally when len == 0 (end of domain name)
+        // Other cases return errors, so no need to check termination
 
         if labels.is_empty() {
             return Err(anyhow!("Empty domain name"));

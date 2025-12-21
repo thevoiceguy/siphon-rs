@@ -1,5 +1,5 @@
 use dashmap::DashMap;
-use sip_core::{Headers, Method, RefresherRole, Request, Response, SipUri};
+use sip_core::{Headers, RefresherRole, Request, Response, SipUri};
 use sip_parse::{header, parse_session_expires};
 use smol_str::SmolStr;
 use std::sync::Arc;
@@ -918,7 +918,7 @@ impl Default for RSeqManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sip_core::{RequestLine, StatusLine};
+    use sip_core::{Method, RequestLine, StatusLine};
 
     fn make_request(
         method: Method,

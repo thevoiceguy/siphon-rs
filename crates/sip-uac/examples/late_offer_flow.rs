@@ -90,7 +90,7 @@ a=rtpmap:0 PCMU/8000
     println!("{}", sdp_answer);
 
     // In a real application:
-    // let ack_request = uac.create_ack(&invite_request, &ok_response, &dialog, Some(sdp_answer));
+    // let ack_request = uac.create_ack(&invite_request, &ok_response, Some(sdp_answer));
 
     println!("Note: UAC includes SDP answer in ACK to complete negotiation");
 

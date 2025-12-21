@@ -54,8 +54,6 @@
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
-use rand::{distributions::Alphanumeric, Rng};
-use sha1::{Digest, Sha1};
 use sip_core::{Method, Request, Response, SipUri};
 use sip_dialog::{Dialog, DialogManager, Subscription, SubscriptionManager};
 use sip_dns::{DnsTarget, Resolver, SipResolver};
@@ -167,13 +165,13 @@ pub struct UACConfig {
     /// Optional WS path suffix to append when building ws://host/path from DNS target.
     pub ws_path: Option<String>,
 
-    /// Enable RFC 5626 outbound/keepalive behavior (adds ;ob on Contact).
+    /// Enable RFC 5626 outbound behavior (adds ;ob/+sip.instance on REGISTER and Supported: outbound).
     pub enable_outbound: bool,
 
-    /// Optional instance-id (RFC 5626/5627) used for GRUU formation.
+    /// Optional instance-id (RFC 5626) used for +sip.instance on REGISTER.
     pub instance_id: Option<String>,
 
-    /// Optional flow token salt used for GRUU opaque token generation.
+    /// Optional flow token salt reserved for GRUU token generation.
     pub flow_token_salt: Option<String>,
 
     /// Registration identifier for outbound flows (RFC 5626 reg-id).
@@ -321,6 +319,37 @@ fn prepare_in_dialog_request(dialog: &mut Dialog, request: &mut Request) -> SipU
 
     // Target for transport resolution is always the topmost route when present
     first_route
+}
+
+fn apply_route_set_to_request(dialog: &Dialog, request: &mut Request) {
+    request.headers.remove("Route");
+    if dialog.route_set.is_empty() {
+        request.start.uri = dialog.remote_target.clone().into();
+        return;
+    }
+
+    let first_route = dialog.route_set.first().cloned().unwrap();
+    let loose_route = first_route.params.contains_key("lr");
+
+    if loose_route {
+        request.start.uri = dialog.remote_target.clone().into();
+        for route in dialog.route_set.iter() {
+            request
+                .headers
+                .push(SmolStr::new("Route"), SmolStr::new(format!("<{}>", route.as_str())));
+        }
+    } else {
+        request.start.uri = first_route.clone().into();
+        for route in dialog.route_set.iter().skip(1) {
+            request
+                .headers
+                .push(SmolStr::new("Route"), SmolStr::new(format!("<{}>", route.as_str())));
+        }
+        request.headers.push(
+            SmolStr::new("Route"),
+            SmolStr::new(format!("<{}>", dialog.remote_target.as_str())),
+        );
+    }
 }
 
 fn apply_in_dialog_response(
@@ -807,6 +836,10 @@ impl IntegratedUAC {
             .or(self.public_addr)
             .unwrap_or(self.local_addr);
 
+        let outbound_register =
+            self.config.enable_outbound && request.start.method == Method::Register;
+        let mut needs_supported = false;
+
         for header in request.headers.iter_mut() {
             if header.name.as_str() == "Contact" {
                 // Extract URI from Contact and update host/port
@@ -829,13 +862,14 @@ impl IntegratedUAC {
                     };
 
                     let mut extra_params = String::new();
-                    if self.config.enable_outbound {
+                    if outbound_register {
                         extra_params.push_str(";ob");
                         extra_params.push_str(&format!(";reg-id={}", self.config.outbound_reg_id));
-                        if let Some(gruu) = self.build_gruu_uri(user_part, contact_addr) {
-                            extra_params.push_str(&format!(";pub-gruu=\"{}\"", gruu));
-                            extra_params.push_str(&format!(";temp-gruu=\"{}\"", gruu));
+                        if let Some(instance_id) = &self.config.instance_id {
+                            extra_params
+                                .push_str(&format!(";+sip.instance=\"{}\"", instance_id));
                         }
+                        needs_supported = true;
                     }
 
                     // Preserve parameters (like expires)
@@ -855,31 +889,24 @@ impl IntegratedUAC {
                 break;
             }
         }
-    }
 
-    fn build_gruu_uri(&self, user_part: &str, contact_addr: SocketAddr) -> Option<String> {
-        let instance = self.config.instance_id.as_ref()?;
-        let token = self.generate_flow_token(contact_addr);
-        let user = if user_part.is_empty() {
-            format!("gruu-{}", instance)
-        } else {
-            user_part.to_string()
-        };
-        Some(format!("sip:{}@{};gruu;opaque={}", user, contact_addr, token))
-    }
-
-    fn generate_flow_token(&self, contact_addr: SocketAddr) -> String {
-        if let Some(salt) = &self.config.flow_token_salt {
-            let mut hasher = Sha1::new();
-            hasher.update(salt.as_bytes());
-            hasher.update(contact_addr.to_string().as_bytes());
-            hex::encode(hasher.finalize())
-        } else {
-            rand::thread_rng()
-                .sample_iter(&Alphanumeric)
-                .take(16)
-                .map(char::from)
-                .collect()
+        if outbound_register && needs_supported {
+            let mut supported_found = false;
+            for header in request.headers.iter_mut() {
+                if header.name.eq_ignore_ascii_case("Supported") {
+                    supported_found = true;
+                    let value = header.value.to_ascii_lowercase();
+                    if !value.contains("outbound") {
+                        header.value = SmolStr::new(format!("{}, outbound", header.value));
+                    }
+                    break;
+                }
+            }
+            if !supported_found {
+                request
+                    .headers
+                    .push(SmolStr::new("Supported"), SmolStr::new("outbound"));
+            }
         }
     }
 
@@ -1914,9 +1941,9 @@ impl CallHandle {
                     let new_branch = crate::generate_branch();
                     cancel_headers.push(
                         SmolStr::new("Via"),
-                        SmolStr::new(format!(
-                            "SIP/2.0/UDP {};branch={}",
-                            self.transport_ctx.peer, new_branch
+                        SmolStr::new(crate::replace_via_branch(
+                            header.value.as_str(),
+                            &new_branch,
                         )),
                     );
                 }
@@ -2079,18 +2106,32 @@ impl ClientTransactionUser for InviteTransactionUser {
             response.start.code, is_2xx
         );
 
-        // Find dialog for this response
+        let original_via = self
+            .request
+            .headers
+            .get("Via")
+            .map(|via| via.as_str().to_string());
+
         let helper = self.helper.lock().await;
-        let dialog = helper.process_invite_response(&self.request, &response);
+        let dialog = if is_2xx {
+            helper.process_invite_response(&self.request, &response)
+        } else {
+            None
+        };
 
-        if let Some(dialog) = dialog {
-            // Determine if this is late offer (200 OK has SDP, INVITE didn't)
-            let invite_has_sdp = !self.request.body.is_empty();
-            let response_has_sdp = !response.body.is_empty();
-            let late_offer = !invite_has_sdp && response_has_sdp;
+        if is_2xx && dialog.is_none() {
+            error!("Failed to create dialog for 2xx ACK");
+            return;
+        }
 
-            // For late offer, generate SDP answer using configured generator
-            let sdp_body = if late_offer {
+        // Determine if this is late offer (200 OK has SDP, INVITE didn't)
+        let invite_has_sdp = !self.request.body.is_empty();
+        let response_has_sdp = !response.body.is_empty();
+        let late_offer = is_2xx && !invite_has_sdp && response_has_sdp;
+
+        // For late offer, generate SDP answer using configured generator
+        let sdp_body = if late_offer {
+            if let Some(dialog) = dialog.as_ref() {
                 if let Some(generator) = &self.config.sdp_answer_generator {
                     debug!("Late offer detected - generating SDP answer via RFC 3264 negotiation");
 
@@ -2101,7 +2142,7 @@ impl ClientTransactionUser for InviteTransactionUser {
                             match SessionDescription::parse(sdp_offer_str) {
                                 Ok(sdp_offer) => {
                                     // Generate SDP answer using RFC 3264 negotiation
-                                    match generator.generate_answer(&sdp_offer, &dialog).await {
+                                    match generator.generate_answer(&sdp_offer, dialog).await {
                                         Ok(sdp_answer) => {
                                             // Serialize SDP answer
                                             let sdp_answer_str = sdp_answer.to_string();
@@ -2128,56 +2169,95 @@ impl ClientTransactionUser for InviteTransactionUser {
                             None
                         }
                     }
-                } else {
-                    if let Some(builder) = &self.config.sdp_profile_builder {
-                        debug!("Late offer detected - generating SDP answer via profile negotiation");
-                        if let Ok(sdp_offer) = SessionDescription::parse(
-                            std::str::from_utf8(&response.body).unwrap_or_default(),
-                        ) {
-                            let addr = self.public_addr.unwrap_or(self.local_addr);
-                            let sdp_answer = profiles::negotiate_answer(
-                                &sdp_offer,
-                                builder,
-                                &self.config.user_agent,
-                                &addr.to_string(),
-                                self.config.local_audio_port,
-                                Some(self.config.local_video_port),
-                            );
-                            let sdp_answer_str = sdp_answer.to_string();
-                            Some(sdp_answer_str)
-                        } else {
-                            None
-                        }
+                } else if let Some(builder) = &self.config.sdp_profile_builder {
+                    debug!("Late offer detected - generating SDP answer via profile negotiation");
+                    if let Ok(sdp_offer) = SessionDescription::parse(
+                        std::str::from_utf8(&response.body).unwrap_or_default(),
+                    ) {
+                        let addr = self.public_addr.unwrap_or(self.local_addr);
+                        let sdp_answer = profiles::negotiate_answer(
+                            &sdp_offer,
+                            builder,
+                            &self.config.user_agent,
+                            &addr.to_string(),
+                            self.config.local_audio_port,
+                            Some(self.config.local_video_port),
+                        );
+                        let sdp_answer_str = sdp_answer.to_string();
+                        Some(sdp_answer_str)
                     } else {
+                        None
+                    }
+                } else {
                     warn!("Late offer scenario detected but no SDP answer generator configured");
                     None
-                    }
                 }
             } else {
                 None
-            };
-
-            let ack = helper.create_ack(&self.request, &response, &dialog, sdp_body.as_deref());
-            drop(helper);
-
-            // Serialize ACK
-            let ack_bytes = serialize_request(&ack);
-
-            // Send ACK directly (ACK for 2xx doesn't go through transaction layer)
-            if let Some(stream) = &ctx.stream {
-                if let Err(e) = stream.send(ack_bytes).await {
-                    error!("Failed to send ACK via stream: {}", e);
-                }
-            } else {
-                // Send via dispatcher
-                if let Err(e) = self.dispatcher.dispatch(ctx, ack_bytes).await {
-                    error!("Failed to send ACK via dispatcher: {}", e);
-                } else {
-                    debug!("ACK sent successfully");
-                }
             }
         } else {
-            error!("Failed to create dialog for ACK");
+            None
+        };
+
+        let mut ack = helper.create_ack(&self.request, &response, sdp_body.as_deref());
+        drop(helper);
+
+        if is_2xx {
+            if let Some(dialog) = dialog.as_ref() {
+                apply_route_set_to_request(dialog, &mut ack);
+            }
+        } else {
+            ack.headers.remove("Route");
+            for route in self.request.headers.get_all("Route") {
+                ack.headers.push(SmolStr::new("Route"), route.clone());
+            }
+        }
+
+        let via_value = if let Some(via) = original_via.as_deref() {
+            if is_2xx {
+                crate::replace_via_branch(via, &crate::generate_branch())
+            } else {
+                via.to_string()
+            }
+        } else if let Some(via) = ack.headers.get("Via") {
+            if is_2xx {
+                crate::replace_via_branch(via.as_str(), &crate::generate_branch())
+            } else {
+                via.to_string()
+            }
+        } else {
+            let via_transport = match ctx.transport {
+                sip_transaction::TransportKind::Udp => "UDP",
+                sip_transaction::TransportKind::Tcp => "TCP",
+                sip_transaction::TransportKind::Tls => "TLS",
+                sip_transaction::TransportKind::Ws => "WS",
+                sip_transaction::TransportKind::Wss => "WSS",
+                sip_transaction::TransportKind::Sctp => "SCTP",
+                sip_transaction::TransportKind::TlsSctp => "TLS-SCTP",
+            };
+            format!(
+                "SIP/2.0/{} {};branch={}",
+                via_transport,
+                self.local_addr,
+                crate::generate_branch()
+            )
+        };
+
+        ack.headers.remove("Via");
+        ack.headers.push(SmolStr::new("Via"), SmolStr::new(via_value));
+
+        // Serialize ACK
+        let ack_bytes = serialize_request(&ack);
+
+        // Send ACK directly (ACK for 2xx doesn't go through transaction layer)
+        if let Some(stream) = &ctx.stream {
+            if let Err(e) = stream.send(ack_bytes).await {
+                error!("Failed to send ACK via stream: {}", e);
+            }
+        } else if let Err(e) = self.dispatcher.dispatch(ctx, ack_bytes).await {
+            error!("Failed to send ACK via dispatcher: {}", e);
+        } else {
+            debug!("ACK sent successfully");
         }
     }
 

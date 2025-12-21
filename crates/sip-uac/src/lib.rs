@@ -8,11 +8,12 @@ use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use sip_auth::{DigestAlgorithm, DigestClient, Qop};
-use sip_core::{Headers, Method, Request, RequestLine, Response, ServiceRouteHeader, SipUri};
+use sip_core::{Header, Headers, Method, Request, RequestLine, Response, ServiceRouteHeader, SipUri};
 use sip_dialog::{Dialog, DialogManager, Subscription, SubscriptionManager, SubscriptionState};
 use sip_parse::header;
 use smol_str::SmolStr;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use tracing::info;
 
 /// UAC (User Agent Client) helper for sending SIP requests.
@@ -51,6 +52,9 @@ pub struct UserAgentClient {
     /// Service-Route from REGISTER response (RFC 3608)
     /// Stored route set to be used as preloaded Route headers in subsequent requests
     service_route: Option<ServiceRouteHeader>,
+
+    /// Stored Call-ID per registrar for REGISTER refreshes.
+    register_call_ids: Mutex<HashMap<String, SmolStr>>,
 }
 
 impl UserAgentClient {
@@ -68,6 +72,7 @@ impl UserAgentClient {
             digest_client: None,
             local_tag,
             service_route: None,
+            register_call_ids: Mutex::new(HashMap::new()),
         }
     }
 
@@ -108,7 +113,7 @@ impl UserAgentClient {
             SmolStr::new(format!("<{}>", target.as_str())),
         );
 
-        // Call-ID
+        // Call-ID (OPTIONS doesn't need Call-ID reuse like REGISTER)
         let call_id = generate_call_id();
         headers.push(SmolStr::new("Call-ID"), SmolStr::new(call_id));
 
@@ -162,9 +167,9 @@ impl UserAgentClient {
             SmolStr::new(format!("<{}>", self.local_uri.as_str())),
         );
 
-        // Call-ID
-        let call_id = generate_call_id();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new(call_id));
+        // Call-ID (reuse per-registrar for refreshes)
+        let call_id = self.register_call_id(registrar_uri);
+        headers.push(SmolStr::new("Call-ID"), call_id);
 
         // CSeq
         headers.push(SmolStr::new("CSeq"), SmolStr::new("1 REGISTER".to_owned()));
@@ -316,16 +321,36 @@ impl UserAgentClient {
     /// ```
     pub fn apply_service_route(&self, request: &mut Request) {
         if let Some(ref service_route) = self.service_route {
-            // Add each Service-Route entry as a Route header
-            // Per RFC 3608, preserve the order
-            for route in &service_route.routes {
-                let route_value = format!("<{}>", route.uri.as_str());
-                // Insert at the beginning to maintain order
-                // (since we iterate forward but want them in order)
-                request
-                    .headers
-                    .push(SmolStr::new("Route"), SmolStr::new(route_value));
+            // Add each Service-Route entry as a Route header before any existing Route headers.
+            let mut new_headers: Vec<Header> = Vec::with_capacity(request.headers.len());
+            let mut inserted = false;
+
+            for header in request.headers.iter() {
+                if header.name.eq_ignore_ascii_case("Route") && !inserted {
+                    for route in &service_route.routes {
+                        let route_value = format!("<{}>", route.uri.as_str());
+                        new_headers.push(Header {
+                            name: SmolStr::new("Route"),
+                            value: SmolStr::new(route_value),
+                        });
+                    }
+                    inserted = true;
+                }
+
+                new_headers.push(header.clone());
             }
+
+            if !inserted {
+                for route in &service_route.routes {
+                    let route_value = format!("<{}>", route.uri.as_str());
+                    new_headers.push(Header {
+                        name: SmolStr::new("Route"),
+                        value: SmolStr::new(route_value),
+                    });
+                }
+            }
+
+            request.headers = Headers::from_vec(new_headers);
 
             info!(
                 "Applied {} Service-Route entries as Route headers",
@@ -432,10 +457,15 @@ impl UserAgentClient {
             "Authorization"
         };
 
+        let new_branch = generate_branch();
+
         // Copy all headers from original request, incrementing CSeq
         let mut cseq_incremented = false;
         for header in original_request.headers.iter() {
-            if header.name.as_str() == "CSeq" && !cseq_incremented {
+            if header.name.as_str() == "Via" {
+                let via_value = replace_via_branch(header.value.as_str(), &new_branch);
+                new_headers.push(SmolStr::new("Via"), SmolStr::new(via_value));
+            } else if header.name.as_str() == "CSeq" && !cseq_incremented {
                 if let Some((num, method)) = header.value.split_once(' ') {
                     if let Ok(mut cseq_num) = num.parse::<u32>() {
                         cseq_num += 1;
@@ -526,7 +556,7 @@ impl UserAgentClient {
             // Content-Length
             headers.push(
                 SmolStr::new("Content-Length"),
-                SmolStr::new(sdp.len().to_string()),
+                SmolStr::new(sdp.as_bytes().len().to_string()),
             );
 
             Bytes::from(sdp.as_bytes().to_vec())
@@ -542,12 +572,11 @@ impl UserAgentClient {
         )
     }
 
-    /// Creates an ACK request for a 2xx response to INVITE.
+    /// Creates an ACK request for an INVITE response.
     ///
     /// # Arguments
     /// * `invite_request` - The original INVITE request
     /// * `response` - The 2xx response to ACK
-    /// * `_dialog` - The dialog created from the INVITE transaction
     /// * `sdp_body` - Optional SDP body for late offer (when 200 OK contained the offer)
     ///
     /// # Returns
@@ -560,7 +589,6 @@ impl UserAgentClient {
         &self,
         invite_request: &Request,
         response: &Response,
-        _dialog: &Dialog,
         sdp_body: Option<&str>,
     ) -> Request {
         let mut headers = Headers::new();
@@ -608,7 +636,7 @@ impl UserAgentClient {
             // Content-Length
             headers.push(
                 SmolStr::new("Content-Length"),
-                SmolStr::new(sdp.len().to_string()),
+                SmolStr::new(sdp.as_bytes().len().to_string()),
             );
 
             Bytes::from(sdp.as_bytes().to_vec())
@@ -761,7 +789,7 @@ impl UserAgentClient {
             // Content-Length
             headers.push(
                 SmolStr::new("Content-Length"),
-                SmolStr::new(sdp.len().to_string()),
+                SmolStr::new(sdp.as_bytes().len().to_string()),
             );
 
             Bytes::from(sdp.as_bytes().to_vec())
@@ -855,7 +883,7 @@ impl UserAgentClient {
             // Content-Length
             headers.push(
                 SmolStr::new("Content-Length"),
-                SmolStr::new(sdp.len().to_string()),
+                SmolStr::new(sdp.as_bytes().len().to_string()),
             );
 
             Bytes::from(sdp.as_bytes().to_vec())
@@ -1078,7 +1106,7 @@ impl UserAgentClient {
         // Content-Length
         headers.push(
             SmolStr::new("Content-Length"),
-            SmolStr::new(body.len().to_string()),
+            SmolStr::new(body.as_bytes().len().to_string()),
         );
 
         // Request-URI is the remote target
@@ -1695,7 +1723,7 @@ impl UserAgentClient {
             );
             headers.push(
                 SmolStr::new("Content-Length"),
-                SmolStr::new(content.len().to_string()),
+                SmolStr::new(content.as_bytes().len().to_string()),
             );
             Bytes::from(content.as_bytes().to_vec())
         } else {
@@ -1877,7 +1905,7 @@ impl UserAgentClient {
         let body = reginfo.to_string();
         headers.push(
             SmolStr::new("Content-Length"),
-            SmolStr::new(body.len().to_string()),
+            SmolStr::new(body.as_bytes().len().to_string()),
         );
 
         Request::new(
@@ -2133,7 +2161,7 @@ impl UserAgentClient {
         // Content-Length
         headers.push(
             SmolStr::new("Content-Length"),
-            SmolStr::new(body.len().to_string()),
+            SmolStr::new(body.as_bytes().len().to_string()),
         );
 
         // NOTE: RFC 3428 explicitly forbids Contact header in MESSAGE requests
@@ -2198,6 +2226,21 @@ impl UserAgentClient {
         request
     }
 
+    fn register_call_id(&self, registrar_uri: &SipUri) -> SmolStr {
+        let key = registrar_uri.as_str().to_string();
+        let mut map = self
+            .register_call_ids
+            .lock()
+            .expect("register_call_ids lock poisoned");
+        if let Some(call_id) = map.get(&key) {
+            return call_id.clone();
+        }
+
+        let call_id = SmolStr::new(generate_call_id());
+        map.insert(key, call_id.clone());
+        call_id
+    }
+
     fn format_from_header(&self) -> String {
         let uri = self.from_uri_override.as_ref().unwrap_or(&self.local_uri);
 
@@ -2254,15 +2297,16 @@ fn parse_www_authenticate(value: &SmolStr) -> Result<std::collections::HashMap<S
 
     let mut map = HashMap::new();
 
-    // Simple parser for Digest challenges
-    if !value.starts_with("Digest ") {
-        return Err(anyhow!("Not a Digest challenge"));
-    }
+    let header = value.as_str().trim();
+    let header_lower = header.to_ascii_lowercase();
+    let digest_pos = header_lower
+        .find("digest")
+        .ok_or_else(|| anyhow!("Not a Digest challenge"))?;
+    let params = header[digest_pos + "Digest".len()..].trim_start();
 
-    let params = &value[7..]; // Skip "Digest "
-
-    for param in params.split(',') {
+    for param in split_auth_params(params) {
         let trimmed = param.trim();
+        let trimmed = trimmed.strip_prefix("Digest").unwrap_or(trimmed).trim_start();
         if let Some(eq_pos) = trimmed.find('=') {
             let key = trimmed[..eq_pos].trim().to_string();
             let value = trimmed[eq_pos + 1..].trim();
@@ -2279,6 +2323,60 @@ fn parse_www_authenticate(value: &SmolStr) -> Result<std::collections::HashMap<S
     }
 
     Ok(map)
+}
+
+fn split_auth_params(input: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut in_quotes = false;
+    let mut start = 0;
+
+    for (idx, ch) in input.char_indices() {
+        match ch {
+            '"' => in_quotes = !in_quotes,
+            ',' if !in_quotes => {
+                let part = input[start..idx].trim();
+                if !part.is_empty() {
+                    parts.push(part);
+                }
+                start = idx + 1;
+            }
+            _ => {}
+        }
+    }
+
+    let tail = input[start..].trim();
+    if !tail.is_empty() {
+        parts.push(tail);
+    }
+
+    parts
+}
+
+pub(crate) fn replace_via_branch(via: &str, new_branch: &str) -> String {
+    let mut parts = via.split(';');
+    let base = parts.next().unwrap_or("").trim();
+    let mut params: Vec<String> = Vec::new();
+    let mut replaced = false;
+
+    for param in parts {
+        let trimmed = param.trim();
+        if trimmed.to_ascii_lowercase().starts_with("branch=") {
+            params.push(format!("branch={}", new_branch));
+            replaced = true;
+        } else if !trimmed.is_empty() {
+            params.push(trimmed.to_string());
+        }
+    }
+
+    if !replaced {
+        params.push(format!("branch={}", new_branch));
+    }
+
+    if params.is_empty() {
+        base.to_string()
+    } else {
+        format!("{};{}", base, params.join(";"))
+    }
 }
 
 /// Extract To URI from response.
@@ -2327,6 +2425,19 @@ mod tests {
 
         let contact = request.headers.get("Contact").unwrap();
         assert!(contact.contains("expires=3600"));
+    }
+
+    #[test]
+    fn reuses_register_call_id_per_registrar() {
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+
+        let registrar = SipUri::parse("sip:registrar.example.com").unwrap();
+        let first = uac.create_register(&registrar, 300);
+        let second = uac.create_register(&registrar, 300);
+
+        assert_eq!(first.headers.get("Call-ID"), second.headers.get("Call-ID"));
     }
 
     #[test]
@@ -2479,10 +2590,10 @@ mod tests {
         );
 
         // Create dialog
-        let dialog = uac.process_invite_response(&invite, &response).unwrap();
+        let _dialog = uac.process_invite_response(&invite, &response).unwrap();
 
         // Create ACK without SDP (early offer - answer was in 200 OK)
-        let ack = uac.create_ack(&invite, &response, &dialog, None);
+        let ack = uac.create_ack(&invite, &response, None);
 
         assert_eq!(ack.start.method.as_str(), Method::Ack.as_str());
         assert_eq!(ack.body.len(), 0);
@@ -2533,11 +2644,11 @@ mod tests {
         );
 
         // Create dialog
-        let dialog = uac.process_invite_response(&invite, &response).unwrap();
+        let _dialog = uac.process_invite_response(&invite, &response).unwrap();
 
         // Create ACK with SDP answer (late offer - answer goes in ACK)
         let sdp_answer = "v=0\r\no=- 345 678 IN IP4 192.168.1.100\r\n";
-        let ack = uac.create_ack(&invite, &response, &dialog, Some(sdp_answer));
+        let ack = uac.create_ack(&invite, &response, Some(sdp_answer));
 
         assert_eq!(ack.start.method.as_str(), Method::Ack.as_str());
         assert_eq!(ack.body.len(), sdp_answer.len());
