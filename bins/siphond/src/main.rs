@@ -235,7 +235,7 @@ async fn main() -> Result<()> {
     let (tx, mut rx) = mpsc::channel::<InboundPacket>(1024);
 
     // Start transport layers
-    let transport_dispatcher = start_transports(
+    let (transport_dispatcher, udp_socket) = start_transports(
         &args.udp_bind,
         &args.tcp_bind,
         &args.sips_bind,
@@ -251,12 +251,15 @@ async fn main() -> Result<()> {
 
     let transaction_mgr = Arc::new(TransactionManager::new(transport_dispatcher.clone()));
 
-    // Set transaction manager in service registry for sending requests
+    // Set transaction manager, transport dispatcher, and UDP socket in service registry
     if let Err(_) = services.set_transaction_manager(transaction_mgr.clone()) {
         panic!("Failed to set transaction manager - already initialized");
     }
     if let Err(_) = services.set_transport_dispatcher(transport_dispatcher.clone()) {
         panic!("Failed to set transport dispatcher - already initialized");
+    }
+    if let Err(_) = services.set_udp_socket(udp_socket.clone()) {
+        panic!("Failed to set UDP socket - already initialized");
     }
 
     info!("siphond ready - listening for requests");
@@ -467,7 +470,8 @@ async fn handle_packet(
             packet.peer,
             packet.stream.clone(),
         )
-        .with_ws_uri(ws_override);
+        .with_ws_uri(ws_override)
+        .with_udp_socket(services.udp_socket.get().cloned());
 
         let handle = transaction_mgr
             .receive_request(req.clone(), ctx.clone())
@@ -577,29 +581,40 @@ async fn handle_packet(
                                     }
                                 }
                             }
-                            sip_transaction::TransportKind::Udp | sip_transaction::TransportKind::Tls => {
-                                let Some(dispatcher) =
-                                    services.transport_dispatcher.get().cloned()
-                                else {
+                            sip_transaction::TransportKind::Udp => {
+                                if let Some(socket) = services.udp_socket.get() {
+                                    if let Err(e) =
+                                        sip_transport::send_udp(socket.as_ref(), &tx.sender_addr, &payload)
+                                            .await
+                                    {
+                                        tracing::warn!(
+                                            error = %e,
+                                            "Proxy response forwarding over UDP failed"
+                                        );
+                                    }
+                                } else {
                                     tracing::warn!(
-                                        transport = ?tx.sender_transport,
-                                        "Transport dispatcher unavailable for proxy response forwarding"
+                                        "Proxy response forwarding over UDP failed: UDP socket unavailable"
                                     );
-                                    return;
-                                };
-
-                                let ctx = TransportContext::new(
-                                    tx.sender_transport,
-                                    tx.sender_addr,
-                                    tx.sender_stream.clone(),
-                                )
-                                .with_ws_uri(tx.sender_ws_uri.clone());
-
-                                if let Err(e) = dispatcher.dispatch(&ctx, payload.clone()).await {
+                                }
+                            }
+                            sip_transaction::TransportKind::Tls => {
+                                if let Some(writer) = &tx.sender_stream {
+                                    if let Err(e) = sip_transport::send_stream(
+                                        sip_transport::TransportKind::Tls,
+                                        writer,
+                                        bytes::Bytes::from(payload.to_vec()),
+                                    )
+                                    .await
+                                    {
+                                        tracing::warn!(
+                                            error = %e,
+                                            "Proxy response forwarding over TLS stream failed"
+                                        );
+                                    }
+                                } else {
                                     tracing::warn!(
-                                        error = %e,
-                                        transport = ?tx.sender_transport,
-                                        "Proxy response forwarding failed"
+                                        "Proxy response forwarding over TLS failed: stream unavailable"
                                     );
                                 }
                             }

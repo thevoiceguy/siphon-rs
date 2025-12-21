@@ -7,47 +7,23 @@
 /// 4. Initiate INVITE to transfer target
 /// 5. Send NOTIFY messages with sipfrag progress
 ///
-/// ## UDP Limitation
+/// ## Transport Support
 ///
-/// **IMPORTANT**: REFER is not fully supported over UDP transport due to architectural
-/// constraints with ACK handling for 2xx responses to INVITE.
+/// REFER is fully supported across all transports when the UDP socket is available:
+/// - **UDP**: ACKs sent via UDP socket exposed in TransportContext (must be populated by caller)
+/// - **TCP**: ACKs sent via TCP connection pool
+/// - **TLS**: ACKs sent via TLS connection pool
+/// - **WebSocket**: ACKs sent via WebSocket connection
 ///
-/// ### Background
+/// ### ACK for 2xx Responses
 ///
 /// Per RFC 3261 §13.2.2.4, the ACK for a 2xx response to INVITE is sent **outside**
 /// the transaction layer (unlike ACKs for error responses which are part of the
-/// transaction). This means the ACK must be sent directly via the transport layer.
+/// transaction). This handler implements the ACK sending directly for all transports.
 ///
-/// ### The Problem
-///
-/// In the current architecture:
-/// - TCP/TLS: We have access to connection pools and can send ACK directly
-/// - WebSocket: We have the WS URI and can send ACK via WebSocket sender
-/// - UDP: **No socket access** - the UDP socket is owned by the transport layer
-///   and not accessible from the transaction user context
-///
-/// ### Impact
-///
-/// When a REFER is received and the transfer target is reachable only via UDP:
-/// - The initial INVITE will be sent successfully
-/// - If a 2xx response is received, the ACK **cannot be sent**
-/// - The transfer target will retransmit the 2xx response (up to Timer G = 32s)
-/// - Eventually the transfer target will give up and terminate the call
-/// - The REFER will fail even though both parties support the transfer
-///
-/// ### Workaround
-///
-/// To support REFER reliably:
-/// 1. Configure transfer targets to use TCP or TLS transport
-/// 2. Ensure DNS resolution prefers TCP over UDP for transfer targets
-/// 3. Set transport=tcp parameter in Refer-To URIs when possible
-///
-/// ### Future Solution
-///
-/// To support UDP REFER properly, we would need:
-/// 1. Pass UDP socket handle to transaction users, OR
-/// 2. Add ACK-sending capability to TransportDispatcher, OR
-/// 3. Handle 2xx ACKs at the transaction layer (non-standard but pragmatic)
+/// The UDP socket is provided via `TransportContext.udp_socket`, which is populated
+/// from the ServiceRegistry during context creation in siphond. Embedders must set
+/// it explicitly to enable UDP ACKs.
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use sip_core::{Request, Response, SipUri};
@@ -186,6 +162,24 @@ impl ClientTransactionUser for ReferTransferTransactionUser {
                     warn!(error = %e, "Failed to send REFER ACK via TCP");
                 }
             }
+            sip_transaction::TransportKind::Tls => {
+                if let Some(writer) = &ctx.stream {
+                    if let Err(e) = sip_transport::send_stream(
+                        sip_transport::TransportKind::Tls,
+                        writer,
+                        bytes::Bytes::from(payload.to_vec()),
+                    )
+                    .await
+                    {
+                        warn!(error = %e, "Failed to send REFER ACK via TLS stream");
+                    }
+                } else {
+                    warn!(
+                        "REFER ACK over TLS not sent - TLS stream not available in context. \
+                         This indicates a missing stream for the inbound TLS connection."
+                    );
+                }
+            }
             sip_transaction::TransportKind::Ws | sip_transaction::TransportKind::Wss => {
                 #[cfg(feature = "ws")]
                 {
@@ -203,14 +197,18 @@ impl ClientTransactionUser for ReferTransferTransactionUser {
                 }
             }
             sip_transaction::TransportKind::Udp => {
-                // UDP ACK not supported - see module documentation for detailed explanation.
-                // The ACK for 2xx responses must be sent outside the transaction layer,
-                // but we have no access to the UDP socket from this context.
-                // Transfer will fail as the target will never receive our ACK.
-                warn!(
-                    "REFER ACK over UDP not supported (no socket access) - transfer will fail. \
-                     Use TCP/TLS transport for reliable REFER support. See module docs for details."
-                );
+                // Send ACK over UDP using the socket from TransportContext
+                if let Some(socket) = &ctx.udp_socket {
+                    if let Err(e) = sip_transport::send_udp(socket.as_ref(), &ctx.peer, &payload).await {
+                        warn!(error = %e, "Failed to send REFER ACK via UDP");
+                    }
+                } else {
+                    // Fallback: UDP socket not available in context
+                    warn!(
+                        "REFER ACK over UDP not sent - UDP socket not available in context. \
+                         This should not happen with current architecture."
+                    );
+                }
             }
             _ => {
                 warn!("REFER ACK transport not supported");
@@ -559,7 +557,9 @@ impl RequestHandler for ReferHandler {
                     }
                 }
 
-                let ctx = TransportContext::new(transport, target_addr, None).with_ws_uri(ws_uri);
+                let ctx = TransportContext::new(transport, target_addr, None)
+                    .with_ws_uri(ws_uri)
+                    .with_udp_socket(services.udp_socket.get().cloned());
                 let Some(transaction_mgr) = services.transaction_mgr.get() else {
                     warn!(call_id, "Transaction manager not available, cannot initiate transfer");
                     return Ok(());

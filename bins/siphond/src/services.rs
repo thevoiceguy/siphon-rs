@@ -8,6 +8,7 @@ use sip_auth::{DigestAuthenticator, MemoryCredentialStore};
 use sip_dialog::{prack_validator::PrackValidator, DialogManager, RSeqManager, SubscriptionManager};
 use sip_registrar::{BasicRegistrar, MemoryLocationStore};
 use sip_transaction::{TransactionManager, TransportDispatcher};
+use tokio::net::UdpSocket;
 
 use crate::b2bua_state::B2BUAStateManager;
 use crate::config::DaemonConfig;
@@ -49,6 +50,9 @@ pub struct ServiceRegistry {
 
     /// Transport dispatcher for sending responses (set after initialization)
     pub transport_dispatcher: OnceLock<Arc<dyn TransportDispatcher>>,
+
+    /// UDP socket for sending ACKs and other messages over UDP (set after initialization)
+    pub udp_socket: OnceLock<Arc<UdpSocket>>,
 
     /// Daemon configuration (immutable)
     pub config: Arc<DaemonConfig>,
@@ -134,6 +138,7 @@ impl ServiceRegistry {
             registrar,
             transaction_mgr: OnceLock::new(),
             transport_dispatcher: OnceLock::new(),
+            udp_socket: OnceLock::new(),
             config,
         }
     }
@@ -152,6 +157,11 @@ impl ServiceRegistry {
         dispatcher: Arc<dyn TransportDispatcher>,
     ) -> Result<(), Arc<dyn TransportDispatcher>> {
         self.transport_dispatcher.set(dispatcher)
+    }
+
+    /// Set the UDP socket (can only be called once)
+    pub fn set_udp_socket(&self, socket: Arc<UdpSocket>) -> Result<(), Arc<UdpSocket>> {
+        self.udp_socket.set(socket)
     }
 
     /// Check if authentication is required

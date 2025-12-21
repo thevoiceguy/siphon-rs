@@ -17,7 +17,7 @@ use tokio::{net::UdpSocket, sync::mpsc};
 use tokio_rustls::rustls;
 use tracing::{info, warn};
 
-/// Start all transport layers and return the transport dispatcher.
+/// Start all transport layers and return the transport dispatcher and UDP socket.
 pub async fn start_transports(
     udp_bind: &str,
     tcp_bind: &str,
@@ -27,7 +27,7 @@ pub async fn start_transports(
     #[cfg(feature = "ws")] ws_bind: Option<&str>,
     #[cfg(feature = "ws")] wss_bind: Option<&str>,
     tx: mpsc::Sender<InboundPacket>,
-) -> Result<Arc<dyn TransportDispatcher>> {
+) -> Result<(Arc<dyn TransportDispatcher>, Arc<UdpSocket>)> {
     // Create UDP socket
     let udp_socket = Arc::new(UdpSocket::bind(udp_bind).await?);
     let recv_socket = Arc::clone(&udp_socket);
@@ -39,9 +39,9 @@ pub async fn start_transports(
     // Prepare optional TLS client config (system roots, default crypto)
     let tls_client_config = build_tls_client_config();
 
-    // Create transport dispatcher
+    // Create transport dispatcher (clone socket since we need to return it too)
     let dispatcher = Arc::new(SiphonTransportDispatcher::new(
-        udp_socket,
+        Arc::clone(&udp_socket),
         Arc::new(DefaultTransportPolicy::default()),
         tcp_pool,
         tls_pool,
@@ -125,7 +125,7 @@ pub async fn start_transports(
         }
     }
 
-    Ok(dispatcher)
+    Ok((dispatcher, udp_socket))
 }
 
 /// Builds a client TLS config using system roots.

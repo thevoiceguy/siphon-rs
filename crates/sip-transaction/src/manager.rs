@@ -185,6 +185,10 @@ pub struct TransportContext {
     pub server_name: Option<String>,
     /// Optional WS/WSS target URI override.
     pub ws_uri: Option<String>,
+    /// Optional UDP socket for sending ACKs and other messages over UDP.
+    /// Required for ClientTransactionUser implementations that need to send
+    /// ACK for 2xx responses (e.g., REFER transfers, UAC call flows).
+    pub udp_socket: Option<std::sync::Arc<tokio::net::UdpSocket>>,
 }
 
 impl TransportContext {
@@ -199,6 +203,7 @@ impl TransportContext {
             stream,
             server_name: None,
             ws_uri: None,
+            udp_socket: None,
         }
     }
 
@@ -211,6 +216,13 @@ impl TransportContext {
     /// Builder-style helper to set an explicit WS/WSS URI.
     pub fn with_ws_uri(mut self, uri: Option<String>) -> Self {
         self.ws_uri = uri;
+        self
+    }
+
+    /// Builder-style helper to set the UDP socket.
+    /// Required for sending ACKs for 2xx responses over UDP.
+    pub fn with_udp_socket(mut self, socket: Option<std::sync::Arc<tokio::net::UdpSocket>>) -> Self {
+        self.udp_socket = socket;
         self
     }
 }
