@@ -4,6 +4,7 @@ use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use sip_auth::Authenticator;
 use sip_core::{Headers, Method, Request, RequestLine, Response, SipUri, StatusLine};
+use sip_dialog::prack_validator::PrackValidator;
 use sip_dialog::session_timer_manager::validate_session_expires;
 use sip_dialog::{Dialog, DialogManager, RSeqManager, Subscription, SubscriptionManager};
 use sip_parse::{header, parse_session_expires};
@@ -43,6 +44,9 @@ pub struct UserAgentServer {
     /// RSeq manager for reliable provisional responses (RFC 3262)
     pub rseq_manager: Arc<RSeqManager>,
 
+    /// PRACK validator for reliable provisional responses (RFC 3262)
+    pub prack_validator: Arc<PrackValidator>,
+
     /// Optional authenticator for challenge/response
     authenticator: Option<Arc<dyn Authenticator>>,
 }
@@ -56,6 +60,7 @@ impl UserAgentServer {
             dialog_manager: Arc::new(DialogManager::new()),
             subscription_manager: Arc::new(SubscriptionManager::new()),
             rseq_manager: Arc::new(RSeqManager::new()),
+            prack_validator: Arc::new(PrackValidator::new()),
             authenticator: None,
         }
     }
@@ -79,7 +84,7 @@ impl UserAgentServer {
         let mut headers = Headers::new();
 
         // Copy Via, From, Call-ID, CSeq from request
-        if let Some(via) = request.headers.get("Via") {
+        for via in request.headers.get_all("Via") {
             headers.push(SmolStr::new("Via"), via.clone());
         }
         if let Some(from) = request.headers.get("From") {
@@ -211,7 +216,27 @@ impl UserAgentServer {
 
     /// Creates a 487 Request Terminated response (for CANCEL).
     pub fn create_request_terminated(request: &Request) -> Response {
-        Self::create_response(request, 487, "Request Terminated")
+        let mut response = Self::create_response(request, 487, "Request Terminated");
+        ensure_to_tag_header(&mut response);
+        response
+    }
+
+    /// Creates a 487 Request Terminated response based on a CANCEL request.
+    ///
+    /// Ensures the CSeq method is INVITE per RFC 3261.
+    pub fn create_request_terminated_from_cancel(request: &Request) -> Response {
+        let mut response = Self::create_request_terminated(request);
+        if let Some(cseq) = request.headers.get("CSeq") {
+            let cseq_number = cseq.split_whitespace().next().unwrap_or("0");
+            let cseq_value = format!("{} INVITE", cseq_number);
+            for header in response.headers.iter_mut() {
+                if header.name.as_str() == "CSeq" {
+                    header.value = SmolStr::new(cseq_value);
+                    break;
+                }
+            }
+        }
+        response
     }
 
     /// Creates a 422 Session Interval Too Small response (RFC 4028).
@@ -234,6 +259,7 @@ impl UserAgentServer {
             .headers
             .push(SmolStr::new("Min-SE"), SmolStr::new(min_se.to_string()));
 
+        ensure_to_tag_header(&mut response);
         response
     }
 
@@ -291,6 +317,10 @@ impl UserAgentServer {
             return Err(anyhow!("Not an INVITE request"));
         }
 
+        if let Err(_response) = Self::validate_invite_headers(request) {
+            return Err(anyhow!("Bad INVITE request"));
+        }
+
         // Verify authentication if configured
         if let Some(auth) = &self.authenticator {
             if !auth.verify(request, &request.headers)? {
@@ -332,7 +362,9 @@ impl UserAgentServer {
     /// # Returns
     /// A response with the specified status
     pub fn reject_invite(request: &Request, code: u16, reason: &str) -> Response {
-        Self::create_response(request, code, reason)
+        let mut response = Self::create_response(request, code, reason);
+        ensure_to_tag_header(&mut response);
+        response
     }
 
     /// Handles a BYE request to terminate a dialog.
@@ -348,13 +380,7 @@ impl UserAgentServer {
             return Err(anyhow!("Not a BYE request"));
         }
 
-        // Verify the request matches the dialog
-        let call_id =
-            header(&request.headers, "Call-ID").ok_or_else(|| anyhow!("Missing Call-ID"))?;
-
-        if call_id != dialog.id.call_id.as_str() {
-            return Err(anyhow!("Call-ID mismatch"));
-        }
+        validate_dialog_request(request, dialog)?;
 
         // Remove dialog from manager
         self.dialog_manager.remove(&dialog.id);
@@ -411,13 +437,7 @@ impl UserAgentServer {
             return Err(anyhow!("Not an INFO request"));
         }
 
-        // Verify the request matches the dialog
-        let call_id =
-            header(&request.headers, "Call-ID").ok_or_else(|| anyhow!("Missing Call-ID"))?;
-
-        if call_id != dialog.id.call_id.as_str() {
-            return Err(anyhow!("Call-ID mismatch"));
-        }
+        validate_dialog_request(request, dialog)?;
 
         info!(
             call_id = %dialog.id.call_id,
@@ -545,7 +565,7 @@ impl UserAgentServer {
     /// A NOTIFY request with message/sipfrag body
     pub fn create_notify_sipfrag(
         &self,
-        subscription: &Subscription,
+        subscription: &mut Subscription,
         status_code: u16,
         reason_phrase: &str,
     ) -> Request {
@@ -553,9 +573,25 @@ impl UserAgentServer {
 
         // Via
         let branch = generate_branch();
+        let transport = self
+            .contact_uri
+            .params
+            .get("transport")
+            .and_then(|v| v.as_ref())
+            .map(|v| v.as_str().to_ascii_uppercase())
+            .unwrap_or_else(|| "UDP".to_string());
+        let host = self.contact_uri.host.as_str();
+        let port = self
+            .contact_uri
+            .port
+            .map(|p| format!(":{}", p))
+            .unwrap_or_default();
         headers.push(
             SmolStr::new("Via"),
-            SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
+            SmolStr::new(format!(
+                "SIP/2.0/{} {}{};branch={}",
+                transport, host, port, branch
+            )),
         );
 
         // From (we are the notifier, so use local URI with To tag from subscription)
@@ -578,7 +614,8 @@ impl UserAgentServer {
         headers.push(SmolStr::new("Call-ID"), subscription.id.call_id.clone());
 
         // CSeq
-        let cseq = subscription.local_cseq + 1;
+        subscription.local_cseq = subscription.local_cseq.saturating_add(1);
+        let cseq = subscription.local_cseq;
         headers.push(
             SmolStr::new("CSeq"),
             SmolStr::new(format!("{} NOTIFY", cseq)),
@@ -647,13 +684,7 @@ impl UserAgentServer {
             return Err(anyhow!("Not a REFER request"));
         }
 
-        // Verify the request matches the dialog
-        let call_id =
-            header(&request.headers, "Call-ID").ok_or_else(|| anyhow!("Missing Call-ID"))?;
-
-        if call_id != dialog.id.call_id.as_str() {
-            return Err(anyhow!("Call-ID mismatch"));
-        }
+        validate_dialog_request(request, dialog)?;
 
         // Extract Refer-To header
         let refer_to = header(&request.headers, "Refer-To")
@@ -743,6 +774,20 @@ impl UserAgentServer {
         // Add tag to To header if not present
         self.ensure_to_tag(&mut response);
 
+        if let Some(cseq) = header(&request.headers, "CSeq") {
+            if let Some(cseq_num) = cseq.split_whitespace().next() {
+                if let Ok(cseq_num) = cseq_num.parse::<u32>() {
+                    self.prack_validator.register_reliable_provisional(
+                        &dialog_id_key(&dialog.id),
+                        rseq,
+                        cseq_num,
+                        request.start.method.clone(),
+                        code,
+                    );
+                }
+            }
+        }
+
         // Add body if provided
         if let Some(body_content) = sdp_body {
             // Update Content-Length
@@ -778,34 +823,21 @@ impl UserAgentServer {
             return Err(anyhow!("Not a PRACK request"));
         }
 
-        // Verify the request matches the dialog
-        let call_id =
-            header(&request.headers, "Call-ID").ok_or_else(|| anyhow!("Missing Call-ID"))?;
+        validate_dialog_request(request, dialog)?;
 
-        if call_id != dialog.id.call_id.as_str() {
-            return Err(anyhow!("Call-ID mismatch"));
+        if let Err(err) =
+            self.prack_validator
+                .validate_prack(&dialog_id_key(&dialog.id), request)
+        {
+            let response = if err.to_string().contains("missing RAck")
+                || err.to_string().contains("Invalid RAck")
+            {
+                Self::create_response(request, 400, "Bad Request")
+            } else {
+                Self::create_response(request, 481, "Call/Transaction Does Not Exist")
+            };
+            return Ok(response);
         }
-
-        // Extract and validate RAck header
-        let rack_str =
-            header(&request.headers, "RAck").ok_or_else(|| anyhow!("Missing RAck header"))?;
-
-        let rack_parts: Vec<&str> = rack_str.split_whitespace().collect();
-        if rack_parts.len() < 3 {
-            return Err(anyhow!("Invalid RAck header format"));
-        }
-
-        // RAck format: RSeq CSeq-number Method
-        let _rseq: u32 = rack_parts[0]
-            .parse()
-            .map_err(|_| anyhow!("Invalid RSeq in RAck"))?;
-        let _cseq_num: u32 = rack_parts[1]
-            .parse()
-            .map_err(|_| anyhow!("Invalid CSeq number in RAck"))?;
-        let _method = rack_parts[2];
-
-        // TODO: Validate RAck values match a pending reliable provisional
-        // For now, just accept it
 
         info!(
             call_id = %dialog.id.call_id,
@@ -818,33 +850,37 @@ impl UserAgentServer {
 
     /// Adds a tag to the To header if not already present.
     fn ensure_to_tag(&self, response: &mut Response) {
-        let mut to_value = None;
-        let mut has_tag = false;
+        ensure_to_tag_header(response);
+    }
 
-        // Find To header and check for tag
-        for header in response.headers.iter() {
-            if header.name.as_str() == "To" {
-                to_value = Some(header.value.clone());
-                has_tag = header.value.contains(";tag=");
-                break;
+    /// Validates required headers for an INVITE request.
+    ///
+    /// Returns a 400 Bad Request response if required headers are missing.
+    pub fn validate_invite_headers(request: &Request) -> Result<(), Response> {
+        if request.start.method.as_str() != "INVITE" {
+            return Ok(());
+        }
+
+        for required in ["Via", "From", "To", "Call-ID", "CSeq"] {
+            if request.headers.get(required).is_none() {
+                return Err(Self::create_bad_request(request, "Bad Request"));
             }
         }
 
-        // Add tag if missing
-        if let Some(to) = to_value {
-            if !has_tag {
-                let tag = generate_tag();
-                let new_to = format!("{};tag={}", to.as_str(), tag.as_str());
-
-                // Replace To header
-                for header in response.headers.iter_mut() {
-                    if header.name.as_str() == "To" {
-                        header.value = SmolStr::new(new_to);
-                        break;
-                    }
-                }
-            }
+        let from_header = header(&request.headers, "From")
+            .ok_or_else(|| Self::create_bad_request(request, "Bad Request"))?;
+        if extract_tag_param(from_header).is_none() {
+            return Err(Self::create_bad_request(request, "Bad Request"));
         }
+
+        Ok(())
+    }
+
+    /// Creates a 400 Bad Request response.
+    pub fn create_bad_request(request: &Request, reason: &str) -> Response {
+        let mut response = Self::create_response(request, 400, reason);
+        ensure_to_tag_header(&mut response);
+        response
     }
 }
 
@@ -870,6 +906,78 @@ fn generate_branch() -> String {
         .map(char::from)
         .collect();
     format!("z9hG4bK{}", random)
+}
+
+/// Extracts tag parameter from From/To header value.
+fn extract_tag_param(value: &SmolStr) -> Option<SmolStr> {
+    value.split(';').find_map(|segment| {
+        let trimmed = segment.trim();
+        if trimmed.len() >= 4 && trimmed[..4].eq_ignore_ascii_case("tag=") {
+            Some(SmolStr::new(trimmed[4..].to_owned()))
+        } else {
+            None
+        }
+    })
+}
+
+/// Builds a stable dialog key for PRACK tracking.
+fn dialog_id_key(id: &sip_dialog::DialogId) -> String {
+    format!("{}:{}:{}", id.call_id, id.local_tag, id.remote_tag)
+}
+
+/// Validates that a request matches the dialog's Call-ID and tags.
+fn validate_dialog_request(request: &Request, dialog: &Dialog) -> Result<()> {
+    let call_id = header(&request.headers, "Call-ID").ok_or_else(|| anyhow!("Missing Call-ID"))?;
+    if call_id != dialog.id.call_id.as_str() {
+        return Err(anyhow!("Call-ID mismatch"));
+    }
+
+    let from_header =
+        header(&request.headers, "From").ok_or_else(|| anyhow!("Missing From header"))?;
+    let to_header = header(&request.headers, "To").ok_or_else(|| anyhow!("Missing To header"))?;
+
+    let from_tag = extract_tag_param(from_header).ok_or_else(|| anyhow!("Missing From tag"))?;
+    let to_tag = extract_tag_param(to_header).ok_or_else(|| anyhow!("Missing To tag"))?;
+
+    if from_tag != dialog.id.remote_tag {
+        return Err(anyhow!("From tag mismatch"));
+    }
+    if to_tag != dialog.id.local_tag {
+        return Err(anyhow!("To tag mismatch"));
+    }
+
+    Ok(())
+}
+
+/// Adds a tag to the To header if not already present.
+fn ensure_to_tag_header(response: &mut Response) {
+    let mut to_value = None;
+    let mut has_tag = false;
+
+    // Find To header and check for tag
+    for header in response.headers.iter() {
+        if header.name.as_str() == "To" {
+            to_value = Some(header.value.clone());
+            has_tag = header.value.contains(";tag=");
+            break;
+        }
+    }
+
+    // Add tag if missing
+    if let Some(to) = to_value {
+        if !has_tag {
+            let tag = generate_tag();
+            let new_to = format!("{};tag={}", to.as_str(), tag.as_str());
+
+            // Replace To header
+            for header in response.headers.iter_mut() {
+                if header.name.as_str() == "To" {
+                    header.value = SmolStr::new(new_to);
+                    break;
+                }
+            }
+        }
+    }
 }
 
 /// Extract From URI from request.
@@ -1460,7 +1568,7 @@ mod tests {
 
         // Create a mock subscription
         let remote_uri = SipUri::parse("sip:alice@example.com").unwrap();
-        let subscription = Subscription {
+        let mut subscription = Subscription {
             id: sip_dialog::SubscriptionId {
                 call_id: SmolStr::new("test-call-id"),
                 from_tag: SmolStr::new("abc123"),
@@ -1477,7 +1585,7 @@ mod tests {
         };
 
         // Test with 100 Trying (should be active)
-        let notify_100 = uas.create_notify_sipfrag(&subscription, 100, "Trying");
+        let notify_100 = uas.create_notify_sipfrag(&mut subscription, 100, "Trying");
 
         assert_eq!(notify_100.start.method, Method::Notify);
         assert!(notify_100.headers.get("Event").is_some());
@@ -1501,7 +1609,7 @@ mod tests {
         assert!(body.contains("SIP/2.0 100 Trying"));
 
         // Test with 200 OK (should be terminated with noresource)
-        let notify_200 = uas.create_notify_sipfrag(&subscription, 200, "OK");
+        let notify_200 = uas.create_notify_sipfrag(&mut subscription, 200, "OK");
 
         assert_eq!(
             notify_200
@@ -1516,7 +1624,7 @@ mod tests {
         assert!(body.contains("SIP/2.0 200 OK"));
 
         // Test with 603 Decline (should be terminated with rejected)
-        let notify_603 = uas.create_notify_sipfrag(&subscription, 603, "Decline");
+        let notify_603 = uas.create_notify_sipfrag(&mut subscription, 603, "Decline");
 
         assert_eq!(
             notify_603
@@ -1655,6 +1763,32 @@ mod tests {
 
         let uas = UserAgentServer::new(local_uri.clone(), contact_uri);
 
+        let mut invite_headers = Headers::new();
+        invite_headers.push(
+            SmolStr::new("Via"),
+            SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
+        );
+        invite_headers.push(
+            SmolStr::new("From"),
+            SmolStr::new("<sip:alice@example.com>;tag=alice-tag"),
+        );
+        invite_headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"));
+        invite_headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"));
+        invite_headers.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"));
+        invite_headers.push(
+            SmolStr::new("Contact"),
+            SmolStr::new("<sip:alice@192.168.1.100:5060>"),
+        );
+
+        let invite_request = Request::new(
+            RequestLine::new(
+                Method::Invite,
+                SipUri::parse("sip:bob@example.com").unwrap(),
+            ),
+            invite_headers,
+            Bytes::new(),
+        );
+
         // Mock dialog
         let remote_uri = SipUri::parse("sip:alice@example.com").unwrap();
         let dialog = Dialog {
@@ -1676,6 +1810,8 @@ mod tests {
             refresher: Some(RefresherRole::Uas),
             is_uac: false,
         };
+
+        let _provisional = uas.create_reliable_provisional(&invite_request, &dialog, 180, "Ringing", None);
 
         // Create PRACK request
         let mut headers = Headers::new();

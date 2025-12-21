@@ -45,11 +45,13 @@
 /// ```
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use sip_auth::Authenticator;
 use sip_core::{Method, Request, Response, SipUri};
 use sip_dialog::{Dialog, DialogManager, SubscriptionManager};
 use sip_sdp::profiles::MediaProfileBuilder;
 use sip_transaction::{
-    ServerTransactionHandle, TransactionManager, TransportContext, TransportDispatcher,
+    ServerTransactionHandle, TransactionKey, TransactionManager, TransportContext,
+    TransportDispatcher,
 };
 use smol_str::SmolStr;
 use std::net::SocketAddr;
@@ -58,6 +60,17 @@ use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 use crate::UserAgentServer;
+
+const ALLOW_HEADER_VALUE: &str =
+    "INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, SUBSCRIBE, NOTIFY, REFER, UPDATE, PRACK, INFO";
+
+fn method_not_allowed_response(request: &Request) -> Response {
+    let mut response = UserAgentServer::create_response(request, 405, "Method Not Allowed");
+    response
+        .headers
+        .push(SmolStr::new("Allow"), SmolStr::new(ALLOW_HEADER_VALUE));
+    response
+}
 
 /// Trait for handling incoming SIP requests.
 ///
@@ -81,7 +94,7 @@ pub trait UasRequestHandler: Send + Sync {
         dialog: Option<&Dialog>,
     ) -> Result<()> {
         let _ = (ctx, dialog);
-        let response = UserAgentServer::create_response(request, 405, "Method Not Allowed");
+        let response = method_not_allowed_response(request);
         handle.send_final(response).await;
         Ok(())
     }
@@ -114,7 +127,7 @@ pub trait UasRequestHandler: Send + Sync {
 
     /// Handle an incoming REGISTER request.
     async fn on_register(&self, request: &Request, handle: ServerTransactionHandle) -> Result<()> {
-        let response = UserAgentServer::create_response(request, 405, "Method Not Allowed");
+        let response = method_not_allowed_response(request);
         handle.send_final(response).await;
         Ok(())
     }
@@ -128,14 +141,14 @@ pub trait UasRequestHandler: Send + Sync {
 
     /// Handle an incoming SUBSCRIBE request.
     async fn on_subscribe(&self, request: &Request, handle: ServerTransactionHandle) -> Result<()> {
-        let response = UserAgentServer::create_response(request, 405, "Method Not Allowed");
+        let response = method_not_allowed_response(request);
         handle.send_final(response).await;
         Ok(())
     }
 
     /// Handle an incoming NOTIFY request.
     async fn on_notify(&self, request: &Request, handle: ServerTransactionHandle) -> Result<()> {
-        let response = UserAgentServer::create_response(request, 405, "Method Not Allowed");
+        let response = method_not_allowed_response(request);
         handle.send_final(response).await;
         Ok(())
     }
@@ -148,7 +161,7 @@ pub trait UasRequestHandler: Send + Sync {
         dialog: &Dialog,
     ) -> Result<()> {
         let _ = dialog;
-        let response = UserAgentServer::create_response(request, 405, "Method Not Allowed");
+        let response = method_not_allowed_response(request);
         handle.send_final(response).await;
         Ok(())
     }
@@ -161,7 +174,7 @@ pub trait UasRequestHandler: Send + Sync {
         dialog: &Dialog,
     ) -> Result<()> {
         let _ = dialog;
-        let response = UserAgentServer::create_response(request, 405, "Method Not Allowed");
+        let response = method_not_allowed_response(request);
         handle.send_final(response).await;
         Ok(())
     }
@@ -174,7 +187,7 @@ pub trait UasRequestHandler: Send + Sync {
         dialog: &Dialog,
     ) -> Result<()> {
         let _ = dialog;
-        let response = UserAgentServer::create_response(request, 405, "Method Not Allowed");
+        let response = method_not_allowed_response(request);
         handle.send_final(response).await;
         Ok(())
     }
@@ -187,7 +200,7 @@ pub trait UasRequestHandler: Send + Sync {
         dialog: &Dialog,
     ) -> Result<()> {
         let _ = dialog;
-        let response = UserAgentServer::create_response(request, 405, "Method Not Allowed");
+        let response = method_not_allowed_response(request);
         handle.send_final(response).await;
         Ok(())
     }
@@ -271,16 +284,35 @@ impl IntegratedUAS {
             ctx.peer
         );
 
+        if self.config.require_authentication && request.start.method != Method::Ack {
+            let helper = self.helper.lock().await;
+            let is_authenticated = helper.verify_authentication(request)?;
+            if !is_authenticated {
+                let mut response = helper.create_unauthorized(request)?;
+                drop(helper);
+                self.auto_fill_headers(&mut response, ctx).await;
+                handle.send_final(response).await;
+                return Ok(());
+            }
+        }
+
         // Route based on method
         match request.start.method.as_str() {
             "INVITE" => {
+                if let Err(mut response) = UserAgentServer::validate_invite_headers(request) {
+                    self.auto_fill_headers(&mut response, ctx).await;
+                    handle.send_final(response).await;
+                    return Ok(());
+                }
+
                 let helper = self.helper.lock().await;
                 let dialog = helper.dialog_manager.find_by_request(request);
                 drop(helper);
 
                 // Send 100 Trying if configured
                 if self.config.auto_send_100_trying {
-                    let trying = UserAgentServer::create_response(request, 100, "Trying");
+                    let mut trying = UserAgentServer::create_response(request, 100, "Trying");
+                    self.auto_fill_headers(&mut trying, ctx).await;
                     handle.send_provisional(trying).await;
                 }
 
@@ -307,16 +339,30 @@ impl IntegratedUAS {
                         .await?;
                 } else {
                     warn!("Received BYE for unknown dialog");
-                    let response = UserAgentServer::create_response(
+                    let mut response = UserAgentServer::create_response(
                         request,
                         481,
                         "Call/Transaction Does Not Exist",
                     );
+                    self.auto_fill_headers(&mut response, ctx).await;
                     handle.send_final(response).await;
                 }
             }
             "CANCEL" => {
                 self.request_handler.on_cancel(request, handle).await?;
+                if let Some(cancel_key) = TransactionKey::from_request(request, true) {
+                    let invite_key = TransactionKey {
+                        branch: cancel_key.branch.clone(),
+                        method: Method::Invite,
+                        is_server: true,
+                    };
+                    let mut response =
+                        UserAgentServer::create_request_terminated_from_cancel(request);
+                    self.auto_fill_headers(&mut response, ctx).await;
+                    self.transaction_manager
+                        .send_final(&invite_key, response)
+                        .await;
+                }
             }
             "REGISTER" => {
                 self.request_handler.on_register(request, handle).await?;
@@ -339,11 +385,12 @@ impl IntegratedUAS {
                         .await?;
                 } else {
                     warn!("Received REFER for unknown dialog");
-                    let response = UserAgentServer::create_response(
+                    let mut response = UserAgentServer::create_response(
                         request,
                         481,
                         "Call/Transaction Does Not Exist",
                     );
+                    self.auto_fill_headers(&mut response, ctx).await;
                     handle.send_final(response).await;
                 }
             }
@@ -356,11 +403,12 @@ impl IntegratedUAS {
                         .await?;
                 } else {
                     warn!("Received UPDATE for unknown dialog");
-                    let response = UserAgentServer::create_response(
+                    let mut response = UserAgentServer::create_response(
                         request,
                         481,
                         "Call/Transaction Does Not Exist",
                     );
+                    self.auto_fill_headers(&mut response, ctx).await;
                     handle.send_final(response).await;
                 }
             }
@@ -373,11 +421,12 @@ impl IntegratedUAS {
                         .await?;
                 } else {
                     warn!("Received PRACK for unknown dialog");
-                    let response = UserAgentServer::create_response(
+                    let mut response = UserAgentServer::create_response(
                         request,
                         481,
                         "Call/Transaction Does Not Exist",
                     );
+                    self.auto_fill_headers(&mut response, ctx).await;
                     handle.send_final(response).await;
                 }
             }
@@ -390,17 +439,19 @@ impl IntegratedUAS {
                         .await?;
                 } else {
                     warn!("Received INFO for unknown dialog");
-                    let response = UserAgentServer::create_response(
+                    let mut response = UserAgentServer::create_response(
                         request,
                         481,
                         "Call/Transaction Does Not Exist",
                     );
+                    self.auto_fill_headers(&mut response, ctx).await;
                     handle.send_final(response).await;
                 }
             }
             _ => {
                 warn!("Unsupported method: {:?}", &request.start.method);
-                let response = UserAgentServer::create_response(request, 501, "Not Implemented");
+                let mut response = UserAgentServer::create_response(request, 501, "Not Implemented");
+                self.auto_fill_headers(&mut response, ctx).await;
                 handle.send_final(response).await;
             }
         }
@@ -455,6 +506,7 @@ pub struct IntegratedUASBuilder {
     transaction_manager: Option<Arc<TransactionManager>>,
     dispatcher: Option<Arc<dyn TransportDispatcher>>,
     request_handler: Option<Arc<dyn UasRequestHandler>>,
+    authenticator: Option<Arc<dyn Authenticator>>,
     config: UASConfig,
     sdp_profile: Option<MediaProfileBuilder>,
 }
@@ -469,6 +521,7 @@ impl IntegratedUASBuilder {
             transaction_manager: None,
             dispatcher: None,
             request_handler: None,
+            authenticator: None,
             config: UASConfig::default(),
             sdp_profile: None,
         }
@@ -524,6 +577,12 @@ impl IntegratedUASBuilder {
         self
     }
 
+    /// Sets the authenticator for 401 challenges.
+    pub fn authenticator(mut self, authenticator: Arc<dyn Authenticator>) -> Self {
+        self.authenticator = Some(authenticator);
+        self
+    }
+
     /// Sets the UAS configuration.
     pub fn config(mut self, config: UASConfig) -> Self {
         self.config = config;
@@ -538,6 +597,12 @@ impl IntegratedUASBuilder {
 
     /// Builds the IntegratedUAS.
     pub fn build(self) -> Result<IntegratedUAS> {
+        if self.config.require_authentication && self.authenticator.is_none() {
+            return Err(anyhow!(
+                "authenticator is required when require_authentication is enabled"
+            ));
+        }
+
         let local_uri = self
             .local_uri
             .ok_or_else(|| anyhow!("local_uri is required"))?;
@@ -565,7 +630,11 @@ impl IntegratedUASBuilder {
             SipUri::parse(&format!("sip:{}@{}", user, local_addr)).unwrap()
         });
 
-        let helper = UserAgentServer::new(local_uri, contact_uri);
+        let helper = if let Some(authenticator) = self.authenticator {
+            UserAgentServer::new(local_uri, contact_uri).with_authenticator(authenticator)
+        } else {
+            UserAgentServer::new(local_uri, contact_uri)
+        };
         let dialog_manager = helper.dialog_manager.clone();
         let subscription_manager = helper.subscription_manager.clone();
 
