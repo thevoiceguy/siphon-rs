@@ -589,7 +589,7 @@ impl<S, A> BasicRegistrar<S, A> {
     /// let auth_store = MemoryCredentialStore::new();
     /// let auth = DigestAuthenticator::new("example.com", auth_store);
     /// let config = RateLimitConfig::register_preset(); // 60 per hour
-    /// let key_fn = std::sync::Arc::new(|_req| Some("192.0.2.10".into()));
+    /// let key_fn = std::sync::Arc::new(|_req: &_| Some("192.0.2.10".into()));
     /// let registrar = BasicRegistrar::new(store, Some(auth))
     ///     .with_rate_limiter_key_fn(RateLimiter::new(config), key_fn);
     /// ```
