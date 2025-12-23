@@ -1159,6 +1159,28 @@ impl RequestHandler for InviteHandler {
             warn!(call_id, "Unable to track INVITE for CANCEL (missing headers)");
         }
 
+        // Validate SDP early (if present) before sending 180 Ringing
+        // RFC 3261 §21.4.13: Send 488 Not Acceptable Here for malformed/unsupported SDP
+        if !request.body.is_empty() {
+            if let Ok(offer_str) = std::str::from_utf8(&request.body) {
+                if let Err(e) = sdp_utils::generate_sdp_answer(&services.config, offer_str) {
+                    warn!(call_id, error = %e, "SDP validation failed, rejecting with 488");
+                    let mut headers = sip_core::Headers::new();
+                    copy_dialog_headers(request, &mut headers);
+                    let response = sip_core::Response::new(
+                        sip_core::StatusLine::new(488, "Not Acceptable Here".into()),
+                        headers,
+                        bytes::Bytes::new(),
+                    );
+                    handle.send_final(response).await;
+                    if let Some(key) = pending_key.as_deref() {
+                        services.invite_state.remove_pending_invite(key);
+                    }
+                    return Ok(());
+                }
+            }
+        }
+
         info!(call_id, "Call accepted, sending 180 Ringing");
 
         // Send 180 Ringing (with optional reliable provisional)
@@ -1240,28 +1262,13 @@ impl RequestHandler for InviteHandler {
         // preventing the 487 Request Terminated response.
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        // Generate SDP answer if offer was provided
+        // Generate SDP answer (already validated earlier, so this should succeed)
         let sdp_answer = if !request.body.is_empty() {
             match std::str::from_utf8(&request.body) {
-                Ok(offer_str) => match sdp_utils::generate_sdp_answer(&services.config, offer_str) {
-                    Ok(answer) => Some(answer),
-                    Err(e) => {
-                        warn!(call_id, error = %e, "Failed to generate SDP answer");
-                        // Send 488 Not Acceptable Here
-                        let mut headers = sip_core::Headers::new();
-                        copy_dialog_headers(request, &mut headers);
-                        let response = sip_core::Response::new(
-                            sip_core::StatusLine::new(488, "Not Acceptable Here".into()),
-                            headers,
-                            bytes::Bytes::new(),
-                        );
-                        handle.send_final(response).await;
-                        if let Some(key) = pending_key.as_deref() {
-                            services.invite_state.remove_pending_invite(key);
-                        }
-                        return Ok(());
-                    }
-                },
+                Ok(offer_str) => {
+                    // SDP was already validated earlier, so this should not fail
+                    sdp_utils::generate_sdp_answer(&services.config, offer_str).ok()
+                }
                 Err(e) => {
                     warn!(call_id, error = %e, "Invalid UTF-8 in SDP offer");
                     None

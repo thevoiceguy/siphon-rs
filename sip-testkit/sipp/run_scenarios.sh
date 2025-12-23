@@ -32,13 +32,22 @@ echo ""
 echo "Optional flags:"
 echo "  RUN_MESSAGE=1 RUN_INFO=1 RUN_UPDATE=1 RUN_PRACK=1 RUN_REINVITE=1"
 echo "  RUN_SUBSCRIBE=1 RUN_REFER=1 RUN_SESSION_TIMER=1 RUN_CANCEL=1 RUN_PROXY=1"
+echo "  RUN_SDP_MULTICODEC=1 RUN_IPV6=1 RUN_ERROR_HANDLING=1"
 echo "Proxy vars:"
 echo "  PROXY_TARGET_CSV=/path/to/proxy_target.csv"
 echo "Refer vars:"
 echo "  REFER_TARGET_CSV=/path/to/refer_target.csv"
+echo "Auth vars:"
+echo "  AUTH_USER=user AUTH_PASS=pass"
+echo "Transport vars:"
+echo "  TLS_CERT=/path/to/client.crt TLS_KEY=/path/to/client.key"
+echo "  TLS_HOST=127.0.0.1 TLS_PORT=5061 TCP_PORT=5060"
+echo "IPv6 vars:"
+echo "  IPV6_HOST=::1 IPV6_PORT=5060"
 echo "Runner vars:"
 echo "  SCENARIO_DELAY_MS=250 PRECHECK_OPTIONS=1 PRECHECK_TIMEOUT_SEC=3"
 echo "  RUN_ALL=1 (enables all optional scenarios)"
+echo "  RUN_ALL_EXTENDED=1 (includes auth/transport/forking/route-set tests)"
 echo ""
 
 # Check if SIPp is installed
@@ -76,6 +85,7 @@ run_scenario() {
     if [[ $# -gt 4 ]]; then
         extra_args=("${@:5}")
     fi
+    local target="${TARGET_OVERRIDE:-$TARGET_HOST:$TARGET_PORT}"
 
     echo -e "${YELLOW}Running: $scenario_name${NC}"
     TESTS_RUN=$((TESTS_RUN + 1))
@@ -98,7 +108,7 @@ run_scenario() {
         fi
     fi
 
-    echo "  Command: sipp -sf $scenario_file -m $calls -s $service ${extra_args[*]} $TARGET_HOST:$TARGET_PORT"
+    echo "  Command: sipp -sf $scenario_file -m $calls -s $service ${extra_args[*]} $target"
     echo "  Log: /tmp/sipp_${scenario_name}.log"
 
     if sipp \
@@ -113,7 +123,7 @@ run_scenario() {
         -r 1 \
         -rp 1000 \
         "${extra_args[@]}" \
-        "$TARGET_HOST":"$TARGET_PORT" \
+        "$target" \
         &> "/tmp/sipp_${scenario_name}.log"; then
         echo -e "${GREEN}✓ PASSED${NC}"
         TESTS_PASSED=$((TESTS_PASSED + 1))
@@ -130,6 +140,16 @@ run_scenario() {
 }
 
 # Expand RUN_ALL into individual flags
+if [[ "${RUN_ALL_EXTENDED:-0}" == "1" ]]; then
+    RUN_ALL=1
+    RUN_AUTH_REGISTER=1
+    RUN_AUTH_INVITE=1
+    RUN_TCP_CORE=1
+    RUN_TLS_CORE=1
+    RUN_FORKING=1
+    RUN_ROUTE_SET=1
+fi
+
 if [[ "${RUN_ALL:-0}" == "1" ]]; then
     RUN_MESSAGE=1
     RUN_INFO=1
@@ -141,6 +161,15 @@ if [[ "${RUN_ALL:-0}" == "1" ]]; then
     RUN_SESSION_TIMER=1
     RUN_CANCEL=1
     RUN_PROXY=1
+    RUN_SDP_MULTICODEC=1
+    RUN_PRACK_BAD=1
+    RUN_PRACK_MISSING=1
+    RUN_REFER_FAIL=1
+    RUN_SUBSCRIBE_LIFECYCLE=1
+    RUN_SESSION_TIMER_REFRESH=1
+    RUN_NEGATIVE_MID_DIALOG=1
+    RUN_REGISTRAR_EDGE=1
+    RUN_ERROR_HANDLING=1
 fi
 
 # Run scenarios
@@ -169,8 +198,20 @@ if [[ "${RUN_PRACK:-0}" == "1" ]]; then
     run_scenario "prack.xml" "PRACK" 1
 fi
 
+if [[ "${RUN_PRACK_BAD:-0}" == "1" ]]; then
+    run_scenario "prack_bad_rack.xml" "PRACK_BAD_RACK" 1
+fi
+
+if [[ "${RUN_PRACK_MISSING:-0}" == "1" ]]; then
+    run_scenario "prack_missing_rack.xml" "PRACK_MISSING_RACK" 1
+fi
+
 if [[ "${RUN_SUBSCRIBE:-0}" == "1" ]]; then
     run_scenario "subscribe_notify.xml" "SUBSCRIBE_NOTIFY" 1
+fi
+
+if [[ "${RUN_SUBSCRIBE_LIFECYCLE:-0}" == "1" ]]; then
+    run_scenario "subscribe_lifecycle.xml" "SUBSCRIBE_LIFECYCLE" 1
 fi
 
 if [[ "${RUN_REFER:-0}" == "1" ]]; then
@@ -178,12 +219,24 @@ if [[ "${RUN_REFER:-0}" == "1" ]]; then
     run_scenario "refer.xml" "REFER" 1 "test" -inf "$REFER_TARGET_CSV"
 fi
 
+if [[ "${RUN_REFER_FAIL:-0}" == "1" ]]; then
+    run_scenario "refer_fail.xml" "REFER_FAIL" 1
+fi
+
 if [[ "${RUN_REINVITE:-0}" == "1" ]]; then
     run_scenario "reinvite.xml" "REINVITE" 1
 fi
 
+if [[ "${RUN_SDP_MULTICODEC:-0}" == "1" ]]; then
+    run_scenario "invite_multi_codec.xml" "INVITE_MULTI_CODEC" 1
+fi
+
 if [[ "${RUN_SESSION_TIMER:-0}" == "1" ]]; then
     run_scenario "session_timer.xml" "SESSION_TIMER" 1
+fi
+
+if [[ "${RUN_SESSION_TIMER_REFRESH:-0}" == "1" ]]; then
+    run_scenario "session_timer_refresh.xml" "SESSION_TIMER_REFRESH" 1
 fi
 
 # Optionally run CANCEL scenario (may not be implemented in basic servers)
@@ -194,6 +247,72 @@ fi
 if [[ "${RUN_PROXY:-0}" == "1" ]]; then
     PROXY_TARGET_CSV="${PROXY_TARGET_CSV:-$SCRIPT_DIR/proxy_target.csv}"
     run_scenario "proxy_invite_bye.xml" "PROXY_INVITE_BYE" 1 "callee" -inf "$PROXY_TARGET_CSV"
+fi
+
+if [[ "${RUN_NEGATIVE_MID_DIALOG:-0}" == "1" ]]; then
+    run_scenario "info_out_of_dialog.xml" "INFO_OUT_OF_DIALOG" 1
+    run_scenario "update_out_of_dialog.xml" "UPDATE_OUT_OF_DIALOG" 1
+fi
+
+if [[ "${RUN_REGISTRAR_EDGE:-0}" == "1" ]]; then
+    run_scenario "register_wildcard.xml" "REGISTER_WILDCARD" 1
+    run_scenario "register_multiple.xml" "REGISTER_MULTIPLE" 1
+fi
+
+if [[ "${RUN_AUTH_REGISTER:-0}" == "1" ]]; then
+    AUTH_USER="${AUTH_USER:-user}"
+    AUTH_PASS="${AUTH_PASS:-pass}"
+    run_scenario "auth_register.xml" "AUTH_REGISTER" 1 "test" -au "$AUTH_USER" -ap "$AUTH_PASS"
+fi
+
+if [[ "${RUN_AUTH_INVITE:-0}" == "1" ]]; then
+    AUTH_USER="${AUTH_USER:-user}"
+    AUTH_PASS="${AUTH_PASS:-pass}"
+    run_scenario "auth_invite.xml" "AUTH_INVITE" 1 "test" -au "$AUTH_USER" -ap "$AUTH_PASS"
+fi
+
+if [[ "${RUN_TCP_CORE:-0}" == "1" ]]; then
+    TCP_PORT="${TCP_PORT:-$TARGET_PORT}"
+    TARGET_OVERRIDE="$TARGET_HOST:$TCP_PORT" run_scenario "options.xml" "OPTIONS_TCP" 1 "test" -t t1
+    TARGET_OVERRIDE="$TARGET_HOST:$TCP_PORT" run_scenario "invite_bye.xml" "INVITE_BYE_TCP" 1 "test" -t t1
+    TARGET_OVERRIDE="$TARGET_HOST:$TCP_PORT" run_scenario "register.xml" "REGISTER_TCP" 1 "test" -t t1
+fi
+
+if [[ "${RUN_TLS_CORE:-0}" == "1" ]]; then
+    TLS_HOST="${TLS_HOST:-$TARGET_HOST}"
+    TLS_PORT="${TLS_PORT:-5061}"
+    TLS_CERT="${TLS_CERT:-}"
+    TLS_KEY="${TLS_KEY:-}"
+    TLS_ARGS=("-t" "l1")
+    if [[ -n "$TLS_CERT" && -n "$TLS_KEY" ]]; then
+        TLS_ARGS+=("-tls_cert" "$TLS_CERT" "-tls_key" "$TLS_KEY")
+    fi
+    TARGET_OVERRIDE="$TLS_HOST:$TLS_PORT" run_scenario "options.xml" "OPTIONS_TLS" 1 "test" "${TLS_ARGS[@]}"
+    TARGET_OVERRIDE="$TLS_HOST:$TLS_PORT" run_scenario "invite_bye.xml" "INVITE_BYE_TLS" 1 "test" "${TLS_ARGS[@]}"
+    TARGET_OVERRIDE="$TLS_HOST:$TLS_PORT" run_scenario "register.xml" "REGISTER_TLS" 1 "test" "${TLS_ARGS[@]}"
+fi
+
+if [[ "${RUN_ROUTE_SET:-0}" == "1" ]]; then
+    run_scenario "route_bye.xml" "ROUTE_BYE" 1
+fi
+
+if [[ "${RUN_FORKING:-0}" == "1" ]]; then
+    run_scenario "forking_invite.xml" "FORKING_INVITE" 1
+fi
+
+if [[ "${RUN_IPV6:-0}" == "1" ]]; then
+    IPV6_HOST="${IPV6_HOST:-::1}"
+    IPV6_PORT="${IPV6_PORT:-$TARGET_PORT}"
+    IPV6_TARGET="[$IPV6_HOST]:$IPV6_PORT"
+    TARGET_OVERRIDE="$IPV6_TARGET" run_scenario "options.xml" "OPTIONS_IPV6" 1 "test" -i "$IPV6_HOST"
+    TARGET_OVERRIDE="$IPV6_TARGET" run_scenario "invite_bye_ipv6.xml" "INVITE_BYE_IPV6" 1 "test" -i "$IPV6_HOST"
+    TARGET_OVERRIDE="$IPV6_TARGET" run_scenario "register.xml" "REGISTER_IPV6" 1 "test" -i "$IPV6_HOST"
+fi
+
+if [[ "${RUN_ERROR_HANDLING:-0}" == "1" ]]; then
+    run_scenario "max_forwards_zero.xml" "MAX_FORWARDS_ZERO" 1
+    run_scenario "malformed_sdp.xml" "MALFORMED_SDP" 1
+    run_scenario "unsupported_method.xml" "UNSUPPORTED_METHOD" 1
 fi
 
 # Summary

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<scenario name="Unsupported method">
+  <!-- Test RFC 3261 §21.4.22: 501 Not Implemented for unsupported methods -->
+  <send>
+<![CDATA[
+FOOBAR sip:[service]@[remote_ip]:[remote_port] SIP/2.0
+Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+Max-Forwards: 70
+From: <sip:sipp@[local_ip]>;tag=[call_number]
+To: <sip:[service]@[remote_ip]>
+Call-ID: [call_id]
+CSeq: 1 FOOBAR
+Contact: <sip:sipp@[local_ip]:[local_port]>
+Content-Length: 0
+
+]]>
+  </send>
+
+  <!-- Expect 501 Not Implemented per RFC 3261 §21.4.22 -->
+  <recv response="501" rtd="true"/>
+</scenario>

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<scenario name="INFO out-of-dialog">
+  <send>
+<![CDATA[
+INFO sip:[service]@[remote_ip]:[remote_port] SIP/2.0
+Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+Max-Forwards: 70
+From: <sip:sipp@[local_ip]>;tag=[call_number]
+To: <sip:[service]@[remote_ip]>
+Call-ID: [call_id]
+CSeq: 1 INFO
+Content-Type: application/dtmf-relay
+Content-Length: [len]
+
+Signal=1
+Duration=160
+]]>
+  </send>
+
+  <recv response="481" rtd="true"/>
+</scenario>

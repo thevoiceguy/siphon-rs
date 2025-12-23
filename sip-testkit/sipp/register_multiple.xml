@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<scenario name="REGISTER multiple contacts">
+  <!-- Test multiple device registration per RFC 3261 §10.2 -->
+  <send>
+<![CDATA[
+REGISTER sip:[service]@[remote_ip]:[remote_port] SIP/2.0
+Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+Max-Forwards: 70
+From: <sip:[service]@[remote_ip]>;tag=[call_number]
+To: <sip:[service]@[remote_ip]>
+Call-ID: [call_id]
+CSeq: 1 REGISTER
+Contact: <sip:[service]@[local_ip]:5060>;+sip.instance="<urn:uuid:00000000-0000-0000-0000-000000000001>";q=1.0
+Contact: <sip:[service]@[local_ip]:5061>;+sip.instance="<urn:uuid:00000000-0000-0000-0000-000000000002>";q=0.5;expires=120
+Expires: 3600
+Content-Length: 0
+
+]]>
+  </send>
+
+  <recv response="200" rtd="true"/>
+</scenario>

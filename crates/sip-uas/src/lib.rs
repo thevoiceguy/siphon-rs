@@ -829,11 +829,16 @@ impl UserAgentServer {
             self.prack_validator
                 .validate_prack(&dialog_id_key(&dialog.id), request)
         {
-            let response = if err.to_string().contains("missing RAck")
-                || err.to_string().contains("Invalid RAck")
+            let err_msg = err.to_string();
+            // RFC 3262 §4: Return 400 for malformed/invalid RAck, 481 for no dialog/transaction
+            let response = if err_msg.contains("missing RAck")
+                || err_msg.contains("Invalid RAck")
+                || err_msg.contains("does not match")
+                || err_msg.contains("Duplicate PRACK")
             {
                 Self::create_response(request, 400, "Bad Request")
             } else {
+                // "No pending reliable provisionals" → 481
                 Self::create_response(request, 481, "Call/Transaction Does Not Exist")
             };
             return Ok(response);
