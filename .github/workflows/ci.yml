@@ -5,6 +5,12 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      run_sipp:
+        description: Run SIPp interop suite (requires SIPp)
+        required: false
+        default: "false"
 
 jobs:
   build:
@@ -16,3 +22,31 @@ jobs:
         run: cargo build --all --verbose
       - name: Test
         run: cargo test --all --verbose
+
+  sipp-interop:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_sipp == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install SIPp
+        run: sudo apt-get update && sudo apt-get install -y sip-tester
+      - name: Checklist
+        run: |
+          echo "SIPp production checklist:"
+          cat sip-testkit/sipp/PRODUCTION_CHECKLIST.md
+      - name: Start siphond
+        run: |
+          cargo run -p siphond -- --mode full-uas --udp-bind 127.0.0.1:5060 &
+          echo $! > /tmp/siphond.pid
+          sleep 2
+      - name: Run SIPp suite
+        run: |
+          cd sip-testkit/sipp
+          RUN_ALL=1 SCENARIO_DELAY_MS=250 PRECHECK_OPTIONS=1 ./run_scenarios.sh 127.0.0.1 5060
+      - name: Stop siphond
+        if: always()
+        run: |
+          if [[ -f /tmp/siphond.pid ]]; then
+            kill "$(cat /tmp/siphond.pid)" || true
+          fi
