@@ -1,10 +1,6 @@
 name: Rust CI
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
   workflow_dispatch:
     inputs:
       run_sipp:
