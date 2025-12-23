@@ -5,9 +5,13 @@ use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 use sip_auth::{DigestAuthenticator, MemoryCredentialStore};
-use sip_dialog::{prack_validator::PrackValidator, DialogManager, RSeqManager, SubscriptionManager};
+use sip_dialog::{
+    prack_validator::PrackValidator, session_timer_manager::SessionTimerManager, DialogManager,
+    RSeqManager, SubscriptionManager,
+};
 use sip_registrar::{BasicRegistrar, MemoryLocationStore};
 use sip_transaction::{TransactionManager, TransportDispatcher};
+use sip_transport::pool::TlsClientConfig;
 use tokio::net::UdpSocket;
 
 use crate::b2bua_state::B2BUAStateManager;
@@ -34,6 +38,9 @@ pub struct ServiceRegistry {
     #[allow(dead_code)]
     pub prack_validator: Arc<PrackValidator>,
 
+    /// Session timer manager (RFC 4028)
+    pub session_timer_mgr: Arc<SessionTimerManager>,
+
     /// Proxy state manager for tracking forwarded transactions
     pub proxy_state: Arc<ProxyStateManager>,
 
@@ -54,6 +61,9 @@ pub struct ServiceRegistry {
     /// UDP socket for sending ACKs and other messages over UDP (set after initialization)
     pub udp_socket: OnceLock<Arc<UdpSocket>>,
 
+    /// TLS client config for outbound TLS connections (set after initialization)
+    pub tls_client_config: OnceLock<Arc<TlsClientConfig>>,
+
     /// Daemon configuration (immutable)
     pub config: Arc<DaemonConfig>,
 }
@@ -68,6 +78,7 @@ impl ServiceRegistry {
         let subscription_mgr = Arc::new(SubscriptionManager::new());
         let rseq_mgr = Arc::new(RSeqManager::new());
         let prack_validator = Arc::new(PrackValidator::new());
+        let session_timer_mgr = Arc::new(SessionTimerManager::new());
         let proxy_state = Arc::new(ProxyStateManager::new());
         let b2bua_state = Arc::new(B2BUAStateManager::new());
 
@@ -133,12 +144,14 @@ impl ServiceRegistry {
             subscription_mgr,
             rseq_mgr,
             prack_validator,
+            session_timer_mgr,
             proxy_state,
             b2bua_state,
             registrar,
             transaction_mgr: OnceLock::new(),
             transport_dispatcher: OnceLock::new(),
             udp_socket: OnceLock::new(),
+            tls_client_config: OnceLock::new(),
             config,
         }
     }
@@ -162,6 +175,14 @@ impl ServiceRegistry {
     /// Set the UDP socket (can only be called once)
     pub fn set_udp_socket(&self, socket: Arc<UdpSocket>) -> Result<(), Arc<UdpSocket>> {
         self.udp_socket.set(socket)
+    }
+
+    /// Set the TLS client config (can only be called once)
+    pub fn set_tls_client_config(
+        &self,
+        config: Arc<TlsClientConfig>,
+    ) -> Result<(), Arc<TlsClientConfig>> {
+        self.tls_client_config.set(config)
     }
 
     /// Check if authentication is required

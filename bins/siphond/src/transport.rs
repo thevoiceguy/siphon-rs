@@ -129,7 +129,7 @@ pub async fn start_transports(
 }
 
 /// Builds a client TLS config using system roots.
-fn build_tls_client_config() -> Option<Arc<TlsClientConfig>> {
+pub fn build_tls_client_config() -> Option<Arc<TlsClientConfig>> {
     #[cfg(feature = "tls")]
     {
         let mut root_store = rustls::RootCertStore::empty();
