@@ -25,11 +25,20 @@ echo "SIPp Interop Test Suite"
 echo "========================================"
 echo "Target: $TARGET_HOST:$TARGET_PORT"
 echo ""
+echo "Server note:"
+echo "  INVITE/REGISTER tests require siphond in full-uas, registrar, or call-server modes."
+echo "  Example: cargo run -p siphond -- --mode full-uas --udp-bind $TARGET_HOST:$TARGET_PORT"
+echo ""
 echo "Optional flags:"
 echo "  RUN_MESSAGE=1 RUN_INFO=1 RUN_UPDATE=1 RUN_PRACK=1 RUN_REINVITE=1"
 echo "  RUN_SUBSCRIBE=1 RUN_REFER=1 RUN_SESSION_TIMER=1 RUN_CANCEL=1 RUN_PROXY=1"
 echo "Proxy vars:"
 echo "  PROXY_TARGET_CSV=/path/to/proxy_target.csv"
+echo "Refer vars:"
+echo "  REFER_TARGET_CSV=/path/to/refer_target.csv"
+echo "Runner vars:"
+echo "  SCENARIO_DELAY_MS=250 PRECHECK_OPTIONS=1 PRECHECK_TIMEOUT_SEC=3"
+echo "  RUN_ALL=1 (enables all optional scenarios)"
 echo ""
 
 # Check if SIPp is installed
@@ -63,13 +72,36 @@ run_scenario() {
     local scenario_name="$2"
     local calls="${3:-1}"
     local service="${4:-test}"
-    shift 4 || true
-    local extra_args=("$@")
+    local extra_args=()
+    if [[ $# -gt 4 ]]; then
+        extra_args=("${@:5}")
+    fi
 
     echo -e "${YELLOW}Running: $scenario_name${NC}"
     TESTS_RUN=$((TESTS_RUN + 1))
 
-    if sipp "$TARGET_HOST":"$TARGET_PORT" \
+    if [[ "${PRECHECK_OPTIONS:-1}" == "1" ]]; then
+        echo "  Preflight: OPTIONS ping"
+        PRECHECK_TIMEOUT_SEC="${PRECHECK_TIMEOUT_SEC:-3}"
+        if ! sipp \
+            -sf "$SCRIPT_DIR/options.xml" \
+            -m 1 \
+            -timeout "${PRECHECK_TIMEOUT_SEC}s" \
+            -timeout_error \
+            "$TARGET_HOST":"$TARGET_PORT" \
+            &> "/tmp/sipp_${scenario_name}_preflight.log"; then
+            echo -e "${RED}✗ FAILED (preflight)${NC}"
+            echo "  Log: /tmp/sipp_${scenario_name}_preflight.log"
+            TESTS_FAILED=$((TESTS_FAILED + 1))
+            echo ""
+            return
+        fi
+    fi
+
+    echo "  Command: sipp -sf $scenario_file -m $calls -s $service ${extra_args[*]} $TARGET_HOST:$TARGET_PORT"
+    echo "  Log: /tmp/sipp_${scenario_name}.log"
+
+    if sipp \
         -sf "$SCRIPT_DIR/$scenario_file" \
         -m "$calls" \
         -s "$service" \
@@ -81,6 +113,7 @@ run_scenario() {
         -r 1 \
         -rp 1000 \
         "${extra_args[@]}" \
+        "$TARGET_HOST":"$TARGET_PORT" \
         &> "/tmp/sipp_${scenario_name}.log"; then
         echo -e "${GREEN}✓ PASSED${NC}"
         TESTS_PASSED=$((TESTS_PASSED + 1))
@@ -90,7 +123,25 @@ run_scenario() {
         TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
     echo ""
+
+    if [[ -n "${SCENARIO_DELAY_MS:-}" && "${SCENARIO_DELAY_MS}" != "0" ]]; then
+        sleep "$(awk "BEGIN {print ${SCENARIO_DELAY_MS}/1000}")"
+    fi
 }
+
+# Expand RUN_ALL into individual flags
+if [[ "${RUN_ALL:-0}" == "1" ]]; then
+    RUN_MESSAGE=1
+    RUN_INFO=1
+    RUN_UPDATE=1
+    RUN_PRACK=1
+    RUN_REINVITE=1
+    RUN_SUBSCRIBE=1
+    RUN_REFER=1
+    RUN_SESSION_TIMER=1
+    RUN_CANCEL=1
+    RUN_PROXY=1
+fi
 
 # Run scenarios
 echo "Running basic scenarios..."
@@ -123,7 +174,8 @@ if [[ "${RUN_SUBSCRIBE:-0}" == "1" ]]; then
 fi
 
 if [[ "${RUN_REFER:-0}" == "1" ]]; then
-    run_scenario "refer.xml" "REFER" 1
+    REFER_TARGET_CSV="${REFER_TARGET_CSV:-$SCRIPT_DIR/refer_target.csv}"
+    run_scenario "refer.xml" "REFER" 1 "test" -inf "$REFER_TARGET_CSV"
 fi
 
 if [[ "${RUN_REINVITE:-0}" == "1" ]]; then

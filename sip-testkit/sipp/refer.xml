@@ -51,7 +51,7 @@ To: <sip:[service]@[remote_ip]>[peer_tag_param]
 Call-ID: [call_id]
 CSeq: 2 REFER
 Contact: <sip:sipp@[local_ip]:[local_port]>
-Refer-To: <sip:transfer@[remote_ip]:[remote_port]>
+Refer-To: <sip:transfer@[field0]:[field1];transport=udp>
 Referred-By: <sip:sipp@[local_ip]>
 Content-Length: 0
 
@@ -60,23 +60,8 @@ Content-Length: 0
 
   <recv response="202" rtd="true"/>
 
-  <recv request="NOTIFY" optional="true"/>
-
-  <send>
-<![CDATA[
-SIP/2.0 200 OK
-[last_Via:]
-[last_From:]
-[last_To:]
-[last_Call-ID:]
-[last_CSeq:]
-Content-Length: 0
-
-]]>
-  </send>
-
-  <recv request="NOTIFY" optional="true"/>
-
+  <!-- Receive mandatory NOTIFY per RFC 3515 (reporting transfer progress) -->
+  <recv request="NOTIFY"/>
   <send>
 <![CDATA[
 SIP/2.0 200 OK

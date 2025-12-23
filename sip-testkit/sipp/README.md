@@ -23,13 +23,21 @@ brew install sipp
 Run all scenarios automatically:
 
 ```bash
-# Start siphond in another terminal
-cargo run -p siphond -- --bind 0.0.0.0:5060
+# Start siphond in another terminal (INVITE/REGISTER tests need full-uas or call-server)
+cargo run -p siphond -- --mode full-uas --udp-bind 0.0.0.0:5060
 
 # Run test suite
 cd sip-testkit/sipp
 ./run_scenarios.sh 127.0.0.1 5060
 ```
+
+Bind flag note:
+- `--udp-bind` listens for SIP over UDP (default `0.0.0.0:5060`).
+- `--tcp-bind` listens for SIP over TCP (default `0.0.0.0:5060`).
+- `--sips-bind` listens for SIP over TLS (default `0.0.0.0:5061`), and requires `--tls-cert` and `--tls-key`.
+
+SIPp ordering note:
+- Some SIPp builds require options before the target host/port; examples below put `127.0.0.1:5060` at the end for compatibility.
 
 Run extended scenarios:
 ```bash
@@ -38,6 +46,12 @@ RUN_MESSAGE=1 RUN_INFO=1 RUN_UPDATE=1 RUN_PRACK=1 \
 RUN_SUBSCRIBE=1 RUN_REFER=1 RUN_REINVITE=1 RUN_SESSION_TIMER=1 \
 ./run_scenarios.sh 127.0.0.1 5060
 ```
+
+Runner controls:
+- `PRECHECK_OPTIONS=1` runs an OPTIONS ping before each scenario (default: on).
+- `PRECHECK_TIMEOUT_SEC=3` sets the OPTIONS preflight timeout in seconds.
+- `SCENARIO_DELAY_MS=250` sleeps between scenarios (milliseconds, default: 250).
+- `RUN_ALL=1` enables all optional scenarios in one go.
 
 Run proxy-mode scenario:
 ```bash
@@ -55,49 +69,49 @@ Individual scenario testing:
 
 ```bash
 # OPTIONS (basic connectivity)
-sipp 127.0.0.1:5060 -sf options.xml -m 1 -trace_msg
+sipp -sf options.xml -m 1 -trace_msg 127.0.0.1:5060
 
 # INVITE/ACK (basic call setup)
-sipp 127.0.0.1:5060 -sf invite.xml -m 1 -trace_msg
+sipp -sf invite.xml -m 1 -trace_msg 127.0.0.1:5060
 
 # INVITE/ACK/BYE (complete call flow)
-sipp 127.0.0.1:5060 -sf invite_bye.xml -m 1 -trace_msg
+sipp -sf invite_bye.xml -m 1 -trace_msg 127.0.0.1:5060
 
 # REGISTER (user registration)
-sipp 127.0.0.1:5060 -sf register.xml -m 1 -trace_msg -s alice
+sipp -sf register.xml -m 1 -trace_msg -s alice 127.0.0.1:5060
 
 # MESSAGE (out-of-dialog)
-sipp 127.0.0.1:5060 -sf message.xml -m 1 -trace_msg
+sipp -sf message.xml -m 1 -trace_msg 127.0.0.1:5060
 
 # INFO (in-dialog)
-sipp 127.0.0.1:5060 -sf info.xml -m 1 -trace_msg
+sipp -sf info.xml -m 1 -trace_msg 127.0.0.1:5060
 
 # UPDATE (in-dialog)
-sipp 127.0.0.1:5060 -sf update.xml -m 1 -trace_msg
+sipp -sf update.xml -m 1 -trace_msg 127.0.0.1:5060
 
 # Re-INVITE (session refresh/update)
-sipp 127.0.0.1:5060 -sf reinvite.xml -m 1 -trace_msg
+sipp -sf reinvite.xml -m 1 -trace_msg 127.0.0.1:5060
 
 # PRACK (reliable provisionals)
-sipp 127.0.0.1:5060 -sf prack.xml -m 1 -trace_msg
+sipp -sf prack.xml -m 1 -trace_msg 127.0.0.1:5060
 
 # SUBSCRIBE/NOTIFY (presence)
-sipp 127.0.0.1:5060 -sf subscribe_notify.xml -m 1 -trace_msg
+sipp -sf subscribe_notify.xml -m 1 -trace_msg 127.0.0.1:5060
 
 # REFER (transfer + NOTIFY)
-sipp 127.0.0.1:5060 -sf refer.xml -m 1 -trace_msg
+sipp -sf refer.xml -inf refer_target.csv -m 1 -trace_msg 127.0.0.1:5060
 
 # Session timers (requires --enable-session-timers on siphond)
-sipp 127.0.0.1:5060 -sf session_timer.xml -m 1 -trace_msg
+sipp -sf session_timer.xml -m 1 -trace_msg 127.0.0.1:5060
 
 # Proxy-mode INVITE/BYE (target host/port set in proxy_target.csv)
-sipp 127.0.0.1:5060 -sf proxy_invite_bye.xml -inf proxy_target.csv -m 1 -trace_msg
+sipp -sf proxy_invite_bye.xml -inf proxy_target.csv -m 1 -trace_msg 127.0.0.1:5060
 
 # CANCEL (call cancellation)
-sipp 127.0.0.1:5060 -sf cancel.xml -m 1 -trace_msg
+sipp -sf cancel.xml -m 1 -trace_msg 127.0.0.1:5060
 
 # UAS mode (receive calls)
-sipp -sn uas 0.0.0.0:5060 -sf uas_invite.xml
+sipp -sn uas -sf uas_invite.xml -i 0.0.0.0 -p 5060
 ```
 
 ## Scenarios
@@ -114,15 +128,18 @@ sipp -sn uas 0.0.0.0:5060 -sf uas_invite.xml
 - **`reinvite.xml`**: Re-INVITE for session modification
 - **`prack.xml`**: Reliable provisional flow (INVITE with 100rel + PRACK)
 - **`subscribe_notify.xml`**: SUBSCRIBE with initial NOTIFY
-- **`refer.xml`**: In-dialog REFER with NOTIFY progress
+- **`refer.xml`**: In-dialog REFER with NOTIFY progress (loops for 100ms waiting for optional NOTIFYs)
+- **`refer_target.csv`**: CSV target for REFER transfer INVITE
 - **`session_timer.xml`**: INVITE with Session-Expires (RFC 4028)
 - **`proxy_invite_bye.xml`**: Proxy-mode INVITE/BYE (target via CSV)
 
 **Notes:**
+- `cancel.xml` requires full CANCEL support (200 OK for CANCEL + 487 Request Terminated for INVITE). **Currently fails with siphond** - the server sends 200 OK for CANCEL but doesn't send 487 for the original INVITE.
 - `prack.xml` requires the server to enable PRACK and honor `Supported: 100rel`.
-- `refer.xml` requires REFER support and an established dialog.
+- `refer.xml` requires REFER support and an established dialog. The scenario loops for up to 100ms to collect optional NOTIFY messages reporting transfer progress (RFC 3515).
+- `refer.xml` uses `refer_target.csv` to set the transfer target host/port (CSV first line must be `SEQUENTIAL` or `RANDOM`).
 - `session_timer.xml` requires the server to enable RFC 4028 session timers.
-- `proxy_invite_bye.xml` requires a reachable callee at the CSV host/port.
+- `proxy_invite_bye.xml` requires a reachable callee at the CSV host/port (CSV first line must be `SEQUENTIAL` or `RANDOM`).
 
 ### UAS (Server) Scenarios
 - **`uas_invite.xml`**: Answers incoming INVITE with 100/180/200, handles ACK and BYE
@@ -134,20 +151,20 @@ sipp -sn uas 0.0.0.0:5060 -sf uas_invite.xml
 Generate multiple concurrent calls:
 ```bash
 # 100 calls at 10 calls/second
-sipp 127.0.0.1:5060 -sf invite_bye.xml -m 100 -r 10 -rp 1000 -trace_err
+sipp -sf invite_bye.xml -m 100 -r 10 -rp 1000 -trace_err 127.0.0.1:5060
 ```
 
 ### Custom Parameters
 
 ```bash
 # Override service name
-sipp 127.0.0.1:5060 -sf options.xml -m 1 -s bob@example.com
+sipp -sf options.xml -m 1 -s bob@example.com 127.0.0.1:5060
 
 # Use TCP transport
-sipp 127.0.0.1:5060 -sf options.xml -m 1 -t t1
+sipp -sf options.xml -m 1 -t t1 127.0.0.1:5060
 
 # Increase verbosity
-sipp 127.0.0.1:5060 -sf options.xml -m 1 -trace_msg -trace_screen
+sipp -sf options.xml -m 1 -trace_msg -trace_screen 127.0.0.1:5060
 ```
 
 ## Troubleshooting

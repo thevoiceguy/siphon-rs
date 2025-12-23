@@ -24,11 +24,11 @@ a=rtpmap:0 PCMU/8000
 ]]>
   </send>
 
-  <!-- Receive provisional response -->
-  <recv response="100" optional="true"/>
-  <recv response="180" optional="true"/>
+  <!-- Receive provisional responses -->
+  <recv response="100"/>
+  <recv response="180"/>
 
-  <!-- Send CANCEL -->
+  <!-- Send CANCEL (must use same branch as INVITE per RFC 3261) -->
   <send>
 <![CDATA[
 CANCEL sip:[service]@[remote_ip]:[remote_port] SIP/2.0
@@ -46,14 +46,14 @@ Content-Length: 0
   <!-- Receive 200 OK for CANCEL -->
   <recv response="200" rtd="true"/>
 
-  <!-- Receive 487 Request Terminated for INVITE -->
-  <recv response="487" rtd="true" optional="true"/>
+  <!-- Receive 487 Request Terminated for original INVITE -->
+  <recv response="487"/>
 
-  <!-- Send ACK for 487 -->
+  <!-- Send ACK for 487 response -->
   <send>
 <![CDATA[
 ACK sip:[service]@[remote_ip]:[remote_port] SIP/2.0
-Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]-ack
+Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
 Max-Forwards: 70
 From: <sip:sipp@[local_ip]>;tag=[call_number]
 To: <sip:[service]@[remote_ip]>[peer_tag_param]
@@ -63,6 +63,4 @@ Content-Length: 0
 
 ]]>
   </send>
-
-  <response-time repartition="1,500"/>
 </scenario>
