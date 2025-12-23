@@ -1188,6 +1188,7 @@ impl TransactionManager {
     }
 }
 
+#[derive(Clone)]
 pub struct ServerTransactionHandle {
     manager: TransactionManager,
     key: TransactionKey,

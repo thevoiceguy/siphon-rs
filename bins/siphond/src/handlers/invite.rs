@@ -1145,6 +1145,20 @@ impl RequestHandler for InviteHandler {
         let trying = UserAgentServer::create_trying(request);
         handle.send_provisional(trying).await;
 
+        // Store transaction handle and headers for potential CANCEL
+        let mut pending_key = None;
+        if let Some((key, pending)) =
+            crate::invite_state::InviteStateManager::pending_from_request(
+                handle.clone(),
+                request,
+            )
+        {
+            services.invite_state.store_pending_invite(key.clone(), pending);
+            pending_key = Some(key);
+        } else {
+            warn!(call_id, "Unable to track INVITE for CANCEL (missing headers)");
+        }
+
         info!(call_id, "Call accepted, sending 180 Ringing");
 
         // Send 180 Ringing (with optional reliable provisional)
@@ -1194,6 +1208,10 @@ impl RequestHandler for InviteHandler {
             }
 
             let ringing_for_retransmit = ringing.clone();
+            if let (Some(key), Some(to)) = (pending_key.as_deref(), header(&ringing.headers, "To"))
+            {
+                services.invite_state.update_to_header(key, to.clone());
+            }
             handle.send_provisional(ringing).await;
 
             if let Some((dialog_key, rseq)) = reliable_info {
@@ -1207,6 +1225,10 @@ impl RequestHandler for InviteHandler {
             }
         } else {
             let ringing = uas.create_ringing(request);
+            if let (Some(key), Some(to)) = (pending_key.as_deref(), header(&ringing.headers, "To"))
+            {
+                services.invite_state.update_to_header(key, to.clone());
+            }
             handle.send_provisional(ringing).await;
         }
 
@@ -1226,6 +1248,9 @@ impl RequestHandler for InviteHandler {
                             bytes::Bytes::new(),
                         );
                         handle.send_final(response).await;
+                        if let Some(key) = pending_key.as_deref() {
+                            services.invite_state.remove_pending_invite(key);
+                        }
                         return Ok(());
                     }
                 },
@@ -1252,6 +1277,9 @@ impl RequestHandler for InviteHandler {
                         bytes::Bytes::new(),
                     );
                     handle.send_final(response).await;
+                    if let Some(key) = pending_key.as_deref() {
+                        services.invite_state.remove_pending_invite(key);
+                    }
                     return Ok(());
                 }
             }
@@ -1306,11 +1334,21 @@ impl RequestHandler for InviteHandler {
 
                 // Send 200 OK
                 handle.send_final(response).await;
+
+                // Remove from pending invites (transaction completed)
+                if let Some(key) = pending_key.as_deref() {
+                    services.invite_state.remove_pending_invite(key);
+                }
             }
             Err(e) => {
                 warn!(call_id, error = %e, "Failed to accept INVITE");
                 let error = uas.create_decline(request);
                 handle.send_final(error).await;
+
+                // Remove from pending invites (transaction completed with error)
+                if let Some(key) = pending_key.as_deref() {
+                    services.invite_state.remove_pending_invite(key);
+                }
             }
         }
 

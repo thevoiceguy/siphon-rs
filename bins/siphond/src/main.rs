@@ -11,6 +11,7 @@ mod b2bua_state;
 mod config;
 mod dispatcher;
 mod handlers;
+mod invite_state;
 mod proxy_state;
 mod proxy_utils;
 mod scenario;

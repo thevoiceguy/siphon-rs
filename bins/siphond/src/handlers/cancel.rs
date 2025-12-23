@@ -22,8 +22,30 @@ impl CancelHandler {
         Self
     }
 
-    /// Create a 487 Request Terminated response for the INVITE
-    fn create_487_response(invite_request: &Request) -> sip_core::Response {
+    /// Create a 487 Request Terminated response for the INVITE (from PendingInvite)
+    fn create_487_response(pending: &crate::invite_state::PendingInvite) -> sip_core::Response {
+        use sip_core::{Headers, Response, StatusLine};
+
+        let mut headers = Headers::new();
+
+        // Copy essential headers from INVITE (including To-tag if known)
+        headers.push("Via".into(), pending.via.clone());
+        headers.push("From".into(), pending.from.clone());
+        headers.push("To".into(), pending.to.clone());
+        headers.push("Call-ID".into(), pending.call_id.clone());
+        headers.push("CSeq".into(), pending.cseq.clone());
+
+        headers.push("Content-Length".into(), "0".into());
+
+        Response::new(
+            StatusLine::new(487, "Request Terminated".into()),
+            headers,
+            bytes::Bytes::new(),
+        )
+    }
+
+    /// Create a 487 Request Terminated response for the INVITE (from Request - B2BUA mode)
+    fn create_487_from_request(invite_request: &Request) -> sip_core::Response {
         use sip_core::{Headers, Response, StatusLine};
 
         let mut headers = Headers::new();
@@ -192,7 +214,7 @@ impl RequestHandler for CancelHandler {
                     if let Some(call_leg) = services.b2bua_state.find_call_leg_by_incoming(call_id)
                     {
                         // Create 487 Request Terminated response for the INVITE
-                        let response_487 = Self::create_487_response(&call_leg.caller_request);
+                        let response_487 = Self::create_487_from_request(&call_leg.caller_request);
 
                         // Send 487 through the response channel to terminate the INVITE
                         if call_leg.response_tx.send(response_487).is_ok() {
@@ -229,11 +251,34 @@ impl RequestHandler for CancelHandler {
                         );
                     }
                 } else {
-                    // Non-B2BUA mode: just log
-                    info!(
-                        call_id,
-                        "CANCEL processed - original INVITE should receive 487 Request Terminated"
-                    );
+                    // Non-B2BUA mode: Send 487 to the original INVITE transaction
+                    let pending_key =
+                        crate::invite_state::InviteStateManager::key_from_request(request);
+                    if let Some((key, pending_invite)) = pending_key
+                        .as_deref()
+                        .and_then(|key| services.invite_state.get_pending_invite(key).map(|p| (key.to_string(), p)))
+                    {
+                        info!(
+                            call_id,
+                            "Sending 487 Request Terminated to original INVITE transaction"
+                        );
+
+                        // Create 487 response using cached INVITE headers
+                        let response_487 = Self::create_487_response(&pending_invite);
+
+                        // Send 487 through the INVITE transaction handle
+                        pending_invite.handle.send_final(response_487).await;
+
+                        // Remove from pending invites
+                        services.invite_state.remove_pending_invite(&key);
+
+                        info!(call_id, "Sent 487 Request Terminated to INVITE transaction");
+                    } else {
+                        warn!(
+                            call_id,
+                            "No pending INVITE found - may have already completed"
+                        );
+                    }
                 }
             }
             Err(e) => {

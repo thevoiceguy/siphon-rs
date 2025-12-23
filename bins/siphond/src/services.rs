@@ -16,6 +16,7 @@ use tokio::net::UdpSocket;
 
 use crate::b2bua_state::B2BUAStateManager;
 use crate::config::DaemonConfig;
+use crate::invite_state::InviteStateManager;
 use crate::proxy_state::ProxyStateManager;
 
 /// Registry of shared services used by request handlers.
@@ -46,6 +47,9 @@ pub struct ServiceRegistry {
 
     /// B2BUA state manager for tracking call leg pairs
     pub b2bua_state: Arc<B2BUAStateManager>,
+
+    /// Invite state manager for tracking pending INVITE transactions (for CANCEL)
+    pub invite_state: Arc<InviteStateManager>,
 
     /// Optional registrar for REGISTER handling
     pub registrar: Option<
@@ -81,6 +85,7 @@ impl ServiceRegistry {
         let session_timer_mgr = Arc::new(SessionTimerManager::new());
         let proxy_state = Arc::new(ProxyStateManager::new());
         let b2bua_state = Arc::new(B2BUAStateManager::new());
+        let invite_state = Arc::new(InviteStateManager::new());
 
         // Create registrar if enabled (it includes authenticator)
         let registrar = if config.enable_registrar() {
@@ -147,6 +152,7 @@ impl ServiceRegistry {
             session_timer_mgr,
             proxy_state,
             b2bua_state,
+            invite_state,
             registrar,
             transaction_mgr: OnceLock::new(),
             transport_dispatcher: OnceLock::new(),
