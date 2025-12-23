@@ -759,8 +759,12 @@ async fn spawn_tls_session(
         }
 
         match reader.read_buf(&mut buf).await {
-            Ok(0) => break,
-            Ok(_) => {
+            Ok(0) => {
+                info!(%peer, "tls connection closed by peer (EOF)");
+                break;
+            }
+            Ok(n) => {
+                info!(%peer, bytes_read = n, buffer_len = buf.len(), "tls data received");
                 transport_metrics().on_packet_received("tls");
 
                 // Try to extract complete SIP messages
