@@ -1,5 +1,5 @@
 use crate::name_addr::NameAddr;
-use crate::{SipUri, Uri};
+use crate::Uri;
 use std::fmt;
 
 /// RFC 3327 Path header.

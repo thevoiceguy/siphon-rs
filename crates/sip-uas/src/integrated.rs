@@ -247,13 +247,17 @@ impl Default for UASConfig {
 pub struct IntegratedUAS {
     helper: Arc<Mutex<UserAgentServer>>,
     transaction_manager: Arc<TransactionManager>,
+    #[allow(dead_code)]
     transport_dispatcher: Arc<dyn TransportDispatcher>,
     local_addr: SocketAddr,
     public_addr: Option<SocketAddr>,
     config: UASConfig,
+    #[allow(dead_code)]
     dialog_manager: Arc<DialogManager>,
+    #[allow(dead_code)]
     subscription_manager: Arc<SubscriptionManager>,
     request_handler: Arc<dyn UasRequestHandler>,
+    #[allow(dead_code)]
     sdp_profile: Option<MediaProfileBuilder>,
 }
 

@@ -418,6 +418,7 @@ pub struct CallHandle {
     transport_ctx: Arc<TransportContext>,
 
     /// Dispatcher for sending CANCEL
+    #[allow(dead_code)]
     dispatcher: Arc<dyn TransportDispatcher>,
 
     /// Transaction manager for creating CANCEL transaction
@@ -698,6 +699,7 @@ pub struct IntegratedUAC {
     dialog_manager: Arc<DialogManager>,
 
     /// Subscription manager (shared with helper)
+    #[allow(dead_code)]
     subscription_manager: Arc<SubscriptionManager>,
 }
 
@@ -2013,11 +2015,14 @@ struct InviteTransactionUser {
     prov_tx: mpsc::Sender<Response>,
     final_tx: Mutex<Option<oneshot::Sender<Response>>>,
     term_tx: Mutex<Option<oneshot::Sender<String>>>,
+    #[allow(dead_code)]
     dialog_manager: Arc<DialogManager>,
     helper: Arc<Mutex<UserAgentClient>>,
     request: Request,
     config: UACConfig,
+    #[allow(dead_code)]
     ctx: TransportContext,
+    #[allow(dead_code)]
     auto_retry_auth: bool,
     transaction_manager: Arc<TransactionManager>,
     dispatcher: Arc<dyn TransportDispatcher>,
@@ -2418,7 +2423,9 @@ pub struct IntegratedUACBuilder {
     contact_uri: Option<SipUri>,
     local_addr: Option<SocketAddr>,
     public_addr: Option<SocketAddr>,
+    #[allow(dead_code)]
     via_advertised: Option<SocketAddr>,
+    #[allow(dead_code)]
     contact_advertised: Option<SocketAddr>,
     transaction_manager: Option<Arc<TransactionManager>>,
     resolver: Option<Arc<SipResolver>>,

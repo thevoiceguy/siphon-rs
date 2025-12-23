@@ -449,19 +449,6 @@ fn extract_body_strict(body_bytes: &[u8], declared: usize) -> Option<Bytes> {
 /// causing memory allocation failures or integer overflow.
 const MAX_CONTENT_LENGTH: usize = 64 * 1024 * 1024; // 64 MB
 
-/// Reads the `Content-Length` header with bounds checking.
-///
-/// Returns `None` if:
-/// - Header is missing
-/// - Value is not a valid integer
-/// - Value exceeds MAX_CONTENT_LENGTH (64 MB)
-/// - Value would cause integer overflow
-fn content_length(headers: &Headers) -> Option<usize> {
-    headers
-        .get("Content-Length")
-        .and_then(parse_content_length_value)
-}
-
 enum ContentLengthError {
     Invalid,   // Non-numeric or malformed
     Oversized, // Exceeds MAX_CONTENT_LENGTH (security limit)
