@@ -888,6 +888,10 @@ impl UserAgentServer {
 fn generate_tag() -> SmolStr {
     use rand::{distributions::Alphanumeric, thread_rng, Rng};
 
+    if let Some(counter) = deterministic_counter() {
+        return SmolStr::new(format!("t{:010x}", counter));
+    }
+
     let tag: String = thread_rng()
         .sample_iter(&Alphanumeric)
         .take(10)
@@ -900,12 +904,32 @@ fn generate_tag() -> SmolStr {
 fn generate_branch() -> String {
     use rand::{distributions::Alphanumeric, thread_rng, Rng};
 
+    if let Some(counter) = deterministic_counter() {
+        return format!("z9hG4bK{:016x}", counter);
+    }
+
     let random: String = thread_rng()
         .sample_iter(&Alphanumeric)
         .take(16)
         .map(char::from)
         .collect();
     format!("z9hG4bK{}", random)
+}
+
+fn deterministic_counter() -> Option<u64> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::OnceLock;
+
+    static SEED: OnceLock<Option<u64>> = OnceLock::new();
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let seed = SEED.get_or_init(|| {
+        std::env::var("SIPHON_ID_SEED")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+    });
+
+    seed.map(|base| base.wrapping_add(COUNTER.fetch_add(1, Ordering::Relaxed)))
 }
 
 /// Extracts tag parameter from From/To header value.

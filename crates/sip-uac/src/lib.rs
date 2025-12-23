@@ -2263,6 +2263,10 @@ impl UserAgentClient {
 
 /// Helper to generate a random tag.
 fn generate_tag() -> SmolStr {
+    if let Some(counter) = deterministic_counter() {
+        return SmolStr::new(format!("t{:010x}", counter));
+    }
+
     let tag: String = thread_rng()
         .sample_iter(&Alphanumeric)
         .take(10)
@@ -2273,6 +2277,10 @@ fn generate_tag() -> SmolStr {
 
 /// Helper to generate a branch parameter (RFC 3261 magic cookie).
 fn generate_branch() -> String {
+    if let Some(counter) = deterministic_counter() {
+        return format!("z9hG4bK{:016x}", counter);
+    }
+
     let random: String = thread_rng()
         .sample_iter(&Alphanumeric)
         .take(16)
@@ -2283,12 +2291,32 @@ fn generate_branch() -> String {
 
 /// Helper to generate a Call-ID.
 fn generate_call_id() -> String {
+    if let Some(counter) = deterministic_counter() {
+        return format!("call{:016x}@localhost", counter);
+    }
+
     let random: String = thread_rng()
         .sample_iter(&Alphanumeric)
         .take(20)
         .map(char::from)
         .collect();
     format!("{}@localhost", random)
+}
+
+fn deterministic_counter() -> Option<u64> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::OnceLock;
+
+    static SEED: OnceLock<Option<u64>> = OnceLock::new();
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let seed = SEED.get_or_init(|| {
+        std::env::var("SIPHON_ID_SEED")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+    });
+
+    seed.map(|base| base.wrapping_add(COUNTER.fetch_add(1, Ordering::Relaxed)))
 }
 
 /// Parse WWW-Authenticate header into key-value pairs.

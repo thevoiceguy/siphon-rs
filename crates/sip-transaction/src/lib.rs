@@ -88,6 +88,10 @@ pub fn request_branch_id(req: &Request) -> Option<SmolStr> {
 
 /// Generates a new RFC 3261 magic-cookie branch identifier.
 pub fn generate_branch_id() -> SmolStr {
+    if let Some(counter) = deterministic_counter() {
+        return SmolStr::new(format!("z9hG4bK{:016x}", counter));
+    }
+
     let mut rng = rand::thread_rng();
     let suffix: String = (&mut rng)
         .sample_iter(&Alphanumeric)
@@ -95,6 +99,22 @@ pub fn generate_branch_id() -> SmolStr {
         .map(char::from)
         .collect();
     SmolStr::new(format!("z9hG4bK{}", suffix))
+}
+
+fn deterministic_counter() -> Option<u64> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::OnceLock;
+
+    static SEED: OnceLock<Option<u64>> = OnceLock::new();
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let seed = SEED.get_or_init(|| {
+        std::env::var("SIPHON_ID_SEED")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+    });
+
+    seed.map(|base| base.wrapping_add(COUNTER.fetch_add(1, Ordering::Relaxed)))
 }
 
 /// Timers referenced by the SIP transaction state machines (RFC 3261 §17).
