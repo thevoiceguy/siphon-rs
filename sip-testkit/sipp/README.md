@@ -31,6 +31,24 @@ cd sip-testkit/sipp
 ./run_scenarios.sh 127.0.0.1 5060
 ```
 
+Run extended scenarios:
+```bash
+# Enable optional feature tests
+RUN_MESSAGE=1 RUN_INFO=1 RUN_UPDATE=1 RUN_PRACK=1 \
+RUN_SUBSCRIBE=1 RUN_REFER=1 RUN_REINVITE=1 RUN_SESSION_TIMER=1 \
+./run_scenarios.sh 127.0.0.1 5060
+```
+
+Run proxy-mode scenario:
+```bash
+# Start siphond in proxy mode on 5060
+# Start a SIPp UAS on 5070 (callee)
+sipp -sn uas -sf uas_invite.xml -i 127.0.0.1 -p 5070
+
+# Run proxy scenario (targets 127.0.0.1:5070 via CSV)
+RUN_PROXY=1 ./run_scenarios.sh 127.0.0.1 5060
+```
+
 ### Manual Testing
 
 Individual scenario testing:
@@ -48,6 +66,33 @@ sipp 127.0.0.1:5060 -sf invite_bye.xml -m 1 -trace_msg
 # REGISTER (user registration)
 sipp 127.0.0.1:5060 -sf register.xml -m 1 -trace_msg -s alice
 
+# MESSAGE (out-of-dialog)
+sipp 127.0.0.1:5060 -sf message.xml -m 1 -trace_msg
+
+# INFO (in-dialog)
+sipp 127.0.0.1:5060 -sf info.xml -m 1 -trace_msg
+
+# UPDATE (in-dialog)
+sipp 127.0.0.1:5060 -sf update.xml -m 1 -trace_msg
+
+# Re-INVITE (session refresh/update)
+sipp 127.0.0.1:5060 -sf reinvite.xml -m 1 -trace_msg
+
+# PRACK (reliable provisionals)
+sipp 127.0.0.1:5060 -sf prack.xml -m 1 -trace_msg
+
+# SUBSCRIBE/NOTIFY (presence)
+sipp 127.0.0.1:5060 -sf subscribe_notify.xml -m 1 -trace_msg
+
+# REFER (transfer + NOTIFY)
+sipp 127.0.0.1:5060 -sf refer.xml -m 1 -trace_msg
+
+# Session timers (requires --enable-session-timers on siphond)
+sipp 127.0.0.1:5060 -sf session_timer.xml -m 1 -trace_msg
+
+# Proxy-mode INVITE/BYE (target host/port set in proxy_target.csv)
+sipp 127.0.0.1:5060 -sf proxy_invite_bye.xml -inf proxy_target.csv -m 1 -trace_msg
+
 # CANCEL (call cancellation)
 sipp 127.0.0.1:5060 -sf cancel.xml -m 1 -trace_msg
 
@@ -63,6 +108,21 @@ sipp -sn uas 0.0.0.0:5060 -sf uas_invite.xml
 - **`invite_bye.xml`**: Complete call: INVITE → 200 → ACK → pause → BYE → 200
 - **`register.xml`**: REGISTER request (optionally handles 401 challenge)
 - **`cancel.xml`**: INVITE → CANCEL flow (tests mid-call cancellation)
+- **`message.xml`**: MESSAGE request (out-of-dialog)
+- **`info.xml`**: INFO mid-dialog signaling (DTMF relay body)
+- **`update.xml`**: UPDATE mid-dialog with SDP
+- **`reinvite.xml`**: Re-INVITE for session modification
+- **`prack.xml`**: Reliable provisional flow (INVITE with 100rel + PRACK)
+- **`subscribe_notify.xml`**: SUBSCRIBE with initial NOTIFY
+- **`refer.xml`**: In-dialog REFER with NOTIFY progress
+- **`session_timer.xml`**: INVITE with Session-Expires (RFC 4028)
+- **`proxy_invite_bye.xml`**: Proxy-mode INVITE/BYE (target via CSV)
+
+**Notes:**
+- `prack.xml` requires the server to enable PRACK and honor `Supported: 100rel`.
+- `refer.xml` requires REFER support and an established dialog.
+- `session_timer.xml` requires the server to enable RFC 4028 session timers.
+- `proxy_invite_bye.xml` requires a reachable callee at the CSV host/port.
 
 ### UAS (Server) Scenarios
 - **`uas_invite.xml`**: Answers incoming INVITE with 100/180/200, handles ACK and BYE
@@ -107,12 +167,19 @@ Comprehensive interop testing should cover:
 - [x] REGISTER (user registration)
 - [x] CANCEL (call cancellation)
 - [ ] Re-INVITE (session refresh)
-- [ ] PRACK (reliable provisionals - RFC 3262)
-- [ ] UPDATE (session parameter update)
+- [x] PRACK (reliable provisionals - RFC 3262)
+- [x] UPDATE (session parameter update)
 - [ ] Authentication (401/407 challenges)
 - [ ] Multiple codecs in SDP
 - [ ] IPv6 support
 - [ ] TLS transport (SIPS)
+- [x] Re-INVITE (session refresh/update)
+- [x] Proxy-mode basic call via request routing
+- [x] MESSAGE (out-of-dialog)
+- [x] INFO (mid-dialog)
+- [x] SUBSCRIBE/NOTIFY (presence)
+- [x] REFER (transfer + NOTIFY)
+- [x] Session timers (RFC 4028)
 
 ## Integration with CI
 

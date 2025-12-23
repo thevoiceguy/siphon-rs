@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<scenario name="MESSAGE">
+  <send>
+<![CDATA[
+MESSAGE sip:[service]@[remote_ip]:[remote_port] SIP/2.0
+Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+Max-Forwards: 70
+From: <sip:sipp@[local_ip]>;tag=[call_number]
+To: <sip:[service]@[remote_ip]>
+Call-ID: [call_id]
+CSeq: 1 MESSAGE
+Contact: <sip:sipp@[local_ip]:[local_port]>
+Content-Type: text/plain
+Content-Length: [len]
+
+Hello from SIPp MESSAGE
+]]>
+  </send>
+
+  <recv response="200" rtd="true"/>
+</scenario>

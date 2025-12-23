@@ -25,6 +25,12 @@ echo "SIPp Interop Test Suite"
 echo "========================================"
 echo "Target: $TARGET_HOST:$TARGET_PORT"
 echo ""
+echo "Optional flags:"
+echo "  RUN_MESSAGE=1 RUN_INFO=1 RUN_UPDATE=1 RUN_PRACK=1 RUN_REINVITE=1"
+echo "  RUN_SUBSCRIBE=1 RUN_REFER=1 RUN_SESSION_TIMER=1 RUN_CANCEL=1 RUN_PROXY=1"
+echo "Proxy vars:"
+echo "  PROXY_TARGET_CSV=/path/to/proxy_target.csv"
+echo ""
 
 # Check if SIPp is installed
 if ! command -v sipp &> /dev/null; then
@@ -57,6 +63,8 @@ run_scenario() {
     local scenario_name="$2"
     local calls="${3:-1}"
     local service="${4:-test}"
+    shift 4 || true
+    local extra_args=("$@")
 
     echo -e "${YELLOW}Running: $scenario_name${NC}"
     TESTS_RUN=$((TESTS_RUN + 1))
@@ -72,6 +80,7 @@ run_scenario() {
         -max_socket 100 \
         -r 1 \
         -rp 1000 \
+        "${extra_args[@]}" \
         &> "/tmp/sipp_${scenario_name}.log"; then
         echo -e "${GREEN}✓ PASSED${NC}"
         TESTS_PASSED=$((TESTS_PASSED + 1))
@@ -92,9 +101,47 @@ run_scenario "invite.xml" "INVITE_ACK" 1
 run_scenario "invite_bye.xml" "INVITE_BYE" 1
 run_scenario "register.xml" "REGISTER" 1
 
+# Extended scenarios (opt-in with env flags)
+if [[ "${RUN_MESSAGE:-0}" == "1" ]]; then
+    run_scenario "message.xml" "MESSAGE" 1
+fi
+
+if [[ "${RUN_INFO:-0}" == "1" ]]; then
+    run_scenario "info.xml" "INFO" 1
+fi
+
+if [[ "${RUN_UPDATE:-0}" == "1" ]]; then
+    run_scenario "update.xml" "UPDATE" 1
+fi
+
+if [[ "${RUN_PRACK:-0}" == "1" ]]; then
+    run_scenario "prack.xml" "PRACK" 1
+fi
+
+if [[ "${RUN_SUBSCRIBE:-0}" == "1" ]]; then
+    run_scenario "subscribe_notify.xml" "SUBSCRIBE_NOTIFY" 1
+fi
+
+if [[ "${RUN_REFER:-0}" == "1" ]]; then
+    run_scenario "refer.xml" "REFER" 1
+fi
+
+if [[ "${RUN_REINVITE:-0}" == "1" ]]; then
+    run_scenario "reinvite.xml" "REINVITE" 1
+fi
+
+if [[ "${RUN_SESSION_TIMER:-0}" == "1" ]]; then
+    run_scenario "session_timer.xml" "SESSION_TIMER" 1
+fi
+
 # Optionally run CANCEL scenario (may not be implemented in basic servers)
 if [[ "${RUN_CANCEL:-0}" == "1" ]]; then
     run_scenario "cancel.xml" "CANCEL" 1
+fi
+
+if [[ "${RUN_PROXY:-0}" == "1" ]]; then
+    PROXY_TARGET_CSV="${PROXY_TARGET_CSV:-$SCRIPT_DIR/proxy_target.csv}"
+    run_scenario "proxy_invite_bye.xml" "PROXY_INVITE_BYE" 1 "callee" -inf "$PROXY_TARGET_CSV"
 fi
 
 # Summary

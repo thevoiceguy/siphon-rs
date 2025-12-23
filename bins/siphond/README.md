@@ -1,6 +1,8 @@
 # siphond - SIP Testing Daemon
 
-**A Swiss Army knife SIP server for testing, development, and demonstration.**
+**A simple SIP server for testing, development, and demonstration of the siphon-rs sip stack**
+
+**Not for production**
 
 siphond is a multi-mode SIP daemon built on the siphon-rs stack, providing comprehensive SIP protocol testing capabilities. It can operate as a minimal OPTIONS responder, full-featured UAS, registrar, proxy, B2BUA, call server, or subscription server.
 
@@ -10,12 +12,18 @@ siphond is a multi-mode SIP daemon built on the siphon-rs stack, providing compr
 - 📞 **Complete Call Handling** - INVITE/ACK/BYE with dialog management and SDP negotiation
 - 📝 **Registration Server** - RFC 3261 compliant registrar with location service
 - 🔀 **Proxy Mode** - Stateful SIP proxy with Via/Record-Route handling and location service integration
+- 🧭 **In-Dialog Proxying** - ACK/BYE/CANCEL/PRACK/UPDATE forwarding with strict transport selection (RFC 3263 + Contact transport)
 - 🔗 **B2BUA Mode** - Back-to-Back User Agent for bridging calls between registered users with response relay
 - 🔔 **Event Subscriptions** - SUBSCRIBE/NOTIFY for event packages (RFC 3265)
 - 🔄 **Call Transfer** - REFER support for blind and attended transfers (RFC 3515)
 - ✅ **Reliable Provisionals** - PRACK support for 180/183 responses (RFC 3262)
+- 📦 **Scenario Runner** - JSON-driven scripted call flows for repeatable tests
+- ⏲️ **Session Timers** - RFC 4028 session refresh/expiry toggle for UAS testing
+- 📨 **Mid-Dialog Methods** - MESSAGE/INFO/UPDATE handlers for signaling tests
+- 🧾 **Standard NOTIFY Bodies** - presence, dialog-info, and message-summary payloads
 - 🔐 **Authentication** - Digest authentication with MD5/SHA-256/SHA-512
 - 🌐 **Multi-Transport** - UDP, TCP, and TLS (SIPS) support
+- 🎯 **Deterministic IDs** - Seeded Call-ID/branch/tag generation for stable snapshots
 - ⚙️ **Highly Configurable** - 25+ CLI options for fine-grained control
 
 ## Quick Start
@@ -64,7 +72,7 @@ Complete SIP User Agent Server accepting all types of requests.
 siphond --mode full-uas
 ```
 
-**Supported Methods:** OPTIONS, INVITE, ACK, BYE, REGISTER, SUBSCRIBE, NOTIFY, REFER, PRACK
+**Supported Methods:** OPTIONS, INVITE, ACK, BYE, REGISTER, SUBSCRIBE, NOTIFY, REFER, PRACK, MESSAGE, INFO, UPDATE
 
 **Features:**
 - ✅ Automatic call acceptance
@@ -124,7 +132,7 @@ Specialized for call handling without registration complexity.
 siphond --mode call-server
 ```
 
-**Supported Methods:** OPTIONS, INVITE, ACK, BYE
+**Supported Methods:** OPTIONS, INVITE, ACK, BYE, INFO, UPDATE
 
 **Features:**
 - ✅ Call setup and teardown
@@ -169,7 +177,7 @@ Acts as a stateful SIP proxy forwarding calls to registered users.
 siphond --mode proxy --local-uri sip:proxy@192.168.1.81
 ```
 
-**Supported Methods:** OPTIONS, REGISTER, INVITE
+**Supported Methods:** OPTIONS, REGISTER, INVITE, ACK, BYE, CANCEL, PRACK, UPDATE
 
 **Features:**
 - ✅ Stateful proxy with location service integration
@@ -178,6 +186,8 @@ siphond --mode proxy --local-uri sip:proxy@192.168.1.81
 - ✅ Max-Forwards checking and decrement
 - ✅ Request-URI rewriting to registered contact
 - ✅ Location service lookup for call routing
+- ✅ Response relay on the same transport as received
+- ✅ Strict transport selection (RFC 3263 + Contact transport parameter)
 
 **Use Cases:**
 - Testing proxy behavior
@@ -192,7 +202,7 @@ siphond --mode proxy \
   --reg-default-expiry 3600
 ```
 
-**Note:** Currently supports TCP forwarding only. Response relay not yet implemented - use B2BUA mode for full bidirectional call bridging.
+**Note:** Media (RTP) is not proxied; signaling only.
 
 ---
 
@@ -256,6 +266,7 @@ siphond --mode b2bua \
 | `--sips-bind <ADDR>` | TLS bind address | 0.0.0.0:5061 |
 | `--local-uri <URI>` | Local SIP URI for From/Contact headers | sip:siphond@localhost |
 | `--user-agent <STR>` | User-Agent header value | siphond/0.2-refactored |
+| `--scenario <PATH>` | Run JSON scenario file at startup | - |
 
 ### TLS Options
 
@@ -273,6 +284,7 @@ siphond --mode b2bua \
 | `--auto-accept-subscriptions` | Automatically accept SUBSCRIBE requests | true |
 | `--enable-prack` | Enable PRACK (reliable provisionals) | true |
 | `--enable-refer` | Enable REFER (call transfer) | true |
+| `--enable-session-timers` | Enable RFC 4028 session timers | false |
 
 ### SDP Configuration
 
@@ -365,6 +377,25 @@ siphond --mode full-uas \
   --sips-bind 0.0.0.0:5061 \
   --tls-cert cert.pem \
   --tls-key key.pem
+```
+
+### Example 6: Scenario Runner (JSON)
+
+```bash
+# Run scripted steps from JSON
+siphond --mode full-uas --scenario scenarios/basic-call.json
+```
+
+### Example 7: Session Timers
+
+```bash
+siphond --mode full-uas --enable-session-timers
+```
+
+### Example 8: Deterministic IDs for Stable Tests
+
+```bash
+SIPHON_ID_SEED=42 siphond --mode full-uas
 ```
 
 ---
@@ -541,27 +572,21 @@ siphond --mode full-uas --udp-bind 192.168.1.100:5060
 ### ⚠️ Known Incomplete Features
 
 #### INVITE Handler Limitations
-- **SDP Negotiation**: Basic SDP pass-through only, no codec negotiation or media attribute validation
-- **Re-INVITE Handling**: Session modification (hold/resume, codec changes) not implemented
-- **Late Offer Support**: Late offer flow (no SDP in INVITE) returns 488 Not Acceptable Here
+- **SDP Negotiation**: Basic SDP generation/answering only; no full codec negotiation or media attribute validation
 - **Early Media**: 183 Session Progress with SDP not fully tested
-- **PRACK Integration**: RSeq handling stub present but not integrated with INVITE state machine
+- **PRACK Integration**: RSeq handling stub present but not fully integrated with INVITE state machine
 
 #### REFER Handler Limitations
-- **Implicit Subscription**: Does NOT create implicit "refer" subscription per RFC 3515 §2.4.4
-- **Referred Call Initiation**: Does NOT automatically initiate the call described in Refer-To URI
-- **NOTIFY Progress**: Does NOT send NOTIFY messages with sipfrag bodies reporting transfer progress
-- **Current Behavior**: Accepts REFER with 202 Accepted, but no further action taken
+- **Transfer Behavior**: Transfer INVITE uses a generated SDP offer; advanced transfer policies are not implemented
 
 #### Proxy Mode Limitations
-- **Response Relay**: Proxy can forward INVITE requests but response relay is not implemented
-- **Use B2BUA Mode**: For full bidirectional call bridging with response forwarding
-- **Transport**: TCP forwarding only, UDP proxy not implemented
+- **Forking**: Parallel/serial forking is not implemented
+- **Media**: No media/RTP proxying (signaling only)
 
 #### General Limitations
 - **Media/RTP**: No actual media handling - SDP is generated/passed through but no RTP streams
 - **Interactive Mode**: Not yet implemented (planned)
-- **Scenario Files**: Not yet implemented (planned)
+- **Scenario Files**: JSON format supported; YAML not supported yet
 - **Custom SDP Files**: `--sdp-profile <path>` option not implemented, only presets work
 - **User File Loading**: `--auth-users <path>` option not implemented, hardcoded users only
 

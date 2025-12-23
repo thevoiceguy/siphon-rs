@@ -91,6 +91,28 @@ sipp -sn uac 127.0.0.1:5060 -m 10
 
 ---
 
+### Scenario 1b: Scenario Runner (JSON)
+
+Script repeatable call flows with the JSON scenario runner:
+
+```bash
+# Create a simple scenario
+cat > scenarios/basic-call.json << 'EOF'
+{
+  "steps": [
+    { "type": "send", "method": "INVITE", "uri": "sip:callee@127.0.0.1:5060" },
+    { "type": "sleep", "ms": 1000 },
+    { "type": "send", "method": "BYE", "uri": "sip:callee@127.0.0.1:5060" }
+  ]
+}
+EOF
+
+# Run it
+siphond --mode full-uas --scenario scenarios/basic-call.json
+```
+
+---
+
 ### Scenario 2: Testing REGISTER Cycles
 
 Registrar with custom expiry for testing re-registration:
@@ -124,10 +146,21 @@ siphond --mode subscription-server \
 - `Event: refer` (call transfer status)
 - `Event: presence` (user presence)
 - `Event: message-summary` (voicemail notifications)
+- `Event: dialog` / `dialog-info` (dialog state)
 
 ---
 
-### Scenario 4: Debugging with Verbose Logging
+### Scenario 4: Session Timers (RFC 4028)
+
+Enable UAS-side session refresh/expiry tracking:
+
+```bash
+siphond --mode full-uas --enable-session-timers
+```
+
+---
+
+### Scenario 5: Debugging with Verbose Logging
 
 Maximum verbosity for debugging:
 
@@ -144,7 +177,7 @@ RUST_LOG=siphond=debug,sip_transaction=trace,sip_dialog=debug siphond --mode ful
 
 ## Production-Like Scenarios
 
-### Scenario 5: Secure Registrar with Authentication
+### Scenario 6: Secure Registrar with Authentication
 
 Full registrar with Digest authentication:
 
@@ -175,7 +208,7 @@ siphond --mode registrar \
 
 ---
 
-### Scenario 6: Multi-Transport Server with TLS
+### Scenario 7: Multi-Transport Server with TLS
 
 Complete server with UDP, TCP, and TLS:
 
@@ -206,7 +239,7 @@ siphond --mode full-uas \
 
 ---
 
-### Scenario 7: Enterprise PBX Simulator
+### Scenario 8: Enterprise PBX Simulator
 
 Simulate a small office PBX:
 
@@ -373,7 +406,17 @@ siphond --mode full-uas \
 
 ---
 
-### Example 4: Testing Edge Cases
+### Example 4: Deterministic IDs for Stable Tests
+
+Seed Call-ID/branch/tag generation for repeatable snapshots:
+
+```bash
+SIPHON_ID_SEED=123 siphond --mode full-uas
+```
+
+---
+
+### Example 5: Testing Edge Cases
 
 **Zero expiry (immediate deregistration):**
 ```bash

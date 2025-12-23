@@ -7,10 +7,12 @@ One-page cheat sheet for siphond.
 | Mode | Description | Methods Supported |
 |------|-------------|-------------------|
 | `minimal` | OPTIONS only (default) | OPTIONS |
-| `full-uas` | Complete SIP server | OPTIONS, INVITE, ACK, BYE, REGISTER, SUBSCRIBE, NOTIFY, REFER, PRACK |
+| `full-uas` | Complete SIP server | OPTIONS, INVITE, ACK, BYE, REGISTER, SUBSCRIBE, NOTIFY, REFER, PRACK, MESSAGE, INFO, UPDATE |
 | `registrar` | Registration server | OPTIONS, REGISTER |
-| `call-server` | Calls only | OPTIONS, INVITE, ACK, BYE |
+| `call-server` | Calls only | OPTIONS, INVITE, ACK, BYE, INFO, UPDATE |
 | `subscription-server` | Events only | OPTIONS, SUBSCRIBE, NOTIFY |
+| `proxy` | Stateful proxy | OPTIONS, REGISTER, INVITE, ACK, BYE, CANCEL, PRACK, UPDATE |
+| `b2bua` | Back-to-back user agent | OPTIONS, REGISTER, INVITE, ACK, BYE |
 
 ## Quick Commands
 
@@ -27,6 +29,12 @@ siphond --mode registrar --auth --auth-realm example.com
 # Call server
 siphond --mode call-server
 
+# Proxy
+siphond --mode proxy --local-uri sip:proxy@127.0.0.1
+
+# Scenario runner
+siphond --mode full-uas --scenario scenarios/basic-call.json
+
 # Custom port
 siphond --udp-bind 0.0.0.0:5070
 ```
@@ -41,6 +49,7 @@ siphond --udp-bind 0.0.0.0:5070
 | `--sips-bind` | 0.0.0.0:5061 | TLS listen address |
 | `--local-uri` | sip:siphond@localhost | Local SIP URI |
 | `--user-agent` | siphond/0.2-refactored | User-Agent header |
+| `--scenario` | - | Run JSON scenario file at startup |
 
 ## Feature Flags
 
@@ -51,6 +60,7 @@ siphond --udp-bind 0.0.0.0:5070
 | `--auto-accept-subscriptions` | ✅ true | Auto-accept SUBSCRIBE |
 | `--enable-prack` | ✅ true | Enable PRACK |
 | `--enable-refer` | ✅ true | Enable REFER |
+| `--enable-session-timers` | ❌ false | Enable RFC 4028 session timers |
 
 ## Authentication
 
@@ -89,6 +99,20 @@ siphond --mode full-uas \
 
 ```bash
 siphond --mode call-server --sdp-profile audio-video
+```
+
+## Scenario Runner
+
+```bash
+# Run a JSON scenario
+siphond --mode full-uas --scenario scenarios/basic-call.json
+```
+
+## Deterministic IDs
+
+```bash
+# Seed Call-ID/branch/tag generation
+SIPHON_ID_SEED=42 siphond --mode full-uas
 ```
 
 ## Registrar Settings
@@ -165,16 +189,16 @@ siphond --udp-bind 192.168.1.100:5060
 
 ## Mode Comparison
 
-| Feature | minimal | full-uas | registrar | call-server | subscription-server |
-|---------|---------|----------|-----------|-------------|---------------------|
-| OPTIONS | ✅ | ✅ | ✅ | ✅ | ✅ |
-| INVITE | ❌ | ✅ | ❌ | ✅ | ❌ |
-| REGISTER | ❌ | ✅ | ✅ | ❌ | ❌ |
-| SUBSCRIBE | ❌ | ✅ | ❌ | ❌ | ✅ |
-| REFER | ❌ | ✅ | ❌ | ❌ | ❌ |
-| PRACK | ❌ | ✅ | ❌ | ✅* | ❌ |
-| Auth | ❌ | ✅* | ✅* | ❌ | ❌ |
-| Dialogs | ❌ | ✅ | ❌ | ✅ | ❌ |
+| Feature | minimal | full-uas | registrar | call-server | subscription-server | proxy | b2bua |
+|---------|---------|----------|-----------|-------------|---------------------|-------|-------|
+| OPTIONS | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| INVITE | ❌ | ✅ | ❌ | ✅ | ❌ | ✅ | ✅ |
+| REGISTER | ❌ | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ |
+| SUBSCRIBE | ❌ | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ |
+| REFER | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| PRACK | ❌ | ✅ | ❌ | ✅* | ❌ | ✅* | ❌ |
+| Auth | ❌ | ✅* | ✅* | ❌ | ❌ | ❌ | ❌ |
+| Dialogs | ❌ | ✅ | ❌ | ✅ | ❌ | ❌ | ✅ |
 
 \* Optional, enabled with flags
 
