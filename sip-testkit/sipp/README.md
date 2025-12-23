@@ -78,6 +78,43 @@ sipp -sn uas -sf uas_invite.xml -i 127.0.0.1 -p 5070
 RUN_PROXY=1 ./run_scenarios.sh 127.0.0.1 5060
 ```
 
+### IPv6 Testing
+
+IPv6 tests require special setup and reachability check bypass:
+
+```bash
+# Terminal 1: Start siphond with IPv6 binding
+# IMPORTANT: Use bracket notation "[::1]:5060" for IPv6 addresses
+cargo run -p siphond -- --mode full-uas --udp-bind "[::1]:5060"
+
+# Terminal 2: Run IPv6 tests
+# IMPORTANT: Use SKIP_REACHABILITY=1 (nc doesn't handle IPv6 brackets correctly)
+cd sip-testkit/sipp
+SKIP_REACHABILITY=1 RUN_IPV6=1 IPV6_HOST=::1 ./run_scenarios.sh "[::1]" 5060
+```
+
+**IPv6 Test Scenarios:**
+- `OPTIONS_IPV6`: Basic connectivity over IPv6
+- `INVITE_BYE_IPV6`: Full call flow with IPv6 SDP (IP6 addresses in o=/c= lines)
+- `REGISTER_IPV6`: Registration over IPv6
+
+**Common IPv6 Issues:**
+
+1. **Reachability check fails**: Use `SKIP_REACHABILITY=1` - the nc tool doesn't handle IPv6 bracket notation
+2. **Binding error**: Ensure you use quotes around `"[::1]:5060"` in the bind argument
+3. **IPv6 disabled**: Check `sysctl net.ipv6.conf.all.disable_ipv6` (should be 0)
+4. **Firewall**: Ensure IPv6 UDP port 5060 is open: `ip6tables -L`
+
+**Verify IPv6 Listener:**
+```bash
+# Check if siphond is listening on IPv6
+ss -lun | grep 5060
+# Should show: [::1]:5060
+
+# Test IPv6 connectivity with nc
+nc -6 -u -v ::1 5060
+```
+
 ### Manual Testing
 
 Individual scenario testing:
@@ -156,6 +193,7 @@ sipp -sf route_bye.xml -m 1 -trace_msg 127.0.0.1:5060
 sipp -sf forking_invite.xml -m 1 -trace_msg 127.0.0.1:5060
 
 # IPv6 core tests (requires IPv6 listener)
+# Note: IPv6 addresses must be in bracket notation [::1]
 sipp -sf invite_bye_ipv6.xml -m 1 -i ::1 -trace_msg [::1]:5060
 
 # Proxy-mode INVITE/BYE (target host/port set in proxy_target.csv)
@@ -222,7 +260,7 @@ sipp -sn uas -sf uas_invite.xml -i 0.0.0.0 -p 5060
 - `prack.xml` requires the server to enable PRACK and honor `Supported: 100rel`.
 - `prack_bad_rack.xml` and `prack_missing_rack.xml` expect the server to reject invalid PRACKs (typically 481/400).
 - `invite_multi_codec.xml` expects the server to accept multiple codecs in the SDP offer.
-- `invite_bye_ipv6.xml` requires an IPv6 listener and a SIPp run bound to IPv6 (`-i ::1`).
+- `invite_bye_ipv6.xml` requires an IPv6 listener and a SIPp run bound to IPv6 (`-i ::1`). See [IPv6 Testing](#ipv6-testing) section for setup instructions.
 - `refer.xml` requires REFER support and an established dialog. The scenario loops for up to 100ms to collect optional NOTIFY messages reporting transfer progress (RFC 3515).
 - `refer.xml` uses `refer_target.csv` to set the transfer target host/port (CSV first line must be `SEQUENTIAL` or `RANDOM`).
 - `refer_fail.xml` uses an invalid target and expects a failure NOTIFY.

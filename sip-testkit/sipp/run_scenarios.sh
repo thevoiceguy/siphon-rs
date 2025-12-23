@@ -14,6 +14,18 @@ TARGET_HOST="${1:-127.0.0.1}"
 TARGET_PORT="${2:-5060}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+format_target() {
+    local host="$1"
+    local port="$2"
+    if [[ "$host" == *:* && "$host" != \[*\] ]]; then
+        echo "[$host]:$port"
+    else
+        echo "$host:$port"
+    fi
+}
+
+DEFAULT_TARGET="$(format_target "$TARGET_HOST" "$TARGET_PORT")"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -23,7 +35,7 @@ NC='\033[0m' # No Color
 echo "========================================"
 echo "SIPp Interop Test Suite"
 echo "========================================"
-echo "Target: $TARGET_HOST:$TARGET_PORT"
+echo "Target: $DEFAULT_TARGET"
 echo ""
 echo "Server note:"
 echo "  INVITE/REGISTER tests require siphond in full-uas, registrar, or call-server modes."
@@ -46,6 +58,7 @@ echo "IPv6 vars:"
 echo "  IPV6_HOST=::1 IPV6_PORT=5060"
 echo "Runner vars:"
 echo "  SCENARIO_DELAY_MS=250 PRECHECK_OPTIONS=1 PRECHECK_TIMEOUT_SEC=3"
+echo "  REACHABILITY_TRANSPORT=any (tcp|udp|any), SKIP_REACHABILITY=1"
 echo "  RUN_ALL=1 (enables all optional scenarios)"
 echo "  RUN_ALL_EXTENDED=1 (includes auth/transport/forking/route-set tests)"
 echo ""
@@ -60,13 +73,46 @@ if ! command -v sipp &> /dev/null; then
 fi
 
 # Check if target is reachable
-if ! nc -z -w1 "$TARGET_HOST" "$TARGET_PORT" 2>/dev/null; then
+check_reachability() {
+    local host="$1"
+    local port="$2"
+    local transport="$3"
+    local opts=()
+    if [[ "$host" == *:* ]]; then
+        opts+=("-6")
+    fi
+    case "$transport" in
+        tcp)
+            nc "${opts[@]}" -z -w1 "$host" "$port" 2>/dev/null
+            return $?
+            ;;
+        udp)
+            nc "${opts[@]}" -u -z -w1 "$host" "$port" 2>/dev/null
+            return $?
+            ;;
+        any)
+            if nc "${opts[@]}" -z -w1 "$host" "$port" 2>/dev/null; then
+                return 0
+            fi
+            nc "${opts[@]}" -u -z -w1 "$host" "$port" 2>/dev/null
+            return $?
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+if [[ "${SKIP_REACHABILITY:-0}" != "1" ]]; then
+    REACHABILITY_TRANSPORT="${REACHABILITY_TRANSPORT:-any}"
+    if ! check_reachability "$TARGET_HOST" "$TARGET_PORT" "$REACHABILITY_TRANSPORT"; then
     echo -e "${YELLOW}WARNING: Target $TARGET_HOST:$TARGET_PORT is not reachable${NC}"
     echo "Make sure your SIP server is running before proceeding."
     read -p "Continue anyway? (y/N) " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
         exit 1
+    fi
     fi
 fi
 
@@ -85,7 +131,7 @@ run_scenario() {
     if [[ $# -gt 4 ]]; then
         extra_args=("${@:5}")
     fi
-    local target="${TARGET_OVERRIDE:-$TARGET_HOST:$TARGET_PORT}"
+    local target="${TARGET_OVERRIDE:-$DEFAULT_TARGET}"
 
     echo -e "${YELLOW}Running: $scenario_name${NC}"
     TESTS_RUN=$((TESTS_RUN + 1))
@@ -98,7 +144,7 @@ run_scenario() {
             -m 1 \
             -timeout "${PRECHECK_TIMEOUT_SEC}s" \
             -timeout_error \
-            "$TARGET_HOST":"$TARGET_PORT" \
+            "$DEFAULT_TARGET" \
             &> "/tmp/sipp_${scenario_name}_preflight.log"; then
             echo -e "${RED}✗ FAILED (preflight)${NC}"
             echo "  Log: /tmp/sipp_${scenario_name}_preflight.log"
