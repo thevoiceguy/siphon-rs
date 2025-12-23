@@ -7,7 +7,7 @@ license.workspace = true
 [dependencies]
 tokio = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 bytes = { workspace = true }
 anyhow = { workspace = true }
 sip-transport = { path = "../../crates/sip-transport", features = ["tls"] }

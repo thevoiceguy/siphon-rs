@@ -1232,8 +1232,12 @@ impl RequestHandler for InviteHandler {
             handle.send_provisional(ringing).await;
         }
 
-        // Small delay to allow CANCEL to be processed before auto-accepting
-        // (simulates realistic ring time before answer)
+        // Delay before auto-accepting to allow CANCEL to arrive
+        // In real-world scenarios, this delay is natural (waiting for user to answer).
+        // In auto-accept mode, we need a small delay to avoid a race condition where
+        // the call is accepted (200 OK sent) before CANCEL can be processed.
+        // Without this delay, the pending INVITE is removed before CANCEL arrives,
+        // preventing the 487 Request Terminated response.
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Generate SDP answer if offer was provided

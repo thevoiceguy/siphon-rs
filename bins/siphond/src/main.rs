@@ -170,10 +170,15 @@ fn parse_sdp_profile(s: &str) -> Result<SdpProfile, String> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing
+    // Initialize tracing with env filter support
+    use tracing_subscriber::EnvFilter;
     tracing_subscriber::fmt()
         .with_target(false)
         .with_level(true)
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("info"))
+        )
         .init();
 
     // Set up observability

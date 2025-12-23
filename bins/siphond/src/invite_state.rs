@@ -5,7 +5,6 @@
 use dashmap::DashMap;
 use sip_core::Request;
 use sip_parse::header;
-use sip_transaction::branch_from_via;
 use smol_str::SmolStr;
 use sip_transaction::ServerTransactionHandle;
 
@@ -45,14 +44,28 @@ impl InviteStateManager {
         }
     }
 
-    /// Build a stable key for an INVITE/CANCEL pair using Call-ID, CSeq number, and top Via branch.
+    /// Build a stable key for an INVITE/CANCEL pair using Call-ID, CSeq number, and From tag.
+    /// Per RFC 3261 §9.2, CANCEL matches INVITE via Call-ID, CSeq number, and From tag.
+    /// Note: Via branch is different for CANCEL/INVITE as they are separate transactions.
     pub fn key_from_request(request: &Request) -> Option<String> {
         let call_id = header(&request.headers, "Call-ID")?;
         let cseq = header(&request.headers, "CSeq")?;
         let cseq_num = cseq.split_whitespace().next()?;
-        let via = header(&request.headers, "Via")?;
-        let branch = branch_from_via(via.as_str())?;
-        Some(format!("{}:{}:{}", call_id, cseq_num, branch))
+        let from = header(&request.headers, "From")?;
+
+        // Extract From tag (format: <sip:user@host>;tag=value or sip:user@host;tag=value)
+        let from_tag = from.as_str().split(";tag=").nth(1)?.split(';').next()?;
+
+        let key = format!("{}:{}:{}", call_id, cseq_num, from_tag);
+        tracing::debug!(
+            method = %request.start.method.as_str(),
+            key = %key,
+            call_id = %call_id,
+            cseq_num = %cseq_num,
+            from_tag = %from_tag,
+            "Generated INVITE/CANCEL key"
+        );
+        Some(key)
     }
 
     /// Store a pending INVITE transaction.
@@ -64,6 +77,11 @@ impl InviteStateManager {
         key: String,
         pending: PendingInvite,
     ) {
+        tracing::debug!(
+            key = %key,
+            call_id = %pending.call_id,
+            "Storing pending INVITE"
+        );
         self.pending.insert(key, pending);
     }
 
@@ -96,7 +114,22 @@ impl InviteStateManager {
     ///
     /// Returns the pending invite info if found, allowing the caller to send a 487 response.
     pub fn get_pending_invite(&self, key: &str) -> Option<PendingInvite> {
-        self.pending.get(key).map(|entry| entry.value().clone())
+        let result = self.pending.get(key).map(|entry| entry.value().clone());
+        tracing::debug!(
+            key = %key,
+            found = result.is_some(),
+            pending_count = self.pending.len(),
+            "Looking up pending INVITE"
+        );
+        if result.is_none() {
+            // Log all current keys to help debug
+            let keys: Vec<String> = self.pending.iter().map(|e| e.key().clone()).collect();
+            tracing::debug!(
+                "Current pending INVITE keys: {:?}",
+                keys
+            );
+        }
+        result
     }
 
     /// Update the To header once a To-tag is generated.
@@ -111,7 +144,14 @@ impl InviteStateManager {
     /// This should be called when the INVITE transaction completes (receives
     /// 200 OK, 4xx, 5xx, 6xx, or is canceled).
     pub fn remove_pending_invite(&self, key: &str) -> Option<PendingInvite> {
-        self.pending.remove(key).map(|(_, pending)| pending)
+        let result = self.pending.remove(key).map(|(_, pending)| pending);
+        tracing::debug!(
+            key = %key,
+            found = result.is_some(),
+            remaining_count = self.pending.len(),
+            "Removing pending INVITE"
+        );
+        result
     }
 
     /// Get the count of pending INVITE transactions.
