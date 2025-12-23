@@ -46,8 +46,11 @@ Content-Length: 0
   <!-- Receive 200 OK for CANCEL -->
   <recv response="200" rtd="true"/>
 
+  <!-- Accept retransmitted 200 OK for CANCEL (UDP) -->
+  <recv response="200" optional="true"/>
+
   <!-- Receive 487 Request Terminated for original INVITE -->
-  <recv response="487"/>
+  <recv response="487" rtd="true"/>
 
   <!-- Send ACK for 487 response -->
   <send>

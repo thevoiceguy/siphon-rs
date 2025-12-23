@@ -1232,6 +1232,10 @@ impl RequestHandler for InviteHandler {
             handle.send_provisional(ringing).await;
         }
 
+        // Small delay to allow CANCEL to be processed before auto-accepting
+        // (simulates realistic ring time before answer)
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
         // Generate SDP answer if offer was provided
         let sdp_answer = if !request.body.is_empty() {
             match std::str::from_utf8(&request.body) {
