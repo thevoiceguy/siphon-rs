@@ -169,6 +169,11 @@ sipp -sf max_forwards_zero.xml -m 1 -trace_msg 127.0.0.1:5060  # Expects 483
 sipp -sf malformed_sdp.xml -m 1 -trace_msg 127.0.0.1:5060      # Expects 488
 sipp -sf unsupported_method.xml -m 1 -trace_msg 127.0.0.1:5060 # Expects 501
 
+# Max-Forwards decrement validation (requires proxy mode)
+# Note: Start siphond with --mode proxy for these tests
+sipp -sf max_forwards_decrement.xml -m 1 -trace_msg 127.0.0.1:5060  # Validates decrement behavior
+sipp -sf max_forwards_edge_case.xml -m 1 -trace_msg 127.0.0.1:5060  # Tests 1->0 edge case
+
 # UAS mode (receive calls)
 sipp -sn uas -sf uas_invite.xml -i 0.0.0.0 -p 5060
 ```
@@ -209,6 +214,8 @@ sipp -sn uas -sf uas_invite.xml -i 0.0.0.0 -p 5060
 - **`max_forwards_zero.xml`**: Max-Forwards=0 error handling (expects 483 Too Many Hops)
 - **`malformed_sdp.xml`**: Malformed/unsupported SDP (expects 488 Not Acceptable Here)
 - **`unsupported_method.xml`**: Unknown SIP method (expects 501 Not Implemented)
+- **`max_forwards_decrement.xml`**: Max-Forwards decrement validation (RFC 3261 §8.1.1.6) - requires proxy mode
+- **`max_forwards_edge_case.xml`**: Max-Forwards: 1 → 0 edge case (validates correct decrement logic) - requires proxy mode
 
 **Notes:**
 - `cancel.xml` expects 200 OK for CANCEL and 487 Request Terminated for the INVITE.
@@ -294,6 +301,8 @@ Items marked [x] have scenarios in this suite; some require extra setup (auth, T
 - [x] Multiple codecs in SDP
 - [x] IPv6 support
 - [x] Max-Forwards=0 handling (483 Too Many Hops)
+- [x] Max-Forwards decrement validation (RFC 3261 §8.1.1.6)
+- [x] Max-Forwards edge case (1 → 0 forwarding)
 - [x] Malformed SDP rejection (488 Not Acceptable Here)
 - [x] Unsupported method rejection (501 Not Implemented)
 

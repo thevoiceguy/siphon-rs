@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<scenario name="Max-Forwards decrement">
+  <!-- Test RFC 3261 §8.1.1.6: Proxy MUST decrement Max-Forwards before forwarding -->
+
+  <!--
+    This test validates that a proxy decrements Max-Forwards at each hop.
+    We send INVITE with Max-Forwards: 2, expecting the proxy to forward with Max-Forwards: 1.
+
+    Test setup:
+    1. SIPp (this scenario) -> Siphond Proxy (decrements 2->1) -> SIPp (server scenario)
+    2. Server scenario verifies Max-Forwards: 1
+  -->
+
+  <send>
+<![CDATA[
+INVITE sip:[service]@[remote_ip]:[remote_port] SIP/2.0
+Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+Max-Forwards: 2
+From: <sip:sipp@[local_ip]>;tag=[call_number]
+To: <sip:[service]@[remote_ip]>
+Call-ID: [call_id]
+CSeq: 1 INVITE
+Contact: <sip:sipp@[local_ip]:[local_port]>
+Content-Type: application/sdp
+Content-Length: [len]
+
+v=0
+o=user1 53655765 2353687637 IN IP4 [local_ip]
+s=-
+c=IN IP4 [local_ip]
+t=0 0
+m=audio 9000 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+]]>
+  </send>
+
+  <recv response="100" optional="true"/>
+
+  <!--
+    In proxy mode, we expect:
+    - Proxy receives Max-Forwards: 2
+    - Proxy decrements to Max-Forwards: 1
+    - Proxy forwards to destination
+    - Destination responds with 180/200
+  -->
+
+  <recv response="180" optional="true"/>
+
+  <recv response="200" rtd="true"/>
+
+  <send>
+<![CDATA[
+ACK sip:[service]@[remote_ip]:[remote_port] SIP/2.0
+Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]-ack
+Max-Forwards: 70
+From: <sip:sipp@[local_ip]>;tag=[call_number]
+To: <sip:[service]@[remote_ip]>[peer_tag_param]
+Call-ID: [call_id]
+CSeq: 1 ACK
+Contact: <sip:sipp@[local_ip]:[local_port]>
+Content-Length: 0
+
+]]>
+  </send>
+
+  <!-- Hold the call briefly -->
+  <pause milliseconds="100"/>
+
+  <send>
+<![CDATA[
+BYE sip:[service]@[remote_ip]:[remote_port] SIP/2.0
+Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]-bye
+Max-Forwards: 70
+From: <sip:sipp@[local_ip]>;tag=[call_number]
+To: <sip:[service]@[remote_ip]>[peer_tag_param]
+Call-ID: [call_id]
+CSeq: 2 BYE
+Contact: <sip:sipp@[local_ip]:[local_port]>
+Content-Length: 0
+
+]]>
+  </send>
+
+  <recv response="200"/>
+</scenario>

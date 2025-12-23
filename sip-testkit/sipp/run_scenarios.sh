@@ -315,6 +315,14 @@ if [[ "${RUN_ERROR_HANDLING:-0}" == "1" ]]; then
     run_scenario "unsupported_method.xml" "UNSUPPORTED_METHOD" 1
 fi
 
+# Max-Forwards decrement validation (requires proxy mode)
+# Note: These tests validate RFC 3261 §8.1.1.6 decrement behavior
+# Run with: cargo run -p siphond -- --mode proxy --udp-bind 127.0.0.1:5060
+if [[ "${RUN_MAX_FORWARDS_DECREMENT:-0}" == "1" ]]; then
+    run_scenario "max_forwards_decrement.xml" "MAX_FORWARDS_DECREMENT" 1
+    run_scenario "max_forwards_edge_case.xml" "MAX_FORWARDS_EDGE_CASE" 1
+fi
+
 # Summary
 echo "========================================"
 echo "Test Summary"
