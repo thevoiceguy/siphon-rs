@@ -291,6 +291,8 @@ impl TlsPool {
                     break;
                 }
             }
+            // Perform proper TLS shutdown when connection closes
+            let _ = tls_stream.shutdown().await;
         });
 
         let result = tx

@@ -630,15 +630,8 @@ pub async fn run_tls(
             };
             transport_metrics().on_connect(TransportKind::Tls.as_str());
 
-            spawn_stream_session(
-                peer,
-                tls_stream,
-                TransportKind::Tls,
-                tx,
-                "tls read error",
-                "tls write error",
-            )
-            .await;
+            // Use TLS-specific session handler with proper shutdown support
+            spawn_tls_session(peer, tls_stream, tx).await;
         });
     }
 }
@@ -720,6 +713,109 @@ impl TransportPolicy for DefaultTransportPolicy {
             TransportKind::Tcp
         } else {
             requested
+        }
+    }
+}
+
+/// Handles a TLS session with proper shutdown support.
+/// This function ensures TLS close_notify is sent when the connection closes.
+#[cfg(feature = "tls")]
+async fn spawn_tls_session(
+    peer: SocketAddr,
+    tls_stream: tokio_rustls::server::TlsStream<TcpStream>,
+    tx: mpsc::Sender<InboundPacket>,
+) {
+    use tokio::io::AsyncWriteExt as _;
+
+    // Split by ownership so we can reunite later for shutdown
+    let (mut reader, writer) = tokio::io::split(tls_stream);
+    let (writer_tx, mut writer_rx) = mpsc::channel::<Bytes>(32);
+
+    // Spawn writer task that returns the WriteHalf when done
+    let writer_handle = tokio::spawn(async move {
+        let mut writer = writer;
+        while let Some(buf) = writer_rx.recv().await {
+            if let Err(e) = writer.write_all(&buf).await {
+                error!(%e, "tls write error");
+                transport_metrics().on_error("tls", "write");
+                break;
+            }
+            transport_metrics().on_packet_sent("tls");
+        }
+        writer // Return the WriteHalf for reuniting
+    });
+
+    let mut buf = BytesMut::with_capacity(4096);
+    loop {
+        // Check if buffer has grown too large - protects against memory exhaustion
+        if buf.len() >= MAX_BUFFER_SIZE {
+            warn!(
+                peer = %peer,
+                buffer_size = buf.len(),
+                "tls buffer exceeded MAX_BUFFER_SIZE, closing connection"
+            );
+            transport_metrics().on_error("tls", "buffer_overflow");
+            break;
+        }
+
+        match reader.read_buf(&mut buf).await {
+            Ok(0) => break,
+            Ok(_) => {
+                transport_metrics().on_packet_received("tls");
+
+                // Try to extract complete SIP messages
+                match drain_sip_frames(&mut buf) {
+                    Ok(frames) => {
+                        for payload in frames {
+                            let packet = InboundPacket {
+                                transport: TransportKind::Tls,
+                                peer,
+                                payload,
+                                stream: Some(writer_tx.clone()),
+                            };
+                            if tx.send(packet).await.is_err() {
+                                error!("receiver dropped; shutting down tls session");
+                                transport_metrics().on_error("tls", "dispatch");
+                                break;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            peer = %peer,
+                            error = %e,
+                            "SIP framing error, closing tls connection"
+                        );
+                        transport_metrics().on_error("tls", "framing_error");
+                        break;
+                    }
+                }
+            }
+            Err(e) => {
+                error!(%e, "tls read error");
+                transport_metrics().on_error("tls", "read");
+                break;
+            }
+        }
+    }
+
+    // Signal writer task to finish and get back the WriteHalf
+    drop(writer_tx);
+    match writer_handle.await {
+        Ok(writer) => {
+            // Reunite the stream halves
+            let mut tls_stream = reader.unsplit(writer);
+
+            // Perform proper TLS shutdown - send close_notify alert
+            if let Err(e) = tls_stream.shutdown().await {
+                // Don't log error if it's just "NotConnected" - peer may have already closed
+                if e.kind() != std::io::ErrorKind::NotConnected {
+                    warn!(%e, "tls shutdown error");
+                }
+            }
+        }
+        Err(e) => {
+            error!(%e, "failed to join writer task, cannot perform tls shutdown");
         }
     }
 }
