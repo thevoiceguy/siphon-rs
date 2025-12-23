@@ -12,6 +12,8 @@ mod config;
 mod dispatcher;
 mod handlers;
 mod proxy_state;
+mod proxy_utils;
+mod scenario;
 mod sdp_utils;
 mod services;
 mod transport;
@@ -115,6 +117,14 @@ struct Args {
     #[arg(long, default_value = "true", value_parser = clap::value_parser!(bool))]
     enable_refer: bool,
 
+    /// Enable Session-Timers (RFC 4028)
+    #[arg(long, default_value = "false", value_parser = clap::value_parser!(bool))]
+    enable_session_timers: bool,
+
+    /// Scenario file (YAML or JSON) for scripted flows
+    #[arg(long)]
+    scenario: Option<std::path::PathBuf>,
+
     // Registrar configuration
     /// Default registration expiry (seconds)
     #[arg(long, default_value = "3600")]
@@ -182,7 +192,7 @@ async fn main() -> Result<()> {
             auto_accept_subscriptions: args.auto_accept_subscriptions,
             enable_prack: args.enable_prack,
             enable_refer: args.enable_refer,
-            enable_session_timers: false,
+            enable_session_timers: args.enable_session_timers,
         },
         sdp_profile: args.sdp_profile,
         rtp_audio_port: args.rtp_audio_port,
@@ -251,7 +261,7 @@ async fn main() -> Result<()> {
 
     let transaction_mgr = Arc::new(TransactionManager::new(transport_dispatcher.clone()));
 
-    // Set transaction manager, transport dispatcher, and UDP socket in service registry
+    // Set transaction manager, transport dispatcher, UDP socket, and TLS client config in service registry
     if let Err(_) = services.set_transaction_manager(transaction_mgr.clone()) {
         panic!("Failed to set transaction manager - already initialized");
     }
@@ -260,6 +270,40 @@ async fn main() -> Result<()> {
     }
     if let Err(_) = services.set_udp_socket(udp_socket.clone()) {
         panic!("Failed to set UDP socket - already initialized");
+    }
+    if let Some(tls_client_config) = transport::build_tls_client_config() {
+        if let Err(_) = services.set_tls_client_config(tls_client_config) {
+            panic!("Failed to set TLS client config - already initialized");
+        }
+    }
+
+    if let Some(scenario_path) = args.scenario.as_ref() {
+        let services = services.clone();
+        let scenario_path = scenario_path.clone();
+        tokio::spawn(async move {
+            if let Err(e) = scenario::run_scenario(&scenario_path, &services).await {
+                tracing::warn!(error = %e, path = %scenario_path.display(), "Scenario failed");
+            }
+        });
+    }
+
+    if services.config.features.enable_session_timers {
+        let session_mgr = services.session_timer_mgr.clone();
+        let dialog_mgr = services.dialog_mgr.clone();
+        tokio::spawn(async move {
+            let mut rx = session_mgr.subscribe().await;
+            while let Some(event) = rx.recv().await {
+                match event {
+                    sip_dialog::session_timer_manager::SessionTimerEvent::RefreshNeeded(id) => {
+                        tracing::info!(call_id = %id.call_id, "Session refresh needed");
+                    }
+                    sip_dialog::session_timer_manager::SessionTimerEvent::SessionExpired(id) => {
+                        tracing::warn!(call_id = %id.call_id, "Session expired - removing dialog");
+                        dialog_mgr.remove(&id);
+                    }
+                }
+            }
+        });
     }
 
     info!("siphond ready - listening for requests");
@@ -381,8 +425,56 @@ async fn handle_packet(
 
     // Try parsing as a request
     if let Some(req) = parse_request(&packet.payload) {
+        let ws_override = if matches!(
+            packet.transport,
+            sip_transport::TransportKind::Ws | sip_transport::TransportKind::Wss
+        ) {
+            header(&req.headers, "Route").and_then(|route| {
+                let raw = route.trim_matches('<').trim_matches('>');
+                SipUri::parse(raw).map(|uri| {
+                    let scheme = if matches!(packet.transport, sip_transport::TransportKind::Wss) {
+                        "wss"
+                    } else {
+                        "ws"
+                    };
+                    let port = uri.port.unwrap_or(80);
+                    format!("{}://{}:{}", scheme, uri.host, port)
+                })
+            })
+        } else {
+            None
+        };
+
+        let ctx = TransportContext::new(
+            map_transport(packet.transport),
+            packet.peer,
+            packet.stream.clone(),
+        )
+        .with_ws_uri(ws_override)
+        .with_udp_socket(services.udp_socket.get().cloned());
+
         // Special handling for ACK (doesn't create a transaction)
         if req.start.method == Method::Ack {
+            if services.config.enable_proxy() {
+                let call_id = header(&req.headers, "Call-ID")
+                    .map(|s| s.as_str())
+                    .unwrap_or("unknown");
+                if let Err(e) = proxy_utils::forward_request(
+                    &req,
+                    services,
+                    &ctx,
+                    call_id,
+                    proxy_utils::ProxyForwardOptions {
+                        add_record_route: false,
+                        rewrite_request_uri: false,
+                    },
+                )
+                .await
+                {
+                    tracing::warn!(error = %e, call_id, "Failed to proxy ACK");
+                }
+            }
+
             // B2BUA MODE: Bridge ACK from caller to callee
             if services.config.enable_b2bua() {
                 if let Some(call_id_header) = req.headers.get("Call-ID") {
@@ -444,34 +536,6 @@ async fn handle_packet(
             }
             return;
         }
-
-        let ws_override = if matches!(
-            packet.transport,
-            sip_transport::TransportKind::Ws | sip_transport::TransportKind::Wss
-        ) {
-            header(&req.headers, "Route").and_then(|route| {
-                let raw = route.trim_matches('<').trim_matches('>');
-                SipUri::parse(raw).map(|uri| {
-                    let scheme = if matches!(packet.transport, sip_transport::TransportKind::Wss) {
-                        "wss"
-                    } else {
-                        "ws"
-                    };
-                    let port = uri.port.unwrap_or(80);
-                    format!("{}://{}:{}", scheme, uri.host, port)
-                })
-            })
-        } else {
-            None
-        };
-
-        let ctx = TransportContext::new(
-            map_transport(packet.transport),
-            packet.peer,
-            packet.stream.clone(),
-        )
-        .with_ws_uri(ws_override)
-        .with_udp_socket(services.udp_socket.get().cloned());
 
         let handle = transaction_mgr
             .receive_request(req.clone(), ctx.clone())

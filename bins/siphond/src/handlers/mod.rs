@@ -8,12 +8,15 @@ use crate::services::ServiceRegistry;
 
 pub mod bye;
 pub mod cancel;
+pub mod info;
 pub mod invite;
+pub mod message;
 pub mod options;
 pub mod prack;
 pub mod refer;
 pub mod register;
 pub mod subscribe;
+pub mod update;
 
 /// Trait for handling SIP request methods.
 ///

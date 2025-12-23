@@ -1,27 +1,27 @@
-/// PRACK request handler.
+/// UPDATE request handler.
 ///
-/// Implements RFC 3262 reliable provisional response acknowledgement.
-use anyhow::Result;
+/// Implements RFC 3311 mid-dialog session updates.
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use sip_core::Request;
 use sip_parse::header;
 use sip_transaction::{ServerTransactionHandle, TransportContext};
 use sip_uas::UserAgentServer;
-use tracing::warn;
+use tracing::{info, warn};
 
 use super::RequestHandler;
-use crate::{proxy_utils, services::ServiceRegistry};
+use crate::{proxy_utils, sdp_utils, services::ServiceRegistry};
 
-pub struct PrackHandler;
+pub struct UpdateHandler;
 
-impl PrackHandler {
+impl UpdateHandler {
     pub fn new() -> Self {
         Self
     }
 }
 
 #[async_trait]
-impl RequestHandler for PrackHandler {
+impl RequestHandler for UpdateHandler {
     async fn handle(
         &self,
         request: &Request,
@@ -48,10 +48,10 @@ impl RequestHandler for PrackHandler {
             return Ok(());
         }
 
-        let dialog = match services.dialog_mgr.find_by_request(request) {
+        let mut dialog = match services.dialog_mgr.find_by_request(request) {
             Some(dialog) => dialog,
             None => {
-                warn!(call_id, "PRACK received outside of dialog");
+                warn!(call_id, "UPDATE received for unknown dialog");
                 let response = UserAgentServer::create_response(
                     request,
                     481,
@@ -62,16 +62,34 @@ impl RequestHandler for PrackHandler {
             }
         };
 
-        let local_uri = match sip_core::SipUri::parse(&services.config.local_uri) {
-            Some(uri) => uri,
-            None => {
-                warn!(call_id, "Invalid local_uri, rejecting PRACK");
-                let response = UserAgentServer::create_response(request, 500, "Server Error");
-                handle.send_final(response).await;
-                return Ok(());
+        if let Err(_) = dialog.update_from_request(request) {
+            warn!(call_id, "UPDATE rejected: invalid CSeq or dialog state");
+            let response = UserAgentServer::create_response(request, 400, "Bad Request");
+            handle.send_final(response).await;
+            return Ok(());
+        }
+
+        let sdp_body = if !request.body.is_empty() {
+            match std::str::from_utf8(&request.body) {
+                Ok(offer_str) => match sdp_utils::generate_sdp_answer(&services.config, offer_str)
+                {
+                    Ok(answer) => Some(answer),
+                    Err(e) => {
+                        warn!(call_id, error = %e, "Failed to generate SDP answer for UPDATE");
+                        let response =
+                            UserAgentServer::create_response(request, 488, "Not Acceptable Here");
+                        handle.send_final(response).await;
+                        return Ok(());
+                    }
+                },
+                Err(_) => None,
             }
+        } else {
+            None
         };
 
+        let local_uri = sip_core::SipUri::parse(&services.config.local_uri)
+            .ok_or_else(|| anyhow!("Invalid local_uri"))?;
         let contact_uri = local_uri.clone();
         let mut uas = UserAgentServer::new(local_uri, contact_uri);
         uas.dialog_manager = services.dialog_mgr.clone();
@@ -79,12 +97,16 @@ impl RequestHandler for PrackHandler {
         uas.rseq_manager = services.rseq_mgr.clone();
         uas.prack_validator = services.prack_validator.clone();
 
-        let response = uas.handle_prack(request, &dialog)?;
+        let response = uas.create_ok(request, sdp_body.as_deref());
+        dialog.update_from_response(&response);
+        services.dialog_mgr.insert(dialog);
+
+        info!(call_id, "UPDATE accepted");
         handle.send_final(response).await;
         Ok(())
     }
 
     fn method(&self) -> &str {
-        "PRACK"
+        "UPDATE"
     }
 }

@@ -106,12 +106,23 @@ impl SubscribeHandler {
 
         let uac = UserAgentClient::new(local_uri.clone(), local_uri.clone());
 
+        let (content_type, body) = Self::build_notify_body(subscription);
+
         // Create initial NOTIFY with "active" state
-        let notify = uac.create_notify(
+        let mut notify = uac.create_notify(
             subscription,
             SubscriptionState::Active, // Initial state is always "active"
-            None,     // No body for simple event packages
+            body.as_deref(),
         );
+
+        if let Some(content_type) = content_type {
+            notify.headers.push("Content-Type".into(), content_type.into());
+            if let Some(body) = body.as_ref() {
+                notify
+                    .headers
+                    .push("Content-Length".into(), body.len().to_string().into());
+            }
+        }
 
         debug!(
             subscription_id = ?subscription.id,
@@ -126,6 +137,47 @@ impl SubscribeHandler {
             .await?;
 
         Ok(())
+    }
+
+    fn build_notify_body(
+        subscription: &Subscription,
+    ) -> (Option<String>, Option<String>) {
+        let event = subscription.id.event.as_str();
+        match event {
+            "presence" => {
+                let body = format!(
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n\
+<presence xmlns=\"urn:ietf:params:xml:ns:pidf\" entity=\"{}\">\r\n\
+  <tuple id=\"t1\">\r\n\
+    <status><basic>open</basic></status>\r\n\
+  </tuple>\r\n\
+</presence>\r\n",
+                    subscription.remote_uri.as_str()
+                );
+                (Some("application/pidf+xml".to_string()), Some(body))
+            }
+            "message-summary" => {
+                let body = "Messages-Waiting: no\r\nVoice-Message: 0/0 (0/0)\r\n".to_string();
+                (
+                    Some("application/simple-message-summary".to_string()),
+                    Some(body),
+                )
+            }
+            "dialog" | "dialog-info" => {
+                let body = format!(
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n\
+<dialog-info xmlns=\"urn:ietf:params:xml:ns:dialog-info\" version=\"1\" state=\"full\" entity=\"{}\">\r\n\
+  <dialog id=\"d1\" call-id=\"{}\" direction=\"recipient\">\r\n\
+    <state>confirmed</state>\r\n\
+  </dialog>\r\n\
+</dialog-info>\r\n",
+                    subscription.remote_uri.as_str(),
+                    subscription.id.call_id.as_str()
+                );
+                (Some("application/dialog-info+xml".to_string()), Some(body))
+            }
+            _ => (None, None),
+        }
     }
 }
 
@@ -209,7 +261,7 @@ impl RequestHandler for SubscribeHandler {
         let result = uas.accept_subscribe(request, Some(requested_expiry));
 
         match result {
-            Ok((response, subscription)) => {
+            Ok((response, mut subscription)) => {
                 info!(
                     call_id,
                     event_package,
@@ -217,6 +269,10 @@ impl RequestHandler for SubscribeHandler {
                     expires = subscription.expires.as_secs(),
                     "Subscription created successfully"
                 );
+
+                if requested_expiry == 0 {
+                    subscription.state = SubscriptionState::Terminated;
+                }
 
                 // Store subscription in manager
                 services.subscription_mgr.insert(subscription.clone());
@@ -238,6 +294,10 @@ impl RequestHandler for SubscribeHandler {
                         event_package,
                         "Initial NOTIFY sent successfully (RFC 3265 compliant)"
                     );
+                }
+
+                if requested_expiry == 0 {
+                    services.subscription_mgr.remove(&subscription.id);
                 }
             }
             Err(e) => {

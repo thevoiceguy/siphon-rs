@@ -13,7 +13,7 @@ use sip_uas::UserAgentServer;
 use tracing::{info, warn};
 
 use super::RequestHandler;
-use crate::services::ServiceRegistry;
+use crate::{proxy_utils, services::ServiceRegistry};
 
 pub struct CancelHandler;
 
@@ -147,6 +147,21 @@ impl RequestHandler for CancelHandler {
             .unwrap_or("unknown");
 
         info!(call_id, "Processing CANCEL request");
+
+        if services.config.enable_proxy() {
+            proxy_utils::forward_request(
+                request,
+                services,
+                _ctx,
+                call_id,
+                proxy_utils::ProxyForwardOptions {
+                    add_record_route: false,
+                    rewrite_request_uri: false,
+                },
+            )
+            .await?;
+            return Ok(());
+        }
 
         // Parse local URI from config
         let local_uri = match sip_core::SipUri::parse(&services.config.local_uri) {

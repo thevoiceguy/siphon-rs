@@ -14,7 +14,7 @@ use sip_uas::UserAgentServer;
 use tracing::{info, warn};
 
 use super::RequestHandler;
-use crate::services::ServiceRegistry;
+use crate::{proxy_utils, services::ServiceRegistry};
 
 pub struct ByeHandler;
 
@@ -428,12 +428,27 @@ impl RequestHandler for ByeHandler {
         &self,
         request: &Request,
         handle: ServerTransactionHandle,
-        _ctx: &TransportContext,
+        ctx: &TransportContext,
         services: &ServiceRegistry,
     ) -> Result<()> {
         let call_id = header(&request.headers, "Call-ID")
             .map(|s| s.as_str())
             .unwrap_or("unknown");
+
+        if services.config.enable_proxy() {
+            proxy_utils::forward_request(
+                request,
+                services,
+                ctx,
+                call_id,
+                proxy_utils::ProxyForwardOptions {
+                    add_record_route: false,
+                    rewrite_request_uri: false,
+                },
+            )
+            .await?;
+            return Ok(());
+        }
 
         // B2BUA MODE: Bridge BYE to the other call leg
         if services.config.enable_b2bua() {

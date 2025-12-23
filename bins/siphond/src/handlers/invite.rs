@@ -901,40 +901,65 @@ impl InviteHandler {
 
         info!(call_id, target = %target_addr, "Forwarding INVITE to registered contact");
 
-        // Serialize and send via appropriate transport
+        // Serialize and send via strict transport selection (RFC 3263 + transport param)
         let payload = serialize_request(&proxied_req);
+        let transport_param = contact_uri
+            .params
+            .get("transport")
+            .and_then(|v| v.as_ref())
+            .map(|s| s.to_ascii_lowercase());
+        let transport = match transport_param.as_deref() {
+            Some("udp") => sip_transaction::TransportKind::Udp,
+            Some("tcp") => sip_transaction::TransportKind::Tcp,
+            Some("tls") => sip_transaction::TransportKind::Tls,
+            Some("ws") => sip_transaction::TransportKind::Ws,
+            Some("wss") => sip_transaction::TransportKind::Wss,
+            _ if contact_uri.sips => sip_transaction::TransportKind::Tls,
+            _ => sip_transaction::TransportKind::Udp,
+        };
 
-        match ctx.transport {
+        match transport {
             sip_transaction::TransportKind::Udp => {
-                // For UDP, we'd need access to the socket - for now return error
-                warn!(call_id, "UDP proxy forwarding not yet implemented");
-                return Err(anyhow!("UDP proxy forwarding requires socket access"));
+                let socket = services
+                    .udp_socket
+                    .get()
+                    .ok_or_else(|| anyhow!("UDP socket not available for proxy forwarding"))?;
+                sip_transport::send_udp(socket.as_ref(), &target_addr, &payload).await?;
+                info!(call_id, "INVITE forwarded via UDP successfully");
             }
             sip_transaction::TransportKind::Tcp => {
                 sip_transport::send_tcp(&target_addr, &payload).await?;
                 info!(call_id, "INVITE forwarded via TCP successfully");
             }
             sip_transaction::TransportKind::Tls => {
-                warn!(call_id, "TLS proxy forwarding not yet implemented");
-                return Err(anyhow!("TLS proxy forwarding not yet implemented"));
+                #[cfg(feature = "tls")]
+                {
+                    let config = services
+                        .tls_client_config
+                        .get()
+                        .ok_or_else(|| anyhow!("TLS client config not available"))?;
+                    let tls = sip_transport::TlsConfig {
+                        server_name: contact_uri.host.to_string(),
+                        client_config: config.clone(),
+                    };
+                    sip_transport::send_tls(&target_addr, &payload, &tls).await?;
+                    info!(call_id, "INVITE forwarded via TLS successfully");
+                }
+                #[cfg(not(feature = "tls"))]
+                {
+                    return Err(anyhow!("TLS proxy forwarding not enabled"));
+                }
             }
             sip_transaction::TransportKind::Ws | sip_transaction::TransportKind::Wss => {
                 #[cfg(feature = "ws")]
                 {
-                    // Prefer contact transport param if present to pick scheme.
-                    let scheme_override = contact_uri
-                        .params
-                        .get("transport")
-                        .and_then(|v| v.as_ref())
-                        .map(|s| s.to_ascii_lowercase());
-                    let scheme = match (ctx.transport, scheme_override.as_deref()) {
-                        (_, Some("wss")) => "wss",
-                        (_, Some("ws")) => "ws",
-                        (sip_transaction::TransportKind::Wss, _) => "wss",
-                        _ => "ws",
+                    let scheme = if transport == sip_transaction::TransportKind::Wss {
+                        "wss"
+                    } else {
+                        "ws"
                     };
                     let ws_url = format!("{}://{}:{}", scheme, contact_uri.host, target_addr.port());
-                    if scheme == "wss" {
+                    if transport == sip_transaction::TransportKind::Wss {
                         sip_transport::send_wss(&ws_url, payload).await?;
                     } else {
                         sip_transport::send_ws(&ws_url, payload).await?;
@@ -943,22 +968,15 @@ impl InviteHandler {
                 }
                 #[cfg(not(feature = "ws"))]
                 {
-                    warn!(call_id, "WS/WSS proxy forwarding requires ws feature");
                     return Err(anyhow!("WS/WSS proxy forwarding not enabled"));
                 }
             }
             sip_transaction::TransportKind::Sctp | sip_transaction::TransportKind::TlsSctp => {
-                warn!(call_id, "SCTP proxy forwarding not yet implemented");
-                return Err(anyhow!("SCTP proxy forwarding not yet implemented"));
+                return Err(anyhow!("SCTP proxy forwarding not implemented"));
             }
         }
 
-        // TODO: Response handling - proxy needs to forward responses back to caller
-        // For now, this is stateless forwarding only
-        warn!(
-            call_id,
-            "Proxy response forwarding not yet implemented - responses will not be relayed"
-        );
+        info!(call_id, "Proxy response forwarding enabled for this transaction");
 
         Ok(())
     }
@@ -1069,6 +1087,20 @@ impl RequestHandler for InviteHandler {
 
             let ok = uas.create_ok(request, sdp_body.as_deref());
             dialog.update_from_response(&ok);
+
+            if services.config.features.enable_session_timers {
+                if let Some(session_expires) = dialog.session_expires {
+                    let is_refresher = matches!(
+                        dialog.refresher,
+                        Some(sip_core::RefresherRole::Uac)
+                    );
+                    services.session_timer_mgr.refresh_timer(
+                        dialog.id.clone(),
+                        session_expires,
+                        is_refresher,
+                    );
+                }
+            }
             services.dialog_mgr.insert(dialog);
             handle.send_final(ok).await;
             return Ok(());
@@ -1080,6 +1112,15 @@ impl RequestHandler for InviteHandler {
             let busy = UserAgentServer::reject_invite(request, 486, "Busy Here");
             handle.send_final(busy).await;
             return Ok(());
+        }
+
+        if services.config.features.enable_session_timers {
+            if let Err(response) =
+                UserAgentServer::validate_session_timer(request, None)
+            {
+                handle.send_final(response).await;
+                return Ok(());
+            }
         }
 
         // Parse local and contact URIs early so we can use UAS for all responses
@@ -1220,7 +1261,38 @@ impl RequestHandler for InviteHandler {
         let result = uas.accept_invite(request, sdp_answer.as_deref());
 
         match result {
-            Ok((response, dialog)) => {
+            Ok((mut response, mut dialog)) => {
+                if services.config.features.enable_session_timers {
+                    let has_se = response.headers.get("Session-Expires").is_some();
+                    if !has_se {
+                        response.headers.push(
+                            "Session-Expires".into(),
+                            sip_dialog::session_timer_manager::DEFAULT_SESSION_EXPIRES
+                                .as_secs()
+                                .to_string()
+                                .into(),
+                        );
+                        response
+                            .headers
+                            .push("Supported".into(), "timer".into());
+                        response
+                            .headers
+                            .push("Min-SE".into(), "90".into());
+                    }
+
+                    dialog.update_from_response(&response);
+
+                    if let Some(session_expires) = dialog.session_expires {
+                        let is_refresher = matches!(
+                            dialog.refresher,
+                            Some(sip_core::RefresherRole::Uac)
+                        );
+                        services
+                            .session_timer_mgr
+                            .start_timer(dialog.id.clone(), session_expires, is_refresher);
+                    }
+                }
+
                 info!(
                     call_id,
                     dialog_call_id = %dialog.id.call_id,

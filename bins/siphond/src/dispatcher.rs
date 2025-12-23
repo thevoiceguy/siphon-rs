@@ -7,9 +7,10 @@ use tracing::warn;
 
 use crate::{
     handlers::{
-        bye::ByeHandler, cancel::CancelHandler, invite::InviteHandler, options::OptionsHandler,
-        prack::PrackHandler, refer::ReferHandler, register::RegisterHandler,
-        subscribe::SubscribeHandler, RequestHandler,
+        bye::ByeHandler, cancel::CancelHandler, info::InfoHandler, invite::InviteHandler,
+        message::MessageHandler, options::OptionsHandler, prack::PrackHandler, refer::ReferHandler,
+        register::RegisterHandler, subscribe::SubscribeHandler, update::UpdateHandler,
+        RequestHandler,
     },
     services::ServiceRegistry,
 };
@@ -41,6 +42,9 @@ impl RequestDispatcher {
             handlers.insert(Method::Cancel, Arc::new(CancelHandler::new()));
             handlers.insert(Method::Bye, Arc::new(ByeHandler::new()));
             handlers.insert(Method::Prack, Arc::new(PrackHandler::new()));
+            handlers.insert(Method::Update, Arc::new(UpdateHandler::new()));
+            handlers.insert(Method::Info, Arc::new(InfoHandler::new()));
+            handlers.insert(Method::Message, Arc::new(MessageHandler::new()));
         }
 
         // REGISTER for registrar
