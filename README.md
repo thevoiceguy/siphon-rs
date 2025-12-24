@@ -1,5 +1,5 @@
 # SIPHON-RS
-AI helped build this library. It’s either a stroke of genius or a very convincing hallucination—we’ll let you decide which. Use accordingly.
+AI helped build this library. It’s either a stroke of genius or a very convincing hallucination. We’ll let you decide which. Use accordingly.
 
 A modern, production-grade SIP (Session Initiation Protocol) stack implementation in Rust, implementing RFC 3261 and related specifications.
 
