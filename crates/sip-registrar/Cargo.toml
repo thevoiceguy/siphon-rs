@@ -3,6 +3,12 @@ name = "sip-registrar"
 version = "0.2.1"
 edition = "2021"
 license.workspace = true
+description = "REGISTER handling and location service for SIP."
+readme = "../../README.md"
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }

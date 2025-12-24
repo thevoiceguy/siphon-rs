@@ -3,6 +3,12 @@ name = "sip-parse"
 version = "0.2.1"
 edition = "2021"
 license.workspace = true
+description = "SIP message parser and serializer."
+readme = "../../README.md"
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 
 [dependencies]
 bytes = { workspace = true }

@@ -3,6 +3,12 @@ name = "sip-dns"
 version = "0.2.0"
 edition = "2021"
 license.workspace = true
+description = "RFC 3263 DNS resolution for SIP."
+readme = "../../README.md"
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }

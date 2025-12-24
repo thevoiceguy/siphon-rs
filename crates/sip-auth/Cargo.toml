@@ -3,6 +3,12 @@ name = "sip-auth"
 version = "0.1.1"
 edition = "2021"
 license.workspace = true
+description = "Digest authentication for SIP (RFC 7616/7617)."
+readme = "../../README.md"
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }

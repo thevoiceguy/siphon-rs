@@ -3,6 +3,12 @@ name = "sip-transaction"
 version = "0.4.0"
 edition = "2021"
 license.workspace = true
+description = "RFC 3261 transaction state machines and timers."
+readme = "../../README.md"
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }

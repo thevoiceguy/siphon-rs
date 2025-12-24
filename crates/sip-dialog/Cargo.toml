@@ -3,6 +3,12 @@ name = "sip-dialog"
 version = "0.2.0"
 edition = "2021"
 license.workspace = true
+description = "SIP dialog and subscription management."
+readme = "../../README.md"
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 
 [dependencies]
 sip-core = { path = "../sip-core" }

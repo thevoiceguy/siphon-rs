@@ -3,6 +3,12 @@ name = "sip-sdp"
 version = "0.2.0"
 edition = "2021"
 license.workspace = true
+description = "SDP models and helpers for SIP."
+readme = "../../README.md"
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 
 [dependencies]
 smol_str = { workspace = true }

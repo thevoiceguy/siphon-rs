@@ -3,6 +3,12 @@ name = "sip-core"
 version = "0.3.0"
 edition = "2021"
 license.workspace = true
+description = "Core SIP types, headers, URIs, and message primitives."
+readme = "../../README.md"
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 
 [dependencies]
 bytes = { workspace = true }
