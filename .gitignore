@@ -7,3 +7,8 @@ Cargo.lock
 .vscode/
 sip-testkit/sipp/*.log
 *.log
+*.pem
+*.crt
+*.key
+*.csr
+.certs/
