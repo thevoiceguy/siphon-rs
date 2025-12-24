@@ -1,3 +1,7 @@
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 /// Example demonstrating attended call transfer using REFER with Replaces (RFC 3515, RFC 3891).
 ///
 /// Attended transfer scenario:

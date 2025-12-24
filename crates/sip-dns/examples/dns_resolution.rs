@@ -1,3 +1,7 @@
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 /// Example demonstrating SIP DNS resolution per RFC 3263
 ///
 /// Run with: cargo run --example dns_resolution

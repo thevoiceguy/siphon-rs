@@ -1,3 +1,26 @@
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+//! Async SIP transport layer for UDP, TCP, TLS, and WebSocket.
+//!
+//! Provides connection pooling, message framing, and automatic protocol handling
+//! with observability integration.
+//!
+//! # Example
+//! ```no_run
+//! use sip_transport::{run_udp, InboundPacket};
+//! use tokio::sync::mpsc;
+//! # async fn example() -> anyhow::Result<()> {
+//! let (tx, mut rx) = mpsc::channel::<InboundPacket>(100);
+//! tokio::spawn(run_udp("0.0.0.0:5060".parse()?, tx));
+//! while let Some(packet) = rx.recv().await {
+//!     // Process inbound SIP messages
+//! }
+//! # Ok(())
+//! # }
+//! ```
+
 use anyhow::{anyhow, Result};
 use bytes::{Buf, Bytes, BytesMut};
 use sip_observe::{span_with_transport, transport_metrics};

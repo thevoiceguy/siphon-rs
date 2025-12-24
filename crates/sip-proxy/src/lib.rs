@@ -1,3 +1,22 @@
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+//! SIP proxy helper primitives for RFC 3261 §16 proxy operations.
+//!
+//! Provides Via insertion, Record-Route handling, Max-Forwards checking, and
+//! Request-URI modification for building stateful and stateless proxies.
+//!
+//! # Example
+//! ```
+//! use sip_proxy::ProxyHelpers;
+//! # use sip_core::{Request, Headers, RequestLine, Method, SipUri};
+//! # use bytes::Bytes;
+//! # let mut req = Request::new(RequestLine::new(Method::Invite, SipUri::parse("sip:bob@example.com").unwrap()), Headers::new(), Bytes::new());
+//! let branch = ProxyHelpers::add_via(&mut req, "proxy.example.com", "UDP");
+//! ProxyHelpers::add_record_route(&mut req, "sip:proxy.example.com;lr");
+//! ```
+
 pub mod cancel_ack;
 pub mod service;
 pub mod stateful;

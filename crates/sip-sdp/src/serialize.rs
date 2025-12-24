@@ -1,3 +1,7 @@
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 //! SDP serializer implementing RFC 4566
 //!
 //! Converts SessionDescription structures to text-based SDP format.

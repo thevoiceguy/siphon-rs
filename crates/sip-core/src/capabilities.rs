@@ -1,3 +1,7 @@
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 /// RFC 3840 SIP User Agent Capabilities (Callee Capabilities).
 ///
 /// This module implements RFC 3840, which defines mechanisms for SIP user agents

@@ -1,3 +1,7 @@
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 //! Demonstrates assembling simple SIP call flows with sip-testkit helpers.
 use sip_parse::{serialize_request, serialize_response};
 use sip_testkit::{

@@ -1,3 +1,7 @@
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 //! Demonstrates a B2BUA bridging two legs while negotiating SDP with MediaProfileBuilder.
 use sip_sdp::profiles::MediaProfileBuilder;
 

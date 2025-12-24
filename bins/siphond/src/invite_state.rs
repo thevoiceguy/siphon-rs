@@ -1,3 +1,7 @@
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 /// Invite state manager for tracking pending INVITE transactions.
 ///
 /// This allows the CANCEL handler to send 487 Request Terminated responses

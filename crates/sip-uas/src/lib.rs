@@ -1,3 +1,26 @@
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+//! UAS (User Agent Server) helper for receiving and responding to SIP requests.
+//!
+//! Provides high-level APIs for handling INVITE, BYE, SUBSCRIBE, REFER, and PRACK
+//! with automatic dialog management, authentication, and reliable provisional responses.
+//!
+//! # Example
+//! ```
+//! use sip_uas::UserAgentServer;
+//! use sip_dialog::{DialogManager, SubscriptionManager, RSeqManager};
+//! use std::sync::Arc;
+//! # use sip_core::SipUri;
+//! let uas = UserAgentServer::new(
+//!     SipUri::parse("sip:bob@example.com").unwrap(),
+//!     Arc::new(DialogManager::new()),
+//!     Arc::new(SubscriptionManager::new()),
+//!     Arc::new(RSeqManager::new()),
+//! );
+//! ```
+
 pub mod integrated;
 
 use anyhow::{anyhow, Result};

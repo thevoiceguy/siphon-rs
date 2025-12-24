@@ -1,3 +1,7 @@
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 //! RFC 4028 Session Timer Runtime Management
 //!
 //! This module provides runtime session timer management for SIP dialogs.

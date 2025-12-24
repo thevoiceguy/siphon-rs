@@ -1,3 +1,21 @@
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+//! SIP message parser and serializer using nom combinators.
+//!
+//! Parses requests, responses, headers, and URIs with strict RFC 3261 compliance.
+//! Supports both SIP and tel URIs, with tolerant parsing and canonical serialization.
+//!
+//! # Example
+//! ```
+//! use sip_parse::{parse_request, serialize_request};
+//! use bytes::Bytes;
+//! # let raw = b"INVITE sip:bob@example.com SIP/2.0\r\nVia: SIP/2.0/UDP pc33.example.com;branch=z9hG4bK776asdhds\r\nMax-Forwards: 70\r\nTo: <sip:bob@example.com>\r\nFrom: Alice <sip:alice@example.com>;tag=1928301774\r\nCall-ID: a84b4c76e66710@pc33.example.com\r\nCSeq: 314159 INVITE\r\nContact: <sip:alice@pc33.example.com>\r\nContent-Length: 0\r\n\r\n";
+//! let request = parse_request(&Bytes::from_static(raw)).unwrap();
+//! let serialized = serialize_request(&request);
+//! ```
+
 use bytes::{Bytes, BytesMut};
 use sip_core::{
     is_valid_branch, Headers, Method, Request, RequestLine, Response, SipVersion, StatusLine, Uri,

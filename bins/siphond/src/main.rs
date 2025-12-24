@@ -1,6 +1,12 @@
-/// siphond - SIP testing daemon with multiple operational modes
-///
-/// A Swiss Army knife SIP server for testing and demonstration.
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+//! siphond - Multi-mode SIP testing daemon
+//!
+//! A Swiss Army knife SIP server for testing and demonstration with support for
+//! minimal OPTIONS responder, full UAS, registrar, proxy, B2BUA, and call server modes.
+
 use anyhow::Result;
 use clap::Parser;
 use std::sync::Arc;

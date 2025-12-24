@@ -1,3 +1,7 @@
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 //! Transport-aware timer calculations per RFC 3261 §17.
 //!
 //! SIP transaction timers must be adjusted based on the transport protocol:

@@ -1,3 +1,19 @@
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+//! Integration test harness and SIPp scenario bindings.
+//!
+//! Provides utilities for building test requests/responses and running
+//! SIPp scenarios for protocol compliance testing.
+//!
+//! # Example
+//! ```
+//! use sip_testkit::build_options;
+//! let req = build_options("sip:test@example.com");
+//! assert_eq!(req.start.method.as_str(), "OPTIONS");
+//! ```
+
 use bytes::Bytes;
 use sip_core::{Headers, Method, Request, RequestLine, Response, SipUri, StatusLine};
 use sip_parse::{serialize_request, serialize_response};

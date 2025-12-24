@@ -1,3 +1,19 @@
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+//! Observability and metrics integration for SIP transports.
+//!
+//! Provides tracing integration and transport metrics collection
+//! for monitoring packet flow, errors, and latency.
+//!
+//! # Example
+//! ```
+//! use sip_observe::{set_transport_metrics, TracingTransportMetrics};
+//! set_transport_metrics(TracingTransportMetrics);
+//! // Metrics automatically emitted via tracing events
+//! ```
+
 use once_cell::sync::OnceCell;
 use std::sync::Arc;
 use tracing::Level;

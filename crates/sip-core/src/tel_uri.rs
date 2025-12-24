@@ -1,3 +1,7 @@
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 /// Tel URI support per RFC 2806 (and updated by RFC 3966).
 ///
 /// A tel URI represents a telephone number, which can be either:

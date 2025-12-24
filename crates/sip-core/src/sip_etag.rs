@@ -1,3 +1,7 @@
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 //! SIP-ETag and SIP-If-Match headers (RFC 3903).
 //!
 //! These headers are used with the PUBLISH method for event state publication.

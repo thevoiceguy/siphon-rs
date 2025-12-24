@@ -1,3 +1,7 @@
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 /// MESSAGE request handler.
 ///
 /// Accepts MESSAGE requests for mid-dialog or out-of-dialog testing.

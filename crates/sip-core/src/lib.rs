@@ -1,3 +1,31 @@
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+//! Core SIP types, messages, headers, and URIs.
+//!
+//! This crate provides the foundational types for the Siphon SIP stack:
+//! - **Messages**: [`Request`], [`Response`], [`SipMessage`]
+//! - **URIs**: [`SipUri`] (sip/sips), [`TelUri`] (RFC 3966 telephone numbers), [`Uri`] (unified)
+//! - **Headers**: [`Headers`] container and typed header structures
+//! - **Methods**: [`Method`] enum (INVITE, REGISTER, SUBSCRIBE, etc.)
+//! - **SDP**: Session Description Protocol types and offer/answer engine
+//! - **Extensions**: PRACK (RFC 3262), Session Timers (RFC 4028), Privacy (RFC 3323), and more
+//!
+//! All types are designed for zero-copy parsing where possible, using [`SmolStr`](smol_str::SmolStr)
+//! and [`Bytes`](bytes::Bytes) for efficient string and binary data handling.
+//!
+//! # Examples
+//!
+//! ```
+//! # use sip_core::*;
+//! // Create a SIP URI
+//! let uri = SipUri::new("example.com", None);
+//!
+//! // Create a tel URI (E.164)
+//! let tel = TelUri::new("+15551234567", true);
+//! ```
+
 pub mod addr_headers;
 pub mod auth;
 pub mod caller_preferences;

@@ -1,3 +1,7 @@
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 //! RFC 3264 Offer/Answer Model implementation
 //!
 //! Implements SDP offer/answer negotiation for establishing media sessions.

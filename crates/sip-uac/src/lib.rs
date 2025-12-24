@@ -1,3 +1,25 @@
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+//! UAC (User Agent Client) helper for sending SIP requests.
+//!
+//! Provides high-level APIs for REGISTER, INVITE, BYE, SUBSCRIBE, REFER, and PRACK
+//! with automatic authentication handling, dialog management, and call transfer support.
+//!
+//! # Example
+//! ```
+//! use sip_uac::UserAgentClient;
+//! use sip_dialog::{DialogManager, SubscriptionManager};
+//! use std::sync::Arc;
+//! # use sip_core::SipUri;
+//! let uac = UserAgentClient::new(
+//!     SipUri::parse("sip:alice@example.com").unwrap(),
+//!     Arc::new(DialogManager::new()),
+//!     Arc::new(SubscriptionManager::new()),
+//! );
+//! ```
+
 // Integrated UAC with full transaction/transport/DNS integration
 pub mod auth_utils;
 pub mod integrated;

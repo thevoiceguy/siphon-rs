@@ -1,3 +1,23 @@
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+//! RFC 3261 dialog state management with subscriptions and session timers.
+//!
+//! Implements dialog lifecycle (Early/Confirmed/Terminated), subscription tracking
+//! per RFC 3265, and reliable provisional response handling (RFC 3262 PRACK).
+//!
+//! # Example
+//! ```
+//! use sip_dialog::{Dialog, DialogManager};
+//! use std::sync::Arc;
+//! # use sip_core::SipUri;
+//! let manager = Arc::new(DialogManager::new());
+//! let dialog = Dialog::new_uac("call-123", "from-tag", "to-tag",
+//!     SipUri::parse("sip:remote@example.com").unwrap(), vec![]);
+//! manager.store(dialog.id.clone(), dialog);
+//! ```
+
 use dashmap::DashMap;
 use sip_core::{Headers, RefresherRole, Request, Response, SipUri};
 use sip_parse::{header, parse_session_expires};

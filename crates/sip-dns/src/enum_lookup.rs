@@ -1,3 +1,7 @@
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 /// RFC 3824 ENUM (E.164 Number Mapping) support for SIP.
 ///
 /// ENUM uses DNS NAPTR records to map E.164 telephone numbers to URIs,

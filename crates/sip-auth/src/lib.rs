@@ -1,3 +1,36 @@
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+//! SIP Digest Authentication (RFC 7616/7617).
+//!
+//! This crate implements HTTP Digest authentication for SIP, supporting:
+//! - **Algorithms**: MD5, SHA-256, SHA-512
+//! - **Quality of Protection (qop)**: auth, auth-int
+//! - **Nonce Management**: Automatic expiry tracking and replay protection
+//! - **Server-side**: Challenge generation (401/407) and credential verification
+//! - **Client-side**: Authorization header generation from challenges
+//! - **Flexible Storage**: Pluggable credential backends (sync/async)
+//!
+//! # Examples
+//!
+//! ```no_run
+//! # use sip_auth::*;
+//! # use sip_core::Request;
+//! // Server-side authentication
+//! let store = MemoryCredentialStore::new();
+//! let auth = DigestAuthenticator::new(store, "example.com");
+//!
+//! // Generate 401 challenge
+//! # let request = todo!();
+//! let challenge = auth.challenge(&request)?;
+//!
+//! // Verify credentials from Authorization header
+//! # let headers = todo!();
+//! let valid = auth.verify(&request, &headers)?;
+//! # Ok::<(), anyhow::Error>(())
+//! ```
+
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use bytes::Bytes;

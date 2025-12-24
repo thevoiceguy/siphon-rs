@@ -1,3 +1,7 @@
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 /// Transport layer initialization and dispatcher implementation.
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;

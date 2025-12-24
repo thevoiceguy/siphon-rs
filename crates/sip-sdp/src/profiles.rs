@@ -1,3 +1,7 @@
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 //! SDP configuration profiles for common scenarios
 //!
 //! Provides pre-configured SDP templates for typical use cases like audio-only calls,

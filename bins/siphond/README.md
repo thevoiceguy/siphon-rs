@@ -1,3 +1,5 @@
+AI helped build this library. It’s either a stroke of genius or a very convincing hallucination—we’ll let you decide which. Use accordingly.
+
 # siphond - SIP Testing Daemon
 
 **A simple SIP server for testing, development, and demonstration of the siphon-rs sip stack**

@@ -1,3 +1,22 @@
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+//! RFC 3263 compliant DNS resolution for SIP URIs.
+//!
+//! Implements NAPTR, SRV, and A/AAAA lookups with priority/weight handling,
+//! failover, and ENUM support for tel URI to SIP URI translation.
+//!
+//! # Example
+//! ```no_run
+//! use sip_dns::{Resolver, Transport};
+//! # async fn example() -> anyhow::Result<()> {
+//! let resolver = Resolver::new_system_conf().await?;
+//! let targets = resolver.resolve_uri("sip:bob@example.com").await?;
+//! # Ok(())
+//! # }
+//! ```
+
 pub mod enum_lookup;
 
 pub use enum_lookup::{

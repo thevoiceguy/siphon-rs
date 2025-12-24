@@ -1,3 +1,7 @@
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 //! Session Timer headers (RFC 4028).
 //!
 //! RFC 4028 defines session timers to detect and clean up "dead" SIP sessions.

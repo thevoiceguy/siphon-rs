@@ -1,3 +1,26 @@
+// siphon-rs - The Siphon SIP Stack
+// Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+//! RFC 3261 §10 compliant REGISTER request handling and location service.
+//!
+//! Provides binding management with expiry tracking, wildcard deregistration,
+//! q-value prioritization, and optional Digest authentication integration.
+//!
+//! # Example
+//! ```
+//! use sip_registrar::{BasicRegistrar, MemoryLocationStore};
+//! # use sip_core::{Request, Headers, RequestLine, Method, SipUri};
+//! # use bytes::Bytes;
+//! # async fn example() -> anyhow::Result<()> {
+//! let store = MemoryLocationStore::new();
+//! let registrar = BasicRegistrar::new(store, None);
+//! # let req = Request::new(RequestLine::new(Method::Register, SipUri::parse("sip:example.com")?), Headers::new(), Bytes::new());
+//! let response = registrar.handle_register(&req).await?;
+//! # Ok(())
+//! # }
+//! ```
+
 use anyhow::Result;
 use bytes::Bytes;
 use chrono::Utc;
