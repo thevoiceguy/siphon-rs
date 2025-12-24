@@ -84,6 +84,7 @@ wait_for_port "$TLS_HOST" "$TLS_PORT" tcp
 
 echo "== Run TLS core scenarios =="
 cd "$ROOT_DIR/sip-testkit/sipp"
+export SIPHON_TLS12_ONLY=1
 RUN_TLS_CORE=1 \
 SKIP_REACHABILITY=1 \
 TLS_HOST="$TLS_HOST" TLS_PORT="$TLS_PORT" \

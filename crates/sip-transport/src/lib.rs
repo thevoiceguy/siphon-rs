@@ -679,10 +679,21 @@ pub fn load_rustls_server_config(
         .next()
         .ok_or_else(|| anyhow!("no private keys found in {}", key_path))?;
 
-    let config = rustls::ServerConfig::builder()
+    let tls12_only = std::env::var("SIPHON_TLS12_ONLY")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE"))
+        .unwrap_or(false);
+
+    let builder = if tls12_only {
+        rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS12])
+    } else {
+        rustls::ServerConfig::builder()
+    };
+
+    let config = builder
         .with_no_client_auth()
         .with_single_cert(certs, key)
         .map_err(|e| anyhow!("failed to build tls config: {e}"))?;
+
     Ok(std::sync::Arc::new(config))
 }
 

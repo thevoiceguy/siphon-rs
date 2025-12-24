@@ -53,6 +53,7 @@ echo "Auth vars:"
 echo "  AUTH_USER=user AUTH_PASS=pass"
 echo "Transport vars:"
 echo "  TLS_CERT=/path/to/client.crt TLS_KEY=/path/to/client.key"
+echo "  TLS_CA=/path/to/ca.crt"
 echo "  TLS_HOST=127.0.0.1 TLS_PORT=5061 TCP_PORT=5060"
 echo "IPv6 vars:"
 echo "  IPV6_HOST=::1 IPV6_PORT=5060"
@@ -329,9 +330,13 @@ if [[ "${RUN_TLS_CORE:-0}" == "1" ]]; then
     TLS_PORT="${TLS_PORT:-5061}"
     TLS_CERT="${TLS_CERT:-}"
     TLS_KEY="${TLS_KEY:-}"
+    TLS_CA="${TLS_CA:-}"
     TLS_ARGS=("-t" "l1")
     if [[ -n "$TLS_CERT" && -n "$TLS_KEY" ]]; then
         TLS_ARGS+=("-tls_cert" "$TLS_CERT" "-tls_key" "$TLS_KEY")
+    fi
+    if [[ -n "$TLS_CA" ]]; then
+        TLS_ARGS+=("-tls_ca" "$TLS_CA")
     fi
     TARGET_OVERRIDE="$TLS_HOST:$TLS_PORT" run_scenario "options.xml" "OPTIONS_TLS" 1 "test" "${TLS_ARGS[@]}"
     TARGET_OVERRIDE="$TLS_HOST:$TLS_PORT" run_scenario "invite_bye.xml" "INVITE_BYE_TLS" 1 "test" "${TLS_ARGS[@]}"

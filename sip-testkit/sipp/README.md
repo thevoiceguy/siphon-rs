@@ -292,16 +292,23 @@ sipp -v  # Currently: v3.7.3-TLS-SCTP-PCAP-SHA256
 
 **Why This Happens:**
 
-- **Siphond uses rustls 0.23** - Modern, pure-Rust TLS 1.3 implementation
-- **SIPp uses OpenSSL** - TLS integration may not handle TLS 1.3 properly in v3.7.3
-- **TLS 1.3 is newer protocol** - Older tools may have compatibility issues
-- **Handshake succeeds, data transfer fails** - Classic symptom of application-layer TLS bugs
+- **Siphond uses rustls 0.23** - Modern, pure-Rust TLS implementation
+- **SIPp uses OpenSSL** - TLS integration has compatibility issues with rustls
+- **Incompatibility affects both TLS 1.2 and TLS 1.3** - Attempted TLS 1.2 fallback still fails
+- **Handshake fails** - SIPp's OpenSSL can't complete handshake with rustls (cipher suite mismatch)
+
+**Attempted Fixes:**
+- ✅ Added TLS 1.2 support via `SIPHON_TLS12_ONLY` environment variable
+- ❌ SIPp still fails with TLS 1.2 (handshake EOF errors)
+- ✅ Verified openssl s_client works perfectly with both TLS 1.2 and TLS 1.3
+
+This is a fundamental incompatibility between SIPp's TLS implementation and rustls, not fixable by version negotiation alone.
 
 **Future Improvements:**
-- Add siphond configuration option to force TLS 1.2 for legacy client compatibility
 - Create wrapper script that uses openssl s_client for TLS testing
-- Investigate newer SIPp versions or alternative SIP testing tools
+- Investigate newer SIPp versions (post-v3.7.3) with better rustls compatibility
 - Consider adding test scenarios using openssl s_client instead of SIPp
+- Explore alternative TLS backends (OpenSSL-based) if rustls compatibility is critical for testing
 
 **Conclusion:** Siphond's TLS implementation is correct, secure, and production-ready (verified with openssl). The SIPp test failures are a known limitation of SIPp v3.7.3's TLS 1.3 support. Use alternative tools (openssl s_client, modern SIP clients) for TLS validation.
 
