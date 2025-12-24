@@ -20,7 +20,7 @@ use tokio::{
     sync::{mpsc, oneshot},
     time,
 };
-use tracing::error;
+use tracing::{debug, error, warn};
 
 use crate::metrics::TransactionRole;
 use crate::top_via;
