@@ -646,6 +646,14 @@ impl TransactionManager {
             is_server: false,
         };
 
+        // Debug: Log transaction creation
+        debug!(
+            branch = %key.branch,
+            method = ?key.method,
+            call_id = ?request.headers.get("Call-ID"),
+            "Starting client transaction"
+        );
+
         // Create transport-aware timers based on the transport type
         let transport = transport_kind_to_transport(ctx.transport);
         let timers = TransportAwareTimers::with_defaults(transport, self.inner.timer_defaults);
@@ -694,24 +702,64 @@ impl TransactionManager {
         // Extract branch from Via header
         let branch = match Self::extract_branch(&response.headers) {
             Some(b) => b,
-            None => return,
+            None => {
+                debug!("Response has no branch in Via header");
+                return;
+            }
         };
 
         // Extract method from CSeq header
         let method = match Self::extract_cseq_method(&response.headers) {
             Some(m) => m,
-            None => return,
+            None => {
+                debug!("Response has no method in CSeq header");
+                return;
+            }
         };
 
         // Build transaction key (is_server=false for client transactions)
         let key = TransactionKey {
-            branch,
-            method,
+            branch: branch.clone(),
+            method: method.clone(),
             is_server: false,
         };
 
+        // Debug: Log transaction matching attempt
+        let has_transaction = self.inner.client.contains_key(&key);
+        debug!(
+            branch = %key.branch,
+            method = ?key.method,
+            has_transaction = has_transaction,
+            total_client_transactions = self.inner.client.len(),
+            status = response.start.code,
+            "Attempting to match response to client transaction"
+        );
+
+        // If no match, log all existing client transaction keys for debugging
+        if !has_transaction && !self.inner.client.is_empty() {
+            warn!(
+                branch = %key.branch,
+                method = ?key.method,
+                status = response.start.code,
+                "No matching client transaction for response"
+            );
+
+            // Log first few transaction keys for debugging
+            let mut count = 0;
+            for existing_key in self.inner.client.iter() {
+                if count < 5 {
+                    debug!(
+                        existing_branch = %existing_key.key().branch,
+                        existing_method = ?existing_key.key().method,
+                        "Existing client transaction key"
+                    );
+                    count += 1;
+                }
+            }
+        }
+
         // Look up and dispatch to client transaction
-        if self.inner.client.contains_key(&key) {
+        if has_transaction {
             self.dispatch_response(&key, response).await;
         }
     }
