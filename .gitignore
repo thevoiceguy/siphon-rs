@@ -5,6 +5,7 @@ Cargo.lock
 .DS_Store
 .idea/
 .vscode/
+siphon-rs.code-workspace
 sip-testkit/sipp/*.log
 *.log
 *.pem

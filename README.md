@@ -3,7 +3,9 @@ AI helped build this library. It’s either a stroke of genius or a very convinc
 
 A modern, production-grade SIP (Session Initiation Protocol) stack implementation in Rust, implementing RFC 3261 and related specifications.
 
-## Status: Production Ready 🚀
+## Status: Beta 🧪
+
+Feature-complete with comprehensive test coverage (235+ tests), but not yet battle-tested in production environments. Early adopters welcome!
 
 **Core Features:**
 - ✅ Full RFC 3261 transaction layer with state machines

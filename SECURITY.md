@@ -11,9 +11,8 @@ Please report security issues privately to the maintainers.
 
 - Preferred: Open a GitHub Security Advisory at
   https://github.com/thevoiceguy/siphon-rs/security/advisories/new
-- If you cannot use GitHub advisories, open a private discussion at
-  https://github.com/thevoiceguy/siphon-rs/discussions and request a maintainer
-  to move the report to a private channel.
+If you cannot use GitHub advisories, please contact the maintainers directly
+via email at ferrous.communications@gmail.com.
 
 When reporting, include:
 

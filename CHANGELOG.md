@@ -7,14 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-11/30/2025
-
 - Add async trait support for registrar/auth storage (`AsyncLocationStore`, `AsyncCredentialStore`) with adapters for sync/async interop.
 - Extend `BasicRegistrar` and `DigestAuthenticator` with async handlers to enable non-blocking storage backends.
 - Update memory stores to implement both sync and async traits and add Tokio/async-trait dependencies where required.
 
 
-## [0.4.0] - 2025-12-23
+## [0.4.0]
 
 ### Added
 - Core SIP types, headers, URIs, and message primitives
