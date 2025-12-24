@@ -23,7 +23,9 @@ resolver = "2"
 license = "MIT OR Apache-2.0"
 edition = "2021"
 authors = ["siphon-rs contributors"]
-repository = "https://github.com/yourusername/siphon-rs"
+repository = "https://github.com/thevoiceguy/siphon-rs"
+homepage = "https://github.com/thevoiceguy/siphon-rs"
+documentation = "https://docs.rs/siphon-rs"
 
 [workspace.dependencies]
 anyhow = "1"

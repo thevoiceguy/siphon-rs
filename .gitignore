@@ -12,3 +12,4 @@ sip-testkit/sipp/*.log
 *.key
 *.csr
 .certs/
+users.json
