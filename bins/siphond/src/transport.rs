@@ -273,11 +273,8 @@ impl TransportDispatcher for SiphonTransportDispatcher {
             }
         }
 
-        sip_observe::transport_metrics().on_latency(
-            selected.as_str(),
-            "dispatch",
-            start.elapsed().as_nanos() as u64,
-        );
+        // Metrics are emitted by the lower-level transport layer (on_packet_sent, etc.)
+        let _ = start; // Latency tracking removed: OpLabel doesn't support dispatch operations
         Ok(())
     }
 }

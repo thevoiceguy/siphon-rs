@@ -581,6 +581,39 @@ mod tests {
         parse_sip_etag,
     };
 
+    /// Test helper to extract and validate Content-Length from headers
+    fn content_length(headers: &Headers) -> Option<usize> {
+        let values: Vec<_> = headers.get_all("Content-Length").collect();
+
+        if values.is_empty() {
+            return None;
+        } else if values.len() == 1 {
+            // Single Content-Length header
+            match parse_content_length_detailed(values[0]) {
+                Ok(len) => Some(len),
+                Err(_) => None, // Reject invalid or oversized
+            }
+        } else {
+            // Multiple Content-Length headers - validate all valid ones match
+            let mut first_valid: Option<usize> = None;
+            for value in &values {
+                match parse_content_length_detailed(value) {
+                    Ok(len) => {
+                        if let Some(existing) = first_valid {
+                            if existing != len {
+                                return None; // Mismatched valid values
+                            }
+                        } else {
+                            first_valid = Some(len);
+                        }
+                    }
+                    Err(_) => return None, // Reject if any are invalid/oversized
+                }
+            }
+            first_valid
+        }
+    }
+
     fn sample_request_bytes() -> Bytes {
         Bytes::from_static(
             b"OPTIONS sip:example.com SIP/2.0\r\n\

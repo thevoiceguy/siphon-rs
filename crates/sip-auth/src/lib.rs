@@ -19,7 +19,7 @@
 //! # use sip_core::Request;
 //! // Server-side authentication
 //! let store = MemoryCredentialStore::new();
-//! let auth = DigestAuthenticator::new(store, "example.com");
+//! let auth = DigestAuthenticator::new("example.com", store);
 //!
 //! // Generate 401 challenge
 //! # let request = todo!();

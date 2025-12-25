@@ -8,15 +8,17 @@
 //! q-value prioritization, and optional Digest authentication integration.
 //!
 //! # Example
-//! ```
+//! ```no_run
 //! use sip_registrar::{BasicRegistrar, MemoryLocationStore};
+//! use sip_auth::{DigestAuthenticator, MemoryCredentialStore};
 //! # use sip_core::{Request, Headers, RequestLine, Method, SipUri};
 //! # use bytes::Bytes;
 //! # async fn example() -> anyhow::Result<()> {
 //! let store = MemoryLocationStore::new();
-//! let registrar = BasicRegistrar::new(store, None);
-//! # let req = Request::new(RequestLine::new(Method::Register, SipUri::parse("sip:example.com")?), Headers::new(), Bytes::new());
-//! let response = registrar.handle_register(&req).await?;
+//! let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+//!     BasicRegistrar::new(store, None);
+//! # let req = Request::new(RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()), Headers::new(), Bytes::new());
+//! let response = registrar.handle_register_async(&req).await?;
 //! # Ok(())
 //! # }
 //! ```

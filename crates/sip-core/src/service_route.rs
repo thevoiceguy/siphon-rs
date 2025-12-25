@@ -242,6 +242,7 @@ impl fmt::Display for ServiceRouteHeader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SipUri;
     use smol_str::SmolStr;
 
     #[test]

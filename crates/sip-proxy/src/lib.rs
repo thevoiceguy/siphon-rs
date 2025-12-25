@@ -14,7 +14,8 @@
 //! # use bytes::Bytes;
 //! # let mut req = Request::new(RequestLine::new(Method::Invite, SipUri::parse("sip:bob@example.com").unwrap()), Headers::new(), Bytes::new());
 //! let branch = ProxyHelpers::add_via(&mut req, "proxy.example.com", "UDP");
-//! ProxyHelpers::add_record_route(&mut req, "sip:proxy.example.com;lr");
+//! let proxy_uri = SipUri::parse("sip:proxy.example.com;lr").unwrap();
+//! ProxyHelpers::add_record_route(&mut req, &proxy_uri);
 //! ```
 
 pub mod cancel_ack;

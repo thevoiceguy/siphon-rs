@@ -9,10 +9,12 @@
 //!
 //! # Example
 //! ```no_run
-//! use sip_dns::{Resolver, Transport};
+//! use sip_dns::{Resolver, SipResolver, Transport};
 //! # async fn example() -> anyhow::Result<()> {
-//! let resolver = Resolver::new_system_conf().await?;
-//! let targets = resolver.resolve_uri("sip:bob@example.com").await?;
+//! # use sip_core::SipUri;
+//! let resolver = SipResolver::from_system()?;
+//! let uri = SipUri::parse("sip:bob@example.com").unwrap();
+//! let targets = resolver.resolve(&uri).await?;
 //! # Ok(())
 //! # }
 //! ```

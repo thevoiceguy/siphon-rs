@@ -10,15 +10,10 @@
 //! # Example
 //! ```
 //! use sip_uas::UserAgentServer;
-//! use sip_dialog::{DialogManager, SubscriptionManager, RSeqManager};
-//! use std::sync::Arc;
 //! # use sip_core::SipUri;
-//! let uas = UserAgentServer::new(
-//!     SipUri::parse("sip:bob@example.com").unwrap(),
-//!     Arc::new(DialogManager::new()),
-//!     Arc::new(SubscriptionManager::new()),
-//!     Arc::new(RSeqManager::new()),
-//! );
+//! let local_uri = SipUri::parse("sip:bob@example.com").unwrap();
+//! let contact_uri = SipUri::parse("sip:bob@192.168.1.100").unwrap();
+//! let uas = UserAgentServer::new(local_uri, contact_uri);
 //! ```
 
 pub mod integrated;

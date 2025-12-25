@@ -11,9 +11,12 @@
 //! ```no_run
 //! use sip_transport::{run_udp, InboundPacket};
 //! use tokio::sync::mpsc;
+//! use tokio::net::UdpSocket;
+//! use std::sync::Arc;
 //! # async fn example() -> anyhow::Result<()> {
+//! let socket = Arc::new(UdpSocket::bind("0.0.0.0:5060").await?);
 //! let (tx, mut rx) = mpsc::channel::<InboundPacket>(100);
-//! tokio::spawn(run_udp("0.0.0.0:5060".parse()?, tx));
+//! tokio::spawn(run_udp(socket, tx));
 //! while let Some(packet) = rx.recv().await {
 //!     // Process inbound SIP messages
 //! }

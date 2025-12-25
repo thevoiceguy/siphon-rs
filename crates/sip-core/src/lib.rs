@@ -19,8 +19,8 @@
 //!
 //! ```
 //! # use sip_core::*;
-//! // Create a SIP URI
-//! let uri = SipUri::new("example.com", None);
+//! // Parse a SIP URI
+//! let uri = SipUri::parse("sip:alice@example.com").unwrap();
 //!
 //! // Create a tel URI (E.164)
 //! let tel = TelUri::new("+15551234567", true);

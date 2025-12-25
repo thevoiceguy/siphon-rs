@@ -10,14 +10,10 @@
 //! # Example
 //! ```
 //! use sip_uac::UserAgentClient;
-//! use sip_dialog::{DialogManager, SubscriptionManager};
-//! use std::sync::Arc;
 //! # use sip_core::SipUri;
-//! let uac = UserAgentClient::new(
-//!     SipUri::parse("sip:alice@example.com").unwrap(),
-//!     Arc::new(DialogManager::new()),
-//!     Arc::new(SubscriptionManager::new()),
-//! );
+//! let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+//! let contact_uri = SipUri::parse("sip:alice@192.168.1.100").unwrap();
+//! let uac = UserAgentClient::new(local_uri, contact_uri);
 //! ```
 
 // Integrated UAC with full transaction/transport/DNS integration

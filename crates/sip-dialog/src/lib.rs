@@ -8,14 +8,18 @@
 //! per RFC 3265, and reliable provisional response handling (RFC 3262 PRACK).
 //!
 //! # Example
-//! ```
+//! ```no_run
 //! use sip_dialog::{Dialog, DialogManager};
 //! use std::sync::Arc;
-//! # use sip_core::SipUri;
+//! # use sip_core::{SipUri, Request, Response};
 //! let manager = Arc::new(DialogManager::new());
-//! let dialog = Dialog::new_uac("call-123", "from-tag", "to-tag",
-//!     SipUri::parse("sip:remote@example.com").unwrap(), vec![]);
-//! manager.store(dialog.id.clone(), dialog);
+//! # let req: Request = todo!();
+//! # let resp: Response = todo!();
+//! let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+//! let remote_uri = SipUri::parse("sip:bob@example.com").unwrap();
+//! if let Some(dialog) = Dialog::new_uac(&req, &resp, local_uri, remote_uri) {
+//!     manager.insert(dialog);
+//! }
 //! ```
 
 use dashmap::DashMap;

@@ -11,16 +11,15 @@
 //! ```no_run
 //! use sip_transaction::{TransactionManager, TransportDispatcher, TransportContext};
 //! # use anyhow::Result;
-//! # use sip_core::{Request, Response};
-//! # use std::net::SocketAddr;
+//! # use bytes::Bytes;
+//! # use std::sync::Arc;
 //! # struct MyDispatcher;
 //! # #[async_trait::async_trait]
 //! # impl TransportDispatcher for MyDispatcher {
-//! #     async fn send_request(&self, req: &Request, ctx: &TransportContext) -> Result<()> { Ok(()) }
-//! #     async fn send_response(&self, resp: &Response, ctx: &TransportContext) -> Result<()> { Ok(()) }
+//! #     async fn dispatch(&self, ctx: &TransportContext, payload: Bytes) -> Result<()> { Ok(()) }
 //! # }
 //! # async fn example() -> Result<()> {
-//! let manager = TransactionManager::new(MyDispatcher);
+//! let manager = TransactionManager::new(Arc::new(MyDispatcher));
 //! // Manager handles transaction lifecycle, timers, and retransmissions automatically
 //! # Ok(())
 //! # }
