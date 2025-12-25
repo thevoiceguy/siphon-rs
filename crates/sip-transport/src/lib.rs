@@ -23,7 +23,7 @@
 
 use anyhow::{anyhow, Result};
 use bytes::{Buf, Bytes, BytesMut};
-use sip_observe::{span_with_transport, transport_metrics};
+use sip_observe::{span_with_transport, transport_metrics, OpLabel, StageLabel, TransportLabel};
 pub mod pool;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -198,6 +198,20 @@ impl TransportKind {
     }
 }
 
+impl From<TransportKind> for TransportLabel {
+    fn from(value: TransportKind) -> Self {
+        match value {
+            TransportKind::Udp => Self::Udp,
+            TransportKind::Tcp => Self::Tcp,
+            TransportKind::Tls => Self::Tls,
+            TransportKind::Sctp => Self::Sctp,
+            TransportKind::TlsSctp => Self::TlsSctp,
+            TransportKind::Ws => Self::Ws,
+            TransportKind::Wss => Self::Wss,
+        }
+    }
+}
+
 /// Bundle representing a packet received by a transport listener.
 #[derive(Debug, Clone)]
 pub struct InboundPacket {
@@ -211,24 +225,24 @@ pub struct InboundPacket {
 pub async fn run_udp(socket: Arc<UdpSocket>, tx: mpsc::Sender<InboundPacket>) -> Result<()> {
     let bind = socket.local_addr()?;
     info!(%bind, "listening (udp)");
-    transport_metrics().on_accept(TransportKind::Udp.as_str());
+    transport_metrics().on_accept(TransportLabel::Udp);
     let mut buf = vec![0u8; 65_535];
     loop {
         match socket.recv_from(&mut buf).await {
             Ok((n, peer)) => {
-                transport_metrics().on_latency(TransportKind::Udp.as_str(), "recv", 0);
-                let span = span_with_transport("udp_packet", TransportKind::Udp.as_str());
+                transport_metrics().on_latency(TransportLabel::Udp, OpLabel::Recv, 0);
+                let span = span_with_transport("udp_packet", TransportLabel::Udp);
                 let _entered = span.enter();
                 let payload = Bytes::copy_from_slice(&buf[..n]);
                 if n == buf.len() {
-                    transport_metrics().on_error(TransportKind::Udp.as_str(), "truncate");
+                    transport_metrics().on_error(TransportLabel::Udp, StageLabel::Truncate);
                     error!(
                         %peer,
                         max = n,
                         "udp datagram likely truncated (buffer full); consider TCP"
                     );
                 }
-                transport_metrics().on_packet_received(TransportKind::Udp.as_str());
+                transport_metrics().on_packet_received(TransportLabel::Udp);
                 let packet = InboundPacket {
                     transport: TransportKind::Udp,
                     peer,
@@ -237,13 +251,13 @@ pub async fn run_udp(socket: Arc<UdpSocket>, tx: mpsc::Sender<InboundPacket>) ->
                 };
                 if tx.send(packet).await.is_err() {
                     error!("receiver dropped; shutting down udp loop");
-                    transport_metrics().on_error(TransportKind::Udp.as_str(), "dispatch");
+                    transport_metrics().on_error(TransportLabel::Udp, StageLabel::Dispatch);
                     break;
                 }
             }
             Err(e) => {
                 error!(%e, "udp recv_from error");
-                transport_metrics().on_error(TransportKind::Udp.as_str(), "recv");
+                transport_metrics().on_error(TransportLabel::Udp, StageLabel::Recv);
             }
         }
     }
@@ -253,7 +267,7 @@ pub async fn run_udp(socket: Arc<UdpSocket>, tx: mpsc::Sender<InboundPacket>) ->
 /// Sends a UDP datagram using an existing bound socket.
 pub async fn send_udp(socket: &UdpSocket, to: &std::net::SocketAddr, data: &[u8]) -> Result<()> {
     socket.send_to(data, to).await?;
-    transport_metrics().on_packet_sent(TransportKind::Udp.as_str());
+    transport_metrics().on_packet_sent(TransportLabel::Udp);
     Ok(())
 }
 
@@ -280,7 +294,7 @@ pub async fn run_tcp(bind: &str, tx: mpsc::Sender<InboundPacket>) -> Result<()> 
         TcpListener::from_std(std_listener)?
     };
     info!(%bind, "listening (tcp)");
-    transport_metrics().on_accept(TransportKind::Tcp.as_str());
+    transport_metrics().on_accept(TransportLabel::Tcp);
     let limiter = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_SESSIONS));
 
     loop {
@@ -289,27 +303,27 @@ pub async fn run_tcp(bind: &str, tx: mpsc::Sender<InboundPacket>) -> Result<()> 
             Ok(pair) => pair,
             Err(e) => {
                 error!(%e, "tcp accept error");
-                transport_metrics().on_error(TransportKind::Tcp.as_str(), "accept");
+                transport_metrics().on_error(TransportLabel::Tcp, StageLabel::Accept);
                 continue;
             }
         };
         transport_metrics().on_latency(
-            TransportKind::Tcp.as_str(),
-            "accept",
+            TransportLabel::Tcp,
+            OpLabel::Accept,
             start.elapsed().as_nanos() as u64,
         );
         let permit = match limiter.clone().try_acquire_owned() {
             Ok(permit) => permit,
             Err(_) => {
                 warn!(%peer, "tcp session limit reached; dropping connection");
-                transport_metrics().on_error(TransportKind::Tcp.as_str(), "session_limit");
+                transport_metrics().on_error(TransportLabel::Tcp, StageLabel::SessionLimit);
                 continue;
             }
         };
         let tx = tx.clone();
         tokio::spawn(async move {
             let _permit = permit;
-            let span = span_with_transport("tcp_session", TransportKind::Tcp.as_str());
+            let span = span_with_transport("tcp_session", TransportLabel::Tcp);
             let _entered = span.enter();
             spawn_stream_session(
                 peer,
@@ -327,9 +341,9 @@ pub async fn run_tcp(bind: &str, tx: mpsc::Sender<InboundPacket>) -> Result<()> 
 /// Connects to the destination and writes the bytes over TCP.
 pub async fn send_tcp(to: &SocketAddr, data: &[u8]) -> Result<()> {
     let mut stream = TcpStream::connect(to).await?;
-    transport_metrics().on_connect(TransportKind::Tcp.as_str());
+    transport_metrics().on_connect(TransportLabel::Tcp);
     stream.write_all(data).await?;
-    transport_metrics().on_packet_sent(TransportKind::Tcp.as_str());
+    transport_metrics().on_packet_sent(TransportLabel::Tcp);
     Ok(())
 }
 
@@ -343,7 +357,7 @@ pub async fn send_stream(
         .send(data)
         .await
         .map_err(|_| anyhow!("connection writer dropped"))?;
-    transport_metrics().on_packet_sent(transport.as_str());
+    transport_metrics().on_packet_sent(transport.into());
     Ok(())
 }
 
@@ -368,13 +382,13 @@ pub async fn send_ws(url: &str, data: Bytes) -> Result<()> {
         .insert("Sec-WebSocket-Protocol", HeaderValue::from_static("sip"));
     let (mut stream, response) = tokio_tungstenite::connect_async(request).await?;
     ensure_ws_subprotocol(&response)?;
-    transport_metrics().on_connect(TransportKind::Ws.as_str());
+    transport_metrics().on_connect(TransportLabel::Ws);
     stream
         .send(tokio_tungstenite::tungstenite::Message::Binary(
             data.to_vec(),
         ))
         .await?;
-    transport_metrics().on_packet_sent(TransportKind::Ws.as_str());
+    transport_metrics().on_packet_sent(TransportLabel::Ws);
     Ok(())
 }
 
@@ -392,13 +406,13 @@ pub async fn send_wss(url: &str, data: Bytes) -> Result<()> {
         .insert("Sec-WebSocket-Protocol", HeaderValue::from_static("sip"));
     let (mut stream, response) = tokio_tungstenite::connect_async(request).await?;
     ensure_ws_subprotocol(&response)?;
-    transport_metrics().on_connect(TransportKind::Wss.as_str());
+    transport_metrics().on_connect(TransportLabel::Wss);
     stream
         .send(tokio_tungstenite::tungstenite::Message::Binary(
             data.to_vec(),
         ))
         .await?;
-    transport_metrics().on_packet_sent(TransportKind::Wss.as_str());
+    transport_metrics().on_packet_sent(TransportLabel::Wss);
     Ok(())
 }
 
@@ -451,7 +465,7 @@ where
                         warn!(%peer, %e, "websocket send error");
                         break;
                     }
-                    transport_metrics().on_packet_sent(transport.as_str());
+                    transport_metrics().on_packet_sent(transport.into());
                 } else {
                     break;
                 }
@@ -459,7 +473,7 @@ where
             inbound = stream.next() => {
                 match inbound {
                     Some(Ok(tungstenite::Message::Binary(data))) => {
-                        transport_metrics().on_packet_received(transport.as_str());
+                        transport_metrics().on_packet_received(transport.into());
                         let packet = InboundPacket {
                             transport,
                             peer,
@@ -472,7 +486,7 @@ where
                         }
                     }
                     Some(Ok(tungstenite::Message::Text(text))) => {
-                        transport_metrics().on_packet_received(transport.as_str());
+                        transport_metrics().on_packet_received(transport.into());
                         let packet = InboundPacket {
                             transport,
                             peer,
@@ -511,7 +525,7 @@ where
 pub async fn run_ws(bind: &str, tx: mpsc::Sender<InboundPacket>) -> Result<()> {
     let listener = TcpListener::bind(bind).await?;
     info!(%bind, "listening (ws)");
-    transport_metrics().on_accept(TransportKind::Ws.as_str());
+    transport_metrics().on_accept(TransportLabel::Ws);
     let limiter = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_SESSIONS));
     loop {
         let (stream, peer) = match listener.accept().await {
@@ -526,7 +540,7 @@ pub async fn run_ws(bind: &str, tx: mpsc::Sender<InboundPacket>) -> Result<()> {
             Ok(permit) => permit,
             Err(_) => {
                 warn!(%peer, "ws session limit reached; dropping connection");
-                transport_metrics().on_error(TransportKind::Ws.as_str(), "session_limit");
+                transport_metrics().on_error(TransportLabel::Ws, StageLabel::SessionLimit);
                 continue;
             }
         };
@@ -552,7 +566,7 @@ pub async fn run_wss(
     let listener = TcpListener::bind(bind).await?;
     let acceptor = TlsAcceptor::from(config);
     info!(%bind, "listening (wss)");
-    transport_metrics().on_accept(TransportKind::Wss.as_str());
+    transport_metrics().on_accept(TransportLabel::Wss);
     let limiter = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_SESSIONS));
 
     loop {
@@ -567,7 +581,7 @@ pub async fn run_wss(
             Ok(permit) => permit,
             Err(_) => {
                 warn!(%peer, "wss session limit reached; dropping connection");
-                transport_metrics().on_error(TransportKind::Wss.as_str(), "session_limit");
+                transport_metrics().on_error(TransportLabel::Wss, StageLabel::SessionLimit);
                 continue;
             }
         };
@@ -601,7 +615,7 @@ pub async fn send_tls(to: &SocketAddr, data: &[u8], config: &TlsConfig) -> Resul
     let stream = TcpStream::connect(to).await?;
     let mut tls_stream = connector.connect(server_name, stream).await?;
     tls_stream.write_all(data).await?;
-    transport_metrics().on_packet_sent(TransportKind::Tls.as_str());
+    transport_metrics().on_packet_sent(TransportLabel::Tls);
     Ok(())
 }
 
@@ -617,7 +631,7 @@ pub async fn run_tls(
     let listener = TcpListener::bind(bind).await?;
     let acceptor = TlsAcceptor::from(config);
     info!(%bind, "listening (tls)");
-    transport_metrics().on_accept(TransportKind::Tls.as_str());
+    transport_metrics().on_accept(TransportLabel::Tls);
     let limiter = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_SESSIONS));
 
     loop {
@@ -625,7 +639,7 @@ pub async fn run_tls(
             Ok(pair) => pair,
             Err(e) => {
                 error!(%e, "tls accept error");
-                transport_metrics().on_error(TransportKind::Tls.as_str(), "accept");
+                transport_metrics().on_error(TransportLabel::Tls, StageLabel::Accept);
                 continue;
             }
         };
@@ -633,7 +647,7 @@ pub async fn run_tls(
             Ok(permit) => permit,
             Err(_) => {
                 warn!(%peer, "tls session limit reached; dropping connection");
-                transport_metrics().on_error(TransportKind::Tls.as_str(), "session_limit");
+                transport_metrics().on_error(TransportLabel::Tls, StageLabel::SessionLimit);
                 continue;
             }
         };
@@ -641,17 +655,17 @@ pub async fn run_tls(
         let acceptor = acceptor.clone();
         tokio::spawn(async move {
             let _permit = permit;
-            let span = span_with_transport("tls_session", TransportKind::Tls.as_str());
+            let span = span_with_transport("tls_session", TransportLabel::Tls);
             let _entered = span.enter();
             let tls_stream = match acceptor.accept(stream).await {
                 Ok(s) => s,
                 Err(e) => {
                     error!(%e, "tls handshake error");
-                    transport_metrics().on_error(TransportKind::Tls.as_str(), "handshake");
+                    transport_metrics().on_error(TransportLabel::Tls, StageLabel::Handshake);
                     return;
                 }
             };
-            transport_metrics().on_connect(TransportKind::Tls.as_str());
+            transport_metrics().on_connect(TransportLabel::Tls);
 
             // Use TLS-specific session handler with proper shutdown support
             spawn_tls_session(peer, tls_stream, tx).await;
@@ -771,10 +785,10 @@ async fn spawn_tls_session(
         while let Some(buf) = writer_rx.recv().await {
             if let Err(e) = writer.write_all(&buf).await {
                 error!(%e, "tls write error");
-                transport_metrics().on_error("tls", "write");
+                transport_metrics().on_error(TransportLabel::Tls, StageLabel::Write);
                 break;
             }
-            transport_metrics().on_packet_sent("tls");
+            transport_metrics().on_packet_sent(TransportLabel::Tls);
         }
         writer // Return the WriteHalf for reuniting
     });
@@ -788,7 +802,7 @@ async fn spawn_tls_session(
                 buffer_size = buf.len(),
                 "tls buffer exceeded MAX_BUFFER_SIZE, closing connection"
             );
-            transport_metrics().on_error("tls", "buffer_overflow");
+            transport_metrics().on_error(TransportLabel::Tls, StageLabel::BufferOverflow);
             break;
         }
 
@@ -799,7 +813,7 @@ async fn spawn_tls_session(
             }
             Ok(n) => {
                 info!(%peer, bytes_read = n, buffer_len = buf.len(), "tls data received");
-                transport_metrics().on_packet_received("tls");
+                transport_metrics().on_packet_received(TransportLabel::Tls);
 
                 // Try to extract complete SIP messages
                 match drain_sip_frames(&mut buf) {
@@ -813,7 +827,10 @@ async fn spawn_tls_session(
                             };
                             if tx.send(packet).await.is_err() {
                                 error!("receiver dropped; shutting down tls session");
-                                transport_metrics().on_error("tls", "dispatch");
+                                transport_metrics().on_error(
+                                    TransportLabel::Tls,
+                                    StageLabel::Dispatch,
+                                );
                                 break;
                             }
                         }
@@ -824,14 +841,17 @@ async fn spawn_tls_session(
                             error = %e,
                             "SIP framing error, closing tls connection"
                         );
-                        transport_metrics().on_error("tls", "framing_error");
+                        transport_metrics().on_error(
+                            TransportLabel::Tls,
+                            StageLabel::FramingError,
+                        );
                         break;
                     }
                 }
             }
             Err(e) => {
                 error!(%e, "tls read error");
-                transport_metrics().on_error("tls", "read");
+                transport_metrics().on_error(TransportLabel::Tls, StageLabel::Read);
                 break;
             }
         }
@@ -875,10 +895,10 @@ async fn spawn_stream_session<S>(
         while let Some(buf) = writer_rx.recv().await {
             if let Err(e) = writer.write_all(&buf).await {
                 error!(%e, "{}", write_label);
-                transport_metrics().on_error(transport.as_str(), "write");
+                transport_metrics().on_error(transport.into(), StageLabel::Write);
                 break;
             }
-            transport_metrics().on_packet_sent(transport.as_str());
+            transport_metrics().on_packet_sent(transport.into());
         }
     });
 
@@ -891,14 +911,14 @@ async fn spawn_stream_session<S>(
                 buffer_size = buf.len(),
                 "stream buffer exceeded MAX_BUFFER_SIZE, closing connection"
             );
-            transport_metrics().on_error(transport.as_str(), "buffer_overflow");
+            transport_metrics().on_error(transport.into(), StageLabel::BufferOverflow);
             break;
         }
 
         match reader.read_buf(&mut buf).await {
             Ok(0) => break,
             Ok(_) => {
-                transport_metrics().on_packet_received(transport.as_str());
+                transport_metrics().on_packet_received(transport.into());
 
                 // Try to extract complete SIP messages
                 match drain_sip_frames(&mut buf) {
@@ -912,7 +932,10 @@ async fn spawn_stream_session<S>(
                             };
                             if tx.send(packet).await.is_err() {
                                 error!("receiver dropped; shutting down {:?} session", transport);
-                                transport_metrics().on_error(transport.as_str(), "dispatch");
+                                transport_metrics().on_error(
+                                    transport.into(),
+                                    StageLabel::Dispatch,
+                                );
                                 break;
                             }
                         }
@@ -923,14 +946,17 @@ async fn spawn_stream_session<S>(
                             error = %e,
                             "SIP framing error, closing connection"
                         );
-                        transport_metrics().on_error(transport.as_str(), "framing_error");
+                        transport_metrics().on_error(
+                            transport.into(),
+                            StageLabel::FramingError,
+                        );
                         break;
                     }
                 }
             }
             Err(e) => {
                 error!(%e, "{}", read_label);
-                transport_metrics().on_error(transport.as_str(), "read");
+                transport_metrics().on_error(transport.into(), StageLabel::Read);
                 break;
             }
         }
