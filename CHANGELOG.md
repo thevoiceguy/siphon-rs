@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add async trait support for registrar/auth storage (`AsyncLocationStore`, `AsyncCredentialStore`) with adapters for sync/async interop.
 - Extend `BasicRegistrar` and `DigestAuthenticator` with async handlers to enable non-blocking storage backends.
 - Update memory stores to implement both sync and async traits and add Tokio/async-trait dependencies where required.
+- Harden transport metrics labels with strict enums/validation and add a rate-limited tracing metrics implementation.
 
 
 ## [0.4.0]
