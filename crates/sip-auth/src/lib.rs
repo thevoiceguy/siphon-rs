@@ -214,6 +214,29 @@ impl Qop {
 
 /// Maximum number of nonces to keep in memory to prevent unbounded growth.
 const MAX_NONCE_COUNT: usize = 10_000;
+const DEFAULT_MAX_REQUEST_AGE: Duration = Duration::from_secs(10);
+const MAX_PARAM_USERNAME_LEN: usize = 256;
+const MAX_PARAM_REALM_LEN: usize = 256;
+const MAX_PARAM_NONCE_LEN: usize = 128;
+const MAX_PARAM_URI_LEN: usize = 2048;
+const MAX_PARAM_RESPONSE_LEN: usize = 512;
+const MAX_PARAM_CNONCE_LEN: usize = 256;
+const MAX_PARAM_NC_LEN: usize = 8;
+const MAX_PARAM_OPAQUE_LEN: usize = 256;
+const MAX_BODY_SIZE: usize = 10 * 1024 * 1024;
+const MAX_VIA_HOST_LEN: usize = 256;
+const MAX_NC_VALUE: u32 = 1_000_000;
+const MAX_NC_JUMP: u32 = 1_000;
+
+fn validate_param(name: &str, value: &str, max_len: usize) -> Result<()> {
+    if value.len() > max_len {
+        return Err(anyhow!("{} too long", name));
+    }
+    if value.contains('\0') || value.contains('\n') || value.contains('\r') {
+        return Err(anyhow!("{} contains invalid characters", name));
+    }
+    Ok(())
+}
 
 /// Nonce with expiry tracking and usage tracking for replay protection.
 #[derive(Debug, Clone)]
@@ -264,11 +287,10 @@ impl Nonce {
         method: &Method,
         uri: &str,
         body: &[u8],
+        max_request_age: Duration,
     ) -> bool {
         // Reject requests that are significantly delayed (potential replay attack)
-        // Allow up to 30 seconds between requests for normal network delays
-        const MAX_REQUEST_AGE: Duration = Duration::from_secs(30);
-        if self.last_nc > 0 && self.last_used.elapsed() > MAX_REQUEST_AGE {
+        if self.last_nc > 0 && self.last_used.elapsed() > max_request_age {
             // If this isn't the first request (last_nc > 0) and it's been too long
             // since the last successful auth, reject as potential replay
             return false;
@@ -317,6 +339,7 @@ pub struct NonceManager {
     nonces: Arc<DashMap<SmolStr, Nonce>>,
     ttl: Duration,
     max_nonces: usize,
+    max_request_age: Duration,
 }
 
 impl NonceManager {
@@ -325,11 +348,17 @@ impl NonceManager {
             nonces: Arc::new(DashMap::new()),
             ttl,
             max_nonces: MAX_NONCE_COUNT,
+            max_request_age: DEFAULT_MAX_REQUEST_AGE,
         }
     }
 
     pub fn with_max_nonces(mut self, max: usize) -> Self {
         self.max_nonces = max;
+        self
+    }
+
+    pub fn with_max_request_age(mut self, max_request_age: Duration) -> Self {
+        self.max_request_age = max_request_age;
         self
     }
 
@@ -364,7 +393,7 @@ impl NonceManager {
                 return false;
             }
             // Validate nc and request hash (replay protection + retransmission support)
-            entry.validate_nc_with_request(nc, method, uri, body)
+            entry.validate_nc_with_request(nc, method, uri, body, self.max_request_age)
         } else {
             false
         }
@@ -383,6 +412,15 @@ impl NonceManager {
     /// Removes expired nonces from the map.
     pub fn cleanup(&self) {
         self.nonces.retain(|_, nonce| nonce.is_valid());
+    }
+
+    fn is_nc_jump_reasonable(&self, value: &str, nc: u32) -> bool {
+        if let Some(entry) = self.nonces.get(value) {
+            if nc > entry.last_nc.saturating_add(MAX_NC_JUMP) {
+                return false;
+            }
+        }
+        true
     }
 
     /// Removes the oldest nonces up to the specified count.
@@ -429,6 +467,9 @@ fn extract_rate_limit_key(headers: &Headers) -> Option<String> {
 
     // Extract host[:port] and params
     let mut host_part = parts[1];
+    if host_part.is_empty() || host_part.len() > MAX_VIA_HOST_LEN {
+        return None;
+    }
     let mut params = "";
     if let Some((host, params_part)) = host_part.split_once(';') {
         host_part = host;
@@ -450,8 +491,15 @@ fn extract_rate_limit_key(headers: &Headers) -> Option<String> {
 }
 
 fn extract_via_host(host_part: &str) -> Option<&str> {
+    if host_part.is_empty() || host_part.len() > MAX_VIA_HOST_LEN {
+        return None;
+    }
+
     if host_part.starts_with('[') {
         let end = host_part.find(']')?;
+        if end <= 1 {
+            return None;
+        }
         return Some(&host_part[1..end]);
     }
 
@@ -488,6 +536,10 @@ pub struct DigestAuthenticator<S> {
 
 impl<S> DigestAuthenticator<S> {
     fn prepare_digest(&self, request: &Request, headers: &Headers) -> Result<Option<DigestParams>> {
+        if request.body.len() > MAX_BODY_SIZE {
+            return Err(anyhow!("request body too large"));
+        }
+
         if let Some(ref limiter) = self.rate_limiter {
             if let Some(key) = extract_rate_limit_key(headers) {
                 if !limiter.check_rate_limit(&key) {
@@ -531,23 +583,47 @@ impl<S> DigestAuthenticator<S> {
             .param("response")
             .ok_or_else(|| anyhow!("missing response"))?;
 
-        let _algorithm = parsed
-            .param("algorithm")
-            .and_then(|a| DigestAlgorithm::from_str(a.as_str()))
-            .unwrap_or(self.algorithm);
+        validate_param("username", username.as_str(), MAX_PARAM_USERNAME_LEN)?;
+        validate_param("realm", realm.as_str(), MAX_PARAM_REALM_LEN)?;
+        validate_param("nonce", nonce.as_str(), MAX_PARAM_NONCE_LEN)?;
+        validate_param("uri", uri.as_str(), MAX_PARAM_URI_LEN)?;
+        validate_param("response", response.as_str(), MAX_PARAM_RESPONSE_LEN)?;
+
+        let algorithm = match parsed.param("algorithm") {
+            Some(alg_str) => match DigestAlgorithm::from_str(alg_str.as_str()) {
+                Some(alg) => alg,
+                None => return Ok(None),
+            },
+            None => self.algorithm,
+        };
+
+        if algorithm != self.algorithm {
+            info!("digest algorithm mismatch");
+            return Ok(None);
+        }
 
         let nc = parsed.param("nc");
         let cnonce = parsed.param("cnonce");
         let qop = parsed.param("qop").and_then(|q| Qop::from_str(q.as_str()));
         let opaque = parsed.param("opaque");
 
+        if let Some(nc_str) = nc {
+            validate_param("nc", nc_str.as_str(), MAX_PARAM_NC_LEN)?;
+        }
+        if let Some(cnonce_str) = cnonce {
+            validate_param("cnonce", cnonce_str.as_str(), MAX_PARAM_CNONCE_LEN)?;
+        }
+        if let Some(opaque_str) = opaque {
+            validate_param("opaque", opaque_str.as_str(), MAX_PARAM_OPAQUE_LEN)?;
+        }
+
         if realm.as_str() != self.realm.as_str() {
-            info!(realm = %realm, "digest realm mismatch");
+            info!("digest realm mismatch");
             return Ok(None);
         }
 
         if uri.as_str() != request.start.uri.as_str() {
-            info!(auth_uri = %uri, request_uri = %request.start.uri, "digest uri mismatch");
+            info!("digest uri mismatch");
             return Ok(None);
         }
 
@@ -574,6 +650,16 @@ impl<S> DigestAuthenticator<S> {
         let _validated_nc = if let Some(nc_str) = nc {
             let nc_value = u32::from_str_radix(nc_str.as_str(), 16)
                 .map_err(|_| anyhow!("invalid nc format"))?;
+
+            if nc_value > MAX_NC_VALUE {
+                info!("digest nc value too large");
+                return Ok(None);
+            }
+
+            if !self.nonce_manager.is_nc_jump_reasonable(nonce.as_str(), nc_value) {
+                info!("digest nc jump too large");
+                return Ok(None);
+            }
 
             if !self.nonce_manager.verify_with_nc(
                 nonce,
@@ -618,7 +704,7 @@ impl<S> DigestAuthenticator<S> {
 
         Self {
             realm: SmolStr::new(realm.to_owned()),
-            algorithm: DigestAlgorithm::Md5,
+            algorithm: DigestAlgorithm::Sha256,
             qop: Qop::Auth,
             store,
             nonce_manager: NonceManager::default(),
@@ -644,7 +730,13 @@ impl<S> DigestAuthenticator<S> {
     }
 
     pub fn with_nonce_ttl(mut self, ttl: Duration) -> Self {
-        self.nonce_manager = NonceManager::new(ttl);
+        let max_request_age = self.nonce_manager.max_request_age;
+        self.nonce_manager = NonceManager::new(ttl).with_max_request_age(max_request_age);
+        self
+    }
+
+    pub fn with_max_request_age(mut self, max_request_age: Duration) -> Self {
+        self.nonce_manager = self.nonce_manager.with_max_request_age(max_request_age);
         self
     }
 
@@ -1093,7 +1185,8 @@ mod tests {
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
-        let auth = DigestAuthenticator::new("example.com", store);
+        let auth = DigestAuthenticator::new("example.com", store)
+            .with_algorithm(DigestAlgorithm::Md5);
 
         let nonce = auth.nonce_manager.generate();
         let method = Method::Invite;
@@ -1233,7 +1326,8 @@ mod tests {
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
-        let auth = DigestAuthenticator::new("example.com", store);
+        let auth = DigestAuthenticator::new("example.com", store)
+            .with_algorithm(DigestAlgorithm::Md5);
 
         let mut headers = Headers::new();
         headers.push(
@@ -1263,7 +1357,8 @@ mod tests {
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds]);
-        let auth = DigestAuthenticator::new("example.com", store);
+        let auth = DigestAuthenticator::new("example.com", store)
+            .with_algorithm(DigestAlgorithm::Md5);
 
         let nonce = auth.nonce_manager.generate();
         let mut headers = Headers::new();
@@ -1295,7 +1390,8 @@ mod tests {
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
-        let auth = DigestAuthenticator::new("example.com", store);
+        let auth = DigestAuthenticator::new("example.com", store)
+            .with_algorithm(DigestAlgorithm::Md5);
 
         let nonce = auth.nonce_manager.generate();
         let method = Method::Invite;
@@ -1342,7 +1438,8 @@ mod tests {
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
-        let auth = DigestAuthenticator::new("example.com", store);
+        let auth = DigestAuthenticator::new("example.com", store)
+            .with_algorithm(DigestAlgorithm::Md5);
 
         let nonce = auth.nonce_manager.generate();
         let method = Method::Invite;
@@ -1484,7 +1581,9 @@ mod tests {
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
-        let auth = DigestAuthenticator::new("example.com", store).with_qop(Qop::AuthInt);
+        let auth = DigestAuthenticator::new("example.com", store)
+            .with_algorithm(DigestAlgorithm::Md5)
+            .with_qop(Qop::AuthInt);
 
         let nonce = auth.nonce_manager.generate();
         let method = Method::Invite;
@@ -1531,7 +1630,8 @@ mod tests {
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
-        let auth = DigestAuthenticator::new("example.com", store);
+        let auth = DigestAuthenticator::new("example.com", store)
+            .with_algorithm(DigestAlgorithm::Md5);
 
         let nonce = auth.nonce_manager.generate();
         let method = Method::Invite;
@@ -1590,7 +1690,8 @@ mod tests {
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
-        let auth = DigestAuthenticator::new("example.com", store);
+        let auth = DigestAuthenticator::new("example.com", store)
+            .with_algorithm(DigestAlgorithm::Md5);
 
         let nonce = auth.nonce_manager.generate();
         let method = Method::Invite;
@@ -1677,7 +1778,8 @@ mod tests {
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
-        let auth = DigestAuthenticator::new("example.com", store);
+        let auth = DigestAuthenticator::new("example.com", store)
+            .with_algorithm(DigestAlgorithm::Md5);
 
         let nonce = auth.nonce_manager.generate();
         let method = Method::Invite;
@@ -1761,7 +1863,8 @@ mod tests {
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
-        let auth = DigestAuthenticator::new("example.com", store);
+        let auth = DigestAuthenticator::new("example.com", store)
+            .with_algorithm(DigestAlgorithm::Md5);
 
         let nonce = auth.nonce_manager.generate();
         let method = Method::Invite;
@@ -1846,7 +1949,8 @@ mod tests {
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
-        let auth = DigestAuthenticator::new("example.com", store);
+        let auth = DigestAuthenticator::new("example.com", store)
+            .with_algorithm(DigestAlgorithm::Md5);
 
         let nonce = auth.nonce_manager.generate();
         let method = Method::Invite;
@@ -1908,7 +2012,8 @@ mod tests {
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
-        let auth = DigestAuthenticator::new("example.com", store);
+        let auth = DigestAuthenticator::new("example.com", store)
+            .with_algorithm(DigestAlgorithm::Md5);
 
         let nonce = auth.nonce_manager.generate();
         let method = Method::Invite;
@@ -1955,7 +2060,8 @@ mod tests {
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
-        let auth = DigestAuthenticator::new("example.com", store);
+        let auth = DigestAuthenticator::new("example.com", store)
+            .with_algorithm(DigestAlgorithm::Md5);
 
         let nonce = auth.nonce_manager.generate();
         let method = Method::Invite;
@@ -1992,6 +2098,169 @@ mod tests {
         );
 
         assert!(!auth.verify(&request, &request.headers).unwrap());
+    }
+
+    #[test]
+    fn reject_oversized_username() {
+        let store = MemoryCredentialStore::new();
+        let auth = DigestAuthenticator::new("example.com", store);
+
+        let long_username = "a".repeat(300);
+        let mut headers = Headers::new();
+        headers.push(
+            SmolStr::new("Authorization"),
+            SmolStr::new(format!(
+                "Digest username=\"{}\", realm=\"example.com\", nonce=\"abc\", uri=\"sip:test\", response=\"xyz\", algorithm=SHA-256, cnonce=\"abc\", nc=00000001, qop=auth, opaque=\"test\"",
+                long_username
+            )),
+        );
+
+        let request = Request::new(
+            RequestLine::new(Method::Invite, SipUri::parse("sip:test").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        assert!(auth.verify(&request, &request.headers).is_err());
+    }
+
+    #[test]
+    fn reject_large_nc_value() {
+        let creds = Credentials {
+            username: SmolStr::new("alice"),
+            password: SmolStr::new("secret"),
+            realm: SmolStr::new("example.com"),
+        };
+        let store = MemoryCredentialStore::with(vec![creds]);
+        let auth = DigestAuthenticator::new("example.com", store);
+        let nonce = auth.nonce_manager.generate();
+
+        let mut headers = Headers::new();
+        headers.push(
+            SmolStr::new("Authorization"),
+            SmolStr::new(format!(
+                "Digest username=\"alice\", realm=\"example.com\", nonce=\"{}\", uri=\"sip:test\", response=\"xyz\", nc=F0000000, cnonce=\"abc\", qop=auth, opaque=\"{}\"",
+                nonce.value, auth.opaque
+            )),
+        );
+
+        let request = Request::new(
+            RequestLine::new(Method::Invite, SipUri::parse("sip:test").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        assert!(!auth.verify(&request, &request.headers).unwrap());
+    }
+
+    #[test]
+    fn reject_oversized_body() {
+        let store = MemoryCredentialStore::new();
+        let auth = DigestAuthenticator::new("example.com", store);
+
+        let large_body = vec![0u8; 11 * 1024 * 1024];
+        let request = Request::new(
+            RequestLine::new(Method::Invite, SipUri::parse("sip:test").unwrap()),
+            Headers::new(),
+            Bytes::from(large_body),
+        );
+
+        assert!(auth.verify(&request, &request.headers).is_err());
+    }
+
+    #[test]
+    fn reject_suspicious_nc_jump() {
+        let creds = Credentials {
+            username: SmolStr::new("alice"),
+            password: SmolStr::new("secret"),
+            realm: SmolStr::new("example.com"),
+        };
+        let store = MemoryCredentialStore::with(vec![creds.clone()]);
+        let auth = DigestAuthenticator::new("example.com", store);
+        let nonce = auth.nonce_manager.generate();
+
+        let method = Method::Invite;
+        let uri = "sip:test";
+
+        let response1 = auth.compute_response(
+            creds.username.as_str(),
+            creds.password.as_str(),
+            &method,
+            uri,
+            &nonce.value,
+            Some("00000001"),
+            Some("abc"),
+            Some(Qop::Auth),
+            b"",
+        );
+
+        let mut headers1 = Headers::new();
+        headers1.push(
+            SmolStr::new("Authorization"),
+            SmolStr::new(format!(
+                "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=SHA-256, cnonce=\"abc\", nc=00000001, qop=auth, opaque=\"{}\"",
+                creds.username, creds.realm, nonce.value, uri, response1, auth.opaque
+            )),
+        );
+
+        let request1 = Request::new(
+            RequestLine::new(method.clone(), SipUri::parse(uri).unwrap()),
+            headers1,
+            Bytes::new(),
+        );
+
+        assert!(auth.verify(&request1, &request1.headers).unwrap());
+
+        let response2 = auth.compute_response(
+            creds.username.as_str(),
+            creds.password.as_str(),
+            &method,
+            uri,
+            &nonce.value,
+            Some("00005000"),
+            Some("def"),
+            Some(Qop::Auth),
+            b"",
+        );
+
+        let mut headers2 = Headers::new();
+        headers2.push(
+            SmolStr::new("Authorization"),
+            SmolStr::new(format!(
+                "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=SHA-256, cnonce=\"def\", nc=00005000, qop=auth, opaque=\"{}\"",
+                creds.username, creds.realm, nonce.value, uri, response2, auth.opaque
+            )),
+        );
+
+        let request2 = Request::new(
+            RequestLine::new(method, SipUri::parse(uri).unwrap()),
+            headers2,
+            Bytes::new(),
+        );
+
+        assert!(!auth.verify(&request2, &request2.headers).unwrap());
+    }
+
+    #[test]
+    fn reject_control_characters_in_username() {
+        let store = MemoryCredentialStore::new();
+        let auth = DigestAuthenticator::new("example.com", store);
+
+        let mut headers = Headers::new();
+        headers.push(
+            SmolStr::new("Authorization"),
+            SmolStr::new(
+                "Digest username=\"alice\x00evil\", realm=\"example.com\", nonce=\"abc\", uri=\"sip:test\", response=\"xyz\", algorithm=SHA-256, cnonce=\"abc\", nc=00000001, qop=auth, opaque=\"test\"",
+            ),
+        );
+
+        let request = Request::new(
+            RequestLine::new(Method::Invite, SipUri::parse("sip:test").unwrap()),
+            headers,
+            Bytes::new(),
+        );
+
+        assert!(auth.verify(&request, &request.headers).is_err());
     }
 
     #[test]
