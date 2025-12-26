@@ -5,7 +5,7 @@ A modern, production-grade SIP (Session Initiation Protocol) stack implementatio
 
 ## Status: Beta 🧪
 
-Feature-complete with comprehensive test coverage (235+ tests), but not yet battle-tested in production environments. Early adopters welcome!
+Feature-complete with comprehensive test coverage (1000+ tests), but not yet battle-tested in production environments. Early adopters welcome!
 
 **Core Features:**
 - ✅ Full RFC 3261 transaction layer with state machines
@@ -26,7 +26,7 @@ Feature-complete with comprehensive test coverage (235+ tests), but not yet batt
 **Production-Grade Implementation:**
 - 🔒 Secure TLS via rustls (modern pure-Rust implementation)
 - 📊 Comprehensive observability and metrics
-- 🧪 235+ unit and integration tests
+- 🧪 1000+ unit and integration tests
 - 📚 Extensive documentation and examples
 - 🎯 RFC-compliant and interop-tested
 
