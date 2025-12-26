@@ -169,7 +169,7 @@ fn validate_text(field: &'static str, value: &str, max_len: usize) -> Result<(),
             actual: value.len(),
         });
     }
-    if value.contains('\r') || value.contains('\n') || value.contains('\0') {
+    if value.chars().any(|c| c.is_ascii_control()) {
         return Err(NameAddrError::InvalidText { field });
     }
     Ok(())
