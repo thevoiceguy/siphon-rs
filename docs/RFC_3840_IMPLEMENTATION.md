@@ -205,7 +205,7 @@ Returns the numeric value if this is a Numeric variant.
 
 ---
 
-##### `to_param_value(&self) -> Option<SmolStr>`
+##### `to_param_value(&self) -> Result<Option<SmolStr>, CapabilityError>`
 
 Converts this feature value to a Contact header parameter value.
 
@@ -223,21 +223,24 @@ use sip_core::FeatureValue;
 use smol_str::SmolStr;
 
 let bool_val = FeatureValue::Boolean(true);
-assert_eq!(bool_val.to_param_value(), None); // No value for boolean
+assert_eq!(bool_val.to_param_value().unwrap(), None); // No value for boolean
 
 let token_val = FeatureValue::Token(SmolStr::new("fixed"));
-assert_eq!(token_val.to_param_value(), Some(SmolStr::new("fixed")));
+assert_eq!(token_val.to_param_value().unwrap(), Some(SmolStr::new("fixed")));
 
 let list_val = FeatureValue::TokenList(vec![
     SmolStr::new("INVITE"),
     SmolStr::new("BYE")
 ]);
-assert_eq!(list_val.to_param_value(), Some(SmolStr::new("\"INVITE,BYE\"")));
+assert_eq!(
+    list_val.to_param_value().unwrap(),
+    Some(SmolStr::new("\"INVITE,BYE\""))
+);
 ```
 
 ---
 
-##### `from_param_value(tag: FeatureTag, value: Option<&str>) -> Option<FeatureValue>`
+##### `from_param_value(tag: FeatureTag, value: Option<&str>) -> Result<FeatureValue, CapabilityError>`
 
 Parses a feature value from a Contact header parameter value.
 
@@ -249,19 +252,19 @@ use sip_core::{FeatureTag, FeatureValue};
 use smol_str::SmolStr;
 
 // Boolean (no value)
-let val = FeatureValue::from_param_value(FeatureTag::Audio, None);
-assert_eq!(val, Some(FeatureValue::Boolean(true)));
+let val = FeatureValue::from_param_value(FeatureTag::Audio, None).unwrap();
+assert_eq!(val, FeatureValue::Boolean(true));
 
 // Token
-let val = FeatureValue::from_param_value(FeatureTag::Mobility, Some("fixed"));
-assert_eq!(val, Some(FeatureValue::Token(SmolStr::new("fixed"))));
+let val = FeatureValue::from_param_value(FeatureTag::Mobility, Some("fixed")).unwrap();
+assert_eq!(val, FeatureValue::Token(SmolStr::new("fixed")));
 
 // Token list
-let val = FeatureValue::from_param_value(FeatureTag::Methods, Some("\"INVITE,BYE\""));
-assert_eq!(val, Some(FeatureValue::TokenList(vec![
-    SmolStr::new("INVITE"),
-    SmolStr::new("BYE")
-])));
+let val = FeatureValue::from_param_value(FeatureTag::Methods, Some("\"INVITE,BYE\"")).unwrap();
+assert_eq!(
+    val,
+    FeatureValue::TokenList(vec![SmolStr::new("INVITE"), SmolStr::new("BYE")])
+);
 ```
 
 ---
@@ -271,18 +274,18 @@ assert_eq!(val, Some(FeatureValue::TokenList(vec![
 Represents a single capability (feature tag + value).
 
 **Fields:**
-- `tag: FeatureTag` - The feature tag
-- `value: FeatureValue` - The feature value
+- `tag: FeatureTag` - The feature tag (private, use accessors)
+- `value: FeatureValue` - The feature value (private, use accessors)
 
 **Methods:**
 
-##### `new(tag: FeatureTag, value: FeatureValue) -> Self`
+##### `new(tag: FeatureTag, value: FeatureValue) -> Result<Self, CapabilityError>`
 
 Creates a new capability.
 
 ---
 
-##### `boolean(tag: FeatureTag, value: bool) -> Self`
+##### `boolean(tag: FeatureTag, value: bool) -> Result<Self, CapabilityError>`
 
 Creates a boolean capability.
 
@@ -290,12 +293,12 @@ Creates a boolean capability.
 ```rust
 use sip_core::{Capability, FeatureTag};
 
-let cap = Capability::boolean(FeatureTag::Audio, true);
+let cap = Capability::boolean(FeatureTag::Audio, true).unwrap();
 ```
 
 ---
 
-##### `token(tag: FeatureTag, value: impl Into<SmolStr>) -> Self`
+##### `token(tag: FeatureTag, value: impl Into<SmolStr>) -> Result<Self, CapabilityError>`
 
 Creates a token capability.
 
@@ -303,12 +306,12 @@ Creates a token capability.
 ```rust
 use sip_core::{Capability, FeatureTag};
 
-let cap = Capability::token(FeatureTag::Mobility, "mobile");
+let cap = Capability::token(FeatureTag::Mobility, "mobile").unwrap();
 ```
 
 ---
 
-##### `token_list(tag: FeatureTag, values: Vec<SmolStr>) -> Self`
+##### `token_list(tag: FeatureTag, values: Vec<SmolStr>) -> Result<Self, CapabilityError>`
 
 Creates a token list capability.
 
@@ -320,12 +323,13 @@ use smol_str::SmolStr;
 let cap = Capability::token_list(
     FeatureTag::Methods,
     vec![SmolStr::new("INVITE"), SmolStr::new("BYE")]
-);
+)
+.unwrap();
 ```
 
 ---
 
-##### `string(tag: FeatureTag, value: impl Into<SmolStr>) -> Self`
+##### `string(tag: FeatureTag, value: impl Into<SmolStr>) -> Result<Self, CapabilityError>`
 
 Creates a string capability.
 
@@ -333,12 +337,12 @@ Creates a string capability.
 ```rust
 use sip_core::{Capability, FeatureTag};
 
-let cap = Capability::string(FeatureTag::Description, "Alice's Phone");
+let cap = Capability::string(FeatureTag::Description, "Alice's Phone").unwrap();
 ```
 
 ---
 
-##### `numeric(tag: FeatureTag, value: f64) -> Self`
+##### `numeric(tag: FeatureTag, value: f64) -> Result<Self, CapabilityError>`
 
 Creates a numeric capability.
 
@@ -350,13 +354,13 @@ Returns the Contact header parameter name for this capability.
 
 ---
 
-##### `param_value(&self) -> Option<SmolStr>`
+##### `param_value(&self) -> Result<Option<SmolStr>, CapabilityError>`
 
 Returns the Contact header parameter value for this capability.
 
 ---
 
-##### `to_param(&self) -> (SmolStr, Option<SmolStr>)`
+##### `to_param(&self) -> Result<(SmolStr, Option<SmolStr>), CapabilityError>`
 
 Converts this capability to a (name, value) pair for Contact parameters.
 
@@ -384,7 +388,7 @@ let mut capabilities = CapabilitySet::new();
 
 ---
 
-##### `add(&mut self, capability: Capability)`
+##### `add(&mut self, capability: Capability) -> Result<(), CapabilityError>`
 
 Adds a capability to the set.
 
@@ -393,12 +397,12 @@ Adds a capability to the set.
 use sip_core::{CapabilitySet, Capability, FeatureTag};
 
 let mut set = CapabilitySet::new();
-set.add(Capability::boolean(FeatureTag::Audio, true));
+set.add(Capability::boolean(FeatureTag::Audio, true).unwrap()).unwrap();
 ```
 
 ---
 
-##### `add_boolean(&mut self, tag: FeatureTag, value: bool)`
+##### `add_boolean(&mut self, tag: FeatureTag, value: bool) -> Result<(), CapabilityError>`
 
 Adds a boolean capability.
 
@@ -407,31 +411,31 @@ Adds a boolean capability.
 use sip_core::{CapabilitySet, FeatureTag};
 
 let mut set = CapabilitySet::new();
-set.add_boolean(FeatureTag::Audio, true);
-set.add_boolean(FeatureTag::Video, true);
+set.add_boolean(FeatureTag::Audio, true).unwrap();
+set.add_boolean(FeatureTag::Video, true).unwrap();
 ```
 
 ---
 
-##### `add_token(&mut self, tag: FeatureTag, value: impl Into<SmolStr>)`
+##### `add_token(&mut self, tag: FeatureTag, value: impl Into<SmolStr>) -> Result<(), CapabilityError>`
 
 Adds a token capability.
 
 ---
 
-##### `add_token_list(&mut self, tag: FeatureTag, values: Vec<SmolStr>)`
+##### `add_token_list(&mut self, tag: FeatureTag, values: Vec<SmolStr>) -> Result<(), CapabilityError>`
 
 Adds a token list capability.
 
 ---
 
-##### `add_string(&mut self, tag: FeatureTag, value: impl Into<SmolStr>)`
+##### `add_string(&mut self, tag: FeatureTag, value: impl Into<SmolStr>) -> Result<(), CapabilityError>`
 
 Adds a string capability.
 
 ---
 
-##### `add_numeric(&mut self, tag: FeatureTag, value: f64)`
+##### `add_numeric(&mut self, tag: FeatureTag, value: f64) -> Result<(), CapabilityError>`
 
 Adds a numeric capability.
 
@@ -446,7 +450,7 @@ Gets a capability value by tag.
 use sip_core::{CapabilitySet, FeatureTag};
 
 let mut set = CapabilitySet::new();
-set.add_boolean(FeatureTag::Audio, true);
+set.add_boolean(FeatureTag::Audio, true).unwrap();
 
 assert!(set.get(FeatureTag::Audio).is_some());
 assert!(set.get(FeatureTag::Video).is_none());
@@ -478,7 +482,7 @@ Returns true if the set is empty.
 
 ---
 
-##### `to_params(&self) -> BTreeMap<SmolStr, Option<SmolStr>>`
+##### `to_params(&self) -> Result<BTreeMap<SmolStr, Option<SmolStr>>, CapabilityError>`
 
 Converts the capability set to Contact header parameters.
 
@@ -491,17 +495,17 @@ use sip_core::{CapabilitySet, FeatureTag};
 use smol_str::SmolStr;
 
 let mut set = CapabilitySet::new();
-set.add_boolean(FeatureTag::Audio, true);
-set.add_token(FeatureTag::Mobility, "fixed");
+set.add_boolean(FeatureTag::Audio, true).unwrap();
+set.add_token(FeatureTag::Mobility, "fixed").unwrap();
 
-let params = set.to_params();
+let params = set.to_params().unwrap();
 assert_eq!(params.get(&SmolStr::new("audio")), Some(&None));
 assert_eq!(params.get(&SmolStr::new("mobility")), Some(&Some(SmolStr::new("fixed"))));
 ```
 
 ---
 
-##### `from_params(params: &BTreeMap<SmolStr, Option<SmolStr>>) -> Self`
+##### `from_params(params: &BTreeMap<SmolStr, Option<SmolStr>>) -> Result<Self, CapabilityError>`
 
 Parses a capability set from Contact header parameters.
 
@@ -515,7 +519,7 @@ let mut params = BTreeMap::new();
 params.insert(SmolStr::new("audio"), None);
 params.insert(SmolStr::new("video"), None);
 
-let set = CapabilitySet::from_params(&params);
+let set = CapabilitySet::from_params(&params).unwrap();
 assert!(set.has(FeatureTag::Audio));
 assert!(set.has(FeatureTag::Video));
 ```
@@ -538,16 +542,16 @@ A capability set matches if:
 use sip_core::{CapabilitySet, FeatureTag};
 
 let mut available = CapabilitySet::new();
-available.add_boolean(FeatureTag::Audio, true);
-available.add_boolean(FeatureTag::Video, true);
+available.add_boolean(FeatureTag::Audio, true).unwrap();
+available.add_boolean(FeatureTag::Video, true).unwrap();
 
 let mut required = CapabilitySet::new();
-required.add_boolean(FeatureTag::Audio, true);
+required.add_boolean(FeatureTag::Audio, true).unwrap();
 
 assert!(available.matches(&required));
 
 // Require text (not available)
-required.add_boolean(FeatureTag::Text, true);
+required.add_boolean(FeatureTag::Text, true).unwrap();
 assert!(!available.matches(&required));
 ```
 
@@ -555,7 +559,7 @@ assert!(!available.matches(&required));
 
 ### ContactHeader Integration
 
-#### `ContactHeader::capabilities(&self) -> CapabilitySet`
+#### `ContactHeader::capabilities(&self) -> Result<CapabilitySet, CapabilityError>`
 
 Extracts RFC 3840 capabilities from Contact header parameters.
 
@@ -564,7 +568,7 @@ from the Contact header parameters and returns them as a CapabilitySet.
 
 **Example:**
 ```rust
-use sip_core::{ContactHeader, NameAddr, SipUri, FeatureTag};
+use sip_core::{ContactHeader, NameAddr, SipUri, Uri, FeatureTag};
 use std::collections::BTreeMap;
 use smol_str::SmolStr;
 
@@ -572,14 +576,15 @@ let mut params = BTreeMap::new();
 params.insert(SmolStr::new("audio"), None);
 params.insert(SmolStr::new("video"), None);
 
-let name_addr = NameAddr {
-    display_name: None,
-    uri: SipUri::parse("sip:alice@example.com").unwrap(),
+let name_addr = NameAddr::new(
+    None,
+    Uri::from(SipUri::parse("sip:alice@example.com").unwrap()),
     params,
-};
+)
+.unwrap();
 
-let contact = ContactHeader(name_addr);
-let capabilities = contact.capabilities();
+let contact = ContactHeader::new(name_addr);
+let capabilities = contact.capabilities().unwrap();
 
 assert!(capabilities.has(FeatureTag::Audio));
 assert!(capabilities.has(FeatureTag::Video));
@@ -597,9 +602,9 @@ use smol_str::SmolStr;
 
 // Build capability set
 let mut capabilities = CapabilitySet::new();
-capabilities.add_boolean(FeatureTag::Audio, true);
-capabilities.add_boolean(FeatureTag::Video, true);
-capabilities.add_token(FeatureTag::Mobility, "mobile");
+capabilities.add_boolean(FeatureTag::Audio, true).unwrap();
+capabilities.add_boolean(FeatureTag::Video, true).unwrap();
+capabilities.add_token(FeatureTag::Mobility, "mobile").unwrap();
 capabilities.add_token_list(
     FeatureTag::Methods,
     vec![
@@ -608,10 +613,11 @@ capabilities.add_token_list(
         SmolStr::new("BYE"),
         SmolStr::new("CANCEL"),
     ]
-);
+)
+.unwrap();
 
 // Convert to Contact parameters
-let params = capabilities.to_params();
+let params = capabilities.to_params().unwrap();
 
 // Add to Contact header when building REGISTER request
 // Contact: <sip:alice@192.168.1.100:5060>;audio;video;mobility=mobile;methods="INVITE,ACK,BYE,CANCEL"
@@ -625,11 +631,11 @@ When responding to OPTIONS, include capabilities:
 use sip_core::{CapabilitySet, FeatureTag};
 
 let mut capabilities = CapabilitySet::new();
-capabilities.add_boolean(FeatureTag::Audio, true);
-capabilities.add_boolean(FeatureTag::Video, true);
-capabilities.add_boolean(FeatureTag::IsFocus, false); // Not a conference server
+capabilities.add_boolean(FeatureTag::Audio, true).unwrap();
+capabilities.add_boolean(FeatureTag::Video, true).unwrap();
+capabilities.add_boolean(FeatureTag::IsFocus, false).unwrap(); // Not a conference server
 
-let params = capabilities.to_params();
+let params = capabilities.to_params().unwrap();
 // Include in 200 OK Contact header
 ```
 
@@ -647,7 +653,7 @@ use smol_str::SmolStr;
 
 // Extract capabilities
 let contact: ContactHeader = /* parsed from message */;
-let capabilities = contact.capabilities();
+let capabilities = contact.capabilities().unwrap();
 
 // Check what the UA supports
 if capabilities.has(FeatureTag::Audio) {
@@ -675,8 +681,8 @@ use smol_str::SmolStr;
 
 // UA's advertised capabilities
 let mut available = CapabilitySet::new();
-available.add_boolean(FeatureTag::Audio, true);
-available.add_boolean(FeatureTag::Video, true);
+available.add_boolean(FeatureTag::Audio, true).unwrap();
+available.add_boolean(FeatureTag::Video, true).unwrap();
 available.add_token_list(
     FeatureTag::Methods,
     vec![
@@ -686,16 +692,18 @@ available.add_token_list(
         SmolStr::new("CANCEL"),
         SmolStr::new("OPTIONS"),
     ]
-);
+)
+.unwrap();
 
 // Requirements for a video call
 let mut required = CapabilitySet::new();
-required.add_boolean(FeatureTag::Audio, true);
-required.add_boolean(FeatureTag::Video, true);
+required.add_boolean(FeatureTag::Audio, true).unwrap();
+required.add_boolean(FeatureTag::Video, true).unwrap();
 required.add_token_list(
     FeatureTag::Methods,
     vec![SmolStr::new("INVITE"), SmolStr::new("BYE")]
-);
+)
+.unwrap();
 
 if available.matches(&required) {
     println!("UA meets requirements for video call");
@@ -717,19 +725,19 @@ use smol_str::SmolStr;
 let mut capabilities = CapabilitySet::new();
 
 // Media capabilities
-capabilities.add_boolean(FeatureTag::Audio, true);
-capabilities.add_boolean(FeatureTag::Video, true);
-capabilities.add_boolean(FeatureTag::Text, true);
+capabilities.add_boolean(FeatureTag::Audio, true).unwrap();
+capabilities.add_boolean(FeatureTag::Video, true).unwrap();
+capabilities.add_boolean(FeatureTag::Text, true).unwrap();
 
 // Device properties
-capabilities.add_boolean(FeatureTag::Automata, false); // Human-operated
-capabilities.add_token(FeatureTag::Class, "personal");
-capabilities.add_token(FeatureTag::Duplex, "full");
-capabilities.add_token(FeatureTag::Mobility, "mobile");
+capabilities.add_boolean(FeatureTag::Automata, false).unwrap(); // Human-operated
+capabilities.add_token(FeatureTag::Class, "personal").unwrap();
+capabilities.add_token(FeatureTag::Duplex, "full").unwrap();
+capabilities.add_token(FeatureTag::Mobility, "mobile").unwrap();
 
 // Descriptive information
-capabilities.add_string(FeatureTag::Description, "iPhone 15 Pro");
-capabilities.add_string(FeatureTag::Language, "en");
+capabilities.add_string(FeatureTag::Description, "iPhone 15 Pro").unwrap();
+capabilities.add_string(FeatureTag::Language, "en").unwrap();
 
 // Protocol support
 capabilities.add_token_list(
@@ -745,7 +753,8 @@ capabilities.add_token_list(
         SmolStr::new("NOTIFY"),
         SmolStr::new("MESSAGE"),
     ]
-);
+)
+.unwrap();
 
 capabilities.add_token_list(
     FeatureTag::Events,
@@ -754,7 +763,8 @@ capabilities.add_token_list(
         SmolStr::new("message-summary"),
         SmolStr::new("reg"),
     ]
-);
+)
+.unwrap();
 
 capabilities.add_token_list(
     FeatureTag::Schemes,
@@ -763,16 +773,17 @@ capabilities.add_token_list(
         SmolStr::new("sips"),
         SmolStr::new("tel"),
     ]
-);
+)
+.unwrap();
 
 // Conference capabilities
-capabilities.add_boolean(FeatureTag::IsFocus, false);
+capabilities.add_boolean(FeatureTag::IsFocus, false).unwrap();
 
 // Actor type
-capabilities.add_token(FeatureTag::Actor, "principal");
+capabilities.add_token(FeatureTag::Actor, "principal").unwrap();
 
 // Convert to params for Contact header
-let params = capabilities.to_params();
+let params = capabilities.to_params().unwrap();
 ```
 
 ## Integration with Other Components
@@ -784,19 +795,20 @@ When sending REGISTER:
 ```rust
 // Build REGISTER request with capabilities in Contact
 let mut capabilities = CapabilitySet::new();
-capabilities.add_boolean(FeatureTag::Audio, true);
-capabilities.add_boolean(FeatureTag::Video, true);
+capabilities.add_boolean(FeatureTag::Audio, true).unwrap();
+capabilities.add_boolean(FeatureTag::Video, true).unwrap();
 
-let params = capabilities.to_params();
+let params = capabilities.to_params().unwrap();
 
 // Create NameAddr with capabilities
-let name_addr = NameAddr {
-    display_name: Some(SmolStr::new("Alice")),
-    uri: contact_uri,
-    params: params, // Include capability parameters
-};
+let name_addr = NameAddr::new(
+    Some(SmolStr::new("Alice")),
+    contact_uri,
+    params, // Include capability parameters
+)
+.unwrap();
 
-let contact = ContactHeader(name_addr);
+let contact = ContactHeader::new(name_addr);
 // Add contact to REGISTER request
 ```
 
@@ -811,7 +823,7 @@ When responding to OPTIONS:
 let mut capabilities = CapabilitySet::new();
 // ... add capabilities ...
 
-let params = capabilities.to_params();
+let params = capabilities.to_params().unwrap();
 
 // Include in Contact header of 200 OK response
 ```
@@ -824,11 +836,11 @@ RFC 3840 capabilities are used by RFC 3841 (Caller Preferences) for intelligent 
 ```rust
 // Caller preferences require video
 let mut required_caps = CapabilitySet::new();
-required_caps.add_boolean(FeatureTag::Video, true);
+required_caps.add_boolean(FeatureTag::Video, true).unwrap();
 
 // Check each registered contact
 for contact in registered_contacts {
-    let ua_caps = contact.capabilities();
+    let ua_caps = contact.capabilities().unwrap();
     if ua_caps.matches(&required_caps) {
         // This UA can handle video calls
         // Add to routing list

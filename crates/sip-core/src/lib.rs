@@ -78,7 +78,7 @@ pub use caller_preferences::{
     ParallelDirective, ProxyDirective, QueueDirective, RecurseDirective, RejectContact,
     RequestDisposition, ScoredContact,
 };
-pub use capabilities::{Capability, CapabilitySet, FeatureTag, FeatureValue};
+pub use capabilities::{Capability, CapabilityError, CapabilitySet, FeatureTag, FeatureValue};
 pub use contact::ContactHeader;
 pub use cpim::{parse_cpim, CpimHeader, CpimMessage};
 pub use date::DateHeader;

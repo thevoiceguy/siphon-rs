@@ -19,9 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING**: `AcceptContact` and `RejectContact` fields are now private
 - **BREAKING**: Builder methods (`with_feature`, `with_q`, `add_feature`) now return `Result<T, CallerPrefsError>`
 - **BREAKING**: `score_contacts()` now returns `Result<Vec<ScoredContact>, CallerPrefsError>`
+- **BREAKING**: `Capability` fields (`tag`, `value`) are now private
+- **BREAKING**: All `Capability` and `CapabilitySet` constructors now return `Result<T, CapabilityError>`
+- **BREAKING**: `FeatureValue::to_param_value()` and `from_param_value()` now return `Result`
+- **BREAKING**: `CapabilitySet::to_params()` and `from_params()` now return `Result`
+- **BREAKING**: `ContactHeader::capabilities()` now returns `Result<CapabilitySet, CapabilityError>`
 
 ### Security
-- Added comprehensive input validation with configurable limits:
+- **Caller Preferences (RFC 3841)**:
   * MAX_FEATURES = 50 (features per header)
   * MAX_TOKEN_LIST_SIZE = 20 (tokens in list)
   * MAX_TOKEN_LENGTH = 64 (token length)
@@ -29,17 +34,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   * MAX_CONTACTS = 1024 (contacts to score)
   * MAX_ACCEPT_HEADERS = 32 (Accept-Contact headers)
   * MAX_REJECT_HEADERS = 32 (Reject-Contact headers)
-- Control character rejection in string feature values
-- Finite value validation for q-values and numeric features (no NaN/Infinity)
-- Token validation (alphanumeric + safe symbols only)
-- Added `CallerPrefsError` enum for validation errors
+  * Control character rejection in string feature values
+  * Finite value validation for q-values and numeric features (no NaN/Infinity)
+  * Token validation (alphanumeric + safe symbols only)
+  * Added `CallerPrefsError` enum for validation errors
+- **Capabilities (RFC 3840)**:
+  * MAX_TOKEN_LENGTH = 64 (token length)
+  * MAX_STRING_LENGTH = 256 (string value length)
+  * MAX_TOKEN_LIST_SIZE = 20 (tokens in token list)
+  * Control character rejection in tokens and strings
+  * Quote character rejection in strings (prevents injection)
+  * Finite value validation for numeric features (no NaN/Infinity)
+  * Token validation (alphanumeric + safe symbols only)
+  * Quote validation (proper opening/closing)
+  * Added `CapabilityError` enum for validation errors
+  * New validated constructors: `new_token()`, `new_token_list()`, `new_string()`, `new_numeric()`
+  * Added `FeatureValue::validate()` method
 
 ### Performance
-- Optimized token list matching from O(n²) to O(n) using HashSet
+- Optimized token list matching from O(n²) to O(n) using HashSet (both caller_preferences and capabilities)
 
 ### Added
-- Accessor methods: `features()`, `require()`, `explicit()`, `q()`, `feature_count()`
-- Four new security validation tests
+- Caller preferences accessor methods: `features()`, `require()`, `explicit()`, `q()`, `feature_count()`
+- Capabilities accessor methods: `tag()`, `value()`
+- 12 new security validation tests (4 caller_preferences + 8 capabilities)
 
 ## [0.4.0] - sip-core
 

@@ -22,17 +22,55 @@
 /// use sip_core::{FeatureTag, FeatureValue, Capability};
 ///
 /// // Create audio capability
-/// let audio = Capability::new(FeatureTag::Audio, FeatureValue::Boolean(true));
+/// let audio = Capability::new(FeatureTag::Audio, FeatureValue::Boolean(true)).unwrap();
 ///
 /// // Create methods capability
 /// let methods = Capability::new(
 ///     FeatureTag::Methods,
 ///     FeatureValue::TokenList(vec!["INVITE".into(), "BYE".into()])
-/// );
+/// )
+/// .unwrap();
 /// ```
 use smol_str::SmolStr;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
+
+const MAX_TOKEN_LENGTH: usize = 64;
+const MAX_STRING_LENGTH: usize = 256;
+const MAX_TOKEN_LIST_SIZE: usize = 20;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CapabilityError {
+    TokenTooLong { max: usize, actual: usize },
+    StringTooLong { max: usize, actual: usize },
+    TokenListTooLarge { max: usize, actual: usize },
+    InvalidToken,
+    InvalidString,
+    InvalidNumeric,
+    InvalidQuoting,
+}
+
+impl fmt::Display for CapabilityError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CapabilityError::TokenTooLong { max, actual } => {
+                write!(f, "token too long (max {}, got {})", max, actual)
+            }
+            CapabilityError::StringTooLong { max, actual } => {
+                write!(f, "string too long (max {}, got {})", max, actual)
+            }
+            CapabilityError::TokenListTooLarge { max, actual } => {
+                write!(f, "token list too large (max {}, got {})", max, actual)
+            }
+            CapabilityError::InvalidToken => write!(f, "invalid token"),
+            CapabilityError::InvalidString => write!(f, "invalid string"),
+            CapabilityError::InvalidNumeric => write!(f, "numeric value must be finite"),
+            CapabilityError::InvalidQuoting => write!(f, "invalid quoting"),
+        }
+    }
+}
+
+impl std::error::Error for CapabilityError {}
 
 /// RFC 3840 feature tags for indicating UA capabilities.
 ///
@@ -218,6 +256,118 @@ pub enum FeatureValue {
 }
 
 impl FeatureValue {
+    pub fn new_token(token: impl Into<SmolStr>) -> Result<Self, CapabilityError> {
+        let token = token.into();
+        if token.len() > MAX_TOKEN_LENGTH {
+            return Err(CapabilityError::TokenTooLong {
+                max: MAX_TOKEN_LENGTH,
+                actual: token.len(),
+            });
+        }
+        if !is_valid_token(token.as_str()) {
+            return Err(CapabilityError::InvalidToken);
+        }
+        Ok(FeatureValue::Token(token))
+    }
+
+    pub fn new_token_list(tokens: Vec<SmolStr>) -> Result<Self, CapabilityError> {
+        if tokens.len() > MAX_TOKEN_LIST_SIZE {
+            return Err(CapabilityError::TokenListTooLarge {
+                max: MAX_TOKEN_LIST_SIZE,
+                actual: tokens.len(),
+            });
+        }
+        for token in &tokens {
+            if token.len() > MAX_TOKEN_LENGTH {
+                return Err(CapabilityError::TokenTooLong {
+                    max: MAX_TOKEN_LENGTH,
+                    actual: token.len(),
+                });
+            }
+            if !is_valid_token(token.as_str()) {
+                return Err(CapabilityError::InvalidToken);
+            }
+        }
+        Ok(FeatureValue::TokenList(tokens))
+    }
+
+    pub fn new_string(value: impl Into<SmolStr>) -> Result<Self, CapabilityError> {
+        let value = value.into();
+        if value.len() > MAX_STRING_LENGTH {
+            return Err(CapabilityError::StringTooLong {
+                max: MAX_STRING_LENGTH,
+                actual: value.len(),
+            });
+        }
+        if !is_valid_string(value.as_str()) {
+            return Err(CapabilityError::InvalidString);
+        }
+        Ok(FeatureValue::String(value))
+    }
+
+    pub fn new_numeric(value: f64) -> Result<Self, CapabilityError> {
+        if !value.is_finite() {
+            return Err(CapabilityError::InvalidNumeric);
+        }
+        Ok(FeatureValue::Numeric(value))
+    }
+
+    pub fn validate(&self) -> Result<(), CapabilityError> {
+        match self {
+            FeatureValue::Boolean(_) => Ok(()),
+            FeatureValue::Token(token) => {
+                if token.len() > MAX_TOKEN_LENGTH {
+                    return Err(CapabilityError::TokenTooLong {
+                        max: MAX_TOKEN_LENGTH,
+                        actual: token.len(),
+                    });
+                }
+                if !is_valid_token(token.as_str()) {
+                    return Err(CapabilityError::InvalidToken);
+                }
+                Ok(())
+            }
+            FeatureValue::TokenList(tokens) => {
+                if tokens.len() > MAX_TOKEN_LIST_SIZE {
+                    return Err(CapabilityError::TokenListTooLarge {
+                        max: MAX_TOKEN_LIST_SIZE,
+                        actual: tokens.len(),
+                    });
+                }
+                for token in tokens {
+                    if token.len() > MAX_TOKEN_LENGTH {
+                        return Err(CapabilityError::TokenTooLong {
+                            max: MAX_TOKEN_LENGTH,
+                            actual: token.len(),
+                        });
+                    }
+                    if !is_valid_token(token.as_str()) {
+                        return Err(CapabilityError::InvalidToken);
+                    }
+                }
+                Ok(())
+            }
+            FeatureValue::String(value) => {
+                if value.len() > MAX_STRING_LENGTH {
+                    return Err(CapabilityError::StringTooLong {
+                        max: MAX_STRING_LENGTH,
+                        actual: value.len(),
+                    });
+                }
+                if !is_valid_string(value.as_str()) {
+                    return Err(CapabilityError::InvalidString);
+                }
+                Ok(())
+            }
+            FeatureValue::Numeric(value) => {
+                if !value.is_finite() {
+                    return Err(CapabilityError::InvalidNumeric);
+                }
+                Ok(())
+            }
+        }
+    }
+
     /// Returns true if this is a boolean true value.
     pub fn is_true(&self) -> bool {
         matches!(self, FeatureValue::Boolean(true))
@@ -269,59 +419,83 @@ impl FeatureValue {
     /// - TokenList: comma-separated quoted values
     /// - String: quoted value
     /// - Numeric: unquoted numeric value
-    pub fn to_param_value(&self) -> Option<SmolStr> {
+    pub fn to_param_value(&self) -> Result<Option<SmolStr>, CapabilityError> {
+        self.validate()?;
         match self {
-            FeatureValue::Boolean(true) => None, // No value for boolean true
-            FeatureValue::Boolean(false) => None, // Don't include false values
-            FeatureValue::Token(t) => Some(t.clone()),
+            FeatureValue::Boolean(true) => Ok(None), // No value for boolean true
+            FeatureValue::Boolean(false) => Ok(None), // Don't include false values
+            FeatureValue::Token(t) => Ok(Some(t.clone())),
             FeatureValue::TokenList(list) => {
                 if list.is_empty() {
-                    return None;
+                    return Ok(None);
                 }
-                Some(SmolStr::new(&format!("\"{}\"", list.join(","))))
+                Ok(Some(SmolStr::new(&format!("\"{}\"", list.join(",")))))
             }
-            FeatureValue::String(s) => Some(SmolStr::new(&format!("\"{}\"", s))),
-            FeatureValue::Numeric(n) => Some(SmolStr::new(&n.to_string())),
+            FeatureValue::String(s) => Ok(Some(SmolStr::new(&format!("\"{}\"", s)))),
+            FeatureValue::Numeric(n) => Ok(Some(SmolStr::new(&n.to_string()))),
         }
     }
 
     /// Parses a feature value from a Contact header parameter value.
     ///
     /// The tag is needed to determine the expected value type.
-    pub fn from_param_value(tag: FeatureTag, value: Option<&str>) -> Option<Self> {
+    pub fn from_param_value(
+        tag: FeatureTag,
+        value: Option<&str>,
+    ) -> Result<Self, CapabilityError> {
         match value {
             None => {
                 // No value = boolean true
-                Some(FeatureValue::Boolean(true))
+                Ok(FeatureValue::Boolean(true))
             }
             Some(v) => {
                 let v = v.trim();
+                if v.contains('"') && !(v.starts_with('"') && v.ends_with('"') && v.len() >= 2) {
+                    return Err(CapabilityError::InvalidQuoting);
+                }
 
                 // List-valued tags
                 if tag.is_list_valued() {
-                    return Some(FeatureValue::TokenList(parse_token_list(v)));
+                    let list = parse_token_list(v)?;
+                    return FeatureValue::new_token_list(list);
                 }
 
                 // String values (quoted)
                 if v.starts_with('"') && v.ends_with('"') {
+                    if v.len() < 2 {
+                        return Err(CapabilityError::InvalidQuoting);
+                    }
                     let unquoted = &v[1..v.len() - 1];
-                    return Some(FeatureValue::String(SmolStr::new(unquoted)));
+                    return FeatureValue::new_string(SmolStr::new(unquoted));
                 }
 
                 // Numeric values
                 if let Ok(num) = v.parse::<f64>() {
-                    return Some(FeatureValue::Numeric(num));
+                    return FeatureValue::new_numeric(num);
                 }
 
                 // Token value (unquoted)
-                Some(FeatureValue::Token(SmolStr::new(v)))
+                FeatureValue::new_token(SmolStr::new(v))
             }
         }
     }
 }
 
+fn is_valid_token(token: &str) -> bool {
+    !token.is_empty()
+        && !token.chars().any(|c| c.is_ascii_control())
+        && token.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(c, '-' | '.' | '!' | '%' | '*' | '_' | '+' | '`' | '\'' | '~')
+        })
+}
+
+fn is_valid_string(value: &str) -> bool {
+    !value.chars().any(|c| c.is_ascii_control() || c == '"')
+}
+
 /// Parses a comma-separated token list, handling quoted strings.
-fn parse_token_list(s: &str) -> Vec<SmolStr> {
+fn parse_token_list(s: &str) -> Result<Vec<SmolStr>, CapabilityError> {
     let s = s.trim();
 
     // Remove outer quotes if present
@@ -331,10 +505,32 @@ fn parse_token_list(s: &str) -> Vec<SmolStr> {
         s
     };
 
-    s.split(',')
+    let tokens: Vec<SmolStr> = s
+        .split(',')
         .map(|token| SmolStr::new(token.trim()))
         .filter(|token| !token.is_empty())
-        .collect()
+        .collect();
+
+    if tokens.len() > MAX_TOKEN_LIST_SIZE {
+        return Err(CapabilityError::TokenListTooLarge {
+            max: MAX_TOKEN_LIST_SIZE,
+            actual: tokens.len(),
+        });
+    }
+
+    for token in &tokens {
+        if token.len() > MAX_TOKEN_LENGTH {
+            return Err(CapabilityError::TokenTooLong {
+                max: MAX_TOKEN_LENGTH,
+                actual: token.len(),
+            });
+        }
+        if !is_valid_token(token.as_str()) {
+            return Err(CapabilityError::InvalidToken);
+        }
+    }
+
+    Ok(tokens)
 }
 
 /// Represents a single capability (feature tag + value).
@@ -344,40 +540,49 @@ fn parse_token_list(s: &str) -> Vec<SmolStr> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Capability {
     /// The feature tag
-    pub tag: FeatureTag,
+    tag: FeatureTag,
     /// The feature value
-    pub value: FeatureValue,
+    value: FeatureValue,
 }
 
 impl Capability {
     /// Creates a new capability.
-    pub fn new(tag: FeatureTag, value: FeatureValue) -> Self {
-        Self { tag, value }
+    pub fn new(tag: FeatureTag, value: FeatureValue) -> Result<Self, CapabilityError> {
+        value.validate()?;
+        Ok(Self { tag, value })
     }
 
     /// Creates a boolean capability.
-    pub fn boolean(tag: FeatureTag, value: bool) -> Self {
+    pub fn boolean(tag: FeatureTag, value: bool) -> Result<Self, CapabilityError> {
         Self::new(tag, FeatureValue::Boolean(value))
     }
 
     /// Creates a token capability.
-    pub fn token(tag: FeatureTag, value: impl Into<SmolStr>) -> Self {
-        Self::new(tag, FeatureValue::Token(value.into()))
+    pub fn token(tag: FeatureTag, value: impl Into<SmolStr>) -> Result<Self, CapabilityError> {
+        Self::new(tag, FeatureValue::new_token(value)?)
     }
 
     /// Creates a token list capability.
-    pub fn token_list(tag: FeatureTag, values: Vec<SmolStr>) -> Self {
-        Self::new(tag, FeatureValue::TokenList(values))
+    pub fn token_list(tag: FeatureTag, values: Vec<SmolStr>) -> Result<Self, CapabilityError> {
+        Self::new(tag, FeatureValue::new_token_list(values)?)
     }
 
     /// Creates a string capability.
-    pub fn string(tag: FeatureTag, value: impl Into<SmolStr>) -> Self {
-        Self::new(tag, FeatureValue::String(value.into()))
+    pub fn string(tag: FeatureTag, value: impl Into<SmolStr>) -> Result<Self, CapabilityError> {
+        Self::new(tag, FeatureValue::new_string(value)?)
     }
 
     /// Creates a numeric capability.
-    pub fn numeric(tag: FeatureTag, value: f64) -> Self {
-        Self::new(tag, FeatureValue::Numeric(value))
+    pub fn numeric(tag: FeatureTag, value: f64) -> Result<Self, CapabilityError> {
+        Self::new(tag, FeatureValue::new_numeric(value)?)
+    }
+
+    pub fn tag(&self) -> FeatureTag {
+        self.tag
+    }
+
+    pub fn value(&self) -> &FeatureValue {
+        &self.value
     }
 
     /// Returns the Contact header parameter name for this capability.
@@ -385,14 +590,15 @@ impl Capability {
         self.tag.param_name()
     }
 
-    /// Returns the Contact header parameter value for this capability.
-    pub fn param_value(&self) -> Option<SmolStr> {
+    /// Returns the Contact header parameter value for this capability, or an error
+    /// if the value is invalid.
+    pub fn param_value(&self) -> Result<Option<SmolStr>, CapabilityError> {
         self.value.to_param_value()
     }
 
     /// Converts this capability to a (name, value) pair for Contact parameters.
-    pub fn to_param(&self) -> (SmolStr, Option<SmolStr>) {
-        (SmolStr::new(self.param_name()), self.param_value())
+    pub fn to_param(&self) -> Result<(SmolStr, Option<SmolStr>), CapabilityError> {
+        Ok((SmolStr::new(self.param_name()), self.param_value()?))
     }
 }
 
@@ -414,33 +620,46 @@ impl CapabilitySet {
     }
 
     /// Adds a capability to the set.
-    pub fn add(&mut self, capability: Capability) {
+    pub fn add(&mut self, capability: Capability) -> Result<(), CapabilityError> {
         self.capabilities.insert(capability.tag, capability.value);
+        Ok(())
     }
 
     /// Adds a boolean capability.
-    pub fn add_boolean(&mut self, tag: FeatureTag, value: bool) {
-        self.add(Capability::boolean(tag, value));
+    pub fn add_boolean(&mut self, tag: FeatureTag, value: bool) -> Result<(), CapabilityError> {
+        self.add(Capability::boolean(tag, value)?)
     }
 
     /// Adds a token capability.
-    pub fn add_token(&mut self, tag: FeatureTag, value: impl Into<SmolStr>) {
-        self.add(Capability::token(tag, value));
+    pub fn add_token(
+        &mut self,
+        tag: FeatureTag,
+        value: impl Into<SmolStr>,
+    ) -> Result<(), CapabilityError> {
+        self.add(Capability::token(tag, value)?)
     }
 
     /// Adds a token list capability.
-    pub fn add_token_list(&mut self, tag: FeatureTag, values: Vec<SmolStr>) {
-        self.add(Capability::token_list(tag, values));
+    pub fn add_token_list(
+        &mut self,
+        tag: FeatureTag,
+        values: Vec<SmolStr>,
+    ) -> Result<(), CapabilityError> {
+        self.add(Capability::token_list(tag, values)?)
     }
 
     /// Adds a string capability.
-    pub fn add_string(&mut self, tag: FeatureTag, value: impl Into<SmolStr>) {
-        self.add(Capability::string(tag, value));
+    pub fn add_string(
+        &mut self,
+        tag: FeatureTag,
+        value: impl Into<SmolStr>,
+    ) -> Result<(), CapabilityError> {
+        self.add(Capability::string(tag, value)?)
     }
 
     /// Adds a numeric capability.
-    pub fn add_numeric(&mut self, tag: FeatureTag, value: f64) {
-        self.add(Capability::numeric(tag, value));
+    pub fn add_numeric(&mut self, tag: FeatureTag, value: f64) -> Result<(), CapabilityError> {
+        self.add(Capability::numeric(tag, value)?)
     }
 
     /// Gets a capability value by tag.
@@ -457,7 +676,7 @@ impl CapabilitySet {
     pub fn iter(&self) -> impl Iterator<Item = Capability> + '_ {
         self.capabilities
             .iter()
-            .map(|(tag, value)| Capability::new(*tag, value.clone()))
+            .map(|(tag, value)| Capability { tag: *tag, value: value.clone() })
     }
 
     /// Returns the number of capabilities in the set.
@@ -473,34 +692,37 @@ impl CapabilitySet {
     /// Converts the capability set to Contact header parameters.
     ///
     /// Returns a map of parameter names to optional values suitable for
-    /// inclusion in a Contact header.
-    pub fn to_params(&self) -> BTreeMap<SmolStr, Option<SmolStr>> {
+    /// inclusion in a Contact header, or an error if any value is invalid.
+    pub fn to_params(
+        &self,
+    ) -> Result<BTreeMap<SmolStr, Option<SmolStr>>, CapabilityError> {
         let mut params = BTreeMap::new();
         for capability in self.iter() {
-            let (name, value) = capability.to_param();
+            let (name, value) = capability.to_param()?;
             // Only include boolean true values (no value) and non-false values
             if !matches!(capability.value, FeatureValue::Boolean(false)) {
                 params.insert(name, value);
             }
         }
-        params
+        Ok(params)
     }
 
-    /// Parses a capability set from Contact header parameters.
-    pub fn from_params(params: &BTreeMap<SmolStr, Option<SmolStr>>) -> Self {
+    /// Parses a capability set from Contact header parameters, or returns an error
+    /// if any values are invalid.
+    pub fn from_params(
+        params: &BTreeMap<SmolStr, Option<SmolStr>>,
+    ) -> Result<Self, CapabilityError> {
         let mut set = Self::new();
 
         for (name, value) in params.iter() {
             if let Some(tag) = FeatureTag::from_param_name(name.as_str()) {
-                if let Some(feature_value) =
-                    FeatureValue::from_param_value(tag, value.as_ref().map(|v| v.as_str()))
-                {
-                    set.add(Capability::new(tag, feature_value));
-                }
+                let feature_value =
+                    FeatureValue::from_param_value(tag, value.as_ref().map(|v| v.as_str()))?;
+                set.add(Capability::new(tag, feature_value)?)?;
             }
         }
 
-        set
+        Ok(set)
     }
 
     /// Checks if this capability set matches the given requirements.
@@ -534,15 +756,22 @@ fn values_match(required: &FeatureValue, available: &FeatureValue) -> bool {
             req.eq_ignore_ascii_case(avail.as_str())
         }
         (FeatureValue::TokenList(req_list), FeatureValue::TokenList(avail_list)) => {
-            // All required tokens must be present in available list
-            req_list.iter().all(|req_token| {
-                avail_list
-                    .iter()
-                    .any(|avail_token| req_token.eq_ignore_ascii_case(avail_token.as_str()))
-            })
+            if req_list.len() > MAX_TOKEN_LIST_SIZE || avail_list.len() > MAX_TOKEN_LIST_SIZE {
+                return false;
+            }
+            let avail_set: HashSet<String> = avail_list
+                .iter()
+                .map(|token| token.to_ascii_lowercase())
+                .collect();
+            req_list
+                .iter()
+                .all(|req_token| avail_set.contains(&req_token.to_ascii_lowercase()))
         }
         (FeatureValue::String(req), FeatureValue::String(avail)) => req == avail,
         (FeatureValue::Numeric(req), FeatureValue::Numeric(avail)) => {
+            if !req.is_finite() || !avail.is_finite() {
+                return false;
+            }
             (req - avail).abs() < f64::EPSILON
         }
         _ => false, // Type mismatch
@@ -599,75 +828,85 @@ mod tests {
         let val = FeatureValue::Boolean(true);
         assert!(val.is_true());
         assert!(!val.is_false());
-        assert_eq!(val.to_param_value(), None); // Boolean true has no value
+        assert_eq!(val.to_param_value().unwrap(), None); // Boolean true has no value
     }
 
     #[test]
     fn token_feature_value() {
         let val = FeatureValue::Token(SmolStr::new("fixed"));
         assert_eq!(val.as_token(), Some(&SmolStr::new("fixed")));
-        assert_eq!(val.to_param_value(), Some(SmolStr::new("fixed")));
+        assert_eq!(
+            val.to_param_value().unwrap(),
+            Some(SmolStr::new("fixed"))
+        );
     }
 
     #[test]
     fn token_list_feature_value() {
         let val = FeatureValue::TokenList(vec![SmolStr::new("INVITE"), SmolStr::new("BYE")]);
-        assert_eq!(val.to_param_value(), Some(SmolStr::new("\"INVITE,BYE\"")));
+        assert_eq!(
+            val.to_param_value().unwrap(),
+            Some(SmolStr::new("\"INVITE,BYE\""))
+        );
     }
 
     #[test]
     fn string_feature_value() {
         let val = FeatureValue::String(SmolStr::new("Test Device"));
-        assert_eq!(val.to_param_value(), Some(SmolStr::new("\"Test Device\"")));
+        assert_eq!(
+            val.to_param_value().unwrap(),
+            Some(SmolStr::new("\"Test Device\""))
+        );
     }
 
     #[test]
     fn numeric_feature_value() {
         let val = FeatureValue::Numeric(100.5);
-        assert_eq!(val.to_param_value(), Some(SmolStr::new("100.5")));
+        assert_eq!(
+            val.to_param_value().unwrap(),
+            Some(SmolStr::new("100.5"))
+        );
     }
 
     #[test]
     fn parse_feature_value_boolean() {
-        let val = FeatureValue::from_param_value(FeatureTag::Audio, None);
-        assert_eq!(val, Some(FeatureValue::Boolean(true)));
+        let val = FeatureValue::from_param_value(FeatureTag::Audio, None).unwrap();
+        assert_eq!(val, FeatureValue::Boolean(true));
     }
 
     #[test]
     fn parse_feature_value_token() {
-        let val = FeatureValue::from_param_value(FeatureTag::Mobility, Some("fixed"));
-        assert_eq!(val, Some(FeatureValue::Token(SmolStr::new("fixed"))));
+        let val = FeatureValue::from_param_value(FeatureTag::Mobility, Some("fixed")).unwrap();
+        assert_eq!(val, FeatureValue::Token(SmolStr::new("fixed")));
     }
 
     #[test]
     fn parse_feature_value_token_list() {
-        let val = FeatureValue::from_param_value(FeatureTag::Methods, Some("\"INVITE,BYE\""));
+        let val = FeatureValue::from_param_value(FeatureTag::Methods, Some("\"INVITE,BYE\"")).unwrap();
         assert_eq!(
             val,
-            Some(FeatureValue::TokenList(vec![
-                SmolStr::new("INVITE"),
-                SmolStr::new("BYE"),
-            ]))
+            FeatureValue::TokenList(vec![SmolStr::new("INVITE"), SmolStr::new("BYE"),])
         );
     }
 
     #[test]
     fn parse_feature_value_string() {
-        let val = FeatureValue::from_param_value(FeatureTag::Description, Some("\"My Phone\""));
-        assert_eq!(val, Some(FeatureValue::String(SmolStr::new("My Phone"))));
+        let val =
+            FeatureValue::from_param_value(FeatureTag::Description, Some("\"My Phone\"")).unwrap();
+        assert_eq!(val, FeatureValue::String(SmolStr::new("My Phone")));
     }
 
     #[test]
     fn capability_creation() {
-        let cap = Capability::boolean(FeatureTag::Audio, true);
-        assert_eq!(cap.tag, FeatureTag::Audio);
-        assert!(cap.value.is_true());
+        let cap = Capability::boolean(FeatureTag::Audio, true).unwrap();
+        assert_eq!(cap.tag(), FeatureTag::Audio);
+        assert!(cap.value().is_true());
     }
 
     #[test]
     fn capability_to_param() {
-        let cap = Capability::boolean(FeatureTag::Audio, true);
-        let (name, value) = cap.to_param();
+        let cap = Capability::boolean(FeatureTag::Audio, true).unwrap();
+        let (name, value) = cap.to_param().unwrap();
         assert_eq!(name, "audio");
         assert_eq!(value, None); // Boolean true has no value
     }
@@ -675,8 +914,8 @@ mod tests {
     #[test]
     fn capability_set_add_and_get() {
         let mut set = CapabilitySet::new();
-        set.add_boolean(FeatureTag::Audio, true);
-        set.add_boolean(FeatureTag::Video, true);
+        set.add_boolean(FeatureTag::Audio, true).unwrap();
+        set.add_boolean(FeatureTag::Video, true).unwrap();
 
         assert!(set.has(FeatureTag::Audio));
         assert!(set.has(FeatureTag::Video));
@@ -687,14 +926,15 @@ mod tests {
     #[test]
     fn capability_set_to_params() {
         let mut set = CapabilitySet::new();
-        set.add_boolean(FeatureTag::Audio, true);
-        set.add_token(FeatureTag::Mobility, "fixed");
+        set.add_boolean(FeatureTag::Audio, true).unwrap();
+        set.add_token(FeatureTag::Mobility, "fixed").unwrap();
         set.add_token_list(
             FeatureTag::Methods,
             vec![SmolStr::new("INVITE"), SmolStr::new("BYE")],
-        );
+        )
+        .unwrap();
 
-        let params = set.to_params();
+        let params = set.to_params().unwrap();
         assert_eq!(params.get(&SmolStr::new("audio")), Some(&None));
         assert_eq!(
             params.get(&SmolStr::new("mobility")),
@@ -713,7 +953,7 @@ mod tests {
         params.insert(SmolStr::new("video"), None);
         params.insert(SmolStr::new("mobility"), Some(SmolStr::new("fixed")));
 
-        let set = CapabilitySet::from_params(&params);
+        let set = CapabilitySet::from_params(&params).unwrap();
         assert!(set.has(FeatureTag::Audio));
         assert!(set.has(FeatureTag::Video));
         assert!(set.has(FeatureTag::Mobility));
@@ -723,71 +963,79 @@ mod tests {
     #[test]
     fn capability_set_matching_boolean() {
         let mut available = CapabilitySet::new();
-        available.add_boolean(FeatureTag::Audio, true);
-        available.add_boolean(FeatureTag::Video, true);
+        available.add_boolean(FeatureTag::Audio, true).unwrap();
+        available.add_boolean(FeatureTag::Video, true).unwrap();
 
         let mut required = CapabilitySet::new();
-        required.add_boolean(FeatureTag::Audio, true);
+        required.add_boolean(FeatureTag::Audio, true).unwrap();
 
         assert!(available.matches(&required));
 
         // Require video too
-        required.add_boolean(FeatureTag::Video, true);
+        required.add_boolean(FeatureTag::Video, true).unwrap();
         assert!(available.matches(&required));
 
         // Require text (not available)
-        required.add_boolean(FeatureTag::Text, true);
+        required.add_boolean(FeatureTag::Text, true).unwrap();
         assert!(!available.matches(&required));
     }
 
     #[test]
     fn capability_set_matching_token() {
         let mut available = CapabilitySet::new();
-        available.add_token(FeatureTag::Mobility, "mobile");
+        available.add_token(FeatureTag::Mobility, "mobile").unwrap();
 
         let mut required = CapabilitySet::new();
-        required.add_token(FeatureTag::Mobility, "mobile");
+        required.add_token(FeatureTag::Mobility, "mobile").unwrap();
         assert!(available.matches(&required));
 
         required = CapabilitySet::new();
-        required.add_token(FeatureTag::Mobility, "fixed");
+        required.add_token(FeatureTag::Mobility, "fixed").unwrap();
         assert!(!available.matches(&required));
     }
 
     #[test]
     fn capability_set_matching_token_list() {
         let mut available = CapabilitySet::new();
-        available.add_token_list(
+        available
+            .add_token_list(
             FeatureTag::Methods,
             vec![
                 SmolStr::new("INVITE"),
                 SmolStr::new("BYE"),
                 SmolStr::new("CANCEL"),
             ],
-        );
+        )
+        .unwrap();
 
         let mut required = CapabilitySet::new();
-        required.add_token_list(FeatureTag::Methods, vec![SmolStr::new("INVITE")]);
+        required
+            .add_token_list(FeatureTag::Methods, vec![SmolStr::new("INVITE")])
+            .unwrap();
         assert!(available.matches(&required));
 
         required = CapabilitySet::new();
-        required.add_token_list(
+        required
+            .add_token_list(
             FeatureTag::Methods,
             vec![SmolStr::new("INVITE"), SmolStr::new("BYE")],
-        );
+        )
+        .unwrap();
         assert!(available.matches(&required));
 
         required = CapabilitySet::new();
-        required.add_token_list(
+        required
+            .add_token_list(
             FeatureTag::Methods,
             vec![SmolStr::new("INVITE"), SmolStr::new("REGISTER")],
-        );
+        )
+        .unwrap();
         assert!(!available.matches(&required)); // REGISTER not available
     }
 
     #[test]
     fn parse_token_list_with_spaces() {
-        let tokens = parse_token_list("\"INVITE, BYE, CANCEL\"");
+        let tokens = parse_token_list("\"INVITE, BYE, CANCEL\"").unwrap();
         assert_eq!(tokens.len(), 3);
         assert_eq!(tokens[0], "INVITE");
         assert_eq!(tokens[1], "BYE");
@@ -797,10 +1045,60 @@ mod tests {
     #[test]
     fn capability_set_iteration() {
         let mut set = CapabilitySet::new();
-        set.add_boolean(FeatureTag::Audio, true);
-        set.add_boolean(FeatureTag::Video, true);
+        set.add_boolean(FeatureTag::Audio, true).unwrap();
+        set.add_boolean(FeatureTag::Video, true).unwrap();
 
         let caps: Vec<_> = set.iter().collect();
         assert_eq!(caps.len(), 2);
+    }
+
+    #[test]
+    fn reject_crlf_in_token() {
+        let result = FeatureValue::new_token("bad\r\ntoken");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn reject_oversized_token() {
+        let long_token = "x".repeat(MAX_TOKEN_LENGTH + 1);
+        let result = FeatureValue::new_token(long_token);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn reject_huge_token_list() {
+        let huge = vec![SmolStr::new("x"); MAX_TOKEN_LIST_SIZE + 1];
+        let result = FeatureValue::new_token_list(huge);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn reject_nan_numeric() {
+        let result = FeatureValue::new_numeric(f64::NAN);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn reject_control_chars_in_string() {
+        let result = FeatureValue::new_string("hello\r\nworld");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn reject_quotes_in_string() {
+        let result = FeatureValue::new_string("hello\"world");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn invalid_numeric_to_param_value() {
+        let val = FeatureValue::Numeric(f64::NAN);
+        assert!(val.to_param_value().is_err());
+    }
+
+    #[test]
+    fn reject_invalid_quoting() {
+        let result = FeatureValue::from_param_value(FeatureTag::Description, Some("\"bad"));
+        assert!(result.is_err());
     }
 }

@@ -186,7 +186,7 @@ let accept = AcceptContact::new()
     .unwrap();
 
 let mut caps = CapabilitySet::new();
-caps.add_boolean(FeatureTag::Audio, true);
+caps.add_boolean(FeatureTag::Audio, true).unwrap();
 
 let score = accept.matches(&caps, true);
 assert_eq!(score, 1.0); // Perfect match
@@ -263,7 +263,7 @@ let reject = RejectContact::new()
     .unwrap();
 
 let mut caps = CapabilitySet::new();
-caps.add_boolean(FeatureTag::Automata, true);
+caps.add_boolean(FeatureTag::Automata, true).unwrap();
 
 // Should reject (contact advertised automata)
 assert!(reject.matches(&caps, true));
@@ -541,10 +541,10 @@ let accept = AcceptContact::new()
     .unwrap();
 
 let mut caps1 = CapabilitySet::new();
-caps1.add_boolean(FeatureTag::Audio, true);
+caps1.add_boolean(FeatureTag::Audio, true).unwrap();
 
 let mut caps2 = CapabilitySet::new();
-caps2.add_boolean(FeatureTag::Video, true);
+caps2.add_boolean(FeatureTag::Video, true).unwrap();
 
 let scored = score_contacts(contacts, &[accept], &[], &[caps1, caps2]).unwrap();
 
@@ -705,15 +705,15 @@ let contacts = vec![
 
 // Contact capabilities
 let mut caps1 = CapabilitySet::new();
-caps1.add_boolean(FeatureTag::Audio, true);
-caps1.add_boolean(FeatureTag::Video, true);
+caps1.add_boolean(FeatureTag::Audio, true).unwrap();
+caps1.add_boolean(FeatureTag::Video, true).unwrap();
 
 let mut caps2 = CapabilitySet::new();
-caps2.add_boolean(FeatureTag::Audio, true);
+caps2.add_boolean(FeatureTag::Audio, true).unwrap();
 
 let mut caps3 = CapabilitySet::new();
-caps3.add_boolean(FeatureTag::Audio, true);
-caps3.add_boolean(FeatureTag::Automata, true);
+caps3.add_boolean(FeatureTag::Audio, true).unwrap();
+caps3.add_boolean(FeatureTag::Automata, true).unwrap();
 
 // Score and filter contacts
 let scored = score_contacts(
@@ -782,8 +782,8 @@ use sip_core::{
 
 // UA advertises capabilities (RFC 3840)
 let mut capabilities = CapabilitySet::new();
-capabilities.add_boolean(FeatureTag::Audio, true);
-capabilities.add_boolean(FeatureTag::Video, true);
+capabilities.add_boolean(FeatureTag::Audio, true).unwrap();
+capabilities.add_boolean(FeatureTag::Video, true).unwrap();
 
 // Caller expresses preferences (RFC 3841)
 let accept = AcceptContact::new()
@@ -840,7 +840,7 @@ let contacts = location_service.get_contacts(&aor);
 
 // Extract capabilities
 let capabilities: Vec<_> = contacts.iter()
-    .map(|c| c.capabilities())
+    .map(|c| c.capabilities().unwrap())
     .collect();
 
 // Score and filter

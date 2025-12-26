@@ -831,7 +831,7 @@ mod tests {
             .unwrap();
 
         let mut caps = CapabilitySet::new();
-        caps.add_boolean(FeatureTag::Audio, true);
+        caps.add_boolean(FeatureTag::Audio, true).unwrap();
 
         // Should match with score 1.0 (1 of 1 features matched)
         assert_eq!(accept.matches(&caps, true), 1.0);
@@ -845,7 +845,7 @@ mod tests {
             .with_require();
 
         let mut caps = CapabilitySet::new();
-        caps.add_boolean(FeatureTag::Audio, true);
+        caps.add_boolean(FeatureTag::Audio, true).unwrap();
 
         // Should fail (score 0.0) because video is required but not available
         assert_eq!(accept.matches(&caps, true), 0.0);
@@ -859,7 +859,7 @@ mod tests {
             .with_explicit();
 
         let mut caps = CapabilitySet::new();
-        caps.add_boolean(FeatureTag::Audio, true);
+        caps.add_boolean(FeatureTag::Audio, true).unwrap();
 
         // Should fail (score 0.0) because explicit is set but contact has no features
         assert_eq!(accept.matches(&caps, false), 0.0);
@@ -876,7 +876,7 @@ mod tests {
             .unwrap();
 
         let mut caps = CapabilitySet::new();
-        caps.add_boolean(FeatureTag::Audio, true);
+        caps.add_boolean(FeatureTag::Audio, true).unwrap();
         // Video not present
 
         // Should score 0.5 (1 of 2 features matched)
@@ -899,7 +899,7 @@ mod tests {
             .unwrap();
 
         let mut caps = CapabilitySet::new();
-        caps.add_boolean(FeatureTag::Automata, true);
+        caps.add_boolean(FeatureTag::Automata, true).unwrap();
 
         // Should match (reject this contact)
         assert!(reject.matches(&caps, true));
@@ -912,7 +912,7 @@ mod tests {
             .unwrap();
 
         let mut caps = CapabilitySet::new();
-        caps.add_boolean(FeatureTag::Automata, true);
+        caps.add_boolean(FeatureTag::Automata, true).unwrap();
 
         // Should not match because contact has no explicit features
         assert!(!reject.matches(&caps, false));
@@ -966,10 +966,10 @@ mod tests {
             AcceptContact::new().with_feature(FeatureTag::Audio, FeatureValue::Boolean(true)).unwrap();
 
         let mut caps1 = CapabilitySet::new();
-        caps1.add_boolean(FeatureTag::Audio, true);
+        caps1.add_boolean(FeatureTag::Audio, true).unwrap();
 
         let mut caps2 = CapabilitySet::new();
-        caps2.add_boolean(FeatureTag::Video, true);
+        caps2.add_boolean(FeatureTag::Video, true).unwrap();
 
         let scored = score_contacts(contacts, &[accept], &[], &[caps1, caps2]).unwrap();
 
@@ -996,10 +996,10 @@ mod tests {
             RejectContact::new().with_feature(FeatureTag::Automata, FeatureValue::Boolean(true)).unwrap();
 
         let mut caps1 = CapabilitySet::new();
-        caps1.add_boolean(FeatureTag::Audio, true);
+        caps1.add_boolean(FeatureTag::Audio, true).unwrap();
 
         let mut caps2 = CapabilitySet::new();
-        caps2.add_boolean(FeatureTag::Automata, true);
+        caps2.add_boolean(FeatureTag::Automata, true).unwrap();
 
         let scored = score_contacts(contacts, &[], &[reject], &[caps1, caps2]).unwrap();
 
@@ -1025,10 +1025,10 @@ mod tests {
             .with_require();
 
         let mut caps1 = CapabilitySet::new();
-        caps1.add_boolean(FeatureTag::Audio, true);
+        caps1.add_boolean(FeatureTag::Audio, true).unwrap();
 
         let mut caps2 = CapabilitySet::new();
-        caps2.add_boolean(FeatureTag::Video, true);
+        caps2.add_boolean(FeatureTag::Video, true).unwrap();
 
         let scored = score_contacts(contacts, &[accept], &[], &[caps1, caps2]).unwrap();
 
@@ -1055,13 +1055,13 @@ mod tests {
             AcceptContact::new().with_feature(FeatureTag::Audio, FeatureValue::Boolean(true)).unwrap();
 
         let mut caps1 = CapabilitySet::new();
-        caps1.add_boolean(FeatureTag::Audio, true);
+        caps1.add_boolean(FeatureTag::Audio, true).unwrap();
 
         let mut caps2 = CapabilitySet::new();
-        caps2.add_boolean(FeatureTag::Video, true);
+        caps2.add_boolean(FeatureTag::Video, true).unwrap();
 
         let mut caps3 = CapabilitySet::new();
-        caps3.add_boolean(FeatureTag::Audio, true);
+        caps3.add_boolean(FeatureTag::Audio, true).unwrap();
 
         let scored = score_contacts(contacts, &[accept], &[], &[caps1, caps2, caps3]).unwrap();
 

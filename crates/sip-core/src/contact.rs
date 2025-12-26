@@ -35,7 +35,8 @@ impl ContactHeader {
     /// Extracts RFC 3840 capabilities from Contact header parameters.
     ///
     /// This parses capability feature tags (like audio, video, methods, etc.)
-    /// from the Contact header parameters and returns them as a CapabilitySet.
+    /// from the Contact header parameters and returns them as a CapabilitySet
+    /// or an error if the parameters are invalid.
     ///
     /// # Examples
     ///
@@ -56,12 +57,12 @@ impl ContactHeader {
     /// .unwrap();
     ///
     /// let contact = ContactHeader::new(name_addr);
-    /// let capabilities = contact.capabilities();
+    /// let capabilities = contact.capabilities().unwrap();
     ///
     /// assert!(capabilities.has(FeatureTag::Audio));
     /// assert!(capabilities.has(FeatureTag::Video));
     /// ```
-    pub fn capabilities(&self) -> CapabilitySet {
+    pub fn capabilities(&self) -> Result<CapabilitySet, crate::capabilities::CapabilityError> {
         CapabilitySet::from_params(self.0.params_map())
     }
 }
