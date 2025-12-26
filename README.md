@@ -82,7 +82,7 @@ bins/
 ## Testing
 
 **Test Suite Status:**
-- ✅ **235+ Unit & Integration Tests** - All passing
+- ✅ **1000+ Unit & Integration Tests** - All passing
 - ✅ **UDP/TCP Transport** - 24/24 scenarios passing
 - ✅ **IPv6 Support** - All scenarios passing
 - ⚠️ **Authentication Tests** - Known SIPp tool limitation (see below)
