@@ -95,7 +95,7 @@ pub use message_waiting::{
 pub use method::Method;
 pub use mime::MimeType;
 pub use msg::{Request, RequestLine, Response, SipMessage, StatusLine};
-pub use name_addr::NameAddr;
+pub use name_addr::{NameAddr, NameAddrError};
 pub use p_headers::{
     parse_p_asserted_identity, parse_p_preferred_identity, PAccessNetworkInfo,
     PAssertedIdentityHeader, PIdentity, PPreferredIdentityHeader, PVisitedNetworkIdHeader,

@@ -8,9 +8,13 @@ use crate::{name_addr::NameAddr, Uri};
 
 /// Parsed Route/Record-Route header value.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RouteHeader(pub NameAddr);
+pub struct RouteHeader(NameAddr);
 
 impl RouteHeader {
+    pub fn new(inner: NameAddr) -> Self {
+        Self(inner)
+    }
+
     pub fn uri(&self) -> &Uri {
         self.0.uri()
     }

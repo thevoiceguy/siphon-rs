@@ -868,9 +868,9 @@ Content-Length: 0\r\n\r\n",
     fn parse_call_info_accepts_absolute_uri() {
         let call_info = SmolStr::new("<https://example.com/info>".to_owned());
         let parsed = parse_call_info_header(&call_info).expect("call-info");
-        assert!(parsed.inner().uri.is_absolute());
+        assert!(parsed.inner().uri().is_absolute());
         assert_eq!(
-            parsed.inner().uri.as_absolute(),
+            parsed.inner().uri().as_absolute(),
             Some("https://example.com/info")
         );
     }
@@ -920,7 +920,7 @@ l: 0\r\n\r\n",
         assert_eq!(allow_tokens, vec!["INVITE", "ACK", "CANCEL"]);
 
         let call_info = parse_call_info_header(&SmolStr::new("<sip:info@example.com>")).unwrap();
-        assert_eq!(call_info.inner().uri.as_str(), "sip:info@example.com");
+        assert_eq!(call_info.inner().uri().as_str(), "sip:info@example.com");
 
         let mut call_info_headers = Headers::new();
         call_info_headers.push(
@@ -941,7 +941,7 @@ l: 0\r\n\r\n",
         let contact =
             parse_contact_header(header(&resp.headers, "Contact").unwrap()).expect("contact");
         assert_eq!(
-            contact.inner().display_name.as_deref(),
+            contact.inner().display_name().map(|s| s.as_str()),
             Some("Alice"),
             "contact display"
         );
@@ -986,13 +986,13 @@ l: 0\r\n\r\n",
         let service_route = parse_service_route(&resp.headers);
         assert_eq!(service_route.routes.len(), 1);
         assert_eq!(
-            service_route.routes[0].uri.as_str(),
+            service_route.routes[0].uri().as_str(),
             "sip:service.example.com"
         );
 
         let path = parse_path(&resp.headers);
         assert_eq!(path.routes.len(), 1);
-        assert_eq!(path.routes[0].uri.as_str(), "sip:path.example.com");
+        assert_eq!(path.routes[0].uri().as_str(), "sip:path.example.com");
 
         let history = parse_history_info(&resp.headers);
         assert_eq!(history.entries.len(), 1);
@@ -1042,7 +1042,7 @@ l: 0\r\n\r\n",
         let value = SmolStr::new("\"Alice <Admin>\" <sip:alice@example.com>".to_owned());
         let contact = parse_contact_header(&value).expect("contact");
         assert_eq!(
-            contact.inner().display_name.as_deref(),
+            contact.inner().display_name().map(|s| s.as_str()),
             Some("Alice <Admin>")
         );
         assert_eq!(contact.uri().as_str(), "sip:alice@example.com");

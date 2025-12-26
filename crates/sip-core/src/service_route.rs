@@ -48,11 +48,7 @@ impl PathHeader {
     /// Creates a Path header with a single route.
     pub fn single(uri: Uri) -> Self {
         Self {
-            routes: vec![NameAddr {
-                display_name: None,
-                uri,
-                params: Default::default(),
-            }],
+            routes: vec![NameAddr::from_uri(uri)],
         }
     }
 
@@ -61,11 +57,7 @@ impl PathHeader {
         Self {
             routes: uris
                 .into_iter()
-                .map(|uri| NameAddr {
-                    display_name: None,
-                    uri,
-                    params: Default::default(),
-                })
+                .map(NameAddr::from_uri)
                 .collect(),
         }
     }
@@ -82,16 +74,12 @@ impl PathHeader {
 
     /// Adds a route to the end of the Path header.
     pub fn add_route(&mut self, uri: Uri) {
-        self.routes.push(NameAddr {
-            display_name: None,
-            uri,
-            params: Default::default(),
-        });
+        self.routes.push(NameAddr::from_uri(uri));
     }
 
     /// Returns an iterator over the route URIs.
     pub fn uris(&self) -> impl Iterator<Item = &Uri> {
-        self.routes.iter().map(|r| &r.uri)
+        self.routes.iter().map(NameAddr::uri)
     }
 
     /// Checks if all routes have the 'lr' (loose routing) parameter.
@@ -101,7 +89,12 @@ impl PathHeader {
     pub fn all_loose_routing(&self) -> bool {
         self.routes
             .iter()
-            .all(|r| r.uri.as_sip().map(|sip| sip.params.contains_key("lr")).unwrap_or(false))
+            .all(|r| {
+                r.uri()
+                    .as_sip()
+                    .map(|sip| sip.params.contains_key("lr"))
+                    .unwrap_or(false)
+            })
     }
 }
 
@@ -111,8 +104,8 @@ impl fmt::Display for PathHeader {
             if i > 0 {
                 write!(f, ", ")?;
             }
-            write!(f, "<{}>", route.uri.as_str())?;
-            for (key, value) in &route.params {
+            write!(f, "<{}>", route.uri().as_str())?;
+            for (key, value) in route.params() {
                 if let Some(v) = value {
                     write!(f, ";{}={}", key, v)?;
                 } else {
@@ -166,11 +159,7 @@ impl ServiceRouteHeader {
     /// Creates a Service-Route header with a single route.
     pub fn single(uri: Uri) -> Self {
         Self {
-            routes: vec![NameAddr {
-                display_name: None,
-                uri,
-                params: Default::default(),
-            }],
+            routes: vec![NameAddr::from_uri(uri)],
         }
     }
 
@@ -179,11 +168,7 @@ impl ServiceRouteHeader {
         Self {
             routes: uris
                 .into_iter()
-                .map(|uri| NameAddr {
-                    display_name: None,
-                    uri,
-                    params: Default::default(),
-                })
+                .map(NameAddr::from_uri)
                 .collect(),
         }
     }
@@ -200,23 +185,24 @@ impl ServiceRouteHeader {
 
     /// Adds a route to the end of the Service-Route header.
     pub fn add_route(&mut self, uri: Uri) {
-        self.routes.push(NameAddr {
-            display_name: None,
-            uri,
-            params: Default::default(),
-        });
+        self.routes.push(NameAddr::from_uri(uri));
     }
 
     /// Returns an iterator over the route URIs.
     pub fn uris(&self) -> impl Iterator<Item = &Uri> {
-        self.routes.iter().map(|r| &r.uri)
+        self.routes.iter().map(NameAddr::uri)
     }
 
     /// Checks if all routes have the 'lr' (loose routing) parameter.
     pub fn all_loose_routing(&self) -> bool {
         self.routes
             .iter()
-            .all(|r| r.uri.as_sip().map(|sip| sip.params.contains_key("lr")).unwrap_or(false))
+            .all(|r| {
+                r.uri()
+                    .as_sip()
+                    .map(|sip| sip.params.contains_key("lr"))
+                    .unwrap_or(false)
+            })
     }
 }
 
@@ -226,8 +212,8 @@ impl fmt::Display for ServiceRouteHeader {
             if i > 0 {
                 write!(f, ", ")?;
             }
-            write!(f, "<{}>", route.uri.as_str())?;
-            for (key, value) in &route.params {
+            write!(f, "<{}>", route.uri().as_str())?;
+            for (key, value) in route.params() {
                 if let Some(v) = value {
                     write!(f, ";{}={}", key, v)?;
                 } else {
@@ -252,7 +238,7 @@ mod tests {
 
         assert_eq!(path.len(), 1);
         assert!(!path.is_empty());
-        assert_eq!(path.routes[0].uri.as_str(), "sip:proxy.example.com;lr");
+        assert_eq!(path.routes[0].uri().as_str(), "sip:proxy.example.com;lr");
     }
 
     #[test]
@@ -263,8 +249,8 @@ mod tests {
 
         assert_eq!(path.len(), 2);
         assert!(!path.is_empty());
-        assert_eq!(path.routes[0].uri.as_str(), "sip:proxy1.example.com;lr");
-        assert_eq!(path.routes[1].uri.as_str(), "sip:proxy2.example.com;lr");
+        assert_eq!(path.routes[0].uri().as_str(), "sip:proxy1.example.com;lr");
+        assert_eq!(path.routes[1].uri().as_str(), "sip:proxy2.example.com;lr");
     }
 
     #[test]
@@ -276,7 +262,7 @@ mod tests {
         path.add_route(Uri::from(uri2));
 
         assert_eq!(path.len(), 2);
-        assert_eq!(path.routes[1].uri.as_str(), "sip:proxy2.example.com;lr");
+        assert_eq!(path.routes[1].uri().as_str(), "sip:proxy2.example.com;lr");
     }
 
     #[test]
@@ -332,7 +318,7 @@ mod tests {
 
         assert_eq!(sr.len(), 1);
         assert!(!sr.is_empty());
-        assert_eq!(sr.routes[0].uri.as_str(), "sip:service.example.com;lr");
+        assert_eq!(sr.routes[0].uri().as_str(), "sip:service.example.com;lr");
     }
 
     #[test]
@@ -343,8 +329,8 @@ mod tests {
 
         assert_eq!(sr.len(), 2);
         assert!(!sr.is_empty());
-        assert_eq!(sr.routes[0].uri.as_str(), "sip:service1.example.com;lr");
-        assert_eq!(sr.routes[1].uri.as_str(), "sip:service2.example.com;lr");
+        assert_eq!(sr.routes[0].uri().as_str(), "sip:service1.example.com;lr");
+        assert_eq!(sr.routes[1].uri().as_str(), "sip:service2.example.com;lr");
     }
 
     #[test]
@@ -356,7 +342,7 @@ mod tests {
         sr.add_route(Uri::from(uri2));
 
         assert_eq!(sr.len(), 2);
-        assert_eq!(sr.routes[1].uri.as_str(), "sip:service2.example.com;lr");
+        assert_eq!(sr.routes[1].uri().as_str(), "sip:service2.example.com;lr");
     }
 
     #[test]
@@ -411,7 +397,9 @@ mod tests {
         let mut path = PathHeader::single(Uri::from(uri));
 
         // Manually add lr param to the NameAddr
-        path.routes[0].params.insert(SmolStr::new("lr"), None);
+        path.routes[0]
+            .insert_param(SmolStr::new("lr"), None)
+            .expect("valid param");
 
         let display = path.to_string();
         assert!(display.contains(";lr"));

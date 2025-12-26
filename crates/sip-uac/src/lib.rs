@@ -346,7 +346,7 @@ impl UserAgentClient {
             for header in request.headers.iter() {
                 if header.name.eq_ignore_ascii_case("Route") && !inserted {
                     for route in &service_route.routes {
-                        let route_value = format!("<{}>", route.uri.as_str());
+                        let route_value = format!("<{}>", route.uri().as_str());
                         new_headers.push(Header {
                             name: SmolStr::new("Route"),
                             value: SmolStr::new(route_value),
@@ -360,7 +360,7 @@ impl UserAgentClient {
 
             if !inserted {
                 for route in &service_route.routes {
-                    let route_value = format!("<{}>", route.uri.as_str());
+                    let route_value = format!("<{}>", route.uri().as_str());
                     new_headers.push(Header {
                         name: SmolStr::new("Route"),
                         value: SmolStr::new(route_value),
@@ -3681,7 +3681,7 @@ mod tests {
         let service_route = uac.get_service_route().unwrap();
         assert_eq!(service_route.len(), 1);
         assert!(service_route.routes[0]
-            .uri
+            .uri()
             .as_str()
             .contains("proxy.example.com"));
     }
@@ -3711,11 +3711,11 @@ mod tests {
         let service_route = uac.get_service_route().unwrap();
         assert_eq!(service_route.len(), 2);
         assert!(service_route.routes[0]
-            .uri
+            .uri()
             .as_str()
             .contains("proxy1.example.com"));
         assert!(service_route.routes[1]
-            .uri
+            .uri()
             .as_str()
             .contains("proxy2.example.com"));
     }

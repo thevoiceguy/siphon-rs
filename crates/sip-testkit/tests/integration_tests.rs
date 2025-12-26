@@ -6,7 +6,7 @@ use bytes::Bytes;
 use sip_core::Method;
 use sip_parse::{parse_request, parse_response, serialize_request, serialize_response};
 use sip_testkit::{
-    as_bytes, build_invite, build_options, build_register, build_response,
+    as_bytes, build_invite, build_options, build_prack, build_register, build_response,
     build_refer, build_provisional_with_rseq, scenario_invite_prack,
     scenario_refer_with_notify, scenario_register_with_auth,
 };

@@ -10,9 +10,13 @@ use crate::name_addr::NameAddr;
 /// Per RFC 3840, Contact headers can include capability feature tags
 /// as parameters to indicate UA capabilities.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ContactHeader(pub NameAddr);
+pub struct ContactHeader(NameAddr);
 
 impl ContactHeader {
+    pub fn new(inner: NameAddr) -> Self {
+        Self(inner)
+    }
+
     /// Returns the contact URI.
     pub fn uri(&self) -> &crate::Uri {
         self.0.uri()
@@ -44,13 +48,14 @@ impl ContactHeader {
     /// params.insert(SmolStr::new("audio"), None);
     /// params.insert(SmolStr::new("video"), None);
     ///
-    /// let name_addr = NameAddr {
-    ///     display_name: None,
-    ///     uri: Uri::from(SipUri::parse("sip:alice@example.com").unwrap()),
+    /// let name_addr = NameAddr::new(
+    ///     None,
+    ///     Uri::from(SipUri::parse("sip:alice@example.com").unwrap()),
     ///     params,
-    /// };
+    /// )
+    /// .unwrap();
     ///
-    /// let contact = ContactHeader(name_addr);
+    /// let contact = ContactHeader::new(name_addr);
     /// let capabilities = contact.capabilities();
     ///
     /// assert!(capabilities.has(FeatureTag::Audio));

@@ -56,7 +56,7 @@ pub fn parse_via_header(value: &SmolStr) -> Option<ViaHeader> {
 }
 
 pub fn parse_contact_header(value: &SmolStr) -> Option<ContactHeader> {
-    parse_name_addr(value).map(ContactHeader)
+    parse_name_addr(value).map(ContactHeader::new)
 }
 
 pub fn parse_route_headers(headers: &Headers, name: &str) -> Vec<RouteHeader> {
@@ -67,19 +67,19 @@ pub fn parse_route_headers(headers: &Headers, name: &str) -> Vec<RouteHeader> {
 }
 
 pub fn parse_route_header(value: &SmolStr) -> Option<RouteHeader> {
-    parse_name_addr(value).map(RouteHeader)
+    parse_name_addr(value).map(RouteHeader::new)
 }
 
 pub fn parse_from_header(value: &SmolStr) -> Option<FromHeader> {
-    parse_name_addr(value).map(FromHeader)
+    parse_name_addr(value).map(FromHeader::new)
 }
 
 pub fn parse_to_header(value: &SmolStr) -> Option<ToHeader> {
-    parse_name_addr(value).map(ToHeader)
+    parse_name_addr(value).map(ToHeader::new)
 }
 
 pub fn parse_call_info_header(value: &SmolStr) -> Option<NameAddrHeader> {
-    parse_name_addr(value).map(NameAddrHeader)
+    parse_name_addr(value).map(NameAddrHeader::new)
 }
 
 pub fn parse_call_info_headers(headers: &Headers) -> Vec<NameAddrHeader> {
@@ -317,7 +317,7 @@ pub fn parse_history_info(headers: &Headers) -> HistoryInfoHeader {
             }
             if let Some(name_addr) = parse_name_addr(&SmolStr::new(part.to_owned())) {
                 entries.push(HistoryInfoEntry {
-                    uri: name_addr.uri.clone(),
+                    uri: name_addr.uri().clone(),
                     params: name_addr.params_map().clone(),
                 });
             }
@@ -363,7 +363,7 @@ pub fn parse_geolocation_header(headers: &Headers) -> GeolocationHeader {
             }
             if let Some(name_addr) = parse_name_addr(&SmolStr::new(part.to_owned())) {
                 values.push(GeolocationValue {
-                    uri: name_addr.uri.clone(),
+                    uri: name_addr.uri().clone(),
                     params: name_addr.params_map().clone(),
                 });
             }
@@ -525,24 +525,21 @@ fn parse_name_addr(value: &SmolStr) -> Option<NameAddr> {
             let uri = input[start + 1..end].trim();
             let params = parse_params(input[end + 1..].trim());
             let uri = Uri::parse(uri)?;
-            Some(NameAddr {
-                display_name: if display.is_empty() {
+            NameAddr::new(
+                if display.is_empty() {
                     None
                 } else {
                     Some(SmolStr::new(display.trim_matches('"').to_owned()))
                 },
                 uri,
                 params,
-            })
+            )
+            .ok()
         }
         Ok(None) => {
             let (uri_part, param_part) = input.split_once(';').unwrap_or((input, ""));
             let uri = Uri::parse(uri_part.trim())?;
-            Some(NameAddr {
-                display_name: None,
-                uri,
-                params: parse_params(param_part),
-            })
+            NameAddr::new(None, uri, parse_params(param_part)).ok()
         }
         Err(()) => None,
     }
