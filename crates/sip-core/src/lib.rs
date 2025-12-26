@@ -74,9 +74,9 @@ pub mod watcher_info;
 pub use addr_headers::{FromHeader, NameAddrHeader, ToHeader};
 pub use auth::AuthorizationHeader;
 pub use caller_preferences::{
-    score_contacts, AcceptContact, CancelDirective, ForkDirective, ParallelDirective,
-    ProxyDirective, QueueDirective, RecurseDirective, RejectContact, RequestDisposition,
-    ScoredContact,
+    score_contacts, AcceptContact, CallerPrefsError, CancelDirective, ForkDirective,
+    ParallelDirective, ProxyDirective, QueueDirective, RecurseDirective, RejectContact,
+    RequestDisposition, ScoredContact,
 };
 pub use capabilities::{Capability, CapabilitySet, FeatureTag, FeatureValue};
 pub use contact::ContactHeader;

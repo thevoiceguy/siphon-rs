@@ -13,6 +13,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Harden transport metrics labels with strict enums/validation and add a rate-limited tracing metrics implementation.
 - Strengthen SIP digest authentication defaults and validation (SHA-256 default, size/nonce bounds, replay window configuration, and parsing hardening) with new tests.
 
+## [0.5.0] - sip-core
+
+### Breaking Changes
+- **BREAKING**: `AcceptContact` and `RejectContact` fields are now private
+- **BREAKING**: Builder methods (`with_feature`, `with_q`, `add_feature`) now return `Result<T, CallerPrefsError>`
+- **BREAKING**: `score_contacts()` now returns `Result<Vec<ScoredContact>, CallerPrefsError>`
+
+### Security
+- Added comprehensive input validation with configurable limits:
+  * MAX_FEATURES = 50 (features per header)
+  * MAX_TOKEN_LIST_SIZE = 20 (tokens in list)
+  * MAX_TOKEN_LENGTH = 64 (token length)
+  * MAX_STRING_LENGTH = 256 (string values)
+  * MAX_CONTACTS = 1024 (contacts to score)
+  * MAX_ACCEPT_HEADERS = 32 (Accept-Contact headers)
+  * MAX_REJECT_HEADERS = 32 (Reject-Contact headers)
+- Control character rejection in string feature values
+- Finite value validation for q-values and numeric features (no NaN/Infinity)
+- Token validation (alphanumeric + safe symbols only)
+- Added `CallerPrefsError` enum for validation errors
+
+### Performance
+- Optimized token list matching from O(n²) to O(n) using HashSet
+
+### Added
+- Accessor methods: `features()`, `require()`, `explicit()`, `q()`, `feature_count()`
+- Four new security validation tests
+
 ## [0.4.0] - sip-core
 
 ### Security
