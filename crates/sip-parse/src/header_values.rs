@@ -245,8 +245,8 @@ pub fn parse_resource_priority(value: &SmolStr) -> ResourcePriorityHeader {
 pub fn parse_event_header(value: &SmolStr) -> Option<EventHeader> {
     let mut parts = value.split(';');
     let package = parts.next()?.trim();
-    let mut id = None;
-    let mut params = Vec::new();
+    let mut header = EventHeader::new(package).ok()?;
+    let mut has_id = false;
     for part in parts {
         let part = part.trim();
         if part.is_empty() {
@@ -255,54 +255,41 @@ pub fn parse_event_header(value: &SmolStr) -> Option<EventHeader> {
         if let Some((name, val)) = part.split_once('=') {
             let val = val.trim().trim_matches('"');
             if name.eq_ignore_ascii_case("id") {
-                id = Some(SmolStr::new(val.to_owned()));
+                if has_id {
+                    return None;
+                }
+                header = header.with_id(val).ok()?;
+                has_id = true;
             } else {
-                params.push((
-                    SmolStr::new(name.to_ascii_lowercase()),
-                    Some(SmolStr::new(val.to_owned())),
-                ));
+                header.add_param(name, Some(val)).ok()?;
             }
         } else {
-            params.push((SmolStr::new(part.to_ascii_lowercase()), None));
+            if part.eq_ignore_ascii_case("id") {
+                return None;
+            }
+            header.add_param(part, None).ok()?;
         }
     }
-    Some(EventHeader {
-        package: SmolStr::new(package.to_ascii_lowercase()),
-        id,
-        params,
-    })
+    Some(header)
 }
 
-pub fn parse_subscription_state(value: &SmolStr) -> SubscriptionStateHeader {
+pub fn parse_subscription_state(value: &SmolStr) -> Option<SubscriptionStateHeader> {
     let mut parts = value.split(';');
-    let state = match parts
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "active" => SubscriptionState::Active,
-        "pending" => SubscriptionState::Pending,
-        "terminated" => SubscriptionState::Terminated,
-        other => SubscriptionState::Unknown(SmolStr::new(other.to_owned())),
-    };
-    let mut params = Vec::new();
+    let state = SubscriptionState::parse(parts.next().unwrap_or("").trim()).ok()?;
+    let mut header = SubscriptionStateHeader::new(state);
     for part in parts {
         let part = part.trim();
         if part.is_empty() {
             continue;
         }
         if let Some((name, val)) = part.split_once('=') {
-            params.push((
-                SmolStr::new(name.to_ascii_lowercase()),
-                Some(SmolStr::new(val.trim().trim_matches('"').to_owned())),
-            ));
+            let val = val.trim().trim_matches('"');
+            header.add_param(name, Some(val)).ok()?;
         } else {
-            params.push((SmolStr::new(part.to_ascii_lowercase()), None));
+            header.add_param(part, None).ok()?;
         }
     }
-    SubscriptionStateHeader { state, params }
+    Some(header)
 }
 
 pub fn parse_history_info(headers: &Headers) -> HistoryInfoHeader {

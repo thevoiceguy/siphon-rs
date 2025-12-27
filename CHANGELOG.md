@@ -13,6 +13,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Harden transport metrics labels with strict enums/validation and add a rate-limited tracing metrics implementation.
 - Strengthen SIP digest authentication defaults and validation (SHA-256 default, size/nonce bounds, replay window configuration, and parsing hardening) with new tests.
 
+## [0.6.2] - sip-core
+
+### Breaking Changes
+- **BREAKING**: `EventHeader` and `SubscriptionStateHeader` fields are now private with accessor methods
+- **BREAKING**: `EventHeader::params` changed from `Vec<(SmolStr, Option<SmolStr>)>` to `BTreeMap<SmolStr, Option<SmolStr>>` for duplicate detection
+
+### Security
+- **Event Package Headers (RFC 3265)**:
+  * MAX_PACKAGE_LENGTH = 64 bytes (event package names)
+  * MAX_ID_LENGTH = 256 bytes (event ID parameter)
+  * MAX_PARAMS = 20 (parameters per Event header)
+  * MAX_PARAM_NAME_LENGTH = 64 bytes
+  * MAX_PARAM_VALUE_LENGTH = 256 bytes
+  * MAX_STATE_LENGTH = 32 bytes (subscription state names)
+  * MAX_REASON_LENGTH = 128 bytes (termination reason)
+  * Control character blocking in all string fields (prevents CRLF injection)
+  * Case-insensitive duplicate parameter detection via BTreeMap
+  * Parameter name validation (alphanumeric + safe symbols only)
+  * Added `EventHeaderError` enum with 12 detailed error variants
+
+### Added
+- `EventHeader` accessor methods: `package()`, `id()`, `params()`, `get_param()`
+- `SubscriptionStateHeader` accessor methods: `state()`, `expires()`, `retry_after()`, `reason()`
+- `SubscriptionState::parse()` method (replaces `from_str()` to avoid confusion with trait)
+- `FromStr` trait implementation for `SubscriptionState` (enables `.parse()` syntax)
+- Case-insensitive parameter lookup via `get_param()`
+- 18 comprehensive security tests covering CRLF injection, oversized inputs, duplicate params, control characters
+- Module-level documentation with security guarantees and usage examples
+
+### Changed
+- `EventHeader::add_param()` now validates parameter names and values
+- Parameter lookup is now case-insensitive for robustness
+- Params stored in BTreeMap for automatic deduplication and sorted iteration
+
+### Fixed
+- Removed method name conflict: renamed `SubscriptionState::from_str()` to `parse()` to avoid clippy warning
+
+## [0.2.4] - sip-parse
+
+### Changed
+- Updated `parse_subscription_state()` to use `SubscriptionState::parse()` instead of deprecated `from_str()` method
+- Maintains backward compatibility with existing parser behavior
+
 ## [0.6.1] - sip-core
 
 ### Added

@@ -976,12 +976,13 @@ l: 0\r\n\r\n",
         assert_eq!(rp.values.len(), 2);
 
         let event = parse_event_header(header(&resp.headers, "Event").unwrap()).expect("event");
-        assert_eq!(event.package.as_str(), "dialog");
-        assert_eq!(event.id.as_deref(), Some("123"));
+        assert_eq!(event.package(), "dialog");
+        assert_eq!(event.id(), Some("123"));
 
         let sub_state =
-            parse_subscription_state(header(&resp.headers, "Subscription-State").unwrap());
-        assert!(matches!(sub_state.state, SubscriptionState::Active));
+            parse_subscription_state(header(&resp.headers, "Subscription-State").unwrap())
+                .expect("subscription-state");
+        assert!(matches!(sub_state.state(), SubscriptionState::Active));
 
         let service_route = parse_service_route(&resp.headers);
         assert_eq!(service_route.routes.len(), 1);

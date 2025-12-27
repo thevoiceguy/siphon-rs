@@ -82,7 +82,7 @@ pub use capabilities::{Capability, CapabilityError, CapabilitySet, FeatureTag, F
 pub use contact::ContactHeader;
 pub use cpim::{parse_cpim, CpimHeader, CpimMessage};
 pub use date::{DateHeader, DateHeaderError};
-pub use event::{EventHeader, SubscriptionState, SubscriptionStateHeader};
+pub use event::{EventHeader, EventHeaderError, SubscriptionState, SubscriptionStateHeader};
 pub use geolocation::{
     GeolocationErrorHeader, GeolocationHeader, GeolocationRoutingHeader, GeolocationValue,
 };
