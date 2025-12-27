@@ -74,7 +74,14 @@ cargo fuzz run parse_request
 cargo fuzz list
 ```
 
-Available fuzz targets: `parse_request`, `parse_response`, `parse_headers`
+Available fuzz targets:
+- `parse_request` - SIP request parsing
+- `parse_response` - SIP response parsing
+- `parse_headers` - SIP header parsing
+- `parse_uri` - URI parsing
+- `parse_via` - Via header parsing
+- `parse_cpim` - CPIM message parsing (RFC 3862)
+- `serialize_roundtrip` - Serialization round-trip testing
 
 ## Architecture Overview
 

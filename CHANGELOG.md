@@ -13,6 +13,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Harden transport metrics labels with strict enums/validation and add a rate-limited tracing metrics implementation.
 - Strengthen SIP digest authentication defaults and validation (SHA-256 default, size/nonce bounds, replay window configuration, and parsing hardening) with new tests.
 
+## [0.6.0] - sip-core
+
+### Breaking Changes
+- **BREAKING**: `CpimMessage` and `CpimHeader` fields are now private with accessor methods
+- **BREAKING**: `CpimMessage::new()` now returns `Result<CpimMessage, CpimError>`
+- **BREAKING**: All builder methods (`with_from`, `with_to`, `with_subject`, etc.) now return `Result<Self, CpimError>`
+- **BREAKING**: `CpimMessage::to_string()` now returns `Result<String, CpimError>`
+- **BREAKING**: `CpimHeader::new()` now returns `Result<CpimHeader, CpimError>`
+- **BREAKING**: `CpimHeader::with_param()` now returns `Result<Self, CpimError>`
+- **BREAKING**: `parse_cpim()` now returns `Result<CpimMessage, CpimError>` instead of `Option<CpimMessage>`
+
+### Security
+- **CPIM Message Format (RFC 3862)**:
+  * MAX_BODY_SIZE = 10 MB (message body limit)
+  * MAX_PARSE_SIZE = 20 MB (input size limit)
+  * MAX_HEADERS = 50 (message headers)
+  * MAX_CONTENT_HEADERS = 20 (content headers)
+  * MAX_PARAMS_PER_HEADER = 10 (parameters per header)
+  * MAX_HEADER_NAME_LENGTH = 128 bytes
+  * MAX_HEADER_VALUE_LENGTH = 1024 bytes
+  * MAX_PARAM_NAME_LENGTH = 64 bytes
+  * MAX_PARAM_VALUE_LENGTH = 256 bytes
+  * MAX_CONTENT_TYPE_LENGTH = 256 bytes
+  * Control character blocking in headers, params, and content type
+  * CRLF injection prevention in content headers
+  * Invalid character detection (`:`, `;`, `=`, `\`, `"` in header names)
+  * Parameter validation with separate checks for names and values
+  * Content-Type validation (non-empty, length-limited)
+  * Added `CpimError` enum with detailed error variants
+
+### Performance
+- Added unchecked builder methods for trusted internal use:
+  * `CpimMessage::new_unchecked()` - Skip validation when inputs are known valid
+  * `CpimMessage::set_header_unchecked()` - Skip header validation
+  * `CpimHeader::new_unchecked()` - Skip value validation
+- Added `body_as_str()` method that returns `&str` without cloning (preferred over `body_as_string()`)
+
+### Added
+- Comprehensive module-level documentation with security guarantees and error handling examples
+- CPIM message accessor methods: `headers()`, `content_type()`, `content_headers()`, `body()`
+- CPIM header accessor methods: `value()`, `params()`
+- `set_body()` method with validation
+- `add_content_header()` method for mutable header addition
+- `parse_cpim.rs` fuzz target for parser hardening
+- 4 doc tests demonstrating usage patterns and error handling
+
+### Fixed
+- Removed redundant CRLF validation (already covered by control character check)
+- Optimized header validation to avoid duplicate checks
+
 ## [0.5.0] - sip-core
 
 ### Breaking Changes
