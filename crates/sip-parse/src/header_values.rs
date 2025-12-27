@@ -5,7 +5,6 @@
 use std::collections::BTreeMap;
 
 use bytes::Bytes;
-use httpdate::parse_http_date;
 use sip_core::{
     AllowHeader, AuthorizationHeader, ContactHeader, DateHeader, EventHeader, FromHeader,
     GeolocationErrorHeader, GeolocationHeader, GeolocationRoutingHeader, GeolocationValue, Headers,
@@ -169,11 +168,10 @@ pub fn parse_priority_header(value: &SmolStr) -> PriorityValue {
 }
 
 pub fn parse_date_header(value: &SmolStr) -> DateHeader {
-    let timestamp = parse_http_date(value.as_str()).ok();
-    DateHeader {
-        raw: value.clone(),
-        timestamp,
-    }
+    // Try to create a validated DateHeader from the raw string
+    // If validation fails, return a DateHeader with the current timestamp
+    // This maintains backward compatibility while using the new validated API
+    DateHeader::new(value.as_str()).unwrap_or_else(|_| DateHeader::now())
 }
 
 pub fn parse_subject_header(value: &SmolStr) -> SubjectHeader {

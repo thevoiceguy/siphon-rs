@@ -81,7 +81,7 @@ pub use caller_preferences::{
 pub use capabilities::{Capability, CapabilityError, CapabilitySet, FeatureTag, FeatureValue};
 pub use contact::ContactHeader;
 pub use cpim::{parse_cpim, CpimHeader, CpimMessage};
-pub use date::DateHeader;
+pub use date::{DateHeader, DateHeaderError};
 pub use event::{EventHeader, SubscriptionState, SubscriptionStateHeader};
 pub use geolocation::{
     GeolocationErrorHeader, GeolocationHeader, GeolocationRoutingHeader, GeolocationValue,

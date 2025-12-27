@@ -1117,7 +1117,7 @@ Content-Length: 0\r\n\r\n",
 
         let date_value = SmolStr::new("Fri, 21 Feb 2025 10:00:00 GMT".to_owned());
         let date = parse_date_header(&date_value);
-        assert!(date.timestamp.is_some());
+        assert!(date.timestamp().is_some());
 
         let subject = parse_subject_header(&SmolStr::new("Test Call".to_owned()));
         assert_eq!(subject.value.as_str(), "Test Call");

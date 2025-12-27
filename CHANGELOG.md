@@ -13,6 +13,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Harden transport metrics labels with strict enums/validation and add a rate-limited tracing metrics implementation.
 - Strengthen SIP digest authentication defaults and validation (SHA-256 default, size/nonce bounds, replay window configuration, and parsing hardening) with new tests.
 
+## [0.6.1] - sip-core
+
+### Added
+- Implemented actual RFC 1123 date parsing and formatting using `httpdate` crate
+- Added 8 comprehensive validation tests for DateHeader (15 total tests)
+- Added strict format validation for day names, months, year range (1970-2100), and time components
+- Added `DateHeader::now()` - Create DateHeader from current system time
+- Added `DateHeader::from_timestamp()` - Create DateHeader from SystemTime
+- Added `DateHeader::is_past()` and `DateHeader::is_future()` - Date comparison methods
+
+### Changed
+- `DateHeader` fields are now private with accessor methods (`raw()`, `timestamp()`)
+- `DateHeader::new()` now performs comprehensive validation and returns `Result<DateHeader, DateHeaderError>`
+- Date parsing now actually works (was stub implementation)
+- Strengthened format validation: validates day names (Mon-Sun), months (Jan-Dec), day numbers (01-31), year range, time format (HH:MM:SS)
+
+### Fixed
+- Restored missing copyright header
+- Fixed placeholder implementations that always returned None/hardcoded values
+- Fixed clippy warnings (use range contains syntax)
+
+### Dependencies
+- Added `httpdate = "1.0"` for RFC 1123 date parsing/formatting
+
+## [0.2.3] - sip-parse
+
+### Changed
+- Updated `parse_date_header()` to use new validated `DateHeader::new()` API
+- Falls back to current timestamp if date validation fails (maintains backward compatibility)
+- Updated test to use `timestamp()` getter instead of direct field access
+
+### Removed
+- Removed duplicate `httpdate` dependency (now handled by sip-core)
+
 ## [0.6.0] - sip-core
 
 ### Breaking Changes

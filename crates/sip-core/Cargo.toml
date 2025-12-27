@@ -1,6 +1,6 @@
 [package]
 name = "sip-core"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 license.workspace = true
 description = "Core SIP types, headers, URIs, and message primitives."
@@ -15,6 +15,7 @@ bytes = { workspace = true }
 smol_str = { workspace = true }
 serde = { workspace = true }
 percent-encoding = "2.3"
+httpdate = "1.0"
 
 [dev-dependencies]
 proptest = "1"
