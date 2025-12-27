@@ -15,6 +15,7 @@ use sip_core::{
     SessionExpires, SipETagHeader, SubjectHeader, SubscriptionState,
     SubscriptionStateHeader, SupportedHeader, ToHeader, TokenList, ViaHeader,
 };
+use sip_core::geolocation::GeolocationError;
 use smol_str::SmolStr;
 
 pub fn parse_via_header(value: &SmolStr) -> Option<ViaHeader> {
@@ -338,7 +339,9 @@ pub fn parse_sip_etag(value: &SmolStr) -> SipETagHeader {
     }
 }
 
-pub fn parse_geolocation_header(headers: &Headers) -> GeolocationHeader {
+pub fn parse_geolocation_header(
+    headers: &Headers,
+) -> Result<GeolocationHeader, GeolocationError> {
     let mut values = Vec::new();
     for header in headers.get_all("Geolocation") {
         for part in split_quoted_commas(header.as_str()) {
@@ -347,21 +350,31 @@ pub fn parse_geolocation_header(headers: &Headers) -> GeolocationHeader {
                 continue;
             }
             if let Some(name_addr) = parse_name_addr(&SmolStr::new(part)) {
-                values.push(GeolocationValue {
-                    uri: name_addr.uri().clone(),
-                    params: name_addr.params_map().clone(),
-                });
+                let mut value = GeolocationValue::new(name_addr.uri().clone());
+                for (name, param_value) in name_addr.params_map() {
+                    let _ = value.add_param(
+                        name.as_str(),
+                        param_value.as_ref().map(|s| s.as_str()),
+                    );
+                }
+                values.push(value);
             }
         }
     }
-    GeolocationHeader { values }
+    GeolocationHeader::new(values)
 }
 
-pub fn parse_geolocation_error(value: &SmolStr) -> GeolocationErrorHeader {
+pub fn parse_geolocation_error(
+    value: &SmolStr,
+) -> Result<GeolocationErrorHeader, GeolocationError> {
     let mut parts = value.split(';');
     let code = parts.next().map(|c| c.trim()).filter(|c| !c.is_empty());
-    let mut params = BTreeMap::new();
-    let mut description = None;
+    let mut header = GeolocationErrorHeader::new();
+    if let Some(code) = code {
+        if let Ok(updated) = header.clone().with_code(code) {
+            header = updated;
+        }
+    }
     for part in parts {
         let part = part.trim();
         if part.is_empty() {
@@ -371,24 +384,30 @@ pub fn parse_geolocation_error(value: &SmolStr) -> GeolocationErrorHeader {
             let key = name.trim().to_ascii_lowercase();
             let value = SmolStr::new(val.trim().trim_matches('"'));
             if key == "reason" {
-                description = Some(value.clone());
+                if let Ok(updated) = header.clone().with_description(value.as_str()) {
+                    header = updated;
+                }
             }
-            params.insert(SmolStr::new(key), Some(value));
+            let _ = header.add_param(&key, Some(value.as_str()));
         } else {
-            params.insert(SmolStr::new(part.to_ascii_lowercase()), None);
+            let key = part.to_ascii_lowercase();
+            let _ = header.add_param(&key, None);
         }
     }
-    GeolocationErrorHeader {
-        code: code.map(SmolStr::new),
-        description,
-        params,
-    }
+    Ok(header)
 }
 
-pub fn parse_geolocation_routing(value: &SmolStr) -> GeolocationRoutingHeader {
-    GeolocationRoutingHeader {
-        params: parse_params(value.as_str()),
+pub fn parse_geolocation_routing(
+    value: &SmolStr,
+) -> Result<GeolocationRoutingHeader, GeolocationError> {
+    let mut header = GeolocationRoutingHeader::new();
+    for (name, param_value) in parse_params(value.as_str()) {
+        let _ = header.add_param(
+            name.as_str(),
+            param_value.as_ref().map(|s| s.as_str()),
+        );
     }
+    Ok(header)
 }
 
 pub fn parse_p_access_network_info(value: &SmolStr) -> Option<PAccessNetworkInfo> {

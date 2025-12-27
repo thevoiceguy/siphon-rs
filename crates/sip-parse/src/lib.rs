@@ -883,10 +883,10 @@ Geolocation: <https://example.com/loc>;purpose=emergency\r\n\
 Content-Length: 0\r\n\r\n",
         );
         let req = parse_request(&raw).expect("parse");
-        let geo = parse_geolocation_header(&req.headers);
-        assert_eq!(geo.values.len(), 1);
+        let geo = parse_geolocation_header(&req.headers).expect("geolocation");
+        assert_eq!(geo.len(), 1);
         assert_eq!(
-            geo.values[0].uri.as_absolute(),
+            geo.first().unwrap().uri().as_absolute(),
             Some("https://example.com/loc")
         );
     }
@@ -1009,18 +1009,20 @@ l: 0\r\n\r\n",
         let etag = parse_sip_etag(header(&resp.headers, "SIP-ETag").unwrap());
         assert_eq!(etag.value.as_str(), "abc123");
 
-        let geo = parse_geolocation_header(&resp.headers);
-        assert_eq!(geo.values.len(), 1);
-        assert_eq!(geo.values[0].uri.as_str(), "sip:geo@example.com");
+        let geo = parse_geolocation_header(&resp.headers).expect("geolocation");
+        assert_eq!(geo.len(), 1);
+        assert_eq!(geo.first().unwrap().uri().as_str(), "sip:geo@example.com");
 
         let geo_error =
-            parse_geolocation_error(header(&resp.headers, "Geolocation-Error").unwrap());
-        assert_eq!(geo_error.code.as_deref(), Some("100"));
-        assert_eq!(geo_error.description.as_deref(), Some("Failure"));
+            parse_geolocation_error(header(&resp.headers, "Geolocation-Error").unwrap())
+                .expect("geolocation-error");
+        assert_eq!(geo_error.code(), Some("100"));
+        assert_eq!(geo_error.description(), Some("Failure"));
 
         let geo_routing =
-            parse_geolocation_routing(header(&resp.headers, "Geolocation-Routing").unwrap());
-        assert!(geo_routing.params.contains_key("yes"));
+            parse_geolocation_routing(header(&resp.headers, "Geolocation-Routing").unwrap())
+                .expect("geolocation-routing");
+        assert!(geo_routing.get_param("yes").is_some());
 
         let pani =
             parse_p_access_network_info(header(&resp.headers, "P-Access-Network-Info").unwrap())
