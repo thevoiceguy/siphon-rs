@@ -88,7 +88,7 @@ pub fn request_vias<'a>(req: &'a Request) -> HeaderValues<'a> {
 }
 
 /// Returns the top-most Via header value, if present.
-pub fn top_via<'a>(req: &'a Request) -> Option<&'a SmolStr> {
+pub fn top_via(req: &Request) -> Option<&SmolStr> {
     request_vias(req).iter().next()
 }
 
@@ -110,7 +110,7 @@ pub fn branch_from_via(via: &str) -> Option<&str> {
 pub fn request_branch_id(req: &Request) -> Option<SmolStr> {
     let via = top_via(req)?;
     let branch = branch_from_via(via)?;
-    Some(SmolStr::new(branch.to_owned()))
+    Some(SmolStr::new(branch))
 }
 
 /// Generates a new RFC 3261 magic-cookie branch identifier.

@@ -77,7 +77,7 @@ impl Method {
         } else if token.eq_ignore_ascii_case("PUBLISH") {
             Method::Publish
         } else {
-            Method::Unknown(SmolStr::new(token.to_owned()))
+            Method::Unknown(SmolStr::new(token))
         }
     }
 }

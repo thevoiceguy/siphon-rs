@@ -38,11 +38,7 @@ impl TelUri {
     /// Creates a new TelUri from components.
     pub fn new(number: impl Into<SmolStr>, is_global: bool) -> Self {
         let number = number.into();
-        let raw = if is_global {
-            SmolStr::new(format!("tel:{}", number))
-        } else {
-            SmolStr::new(format!("tel:{}", number))
-        };
+        let raw = SmolStr::new(format!("tel:{}", number));
 
         Self {
             raw,
@@ -70,7 +66,7 @@ impl TelUri {
     /// assert_eq!(uri.phone_context.as_ref().unwrap().as_str(), "example.com");
     /// ```
     pub fn parse(input: &str) -> Option<Self> {
-        let raw = SmolStr::new(input.to_owned());
+        let raw = SmolStr::new(input);
 
         // Must start with "tel:"
         let rest = input.strip_prefix("tel:")?;
@@ -91,7 +87,7 @@ impl TelUri {
         let normalized_number = if is_global {
             normalize_global_number(number_part)
         } else {
-            SmolStr::new(number_part.to_owned())
+            SmolStr::new(number_part)
         };
 
         // Parse parameters
@@ -105,8 +101,8 @@ impl TelUri {
             }
 
             if let Some((key, value)) = param.split_once('=') {
-                let key = SmolStr::new(key.trim().to_owned());
-                let value = SmolStr::new(value.trim().to_owned());
+                let key = SmolStr::new(key.trim());
+                let value = SmolStr::new(value.trim());
 
                 // Special handling for phone-context
                 if key.as_str().eq_ignore_ascii_case("phone-context") {
@@ -115,7 +111,7 @@ impl TelUri {
 
                 parameters.insert(key, Some(value));
             } else {
-                parameters.insert(SmolStr::new(param.to_owned()), None);
+                parameters.insert(SmolStr::new(param), None);
             }
         }
 
@@ -168,7 +164,7 @@ impl TelUri {
         if !self.is_global {
             self.phone_context = Some(context.clone());
             self.parameters
-                .insert(SmolStr::new("phone-context".to_owned()), Some(context));
+                .insert(SmolStr::new("phone-context"), Some(context));
         }
         self
     }

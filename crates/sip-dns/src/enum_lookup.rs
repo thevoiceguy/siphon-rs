@@ -26,7 +26,6 @@
 /// let domain = enum_to_domain("+12025332600").unwrap();
 /// assert_eq!(domain, "0.0.6.2.3.3.5.2.0.2.1.e164.arpa");
 /// ```
-
 /// Converts an E.164 telephone number to an ENUM domain name.
 ///
 /// Per RFC 3761, E.164 numbers are converted to DNS names by:

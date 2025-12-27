@@ -457,7 +457,7 @@ impl LocationStore for MemoryLocationStore {
         let expires_at = Instant::now() + binding.expires;
         let aor_key = binding.aor.clone();
 
-        let mut list = self.inner.entry(aor_key).or_insert_with(Vec::new);
+        let mut list = self.inner.entry(aor_key).or_default();
 
         // Remove existing binding with same contact
         list.retain(|b| b.contact != binding.contact);
@@ -475,19 +475,19 @@ impl LocationStore for MemoryLocationStore {
     }
 
     fn remove(&self, aor: &str, contact: &str) -> Result<()> {
-        if let Some(mut entry) = self.inner.get_mut(&SmolStr::new(aor.to_owned())) {
+        if let Some(mut entry) = self.inner.get_mut(&SmolStr::new(aor)) {
             entry.retain(|b| b.contact.as_str() != contact);
         }
         Ok(())
     }
 
     fn remove_all(&self, aor: &str) -> Result<()> {
-        self.inner.remove(&SmolStr::new(aor.to_owned()));
+        self.inner.remove(&SmolStr::new(aor));
         Ok(())
     }
 
     fn lookup(&self, aor: &str) -> Result<Vec<Binding>> {
-        let aor_key = SmolStr::new(aor.to_owned());
+        let aor_key = SmolStr::new(aor);
         self.purge_expired(&aor_key);
 
         if let Some(entry) = self.inner.get(&aor_key) {
@@ -567,6 +567,7 @@ pub struct BasicRegistrar<S, A> {
     min_expires: Duration,
     max_expires: Duration,
     rate_limiter: Option<RateLimiter>,
+    #[allow(clippy::type_complexity)]
     rate_limit_key_fn: Option<Arc<dyn Fn(&Request) -> Option<SmolStr> + Send + Sync>>,
 }
 
@@ -623,6 +624,7 @@ impl<S, A> BasicRegistrar<S, A> {
         self
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn with_rate_limiter_key_fn(
         mut self,
         limiter: RateLimiter,
@@ -704,7 +706,7 @@ impl<S, A> BasicRegistrar<S, A> {
             if uri.is_empty() {
                 return Err(ContactHeaderError::Invalid);
             }
-            return Ok(SmolStr::new(uri.to_owned()));
+            return Ok(SmolStr::new(uri));
         }
 
         // Handle uri without brackets (stop at first semicolon)
@@ -713,11 +715,11 @@ impl<S, A> BasicRegistrar<S, A> {
             if uri.is_empty() {
                 return Err(ContactHeaderError::Invalid);
             }
-            Ok(SmolStr::new(uri.to_owned()))
+            Ok(SmolStr::new(uri))
         } else if trimmed.is_empty() {
             Err(ContactHeaderError::Invalid)
         } else {
-            Ok(SmolStr::new(trimmed.to_owned()))
+            Ok(SmolStr::new(trimmed))
         }
     }
 
@@ -787,7 +789,7 @@ impl<S, A> BasicRegistrar<S, A> {
                     .build_error_response(request, 400, reason)
                     .unwrap_or_else(|_| {
                         Response::new(
-                            StatusLine::new(400, SmolStr::new(reason.to_owned())),
+                            StatusLine::new(400, SmolStr::new(reason)),
                             Headers::new(),
                             Bytes::new(),
                         )
@@ -805,7 +807,7 @@ impl<S, A> BasicRegistrar<S, A> {
                     .build_error_response(request, 400, "Bad Request - Missing CSeq header")
                     .unwrap_or_else(|_| {
                         Response::new(
-                            StatusLine::new(400, SmolStr::new("Bad Request - Missing CSeq".to_owned())),
+                            StatusLine::new(400, SmolStr::new("Bad Request - Missing CSeq")),
                             Headers::new(),
                             Bytes::new(),
                         )
@@ -823,7 +825,7 @@ impl<S, A> BasicRegistrar<S, A> {
                     "Bad Request - Invalid CSeq",
                 ).unwrap_or_else(|_| {
                     Response::new(
-                        StatusLine::new(400, SmolStr::new("Bad Request - Invalid CSeq".to_owned())),
+                        StatusLine::new(400, SmolStr::new("Bad Request - Invalid CSeq")),
                         Headers::new(),
                         Bytes::new(),
                     )
@@ -835,7 +837,7 @@ impl<S, A> BasicRegistrar<S, A> {
             return Err(self.build_error_response(request, 400, "Bad Request - Invalid CSeq")
                 .unwrap_or_else(|_| {
                     Response::new(
-                        StatusLine::new(400, SmolStr::new("Bad Request - Invalid CSeq".to_owned())),
+                        StatusLine::new(400, SmolStr::new("Bad Request - Invalid CSeq")),
                         Headers::new(),
                         Bytes::new(),
                     )
@@ -866,10 +868,10 @@ impl<S, A> BasicRegistrar<S, A> {
             headers.push(SmolStr::new("CSeq"), cseq.clone());
         }
 
-        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0".to_owned()));
+        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
 
         Ok(Response::new(
-            StatusLine::new(code, SmolStr::new(reason.to_owned())),
+            StatusLine::new(code, SmolStr::new(reason)),
             headers,
             Bytes::new(),
         ))
@@ -1062,7 +1064,7 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
 
             headers.push(SmolStr::new("Contact"), SmolStr::new("*"));
             headers.push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()));
-            headers.push(SmolStr::new("Content-Length"), SmolStr::new("0".to_owned()));
+            headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
 
             return Ok(Response::new(
                 StatusLine::new(200, SmolStr::new("OK")),
@@ -1181,7 +1183,7 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
         }
 
         headers.push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()));
-        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0".to_owned()));
+        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
 
         Ok(Response::new(
             StatusLine::new(200, SmolStr::new("OK")),
@@ -1336,7 +1338,7 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
 
             headers.push(SmolStr::new("Contact"), SmolStr::new("*"));
             headers.push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()));
-            headers.push(SmolStr::new("Content-Length"), SmolStr::new("0".to_owned()));
+            headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
 
             return Ok(Response::new(
                 StatusLine::new(200, SmolStr::new("OK")),
@@ -1461,7 +1463,7 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
         }
 
         headers.push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()));
-        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0".to_owned()));
+        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
 
         Ok(Response::new(
             StatusLine::new(200, SmolStr::new("OK")),
@@ -1478,7 +1480,7 @@ pub fn contact_headers(headers: &Headers) -> Vec<SmolStr> {
         for part in split_quoted_commas(value.as_str()) {
             let trimmed = part.trim();
             if !trimmed.is_empty() {
-                contacts.push(SmolStr::new(trimmed.to_owned()));
+                contacts.push(SmolStr::new(trimmed));
             }
         }
     }
@@ -1503,7 +1505,7 @@ fn format_contact(contact_uri: &SmolStr, expires: Duration, q_value: f32) -> Smo
 fn ensure_to_tag(to_header: &str) -> SmolStr {
     // Check if tag already exists
     if to_header.contains(";tag=") {
-        return SmolStr::new(to_header.to_owned());
+        return SmolStr::new(to_header);
     }
 
     // Generate random tag (8 characters)

@@ -290,7 +290,7 @@ impl ContactEvent {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "registered" => Some(ContactEvent::Registered),
             "created" => Some(ContactEvent::Created),
@@ -303,6 +303,14 @@ impl ContactEvent {
             "probation" => Some(ContactEvent::Probation),
             _ => None,
         }
+    }
+}
+
+impl std::str::FromStr for ContactEvent {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s).ok_or(())
     }
 }
 
@@ -482,18 +490,18 @@ mod tests {
     #[test]
     fn contact_event_from_str() {
         assert_eq!(
-            ContactEvent::from_str("registered"),
+            ContactEvent::parse("registered"),
             Some(ContactEvent::Registered)
         );
         assert_eq!(
-            ContactEvent::from_str("expired"),
+            ContactEvent::parse("expired"),
             Some(ContactEvent::Expired)
         );
         assert_eq!(
-            ContactEvent::from_str("refreshed"),
+            ContactEvent::parse("refreshed"),
             Some(ContactEvent::Refreshed)
         );
-        assert_eq!(ContactEvent::from_str("invalid"), None);
+        assert_eq!(ContactEvent::parse("invalid"), None);
     }
 
     #[test]

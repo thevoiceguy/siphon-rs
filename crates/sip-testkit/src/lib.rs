@@ -61,7 +61,7 @@ pub fn build_invite(uri: &str, branch: &str, call_id: &str) -> Request {
         SmolStr::new("<sip:alice@example.com>;tag=1234"),
     );
     headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"));
-    headers.push(SmolStr::new("Call-ID"), SmolStr::new(call_id.to_owned()));
+    headers.push(SmolStr::new("Call-ID"), SmolStr::new(call_id));
     headers.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"));
     headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
     headers.push(
@@ -89,9 +89,9 @@ pub fn build_prack(uri: &str, rack: &str, call_id: &str, cseq: u32) -> Request {
         SmolStr::new("<sip:alice@example.com>;tag=1234"),
     );
     headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"));
-    headers.push(SmolStr::new("Call-ID"), SmolStr::new(call_id.to_owned()));
+    headers.push(SmolStr::new("Call-ID"), SmolStr::new(call_id));
     headers.push(SmolStr::new("CSeq"), SmolStr::new(format!("{} PRACK", cseq)));
-    headers.push(SmolStr::new("RAck"), SmolStr::new(rack.to_owned()));
+    headers.push(SmolStr::new("RAck"), SmolStr::new(rack));
     headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
     headers.push(
         SmolStr::new("Contact"),
@@ -118,13 +118,13 @@ pub fn build_refer(uri: &str, refer_to: &str, call_id: &str, cseq: u32) -> Reque
         SmolStr::new("<sip:alice@example.com>;tag=1234"),
     );
     headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"));
-    headers.push(SmolStr::new("Call-ID"), SmolStr::new(call_id.to_owned()));
+    headers.push(SmolStr::new("Call-ID"), SmolStr::new(call_id));
     headers.push(SmolStr::new("CSeq"), SmolStr::new(format!("{} REFER", cseq)));
     headers.push(
         SmolStr::new("Contact"),
         SmolStr::new("<sip:alice@client.example.com:5060>"),
     );
-    headers.push(SmolStr::new("Refer-To"), SmolStr::new(refer_to.to_owned()));
+    headers.push(SmolStr::new("Refer-To"), SmolStr::new(refer_to));
     headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
     headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
 
@@ -162,7 +162,7 @@ pub fn build_register(uri: &str, contact: &str) -> Request {
     );
     headers.push(SmolStr::new("CSeq"), SmolStr::new("1 REGISTER"));
     headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
-    headers.push(SmolStr::new("Contact"), SmolStr::new(contact.to_owned()));
+    headers.push(SmolStr::new("Contact"), SmolStr::new(contact));
     headers.push(SmolStr::new("Expires"), SmolStr::new("3600"));
     headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
 
@@ -244,7 +244,7 @@ pub fn build_notify_for_refer(
     );
     headers.push(
         SmolStr::new("Call-ID"),
-        SmolStr::new(refer_sub_call_id.to_owned()),
+        SmolStr::new(refer_sub_call_id),
     );
     headers.push(SmolStr::new("CSeq"), SmolStr::new("1 NOTIFY"));
     headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));

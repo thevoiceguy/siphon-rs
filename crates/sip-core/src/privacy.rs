@@ -169,12 +169,13 @@ impl PrivacyHeader {
     /// assert!(header.contains(PrivacyValue::Id));
     /// assert!(header.contains(PrivacyValue::Critical));
     /// ```
+    #[allow(clippy::result_unit_err)]
     pub fn parse(s: &str) -> Result<Self, ()> {
         let values: Result<Vec<_>, _> = s
             .split(';')
             .map(|part| part.trim())
             .filter(|part| !part.is_empty())
-            .map(|part| PrivacyValue::from_str(part))
+            .map(PrivacyValue::from_str)
             .collect();
 
         Ok(Self { values: values? })
@@ -221,7 +222,6 @@ pub fn parse_privacy_header(headers: &crate::Headers) -> Option<PrivacyHeader> {
 ///
 /// These functions apply privacy requirements to SIP requests by removing
 /// or anonymizing headers as specified in RFC 3323.
-
 /// Headers that should be removed when 'header' privacy is requested.
 const REMOVABLE_HEADERS: &[&str] = &[
     "Subject",

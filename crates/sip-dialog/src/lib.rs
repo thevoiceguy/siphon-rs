@@ -551,7 +551,7 @@ fn extract_tag(value: &SmolStr) -> Option<SmolStr> {
     value.split(';').find_map(|segment| {
         let trimmed = segment.trim();
         if trimmed.len() >= 4 && trimmed[..4].eq_ignore_ascii_case("tag=") {
-            Some(SmolStr::new(trimmed[4..].to_owned()))
+            Some(SmolStr::new(&trimmed[4..]))
         } else {
             None
         }
@@ -627,9 +627,7 @@ fn split_header_values(raw: &str) -> Vec<String> {
                 angle_depth = angle_depth.saturating_add(1);
             }
             '>' => {
-                if angle_depth > 0 {
-                    angle_depth -= 1;
-                }
+                angle_depth = angle_depth.saturating_sub(1);
             }
             ',' if !in_quotes && angle_depth == 0 => {
                 let part = raw[start..idx].trim();
@@ -905,11 +903,10 @@ impl RSeqManager {
     /// Gets the next RSeq for a dialog and increments the counter.
     /// Returns 1 for the first call.
     pub fn next_rseq(&self, dialog_id: &DialogId) -> u32 {
-        self.sequences
+        *self.sequences
             .entry(dialog_id.clone())
             .and_modify(|rseq| *rseq = rseq.saturating_add(1))
             .or_insert(1)
-            .clone()
     }
 
     /// Gets the current RSeq without incrementing.

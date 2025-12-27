@@ -38,7 +38,7 @@ impl SipUri {
 
     /// Attempts to parse a SIP or SIPS URI from the provided string.
     pub fn parse(input: &str) -> Option<Self> {
-        let raw = SmolStr::new(input.to_owned());
+        let raw = SmolStr::new(input);
         let (scheme, rest) = input.split_once(':')?;
         let sips = scheme.eq_ignore_ascii_case("sips");
         if !sips && !scheme.eq_ignore_ascii_case("sip") {
@@ -60,11 +60,11 @@ impl SipUri {
             }
             if let Some((k, v)) = param.split_once('=') {
                 params.insert(
-                    SmolStr::new(k.trim().to_owned()),
-                    Some(SmolStr::new(v.trim().to_owned())),
+                    SmolStr::new(k.trim()),
+                    Some(SmolStr::new(v.trim())),
                 );
             } else {
-                params.insert(SmolStr::new(param.to_owned()), None);
+                params.insert(SmolStr::new(param), None);
             }
         }
 
@@ -73,7 +73,7 @@ impl SipUri {
                 percent_decode_str(user.trim())
                     .decode_utf8()
                     .ok()
-                    .map(|s| SmolStr::new(s.to_string())),
+                    .map(|s| SmolStr::new(&s)),
                 host.trim(),
             ),
             None => (None, base.trim()),
@@ -97,8 +97,8 @@ impl SipUri {
                 }
                 if let Some((k, v)) = pair.split_once('=') {
                     headers.insert(
-                        SmolStr::new(k.trim().to_owned()),
-                        SmolStr::new(v.trim().to_owned()),
+                        SmolStr::new(k.trim()),
+                        SmolStr::new(v.trim()),
                     );
                 }
             }
@@ -252,7 +252,7 @@ fn parse_absolute_uri(input: &str) -> Option<SmolStr> {
     if remainder.is_empty() {
         return None;
     }
-    Some(SmolStr::new(trimmed.to_owned()))
+    Some(SmolStr::new(trimmed))
 }
 
 /// Splits a host[:port] or IPv6 literal "[host]:port" string.
@@ -261,8 +261,8 @@ fn split_host_port(input: &str) -> Option<(&str, Option<u16>)> {
         let end = input.find(']')?;
         let host = &input[1..end];
         let remainder = &input[end + 1..];
-        if remainder.starts_with(':') {
-            let port = remainder[1..].parse().ok()?;
+        if let Some(stripped) = remainder.strip_prefix(':') {
+            let port = stripped.parse().ok()?;
             Some((host, Some(port)))
         } else {
             Some((host, None))

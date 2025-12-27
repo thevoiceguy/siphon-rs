@@ -314,11 +314,11 @@ impl SessionDescription {
     ///         .add_rtpmap(0, "PCMU", 8000, None))
     ///     .build();
     ///
-    /// let sdp_text = sdp.to_string();
+    /// let sdp_text = sdp.serialize();
     /// assert!(sdp_text.contains("v=0\r\n"));
     /// assert!(sdp_text.contains("m=audio 8000 RTP/AVP 0\r\n"));
     /// ```
-    pub fn to_string(&self) -> String {
+    pub fn serialize(&self) -> String {
         serialize::serialize_sdp(self)
     }
 
@@ -371,6 +371,12 @@ impl SessionDescription {
             .iter()
             .filter(|m| m.media_type == media_type)
             .collect()
+    }
+}
+
+impl std::fmt::Display for SessionDescription {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.serialize())
     }
 }
 

@@ -188,7 +188,7 @@ async fn main() -> Result<()> {
         .init();
 
     // Set up observability
-    if !set_transport_metrics(Arc::new(TracingTransportMetrics::default())) {
+    if !set_transport_metrics(Arc::new(TracingTransportMetrics)) {
         tracing::warn!("transport metrics already configured");
     }
 
@@ -274,17 +274,17 @@ async fn main() -> Result<()> {
     let transaction_mgr = Arc::new(TransactionManager::new(transport_dispatcher.clone()));
 
     // Set transaction manager, transport dispatcher, UDP socket, and TLS client config in service registry
-    if let Err(_) = services.set_transaction_manager(transaction_mgr.clone()) {
+    if services.set_transaction_manager(transaction_mgr.clone()).is_err() {
         panic!("Failed to set transaction manager - already initialized");
     }
-    if let Err(_) = services.set_transport_dispatcher(transport_dispatcher.clone()) {
+    if services.set_transport_dispatcher(transport_dispatcher.clone()).is_err() {
         panic!("Failed to set transport dispatcher - already initialized");
     }
-    if let Err(_) = services.set_udp_socket(udp_socket.clone()) {
+    if services.set_udp_socket(udp_socket.clone()).is_err() {
         panic!("Failed to set UDP socket - already initialized");
     }
     if let Some(tls_client_config) = transport::build_tls_client_config() {
-        if let Err(_) = services.set_tls_client_config(tls_client_config) {
+        if services.set_tls_client_config(tls_client_config).is_err() {
             panic!("Failed to set TLS client config - already initialized");
         }
     }

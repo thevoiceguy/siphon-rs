@@ -144,14 +144,12 @@ impl InviteHandler {
             } else {
                 info!(call_id, "Alice sent re-INVITE (session modification) - forwarding to Bob");
             }
+        } else if is_hold {
+            info!(call_id, "Bob is putting Alice on hold - forwarding re-INVITE to Alice");
+        } else if is_resume {
+            info!(call_id, "Bob is resuming call with Alice - forwarding re-INVITE to Alice");
         } else {
-            if is_hold {
-                info!(call_id, "Bob is putting Alice on hold - forwarding re-INVITE to Alice");
-            } else if is_resume {
-                info!(call_id, "Bob is resuming call with Alice - forwarding re-INVITE to Alice");
-            } else {
-                info!(call_id, "Bob sent re-INVITE (session modification) - forwarding to Alice");
-            }
+            info!(call_id, "Bob sent re-INVITE (session modification) - forwarding to Alice");
         }
 
         // Parse B2BUA URI for creating UAC
@@ -1038,7 +1036,7 @@ impl RequestHandler for InviteHandler {
                 }
             };
 
-            if let Err(_) = dialog.update_from_request(request) {
+            if dialog.update_from_request(request).is_err() {
                 warn!(call_id, "re-INVITE rejected: invalid CSeq or dialog state");
                 let response = UserAgentServer::create_response(request, 400, "Bad Request");
                 handle.send_final(response).await;

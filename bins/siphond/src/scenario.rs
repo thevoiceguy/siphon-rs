@@ -225,7 +225,7 @@ pub async fn run_scenario(path: &Path, services: &ServiceRegistry) -> Result<()>
                 let transport = parse_transport(
                     transport
                         .as_deref()
-                        .or_else(|| default_transport.as_deref()),
+                        .or(default_transport.as_deref()),
                 );
                 let target_addr = format!("{}:{}", uri.host, uri.port.unwrap_or(5060))
                     .parse::<std::net::SocketAddr>()?;

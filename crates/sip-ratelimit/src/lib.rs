@@ -357,7 +357,7 @@ impl RateLimiter {
             return true;
         }
 
-        if check_count % CLEANUP_EVERY_CHECKS == 0 {
+        if check_count.is_multiple_of(CLEANUP_EVERY_CHECKS) {
             self.cleanup_idle();
         }
 

@@ -493,7 +493,7 @@ impl TransactionManager {
     fn extract_branch(headers: &Headers) -> Option<SmolStr> {
         let via = headers.get("Via")?;
         let branch = branch_from_via(via)?;
-        Some(SmolStr::new(branch.to_owned()))
+        Some(SmolStr::new(branch))
     }
 
     fn extract_cseq_method(headers: &Headers) -> Option<Method> {
@@ -531,7 +531,7 @@ impl TransactionManager {
         request: Request,
         ctx: TransportContext,
     ) -> ServerTransactionHandle {
-        let branch = request_branch_id(&request).unwrap_or_else(|| crate::generate_branch_id());
+        let branch = request_branch_id(&request).unwrap_or_else(crate::generate_branch_id);
         let key = TransactionKey {
             branch,
             method: request.start.method.clone(),

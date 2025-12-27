@@ -311,7 +311,7 @@ fn parse_status_line(line: &str) -> Option<StatusLine> {
     Some(StatusLine {
         version: SipVersion::V2,
         code,
-        reason: SmolStr::new(reason.trim().to_owned()),
+        reason: SmolStr::new(reason.trim()),
     })
 }
 
@@ -362,7 +362,7 @@ where
         if let Some((name, value)) = line.split_once(':') {
             headers.push(
                 canonical_header_name(name.trim()),
-                SmolStr::new(value.trim().to_owned()),
+                SmolStr::new(value.trim()),
             );
         } else {
             return None;
@@ -394,7 +394,7 @@ fn canonical_header_name(name: &str) -> SmolStr {
         "u" => "Allow-Events",
         _ => name,
     };
-    SmolStr::new(canonical.to_owned())
+    SmolStr::new(canonical)
 }
 
 /// Returns the body truncated to the declared `Content-Length`, or [`None`] if shorter.

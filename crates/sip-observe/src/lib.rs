@@ -142,7 +142,7 @@ impl RateLimitedTracingTransportMetrics {
 
     fn should_emit(&self) -> bool {
         let count = self.counter.fetch_add(1, Ordering::Relaxed);
-        if count % self.sample_every.get() != 0 {
+        if !count.is_multiple_of(self.sample_every.get()) {
             return false;
         }
 

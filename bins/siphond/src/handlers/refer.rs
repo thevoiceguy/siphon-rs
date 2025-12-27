@@ -256,7 +256,7 @@ impl ReferHandler {
                 let trimmed = part.trim();
                 trimmed
                     .strip_prefix("tag=")
-                    .map(|tag| SmolStr::new(tag.to_owned()))
+                    .map(SmolStr::new)
             })
     }
 
@@ -264,6 +264,7 @@ impl ReferHandler {
         let decoded = value.replace("%3D", "=");
         let start = decoded.find("Replaces=")? + "Replaces=".len();
         let tail = &decoded[start..];
+        #[allow(clippy::manual_pattern_char_comparison)]
         let end = tail
             .find(|c: char| c == ';' || c == '>' || c == '&')
             .unwrap_or(tail.len());

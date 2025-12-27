@@ -240,12 +240,20 @@ impl BasicStatus {
     }
 
     /// Parses a basic status from a string.
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "open" => Some(BasicStatus::Open),
             "closed" => Some(BasicStatus::Closed),
             _ => None,
         }
+    }
+}
+
+impl std::str::FromStr for BasicStatus {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s).ok_or(())
     }
 }
 
@@ -304,7 +312,7 @@ fn parse_tuple(xml: &str) -> Option<Tuple> {
     if let Some(basic_start) = xml.find("<basic>") {
         if let Some(basic_end) = xml.find("</basic>") {
             let status_str = &xml[basic_start + 7..basic_end].trim();
-            tuple.status = BasicStatus::from_str(status_str);
+            tuple.status = BasicStatus::parse(status_str);
         }
     }
 
@@ -387,9 +395,9 @@ mod tests {
         assert_eq!(BasicStatus::Open.as_str(), "open");
         assert_eq!(BasicStatus::Closed.as_str(), "closed");
 
-        assert_eq!(BasicStatus::from_str("open"), Some(BasicStatus::Open));
-        assert_eq!(BasicStatus::from_str("CLOSED"), Some(BasicStatus::Closed));
-        assert_eq!(BasicStatus::from_str("invalid"), None);
+        assert_eq!(BasicStatus::parse("open"), Some(BasicStatus::Open));
+        assert_eq!(BasicStatus::parse("CLOSED"), Some(BasicStatus::Closed));
+        assert_eq!(BasicStatus::parse("invalid"), None);
     }
 
     #[test]

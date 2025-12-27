@@ -178,13 +178,20 @@ impl DigestAlgorithm {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_uppercase().as_str() {
             "MD5" => Some(DigestAlgorithm::Md5),
             "SHA-256" => Some(DigestAlgorithm::Sha256),
             "SHA-512" | "SHA-512-256" => Some(DigestAlgorithm::Sha512),
             _ => None,
         }
+    }
+}
+
+impl std::str::FromStr for DigestAlgorithm {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s).ok_or(())
     }
 }
 
@@ -203,12 +210,19 @@ impl Qop {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "auth" => Some(Qop::Auth),
             "auth-int" => Some(Qop::AuthInt),
             _ => None,
         }
+    }
+}
+
+impl std::str::FromStr for Qop {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s).ok_or(())
     }
 }
 
@@ -590,7 +604,7 @@ impl<S> DigestAuthenticator<S> {
         validate_param("response", response.as_str(), MAX_PARAM_RESPONSE_LEN)?;
 
         let algorithm = match parsed.param("algorithm") {
-            Some(alg_str) => match DigestAlgorithm::from_str(alg_str.as_str()) {
+            Some(alg_str) => match DigestAlgorithm::parse(alg_str.as_str()) {
                 Some(alg) => alg,
                 None => return Ok(None),
             },
@@ -604,7 +618,7 @@ impl<S> DigestAuthenticator<S> {
 
         let nc = parsed.param("nc");
         let cnonce = parsed.param("cnonce");
-        let qop = parsed.param("qop").and_then(|q| Qop::from_str(q.as_str()));
+        let qop = parsed.param("qop").and_then(|q| Qop::parse(q.as_str()));
         let opaque = parsed.param("opaque");
 
         if let Some(nc_str) = nc {
@@ -703,7 +717,7 @@ impl<S> DigestAuthenticator<S> {
             .collect();
 
         Self {
-            realm: SmolStr::new(realm.to_owned()),
+            realm: SmolStr::new(realm),
             algorithm: DigestAlgorithm::Sha256,
             qop: Qop::Auth,
             store,
@@ -809,6 +823,7 @@ impl<S> DigestAuthenticator<S> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn compute_response(
         &self,
         username: &str,
@@ -964,7 +979,7 @@ pub struct DigestClient {
 fn ensure_to_tag(to_header: &str) -> SmolStr {
     // Check if tag already exists
     if to_header.contains(";tag=") {
-        return SmolStr::new(to_header.to_owned());
+        return SmolStr::new(to_header);
     }
 
     // Generate random tag (8 characters)
@@ -981,13 +996,14 @@ fn ensure_to_tag(to_header: &str) -> SmolStr {
 impl DigestClient {
     pub fn new(username: &str, password: &str) -> Self {
         Self {
-            username: SmolStr::new(username.to_owned()),
-            password: SmolStr::new(password.to_owned()),
+            username: SmolStr::new(username),
+            password: SmolStr::new(password),
             nc: 0,
         }
     }
 
     /// Generates Authorization header value from a 401/407 challenge.
+    #[allow(clippy::too_many_arguments)]
     pub fn generate_authorization(
         &mut self,
         method: &Method,
@@ -1073,28 +1089,28 @@ mod tests {
 
     #[test]
     fn digest_algorithm_from_str() {
-        assert_eq!(DigestAlgorithm::from_str("MD5"), Some(DigestAlgorithm::Md5));
+        assert_eq!(DigestAlgorithm::parse("MD5"), Some(DigestAlgorithm::Md5));
         assert_eq!(
-            DigestAlgorithm::from_str("SHA-256"),
+            DigestAlgorithm::parse("SHA-256"),
             Some(DigestAlgorithm::Sha256)
         );
         assert_eq!(
-            DigestAlgorithm::from_str("SHA-512"),
+            DigestAlgorithm::parse("SHA-512"),
             Some(DigestAlgorithm::Sha512)
         );
         assert_eq!(
-            DigestAlgorithm::from_str("sha-256"),
+            DigestAlgorithm::parse("sha-256"),
             Some(DigestAlgorithm::Sha256)
         );
-        assert_eq!(DigestAlgorithm::from_str("INVALID"), None);
+        assert_eq!(DigestAlgorithm::parse("INVALID"), None);
     }
 
     #[test]
     fn qop_from_str() {
-        assert_eq!(Qop::from_str("auth"), Some(Qop::Auth));
-        assert_eq!(Qop::from_str("auth-int"), Some(Qop::AuthInt));
-        assert_eq!(Qop::from_str("AUTH"), Some(Qop::Auth));
-        assert_eq!(Qop::from_str("invalid"), None);
+        assert_eq!(Qop::parse("auth"), Some(Qop::Auth));
+        assert_eq!(Qop::parse("auth-int"), Some(Qop::AuthInt));
+        assert_eq!(Qop::parse("AUTH"), Some(Qop::Auth));
+        assert_eq!(Qop::parse("invalid"), None);
     }
 
     #[test]

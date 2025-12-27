@@ -240,25 +240,25 @@ impl Watcher {
         xml.push_str(self.status.as_str());
         xml.push_str("\" event=\"");
         xml.push_str(self.event.as_str());
-        xml.push_str("\"");
+        xml.push('"');
 
         // Optional attributes
         if let Some(ref display_name) = self.display_name {
             xml.push_str(" display-name=\"");
             xml.push_str(&xml_escape(display_name));
-            xml.push_str("\"");
+            xml.push('"');
         }
 
         if let Some(expiration) = self.expiration {
             xml.push_str(" expiration=\"");
             xml.push_str(&expiration.to_string());
-            xml.push_str("\"");
+            xml.push('"');
         }
 
         if let Some(duration) = self.duration_subscribed {
             xml.push_str(" duration-subscribed=\"");
             xml.push_str(&duration.to_string());
-            xml.push_str("\"");
+            xml.push('"');
         }
 
         xml.push('>');
@@ -300,7 +300,7 @@ impl WatcherStatus {
     }
 
     /// Parses a watcher status from a string.
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "pending" => Some(WatcherStatus::Pending),
             "active" => Some(WatcherStatus::Active),
@@ -308,6 +308,14 @@ impl WatcherStatus {
             "terminated" => Some(WatcherStatus::Terminated),
             _ => None,
         }
+    }
+}
+
+impl std::str::FromStr for WatcherStatus {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s).ok_or(())
     }
 }
 
@@ -356,7 +364,7 @@ impl WatcherEvent {
     }
 
     /// Parses a watcher event from a string.
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "subscribe" => Some(WatcherEvent::Subscribe),
             "approved" => Some(WatcherEvent::Approved),
@@ -368,6 +376,14 @@ impl WatcherEvent {
             "noresource" => Some(WatcherEvent::Noresource),
             _ => None,
         }
+    }
+}
+
+impl std::str::FromStr for WatcherEvent {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s).ok_or(())
     }
 }
 
@@ -451,8 +467,8 @@ fn parse_watcher(xml: &str) -> Option<Watcher> {
     let status_str = extract_attribute(xml, "<watcher", "status")?;
     let event_str = extract_attribute(xml, "<watcher", "event")?;
 
-    let status = WatcherStatus::from_str(&status_str)?;
-    let event = WatcherEvent::from_str(&event_str)?;
+    let status = WatcherStatus::parse(&status_str)?;
+    let event = WatcherEvent::parse(&event_str)?;
 
     let mut watcher = Watcher::new(id, status, event);
 
@@ -542,14 +558,14 @@ mod tests {
         assert_eq!(WatcherStatus::Terminated.as_str(), "terminated");
 
         assert_eq!(
-            WatcherStatus::from_str("active"),
+            WatcherStatus::parse("active"),
             Some(WatcherStatus::Active)
         );
         assert_eq!(
-            WatcherStatus::from_str("PENDING"),
+            WatcherStatus::parse("PENDING"),
             Some(WatcherStatus::Pending)
         );
-        assert_eq!(WatcherStatus::from_str("invalid"), None);
+        assert_eq!(WatcherStatus::parse("invalid"), None);
     }
 
     #[test]
@@ -559,14 +575,14 @@ mod tests {
         assert_eq!(WatcherEvent::Rejected.as_str(), "rejected");
 
         assert_eq!(
-            WatcherEvent::from_str("approved"),
+            WatcherEvent::parse("approved"),
             Some(WatcherEvent::Approved)
         );
         assert_eq!(
-            WatcherEvent::from_str("TIMEOUT"),
+            WatcherEvent::parse("TIMEOUT"),
             Some(WatcherEvent::Timeout)
         );
-        assert_eq!(WatcherEvent::from_str("invalid"), None);
+        assert_eq!(WatcherEvent::parse("invalid"), None);
     }
 
     #[test]

@@ -212,18 +212,16 @@ impl SipResolver {
             Transport::Tls
         } else {
             // Check for explicit transport parameter
-            if let Some(transport_param) = uri.params.get(&SmolStr::new("transport".to_owned())) {
-                if let Some(t) = transport_param {
-                    return match t.as_str().to_ascii_lowercase().as_str() {
-                        "tcp" => Transport::Tcp,
-                        "tls" => Transport::Tls,
-                        "ws" => Transport::Ws,
-                        "wss" => Transport::Wss,
-                        "sctp" => Transport::Sctp,
-                        "tls-sctp" => Transport::TlsSctp,
-                        _ => Transport::Udp,
-                    };
-                }
+            if let Some(Some(t)) = uri.params.get(&SmolStr::new("transport")) {
+                return match t.as_str().to_ascii_lowercase().as_str() {
+                    "tcp" => Transport::Tcp,
+                    "tls" => Transport::Tls,
+                    "ws" => Transport::Ws,
+                    "wss" => Transport::Wss,
+                    "sctp" => Transport::Sctp,
+                    "tls-sctp" => Transport::TlsSctp,
+                    _ => Transport::Udp,
+                };
             }
             Transport::Udp
         }
@@ -231,7 +229,7 @@ impl SipResolver {
 
     /// Returns the transport parameter from the URI, if present.
     fn transport_param(uri: &SipUri) -> Option<Transport> {
-        let transport_param = uri.params.get(&SmolStr::new("transport".to_owned()))?;
+        let transport_param = uri.params.get(&SmolStr::new("transport"))?;
         let param = transport_param.as_ref()?;
         Some(match param.as_str().to_ascii_lowercase().as_str() {
             "tcp" => Transport::Tcp,
@@ -338,19 +336,17 @@ impl SipResolver {
             vec![Transport::Tls]
         } else {
             // Check for explicit transport parameter
-            if let Some(transport_param) = uri.params.get(&SmolStr::new("transport".to_owned())) {
-                if let Some(t) = transport_param {
-                    let transport = match t.as_str().to_ascii_lowercase().as_str() {
-                        "tcp" => Transport::Tcp,
-                        "tls" => Transport::Tls,
-                        "ws" => Transport::Ws,
-                        "wss" => Transport::Wss,
-                        "sctp" => Transport::Sctp,
-                        "tls-sctp" => Transport::TlsSctp,
-                        _ => Transport::Udp,
-                    };
-                    return vec![transport];
-                }
+            if let Some(Some(t)) = uri.params.get(&SmolStr::new("transport")) {
+                let transport = match t.as_str().to_ascii_lowercase().as_str() {
+                    "tcp" => Transport::Tcp,
+                    "tls" => Transport::Tls,
+                    "ws" => Transport::Ws,
+                    "wss" => Transport::Wss,
+                    "sctp" => Transport::Sctp,
+                    "tls-sctp" => Transport::TlsSctp,
+                    _ => Transport::Udp,
+                };
+                return vec![transport];
             }
             // RFC 3263 default: try TCP first, then UDP
             vec![Transport::Tcp, Transport::Udp]
@@ -409,7 +405,7 @@ impl SipResolver {
                     let replacement = if replacement.is_empty() {
                         None
                     } else {
-                        Some(SmolStr::new(replacement.to_owned()))
+                        Some(SmolStr::new(replacement))
                     };
                     records.push(NaptrRecord {
                         order: rdata.order(),
@@ -458,7 +454,7 @@ impl SipResolver {
             }
             priority_groups.entry(rec.priority()).or_default().push((
                 rec.weight(),
-                SmolStr::new(target.to_owned()),
+                SmolStr::new(target),
                 rec.port(),
             ));
         }
@@ -652,7 +648,7 @@ pub fn parse_dhcp_option_150(data: &[u8]) -> Result<Vec<std::net::Ipv4Addr>> {
         return Err(anyhow!("Empty DHCP Option 150 data"));
     }
 
-    if data.len() % 4 != 0 {
+    if !data.len().is_multiple_of(4) {
         return Err(anyhow!(
             "Invalid DHCP Option 150 data length: {} (must be multiple of 4)",
             data.len()
@@ -821,7 +817,7 @@ fn parse_dhcp_domain_names(data: &[u8]) -> Result<Vec<DhcpSipServer>> {
 ///
 /// Each address is 4 bytes in network byte order.
 fn parse_dhcp_ipv4_addresses(data: &[u8]) -> Result<Vec<DhcpSipServer>> {
-    if data.len() % 4 != 0 {
+    if !data.len().is_multiple_of(4) {
         return Err(anyhow!(
             "Invalid DHCP Option 120 IPv4 data length: {}",
             data.len()

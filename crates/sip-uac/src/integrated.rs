@@ -886,8 +886,6 @@ impl IntegratedUAC {
                             extra_params,
                             &contact_str[param_start + 1..]
                         ));
-                    } else if contact_str.ends_with('>') {
-                        header.value = SmolStr::new(format!("{}{}", new_contact, extra_params));
                     } else {
                         header.value = SmolStr::new(format!("{}{}", new_contact, extra_params));
                     }
@@ -1177,7 +1175,6 @@ impl IntegratedUAC {
     /// # Ok(())
     /// # }
     /// ```
-
     /// Sets the display name for the From header in subsequent requests.
     ///
     /// This is useful for B2BUA scenarios where you want to preserve the original caller's

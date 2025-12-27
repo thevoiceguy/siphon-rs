@@ -30,6 +30,12 @@ pub struct ProxyService {
     proxy: StatefulProxy,
 }
 
+impl Default for ProxyService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ProxyService {
     /// Create a new proxy service.
     pub fn new() -> Self {
@@ -42,6 +48,7 @@ impl ProxyService {
     ///
     /// Returns the proxy context, an upstream response receiver, and the prepared outbound
     /// requests to dispatch to each target.
+    #[allow(clippy::too_many_arguments)]
     pub async fn start_forking(
         &self,
         original: Request,

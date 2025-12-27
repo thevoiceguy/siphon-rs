@@ -323,7 +323,7 @@ impl SecurityServerHeader {
                 let client_q = client_entry.preference().unwrap_or(0.001);
                 let combined = server_q * client_q;
 
-                if best.map_or(true, |(_, score)| combined > score) {
+                if best.is_none_or(|(_, score)| combined > score) {
                     best = Some((server_entry, combined));
                 }
             }

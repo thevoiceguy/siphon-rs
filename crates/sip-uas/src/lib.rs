@@ -198,7 +198,7 @@ impl UserAgentServer {
         if let Some(etag) = sip_etag {
             response
                 .headers
-                .push(SmolStr::new("SIP-ETag"), SmolStr::new(etag.to_string()));
+                .push(SmolStr::new("SIP-ETag"), SmolStr::new(etag));
         }
         response
     }
@@ -649,7 +649,7 @@ impl UserAgentServer {
         headers.push(SmolStr::new("Event"), subscription.id.event.clone());
 
         // Subscription-State (terminated after final response)
-        let state = if status_code >= 200 && status_code < 300 {
+        let state = if (200..300).contains(&status_code) {
             "terminated;reason=noresource"
         } else if status_code >= 300 {
             "terminated;reason=rejected"
@@ -766,7 +766,7 @@ impl UserAgentServer {
         reason: &str,
         sdp_body: Option<&str>,
     ) -> Response {
-        if code < 100 || code >= 200 {
+        if !(100..200).contains(&code) {
             panic!("Reliable provisional must be 1xx response, got {}", code);
         }
 
@@ -960,7 +960,7 @@ fn extract_tag_param(value: &SmolStr) -> Option<SmolStr> {
     value.split(';').find_map(|segment| {
         let trimmed = segment.trim();
         if trimmed.len() >= 4 && trimmed[..4].eq_ignore_ascii_case("tag=") {
-            Some(SmolStr::new(trimmed[4..].to_owned()))
+            Some(SmolStr::new(&trimmed[4..]))
         } else {
             None
         }

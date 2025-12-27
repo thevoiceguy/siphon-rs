@@ -59,7 +59,7 @@ impl ProxyHelpers {
             name: "Via".into(),
             value: via_value.into(),
         });
-        new_headers.extend(request.headers.clone().into_iter());
+        new_headers.extend(request.headers.clone());
         request.headers = Headers::from_vec(new_headers);
 
         branch.to_string()

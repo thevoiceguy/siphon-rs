@@ -292,13 +292,13 @@ impl TransactionMetrics {
         // Record by transport
         data.durations_by_transport
             .entry(transport)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(duration);
 
         // Record by method
         data.durations_by_method
             .entry(method.to_string())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(duration);
 
         data.total_count += 1;
@@ -315,7 +315,7 @@ impl TransactionMetrics {
         *data
             .outcomes_by_transport
             .entry(transport)
-            .or_insert_with(HashMap::new)
+            .or_default()
             .entry(outcome)
             .or_insert(0) += 1;
     }

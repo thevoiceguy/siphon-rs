@@ -33,7 +33,7 @@ pub fn decrement_max_forwards(headers: &mut Headers) -> Result<u32, MaxForwardsE
     }
 
     // Insert default 70 -> 69 when missing.
-    headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("69".to_owned()));
+    headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("69"));
     Ok(69)
 }
 

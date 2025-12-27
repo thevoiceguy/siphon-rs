@@ -517,7 +517,7 @@ pub fn is_static_range(pt: u8) -> bool {
 
 /// Checks if a payload type number is in the dynamic range (96-127).
 pub fn is_dynamic_range(pt: u8) -> bool {
-    pt >= 96 && pt <= 127
+    (96..=127).contains(&pt)
 }
 
 /// Checks if a payload type number is reserved (72-76) for RTCP conflict avoidance.

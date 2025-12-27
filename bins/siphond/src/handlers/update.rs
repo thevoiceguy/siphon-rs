@@ -66,7 +66,7 @@ impl RequestHandler for UpdateHandler {
             }
         };
 
-        if let Err(_) = dialog.update_from_request(request) {
+        if dialog.update_from_request(request).is_err() {
             warn!(call_id, "UPDATE rejected: invalid CSeq or dialog state");
             let response = UserAgentServer::create_response(request, 400, "Bad Request");
             handle.send_final(response).await;

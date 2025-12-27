@@ -121,7 +121,7 @@ impl RequestHandler for OptionsHandler {
         headers.push("Supported".into(), Self::build_supported_header(services));
         headers.push(
             "Accept".into(),
-            SmolStr::new("application/sdp, application/sdp-answer".to_string()),
+            SmolStr::new("application/sdp, application/sdp-answer"),
         );
         headers.push(
             "User-Agent".into(),

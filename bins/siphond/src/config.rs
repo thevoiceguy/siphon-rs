@@ -6,9 +6,10 @@
 use std::path::PathBuf;
 
 /// Operational mode determines which SIP methods are handled and how.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum DaemonMode {
     /// Minimal mode: Only respond to OPTIONS with 200 OK
+    #[default]
     Minimal,
 
     /// Full UAS: Accept all incoming requests (INVITE, REGISTER, SUBSCRIBE, etc.)
@@ -36,12 +37,6 @@ pub enum DaemonMode {
     /// Interactive mode: Requires user input for accept/reject decisions
     /// (Future: could integrate with web UI or CLI prompts)
     Interactive,
-}
-
-impl Default for DaemonMode {
-    fn default() -> Self {
-        Self::Minimal
-    }
 }
 
 /// Feature flags for enabling/disabling specific capabilities
@@ -84,12 +79,13 @@ impl Default for FeatureFlags {
 }
 
 /// SDP profile configuration for media handling
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum SdpProfile {
     /// No SDP - reject calls requiring media
     None,
 
     /// Audio-only (PCMU/PCMA)
+    #[default]
     AudioOnly,
 
     /// Audio and video
@@ -97,12 +93,6 @@ pub enum SdpProfile {
 
     /// Custom SDP from file
     Custom(PathBuf),
-}
-
-impl Default for SdpProfile {
-    fn default() -> Self {
-        Self::AudioOnly
-    }
 }
 
 /// Authentication configuration

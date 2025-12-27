@@ -76,8 +76,14 @@ impl RAck {
     }
 
     /// Format RAck header value
-    pub fn to_string(&self) -> String {
+    pub fn format(&self) -> String {
         format!("{} {} {}", self.rseq, self.cseq, self.method.as_str())
+    }
+}
+
+impl std::fmt::Display for RAck {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.format())
     }
 }
 
@@ -140,7 +146,7 @@ impl PrackValidator {
 
         self.pending
             .entry(dialog_id.to_string())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(pending);
     }
 
@@ -324,7 +330,7 @@ mod tests {
             cseq: 314159,
             method: Method::Invite,
         };
-        assert_eq!(rack.to_string(), "1776 314159 INVITE");
+        assert_eq!(rack.format(), "1776 314159 INVITE");
     }
 
     #[test]

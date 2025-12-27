@@ -429,10 +429,10 @@ impl FeatureValue {
                 if list.is_empty() {
                     return Ok(None);
                 }
-                Ok(Some(SmolStr::new(&format!("\"{}\"", list.join(",")))))
+                Ok(Some(SmolStr::new(format!("\"{}\"", list.join(",")))))
             }
-            FeatureValue::String(s) => Ok(Some(SmolStr::new(&format!("\"{}\"", s)))),
-            FeatureValue::Numeric(n) => Ok(Some(SmolStr::new(&n.to_string()))),
+            FeatureValue::String(s) => Ok(Some(SmolStr::new(format!("\"{}\"", s)))),
+            FeatureValue::Numeric(n) => Ok(Some(SmolStr::new(n.to_string()))),
         }
     }
 

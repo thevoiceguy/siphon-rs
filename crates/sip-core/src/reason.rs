@@ -230,11 +230,11 @@ impl ReasonHeader {
         );
         params.insert(
             SmolStr::new("text"),
-            Some(SmolStr::new(cause.text().to_owned())),
+            Some(SmolStr::new(cause.text())),
         );
 
         Self {
-            protocol: SmolStr::new(ReasonProtocol::Q850.as_str().to_owned()),
+            protocol: SmolStr::new(ReasonProtocol::Q850.as_str()),
             params,
         }
     }
@@ -262,10 +262,10 @@ impl ReasonHeader {
 
         let default_text = sip_response_text(code);
         let text = text.unwrap_or(default_text);
-        params.insert(SmolStr::new("text"), Some(SmolStr::new(text.to_owned())));
+        params.insert(SmolStr::new("text"), Some(SmolStr::new(text)));
 
         Self {
-            protocol: SmolStr::new(ReasonProtocol::Sip.as_str().to_owned()),
+            protocol: SmolStr::new(ReasonProtocol::Sip.as_str()),
             params,
         }
     }
@@ -287,7 +287,7 @@ impl ReasonHeader {
     /// ```
     pub fn new(protocol: &str, params: BTreeMap<SmolStr, Option<SmolStr>>) -> Self {
         Self {
-            protocol: SmolStr::new(protocol.to_owned()),
+            protocol: SmolStr::new(protocol),
             params,
         }
     }
@@ -421,7 +421,7 @@ pub fn parse_reason_header(headers: &crate::Headers) -> Option<ReasonHeader> {
 /// Parses a Reason header value string.
 fn parse_reason_from_string(value: &str) -> ReasonHeader {
     let mut parts = value.split(';');
-    let protocol = SmolStr::new(parts.next().unwrap_or("").trim().to_owned());
+    let protocol = SmolStr::new(parts.next().unwrap_or("").trim());
     let mut params = BTreeMap::new();
     for part in parts {
         let part = part.trim();
@@ -431,7 +431,7 @@ fn parse_reason_from_string(value: &str) -> ReasonHeader {
         if let Some((name, val)) = part.split_once('=') {
             params.insert(
                 SmolStr::new(name.to_ascii_lowercase()),
-                Some(SmolStr::new(val.trim().trim_matches('"').to_owned())),
+                Some(SmolStr::new(val.trim().trim_matches('"'))),
             );
         } else {
             params.insert(SmolStr::new(part.to_ascii_lowercase()), None);

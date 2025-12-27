@@ -233,8 +233,7 @@ impl SessionTimerManager {
         // This means only one subscriber is supported
 
         // Take the receiver out
-        let old_rx = std::mem::replace(&mut *rx_lock, new_rx);
-        old_rx
+        std::mem::replace(&mut *rx_lock, new_rx)
     }
 
     /// Returns the count of active session timers.

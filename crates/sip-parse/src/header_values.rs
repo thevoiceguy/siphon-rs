@@ -49,7 +49,7 @@ pub fn parse_via_header(value: &SmolStr) -> Option<ViaHeader> {
     let params = parse_params(params_part.unwrap_or("").trim());
     Some(ViaHeader {
         transport: SmolStr::new(transport.to_uppercase()),
-        sent_by: SmolStr::new(sent_by.to_owned()),
+        sent_by: SmolStr::new(sent_by),
         params,
     })
 }
@@ -61,7 +61,7 @@ pub fn parse_contact_header(value: &SmolStr) -> Option<ContactHeader> {
 pub fn parse_route_headers(headers: &Headers, name: &str) -> Vec<RouteHeader> {
     headers
         .get_all(name)
-        .filter_map(|value| parse_route_header(value))
+        .filter_map(parse_route_header)
         .collect()
 }
 
@@ -92,7 +92,7 @@ pub fn parse_service_route(headers: &Headers) -> ServiceRouteHeader {
     let mut routes = Vec::new();
     for value in headers.get_all("Service-Route") {
         for part in split_quoted_commas(value.as_str()) {
-            if let Some(name_addr) = parse_name_addr(&SmolStr::new(part.trim().to_owned())) {
+            if let Some(name_addr) = parse_name_addr(&SmolStr::new(part.trim())) {
                 routes.push(name_addr);
             }
         }
@@ -104,7 +104,7 @@ pub fn parse_path(headers: &Headers) -> PathHeader {
     let mut routes = Vec::new();
     for value in headers.get_all("Path") {
         for part in split_quoted_commas(value.as_str()) {
-            if let Some(name_addr) = parse_name_addr(&SmolStr::new(part.trim().to_owned())) {
+            if let Some(name_addr) = parse_name_addr(&SmolStr::new(part.trim())) {
                 routes.push(name_addr);
             }
         }
@@ -125,7 +125,7 @@ pub fn parse_mime_type(value: &SmolStr) -> Option<MimeType> {
         if let Some((k, v)) = part.split_once('=') {
             params.insert(
                 SmolStr::new(k.trim().to_ascii_lowercase()),
-                SmolStr::new(v.trim().trim_matches('"').to_owned()),
+                SmolStr::new(v.trim().trim_matches('"')),
             );
         }
     }
@@ -163,7 +163,7 @@ pub fn parse_priority_header(value: &SmolStr) -> PriorityValue {
         "urgent" => PriorityValue::Urgent,
         "normal" => PriorityValue::Normal,
         "non-urgent" => PriorityValue::NonUrgent,
-        other => PriorityValue::Unknown(SmolStr::new(other.to_owned())),
+        other => PriorityValue::Unknown(SmolStr::new(other)),
     }
 }
 
@@ -234,8 +234,8 @@ pub fn parse_resource_priority(value: &SmolStr) -> ResourcePriorityHeader {
         let token = token.trim();
         if let Some((ns, prio)) = token.split_once('.') {
             values.push(ResourcePriorityValue {
-                namespace: SmolStr::new(ns.trim().to_owned()),
-                priority: SmolStr::new(prio.trim().to_owned()),
+                namespace: SmolStr::new(ns.trim()),
+                priority: SmolStr::new(prio.trim()),
             });
         }
     }
@@ -300,7 +300,7 @@ pub fn parse_history_info(headers: &Headers) -> HistoryInfoHeader {
             if part.is_empty() {
                 continue;
             }
-            if let Some(name_addr) = parse_name_addr(&SmolStr::new(part.to_owned())) {
+            if let Some(name_addr) = parse_name_addr(&SmolStr::new(part)) {
                 entries.push(HistoryInfoEntry {
                     uri: name_addr.uri().clone(),
                     params: name_addr.params_map().clone(),
@@ -313,7 +313,7 @@ pub fn parse_history_info(headers: &Headers) -> HistoryInfoHeader {
 
 pub fn parse_reason_header(value: &SmolStr) -> ReasonHeader {
     let mut parts = value.split(';');
-    let protocol = SmolStr::new(parts.next().unwrap_or("").trim().to_owned());
+    let protocol = SmolStr::new(parts.next().unwrap_or("").trim());
     let mut params = BTreeMap::new();
     for part in parts {
         let part = part.trim();
@@ -323,7 +323,7 @@ pub fn parse_reason_header(value: &SmolStr) -> ReasonHeader {
         if let Some((name, val)) = part.split_once('=') {
             params.insert(
                 SmolStr::new(name.to_ascii_lowercase()),
-                Some(SmolStr::new(val.trim().trim_matches('"').to_owned())),
+                Some(SmolStr::new(val.trim().trim_matches('"'))),
             );
         } else {
             params.insert(SmolStr::new(part.to_ascii_lowercase()), None);
@@ -346,7 +346,7 @@ pub fn parse_geolocation_header(headers: &Headers) -> GeolocationHeader {
             if part.is_empty() {
                 continue;
             }
-            if let Some(name_addr) = parse_name_addr(&SmolStr::new(part.to_owned())) {
+            if let Some(name_addr) = parse_name_addr(&SmolStr::new(part)) {
                 values.push(GeolocationValue {
                     uri: name_addr.uri().clone(),
                     params: name_addr.params_map().clone(),
@@ -369,7 +369,7 @@ pub fn parse_geolocation_error(value: &SmolStr) -> GeolocationErrorHeader {
         }
         if let Some((name, val)) = part.split_once('=') {
             let key = name.trim().to_ascii_lowercase();
-            let value = SmolStr::new(val.trim().trim_matches('"').to_owned());
+            let value = SmolStr::new(val.trim().trim_matches('"'));
             if key == "reason" {
                 description = Some(value.clone());
             }
@@ -379,7 +379,7 @@ pub fn parse_geolocation_error(value: &SmolStr) -> GeolocationErrorHeader {
         }
     }
     GeolocationErrorHeader {
-        code: code.map(|c| SmolStr::new(c.to_owned())),
+        code: code.map(SmolStr::new),
         description,
         params,
     }
@@ -393,7 +393,7 @@ pub fn parse_geolocation_routing(value: &SmolStr) -> GeolocationRoutingHeader {
 
 pub fn parse_p_access_network_info(value: &SmolStr) -> Option<PAccessNetworkInfo> {
     let mut parts = value.split(';');
-    let access_type = SmolStr::new(parts.next()?.trim().to_owned());
+    let access_type = SmolStr::new(parts.next()?.trim());
     let mut params = BTreeMap::new();
     for part in parts {
         let part = part.trim();
@@ -403,7 +403,7 @@ pub fn parse_p_access_network_info(value: &SmolStr) -> Option<PAccessNetworkInfo
         if let Some((name, val)) = part.split_once('=') {
             params.insert(
                 SmolStr::new(name.trim().to_ascii_lowercase()),
-                Some(SmolStr::new(val.trim().trim_matches('"').to_owned())),
+                Some(SmolStr::new(val.trim().trim_matches('"'))),
             );
         } else {
             params.insert(SmolStr::new(part.to_ascii_lowercase()), None);
@@ -418,7 +418,7 @@ pub fn parse_p_access_network_info(value: &SmolStr) -> Option<PAccessNetworkInfo
 pub fn parse_p_visited_network_id(value: &SmolStr) -> PVisitedNetworkIdHeader {
     let values = split_quoted_commas(value.as_str())
         .into_iter()
-        .map(|token| SmolStr::new(token.trim_matches('"').to_owned()))
+        .map(|token| SmolStr::new(token.trim_matches('"')))
         .collect();
     PVisitedNetworkIdHeader { values }
 }
@@ -428,7 +428,7 @@ fn parse_name_addr_list<'a>(header_values: impl Iterator<Item = &'a SmolStr>) ->
     let mut out = Vec::new();
     for value in header_values {
         for part in split_quoted_commas(value.as_str()) {
-            if let Some(name_addr) = parse_name_addr(&SmolStr::new(part.trim().to_owned())) {
+            if let Some(name_addr) = parse_name_addr(&SmolStr::new(part.trim())) {
                 out.push(name_addr);
             }
         }
@@ -453,7 +453,7 @@ where
     let mut out = Vec::new();
     for value in header_values {
         for part in split_quoted_commas(value.as_str()) {
-            if let Some(identity) = parse_p_identity(&SmolStr::new(part.trim().to_owned())) {
+            if let Some(identity) = parse_p_identity(&SmolStr::new(part.trim())) {
                 out.push(identity);
             }
         }
@@ -480,7 +480,7 @@ fn parse_p_identity(value: &SmolStr) -> Option<sip_core::PIdentity> {
                 display_name: if display.is_empty() {
                     None
                 } else {
-                    Some(SmolStr::new(display.trim_matches('"').to_owned()))
+                    Some(SmolStr::new(display.trim_matches('"')))
                 },
                 uri,
                 params,
@@ -514,7 +514,7 @@ fn parse_name_addr(value: &SmolStr) -> Option<NameAddr> {
                 if display.is_empty() {
                     None
                 } else {
-                    Some(SmolStr::new(display.trim_matches('"').to_owned()))
+                    Some(SmolStr::new(display.trim_matches('"')))
                 },
                 uri,
                 params,
@@ -540,7 +540,7 @@ fn parse_params(input: &str) -> BTreeMap<SmolStr, Option<SmolStr>> {
         if let Some((name, value)) = raw.split_once('=') {
             params.insert(
                 SmolStr::new(name.trim().to_ascii_lowercase()),
-                Some(SmolStr::new(value.trim().trim_matches('"').to_owned())),
+                Some(SmolStr::new(value.trim().trim_matches('"'))),
             );
         } else {
             params.insert(SmolStr::new(raw.to_ascii_lowercase()), None);
@@ -611,7 +611,7 @@ fn parse_token_list(value: &SmolStr) -> Vec<SmolStr> {
             if trimmed.is_empty() {
                 None
             } else {
-                Some(SmolStr::new(trimmed.to_owned()))
+                Some(SmolStr::new(trimmed))
             }
         })
         .collect()
@@ -623,7 +623,7 @@ fn parse_auth_like_header(value: &SmolStr) -> Option<AuthorizationHeader> {
         return None;
     }
     let mut parts = trimmed.splitn(2, ' ');
-    let scheme = SmolStr::new(parts.next()?.trim().to_owned());
+    let scheme = SmolStr::new(parts.next()?.trim());
     let remainder = parts.next().unwrap_or("");
     let mut params = BTreeMap::new();
     for part in split_quoted_commas(remainder) {
@@ -631,7 +631,7 @@ fn parse_auth_like_header(value: &SmolStr) -> Option<AuthorizationHeader> {
             let cleaned = val.trim().trim_matches('"');
             params.insert(
                 SmolStr::new(name.trim().to_ascii_lowercase()),
-                SmolStr::new(cleaned.to_owned()),
+                SmolStr::new(cleaned),
             );
         }
     }

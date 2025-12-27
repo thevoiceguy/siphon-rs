@@ -470,8 +470,8 @@ impl RtcpAttribute {
         }
     }
 
-    /// Converts the RTCP attribute to its SDP string representation.
-    pub fn to_string(&self) -> String {
+    /// Formats the RTCP attribute as an SDP string.
+    pub fn format(&self) -> String {
         if let (Some(nettype), Some(addrtype), Some(addr)) =
             (&self.nettype, &self.addrtype, &self.connection_address)
         {
@@ -479,6 +479,12 @@ impl RtcpAttribute {
         } else {
             self.port.to_string()
         }
+    }
+}
+
+impl std::fmt::Display for RtcpAttribute {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.format())
     }
 }
 
@@ -925,9 +931,9 @@ impl CurrentStatus {
 
         let precondition_type = PreconditionType::parse(parts[0]);
         let status_type = StatusType::parse(parts[1])
-            .ok_or_else(|| SdpError::InvalidFormat("a=curr status-type"))?;
+            .ok_or(SdpError::InvalidFormat("a=curr status-type"))?;
         let direction = PreconditionDirection::parse(parts[2])
-            .ok_or_else(|| SdpError::InvalidFormat("a=curr direction"))?;
+            .ok_or(SdpError::InvalidFormat("a=curr direction"))?;
 
         Ok(CurrentStatus {
             precondition_type,
@@ -975,11 +981,11 @@ impl DesiredStatus {
 
         let precondition_type = PreconditionType::parse(parts[0]);
         let strength = StrengthTag::parse(parts[1])
-            .ok_or_else(|| SdpError::InvalidFormat("a=des strength-tag"))?;
+            .ok_or(SdpError::InvalidFormat("a=des strength-tag"))?;
         let status_type = StatusType::parse(parts[2])
-            .ok_or_else(|| SdpError::InvalidFormat("a=des status-type"))?;
+            .ok_or(SdpError::InvalidFormat("a=des status-type"))?;
         let direction = PreconditionDirection::parse(parts[3])
-            .ok_or_else(|| SdpError::InvalidFormat("a=des direction"))?;
+            .ok_or(SdpError::InvalidFormat("a=des direction"))?;
 
         Ok(DesiredStatus {
             precondition_type,
@@ -1027,9 +1033,9 @@ impl ConfirmStatus {
 
         let precondition_type = PreconditionType::parse(parts[0]);
         let status_type = StatusType::parse(parts[1])
-            .ok_or_else(|| SdpError::InvalidFormat("a=conf status-type"))?;
+            .ok_or(SdpError::InvalidFormat("a=conf status-type"))?;
         let direction = PreconditionDirection::parse(parts[2])
-            .ok_or_else(|| SdpError::InvalidFormat("a=conf direction"))?;
+            .ok_or(SdpError::InvalidFormat("a=conf direction"))?;
 
         Ok(ConfirmStatus {
             precondition_type,
@@ -1172,7 +1178,7 @@ impl SdpSession {
 
             // Safety: We know line.len() >= 2 from check above, so next() must return Some
             let Some(field_type) = line.chars().next() else {
-                return Err(SdpError::InvalidSyntax(format!("Empty line")));
+                return Err(SdpError::InvalidSyntax("Empty line".to_string()));
             };
             match field_type {
                 'i' => self.session_info = Some(line[2..].to_string()),
@@ -1688,7 +1694,7 @@ impl MediaDescription {
 
             // Safety: We know line.len() >= 2 from check above, so next() must return Some
             let Some(field_type) = line.chars().next() else {
-                return Err(SdpError::InvalidSyntax(format!("Empty line")));
+                return Err(SdpError::InvalidSyntax("Empty line".to_string()));
             };
             match field_type {
                 'i' => desc.title = Some(line[2..].to_string()),
@@ -1718,12 +1724,8 @@ impl fmt::Display for MediaDescription {
             write!(f, "/{}", count)?;
         }
         write!(f, " {}", self.proto)?;
-        for (i, fmt) in self.fmt.iter().enumerate() {
-            if i == 0 {
-                write!(f, " {}", fmt)?;
-            } else {
-                write!(f, " {}", fmt)?;
-            }
+        for fmt in &self.fmt {
+            write!(f, " {}", fmt)?;
         }
         writeln!(f)?;
 
@@ -1745,7 +1747,7 @@ impl fmt::Display for MediaDescription {
         }
         // Write rtcp attribute (RFC 3605)
         if let Some(ref rtcp) = self.rtcp {
-            writeln!(f, "a=rtcp:{}", rtcp.to_string())?;
+            writeln!(f, "a=rtcp:{}", rtcp)?;
         }
         // Write capability set (RFC 3407)
         if let Some(ref cap_set) = self.capability_set {
@@ -1987,7 +1989,7 @@ fn parse_repeat_time(line: &str) -> Result<RepeatTime, SdpError> {
 
 fn parse_time_zones(line: &str) -> Result<Vec<TimeZone>, SdpError> {
     let parts: Vec<&str> = line[2..].split_whitespace().collect();
-    if parts.len() % 2 != 0 {
+    if !parts.len().is_multiple_of(2) {
         return Err(SdpError::InvalidFormat("z="));
     }
 
@@ -2039,9 +2041,11 @@ fn parse_attribute(line: &str) -> Result<Attribute, SdpError> {
     }
 }
 
+type MediaLineParsed = (String, u16, Option<u16>, String, Vec<String>);
+
 fn parse_media_line(
     line: &str,
-) -> Result<(String, u16, Option<u16>, String, Vec<String>), SdpError> {
+) -> Result<MediaLineParsed, SdpError> {
     let parts: Vec<&str> = line[2..].split_whitespace().collect();
     if parts.len() < 4 {
         return Err(SdpError::InvalidFormat("m="));
@@ -4196,7 +4200,7 @@ mod tests {
     #[test]
     fn rtcp_attribute_to_string_port_only() {
         let rtcp = RtcpAttribute::new(53020);
-        assert_eq!(rtcp.to_string(), "53020");
+        assert_eq!(rtcp.format(), "53020");
     }
 
     #[test]
@@ -4207,7 +4211,7 @@ mod tests {
             "IP4".to_string(),
             "126.16.64.4".to_string(),
         );
-        assert_eq!(rtcp.to_string(), "53020 IN IP4 126.16.64.4");
+        assert_eq!(rtcp.format(), "53020 IN IP4 126.16.64.4");
     }
 
     #[test]

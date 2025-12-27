@@ -33,8 +33,6 @@ use smol_str::SmolStr;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tracing::info;
-
-/// UAC (User Agent Client) helper for sending SIP requests.
 ///
 /// **Note**: This is the low-level helper for request generation. For production
 /// use with automatic transaction management, DNS resolution, and authentication,
@@ -136,7 +134,7 @@ impl UserAgentClient {
         headers.push(SmolStr::new("Call-ID"), SmolStr::new(call_id));
 
         // CSeq
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 OPTIONS".to_owned()));
+        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 OPTIONS"));
 
         // Max-Forwards
         headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
@@ -144,11 +142,11 @@ impl UserAgentClient {
         // User-Agent
         headers.push(
             SmolStr::new("User-Agent"),
-            SmolStr::new("siphon-rs/0.1.0".to_owned()),
+            SmolStr::new("siphon-rs/0.1.0"),
         );
 
         // Content-Length
-        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0".to_owned()));
+        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
 
         Request::new(
             RequestLine::new(Method::Options, target.clone()),
@@ -190,7 +188,7 @@ impl UserAgentClient {
         headers.push(SmolStr::new("Call-ID"), call_id);
 
         // CSeq
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 REGISTER".to_owned()));
+        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 REGISTER"));
 
         // Contact
         headers.push(
@@ -206,16 +204,16 @@ impl UserAgentClient {
         headers.push(SmolStr::new("Expires"), SmolStr::new(expires.to_string()));
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70".to_owned()));
+        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
 
         // User-Agent
         headers.push(
             SmolStr::new("User-Agent"),
-            SmolStr::new("siphon-rs/0.1.0".to_owned()),
+            SmolStr::new("siphon-rs/0.1.0"),
         );
 
         // Content-Length
-        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0".to_owned()));
+        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
 
         Request::new(
             RequestLine::new(Method::Register, registrar_uri.clone()),
@@ -438,7 +436,7 @@ impl UserAgentClient {
 
         let algorithm = challenge
             .get("algorithm")
-            .and_then(|a| DigestAlgorithm::from_str(a))
+            .and_then(|a| DigestAlgorithm::parse(a))
             .unwrap_or(DigestAlgorithm::Md5);
 
         let qop = challenge.get("qop").and_then(|q| {
@@ -547,7 +545,7 @@ impl UserAgentClient {
         headers.push(SmolStr::new("Call-ID"), SmolStr::new(call_id));
 
         // CSeq
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE".to_owned()));
+        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"));
 
         // Contact
         headers.push(
@@ -556,30 +554,30 @@ impl UserAgentClient {
         );
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70".to_owned()));
+        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
 
         // User-Agent
         headers.push(
             SmolStr::new("User-Agent"),
-            SmolStr::new("siphon-rs/0.1.0".to_owned()),
+            SmolStr::new("siphon-rs/0.1.0"),
         );
 
         let body = if let Some(sdp) = sdp_body {
             // Content-Type
             headers.push(
                 SmolStr::new("Content-Type"),
-                SmolStr::new("application/sdp".to_owned()),
+                SmolStr::new("application/sdp"),
             );
 
             // Content-Length
             headers.push(
                 SmolStr::new("Content-Length"),
-                SmolStr::new(sdp.as_bytes().len().to_string()),
+                SmolStr::new(sdp.len().to_string()),
             );
 
             Bytes::from(sdp.as_bytes().to_vec())
         } else {
-            headers.push(SmolStr::new("Content-Length"), SmolStr::new("0".to_owned()));
+            headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
             Bytes::new()
         };
 
@@ -641,26 +639,26 @@ impl UserAgentClient {
         }
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70".to_owned()));
+        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
 
         // Handle SDP body (for late offer scenario)
         let body = if let Some(sdp) = sdp_body {
             // Content-Type
             headers.push(
                 SmolStr::new("Content-Type"),
-                SmolStr::new("application/sdp".to_owned()),
+                SmolStr::new("application/sdp"),
             );
 
             // Content-Length
             headers.push(
                 SmolStr::new("Content-Length"),
-                SmolStr::new(sdp.as_bytes().len().to_string()),
+                SmolStr::new(sdp.len().to_string()),
             );
 
             Bytes::from(sdp.as_bytes().to_vec())
         } else {
             // Content-Length
-            headers.push(SmolStr::new("Content-Length"), SmolStr::new("0".to_owned()));
+            headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
             Bytes::new()
         };
 
@@ -713,10 +711,10 @@ impl UserAgentClient {
         headers.push(SmolStr::new("CSeq"), SmolStr::new(format!("{} BYE", cseq)));
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70".to_owned()));
+        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
 
         // Content-Length
-        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0".to_owned()));
+        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
 
         // Request-URI is the remote target
         let request_uri = dialog.remote_target.clone();
@@ -789,30 +787,30 @@ impl UserAgentClient {
         );
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70".to_owned()));
+        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
 
         // User-Agent
         headers.push(
             SmolStr::new("User-Agent"),
-            SmolStr::new("siphon-rs/0.1.0".to_owned()),
+            SmolStr::new("siphon-rs/0.1.0"),
         );
 
         let body = if let Some(sdp) = sdp_body {
             // Content-Type
             headers.push(
                 SmolStr::new("Content-Type"),
-                SmolStr::new("application/sdp".to_owned()),
+                SmolStr::new("application/sdp"),
             );
 
             // Content-Length
             headers.push(
                 SmolStr::new("Content-Length"),
-                SmolStr::new(sdp.as_bytes().len().to_string()),
+                SmolStr::new(sdp.len().to_string()),
             );
 
             Bytes::from(sdp.as_bytes().to_vec())
         } else {
-            headers.push(SmolStr::new("Content-Length"), SmolStr::new("0".to_owned()));
+            headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
             Bytes::new()
         };
 
@@ -883,30 +881,30 @@ impl UserAgentClient {
         );
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70".to_owned()));
+        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
 
         // User-Agent
         headers.push(
             SmolStr::new("User-Agent"),
-            SmolStr::new("siphon-rs/0.1.0".to_owned()),
+            SmolStr::new("siphon-rs/0.1.0"),
         );
 
         let body = if let Some(sdp) = sdp_body {
             // Content-Type
             headers.push(
                 SmolStr::new("Content-Type"),
-                SmolStr::new("application/sdp".to_owned()),
+                SmolStr::new("application/sdp"),
             );
 
             // Content-Length
             headers.push(
                 SmolStr::new("Content-Length"),
-                SmolStr::new(sdp.as_bytes().len().to_string()),
+                SmolStr::new(sdp.len().to_string()),
             );
 
             Bytes::from(sdp.as_bytes().to_vec())
         } else {
-            headers.push(SmolStr::new("Content-Length"), SmolStr::new("0".to_owned()));
+            headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
             Bytes::new()
         };
 
@@ -941,16 +939,16 @@ impl UserAgentClient {
 
         let call_id = generate_call_id();
         headers.push(SmolStr::new("Call-ID"), SmolStr::new(call_id));
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 PUBLISH".to_owned()));
-        headers.push(SmolStr::new("Event"), SmolStr::new(event.to_owned()));
+        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 PUBLISH"));
+        headers.push(SmolStr::new("Event"), SmolStr::new(event));
         headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
         headers.push(
             SmolStr::new("User-Agent"),
-            SmolStr::new("siphon-rs/0.1.0".to_owned()),
+            SmolStr::new("siphon-rs/0.1.0"),
         );
         headers.push(
             SmolStr::new("Content-Type"),
-            SmolStr::new(content_type.to_owned()),
+            SmolStr::new(content_type),
         );
 
         let body_bytes = Bytes::from(body.as_bytes().to_vec());
@@ -1039,7 +1037,7 @@ impl UserAgentClient {
         );
 
         // Add Supported: timer to indicate session timer support
-        if !request.headers.get("Supported").is_some() {
+        if request.headers.get("Supported").is_none() {
             request
                 .headers
                 .push(SmolStr::new("Supported"), SmolStr::new("timer"));
@@ -1113,18 +1111,18 @@ impl UserAgentClient {
         headers.push(SmolStr::new("CSeq"), SmolStr::new(format!("{} INFO", cseq)));
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70".to_owned()));
+        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
 
         // Content-Type
         headers.push(
             SmolStr::new("Content-Type"),
-            SmolStr::new(content_type.to_owned()),
+            SmolStr::new(content_type),
         );
 
         // Content-Length
         headers.push(
             SmolStr::new("Content-Length"),
-            SmolStr::new(body.as_bytes().len().to_string()),
+            SmolStr::new(body.len().to_string()),
         );
 
         // Request-URI is the remote target
@@ -1506,7 +1504,7 @@ impl UserAgentClient {
         headers.push(SmolStr::new("RAck"), SmolStr::new(rack_value));
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70".to_owned()));
+        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
 
         // Contact
         headers.push(
@@ -1515,7 +1513,7 @@ impl UserAgentClient {
         );
 
         // Content-Length
-        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0".to_owned()));
+        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
 
         // Request-URI is the remote target (Contact from provisional response)
         let request_uri = dialog.remote_target.clone();
@@ -1599,7 +1597,7 @@ impl UserAgentClient {
         headers.push(SmolStr::new("Call-ID"), SmolStr::new(call_id));
 
         // CSeq
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 SUBSCRIBE".to_owned()));
+        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 SUBSCRIBE"));
 
         // Contact
         headers.push(
@@ -1614,16 +1612,16 @@ impl UserAgentClient {
         headers.push(SmolStr::new("Expires"), SmolStr::new(expires.to_string()));
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70".to_owned()));
+        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
 
         // User-Agent
         headers.push(
             SmolStr::new("User-Agent"),
-            SmolStr::new("siphon-rs/0.1.0".to_owned()),
+            SmolStr::new("siphon-rs/0.1.0"),
         );
 
         // Content-Length
-        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0".to_owned()));
+        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
 
         Request::new(
             RequestLine::new(Method::Subscribe, target_uri.clone()),
@@ -1730,22 +1728,22 @@ impl UserAgentClient {
         );
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70".to_owned()));
+        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
 
         // Handle body
         let request_body = if let Some(content) = body {
             // Content-Type (depends on event package, defaulting to plain text)
             headers.push(
                 SmolStr::new("Content-Type"),
-                SmolStr::new("text/plain".to_owned()),
+                SmolStr::new("text/plain"),
             );
             headers.push(
                 SmolStr::new("Content-Length"),
-                SmolStr::new(content.as_bytes().len().to_string()),
+                SmolStr::new(content.len().to_string()),
             );
             Bytes::from(content.as_bytes().to_vec())
         } else {
-            headers.push(SmolStr::new("Content-Length"), SmolStr::new("0".to_owned()));
+            headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
             Bytes::new()
         };
 
@@ -1911,7 +1909,7 @@ impl UserAgentClient {
         );
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70".to_owned()));
+        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
 
         // Content-Type: application/reginfo+xml
         headers.push(
@@ -1923,7 +1921,7 @@ impl UserAgentClient {
         let body = reginfo.to_string();
         headers.push(
             SmolStr::new("Content-Length"),
-            SmolStr::new(body.as_bytes().len().to_string()),
+            SmolStr::new(body.len().to_string()),
         );
 
         Request::new(
@@ -1996,10 +1994,10 @@ impl UserAgentClient {
         );
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70".to_owned()));
+        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
 
         // Content-Length
-        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0".to_owned()));
+        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
 
         Request::new(
             RequestLine::new(Method::Refer, dialog.remote_target.clone()),
@@ -2093,10 +2091,10 @@ impl UserAgentClient {
         );
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70".to_owned()));
+        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
 
         // Content-Length
-        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0".to_owned()));
+        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
 
         Request::new(
             RequestLine::new(Method::Refer, dialog.remote_target.clone()),
@@ -2165,21 +2163,21 @@ impl UserAgentClient {
         headers.push(SmolStr::new("Call-ID"), SmolStr::new(call_id));
 
         // CSeq
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 MESSAGE".to_owned()));
+        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 MESSAGE"));
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70".to_owned()));
+        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
 
         // Content-Type
         headers.push(
             SmolStr::new("Content-Type"),
-            SmolStr::new(content_type.to_owned()),
+            SmolStr::new(content_type),
         );
 
         // Content-Length
         headers.push(
             SmolStr::new("Content-Length"),
-            SmolStr::new(body.as_bytes().len().to_string()),
+            SmolStr::new(body.len().to_string()),
         );
 
         // NOTE: RFC 3428 explicitly forbids Contact header in MESSAGE requests
@@ -2215,8 +2213,8 @@ impl UserAgentClient {
     /// );
     ///
     /// let mut extra_headers = Headers::new();
-    /// extra_headers.push(SmolStr::new("Expires".to_owned()), SmolStr::new("300".to_owned()));
-    /// extra_headers.push(SmolStr::new("Date".to_owned()), SmolStr::new("Wed, 21 Jan 2025 12:00:00 GMT".to_owned()));
+    /// extra_headers.push(SmolStr::new("Expires"), SmolStr::new("300"));
+    /// extra_headers.push(SmolStr::new("Date"), SmolStr::new("Wed, 21 Jan 2025 12:00:00 GMT"));
     ///
     /// let message = uac.create_message_with_headers(
     ///     &SipUri::parse("sip:bob@example.com").unwrap(),
@@ -2278,8 +2276,6 @@ impl UserAgentClient {
         }
     }
 }
-
-/// Helper to generate a random tag.
 fn generate_tag() -> SmolStr {
     if let Some(counter) = deterministic_counter() {
         return SmolStr::new(format!("t{:010x}", counter));
@@ -2292,8 +2288,6 @@ fn generate_tag() -> SmolStr {
         .collect();
     SmolStr::new(tag)
 }
-
-/// Helper to generate a branch parameter (RFC 3261 magic cookie).
 fn generate_branch() -> String {
     if let Some(counter) = deterministic_counter() {
         return format!("z9hG4bK{:016x}", counter);
@@ -2306,8 +2300,6 @@ fn generate_branch() -> String {
         .collect();
     format!("z9hG4bK{}", random)
 }
-
-/// Helper to generate a Call-ID.
 fn generate_call_id() -> String {
     if let Some(counter) = deterministic_counter() {
         return format!("call{:016x}@localhost", counter);
@@ -2336,8 +2328,6 @@ fn deterministic_counter() -> Option<u64> {
 
     seed.map(|base| base.wrapping_add(COUNTER.fetch_add(1, Ordering::Relaxed)))
 }
-
-/// Parse WWW-Authenticate header into key-value pairs.
 fn parse_www_authenticate(value: &SmolStr) -> Result<std::collections::HashMap<String, String>> {
     use std::collections::HashMap;
 
@@ -2424,8 +2414,6 @@ pub(crate) fn replace_via_branch(via: &str, new_branch: &str) -> String {
         format!("{};{}", base, params.join(";"))
     }
 }
-
-/// Extract To URI from response.
 fn extract_to_uri(response: &Response) -> Option<SipUri> {
     let to_header = header(&response.headers, "To")?;
     // Simple extraction - look for URI between < >

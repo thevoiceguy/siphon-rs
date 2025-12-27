@@ -314,7 +314,7 @@ fn parse_r_line(input: &str) -> IResult<&str, RepeatTime> {
         tag("r="),
         map(take_till(|c| c == '\r' || c == '\n'), |s: &str| {
             let parts: Vec<&str> = s.split_whitespace().collect();
-            let repeat_interval = parts.get(0).copied().unwrap_or("");
+            let repeat_interval = parts.first().copied().unwrap_or("");
             let active_duration = parts.get(1).copied().unwrap_or("");
             let offsets = parts
                 .iter()
