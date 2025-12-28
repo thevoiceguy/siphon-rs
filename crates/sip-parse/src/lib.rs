@@ -1089,7 +1089,7 @@ l: 0\r\n\r\n",
         let resp = parse_response(&sample_response_bytes()).expect("parse");
         let mime = parse_mime_type(header(&resp.headers, "Content-Type").unwrap()).expect("mime");
         assert_eq!(mime.as_str(), "application/sdp");
-        assert_eq!(mime.param("charset").map(|c| c.as_str()), Some("utf-8"));
+        assert_eq!(mime.param("charset"), Some("utf-8"));
 
         let sdp = parse_sdp(&resp.body).expect("sdp");
         assert_eq!(sdp.version, 0);

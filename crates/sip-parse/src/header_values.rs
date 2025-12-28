@@ -114,27 +114,7 @@ pub fn parse_path(headers: &Headers) -> PathHeader {
 }
 
 pub fn parse_mime_type(value: &SmolStr) -> Option<MimeType> {
-    let mut parts = value.split(';');
-    let main = parts.next()?.trim();
-    let (top_level, subtype) = main.split_once('/')?;
-    let mut params = BTreeMap::new();
-    for part in parts {
-        let part = part.trim();
-        if part.is_empty() {
-            continue;
-        }
-        if let Some((k, v)) = part.split_once('=') {
-            params.insert(
-                SmolStr::new(k.trim().to_ascii_lowercase()),
-                SmolStr::new(v.trim().trim_matches('"')),
-            );
-        }
-    }
-    Some(MimeType {
-        top_level: SmolStr::new(top_level.to_ascii_lowercase()),
-        subtype: SmolStr::new(subtype.to_ascii_lowercase()),
-        params,
-    })
+    value.as_str().parse().ok()
 }
 
 pub fn parse_sdp(body: &Bytes) -> Option<SdpSession> {
