@@ -1314,10 +1314,10 @@ impl RequestHandler for InviteHandler {
                                 .as_secs()
                                 .to_string(),
                         );
-                        response
+                        let _ = response
                             .headers
                             .push("Supported", "timer");
-                        response
+                        let _ = response
                             .headers
                             .push("Min-SE", "90");
                     }

@@ -536,7 +536,7 @@ impl RequestHandler for ReferHandler {
                 let mut invite = uac.create_invite(&refer_uri, sdp_offer.as_deref());
 
                 if let Some(replaces) = Self::extract_replaces(&refer_to_target) {
-                    invite.headers.push("Replaces", replaces);
+                    let _ = invite.headers.push("Replaces", replaces);
                 }
 
                 let transport_name = match transport {

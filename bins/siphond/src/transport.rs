@@ -22,6 +22,7 @@ use tokio_rustls::rustls;
 use tracing::{info, warn};
 
 /// Start all transport layers and return the transport dispatcher and UDP socket.
+#[allow(clippy::too_many_arguments)]
 pub async fn start_transports(
     udp_bind: &str,
     tcp_bind: &str,
@@ -94,8 +95,9 @@ pub async fn start_transports(
     #[cfg(feature = "tls")]
     if let Some(config) = tls_server_config.clone() {
         let bind = tls_bind.to_string();
+        let tx_tls = tx.clone();
         tokio::spawn(async move {
-            if let Err(e) = run_tls(&bind, config, tx).await {
+            if let Err(e) = run_tls(&bind, config, tx_tls).await {
                 tracing::error!(%e, "TLS listener exited");
             }
         });
@@ -105,24 +107,26 @@ pub async fn start_transports(
     #[cfg(feature = "ws")]
     {
         if let Some(bind) = ws_bind {
+            let bind = bind.to_string();
+            info!(%bind, "WS listener enabled");
             let tx_ws = tx.clone();
             tokio::spawn(async move {
-                if let Err(e) = run_ws(bind, tx_ws).await {
+                if let Err(e) = run_ws(&bind, tx_ws).await {
                     tracing::error!(%e, "WS listener exited");
                 }
             });
-            info!(%bind, "WS listener enabled");
         }
         #[cfg(feature = "tls")]
         if let Some(bind) = wss_bind {
+            let bind = bind.to_string();
             if let Some(config) = tls_server_config.clone() {
+                info!(%bind, "WSS listener enabled");
                 let tx_wss = tx.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = run_wss(bind, config, tx_wss).await {
+                    if let Err(e) = run_wss(&bind, config, tx_wss).await {
                         tracing::error!(%e, "WSS listener exited");
                     }
                 });
-                info!(%bind, "WSS listener enabled");
             } else {
                 warn!("WSS listener requested but TLS config missing; skipping");
             }

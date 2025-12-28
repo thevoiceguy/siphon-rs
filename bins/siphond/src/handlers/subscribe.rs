@@ -120,9 +120,9 @@ impl SubscribeHandler {
         );
 
         if let Some(content_type) = content_type {
-            notify.headers.push("Content-Type", content_type);
+            let _ = notify.headers.push("Content-Type", content_type);
             if let Some(body) = body.as_ref() {
-                notify
+                let _ = notify
                     .headers
                     .push("Content-Length", body.len().to_string());
             }

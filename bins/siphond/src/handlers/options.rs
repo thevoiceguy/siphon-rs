@@ -32,26 +32,26 @@ impl OptionsHandler {
         let mut methods = vec!["OPTIONS", "ACK", "CANCEL"];
 
         if services.config.enable_calls() {
-            let _ = methods.push("INVITE");
-            let _ = methods.push("BYE");
-            let _ = methods.push("UPDATE");
+            methods.push("INVITE");
+            methods.push("BYE");
+            methods.push("UPDATE");
         }
 
         if services.config.enable_registrar() {
-            let _ = methods.push("REGISTER");
+            methods.push("REGISTER");
         }
 
         if services.config.enable_subscriptions() {
-            let _ = methods.push("SUBSCRIBE");
-            let _ = methods.push("NOTIFY");
+            methods.push("SUBSCRIBE");
+            methods.push("NOTIFY");
         }
 
         if services.config.features.enable_refer {
-            let _ = methods.push("REFER");
+            methods.push("REFER");
         }
 
         if services.config.features.enable_prack {
-            let _ = methods.push("PRACK");
+            methods.push("PRACK");
         }
 
         SmolStr::new(methods.join(", "))
@@ -62,15 +62,15 @@ impl OptionsHandler {
         let mut extensions = vec!["path"];
 
         if services.config.features.enable_prack {
-            let _ = extensions.push("100rel");
+            extensions.push("100rel");
         }
 
         if services.config.features.enable_session_timers {
-            let _ = extensions.push("timer");
+            extensions.push("timer");
         }
 
         if services.config.features.enable_refer {
-            let _ = extensions.push("replaces");
+            extensions.push("replaces");
         }
 
         SmolStr::new(extensions.join(", "))
