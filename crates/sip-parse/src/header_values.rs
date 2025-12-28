@@ -302,14 +302,20 @@ pub fn parse_history_info(headers: &Headers) -> HistoryInfoHeader {
                 continue;
             }
             if let Some(name_addr) = parse_name_addr(&SmolStr::new(part)) {
-                entries.push(HistoryInfoEntry {
-                    uri: name_addr.uri().clone(),
-                    params: name_addr.params_map().clone(),
-                });
+                let mut entry = HistoryInfoEntry::new(name_addr.uri().clone());
+                // Add all parameters from the name_addr
+                for (k, v) in name_addr.params_map() {
+                    let _ = entry.add_param(k, v.as_deref());
+                }
+                entries.push(entry);
             }
         }
     }
-    HistoryInfoHeader { entries }
+    HistoryInfoHeader::new(entries).unwrap_or_else(|_| {
+        // Fallback: create a header with a dummy entry if parsing failed
+        let uri = Uri::parse("sip:invalid@invalid").unwrap();
+        HistoryInfoHeader::single(HistoryInfoEntry::new(uri))
+    })
 }
 
 pub fn parse_reason_header(value: &SmolStr) -> ReasonHeader {
