@@ -352,10 +352,16 @@ fn integration_transport_performance_impact() {
     let tcp_k = tcp.duration(TransactionTimer::K);
     let tls_k = tls.duration(TransactionTimer::K);
 
-    println!("  UDP:  Timer K = {:?} (wait for response retransmissions)", udp_k);
+    println!(
+        "  UDP:  Timer K = {:?} (wait for response retransmissions)",
+        udp_k
+    );
     println!("  TCP:  Timer K = {:?} (instant termination)", tcp_k);
     println!("  TLS:  Timer K = {:?} (instant termination)", tls_k);
-    println!("  Speedup: TCP/TLS complete {} seconds faster\n", udp_k.as_secs());
+    println!(
+        "  Speedup: TCP/TLS complete {} seconds faster\n",
+        udp_k.as_secs()
+    );
 
     assert_eq!(udp_k.as_secs(), 5);
     assert_eq!(tcp_k, Duration::ZERO);
@@ -372,9 +378,15 @@ fn integration_transport_performance_impact() {
     let udp_d = udp.duration(TransactionTimer::D);
     let tcp_d = tcp.duration(TransactionTimer::D);
 
-    println!("  UDP:  Timer D = {:?} (wait for response retransmissions)", udp_d);
+    println!(
+        "  UDP:  Timer D = {:?} (wait for response retransmissions)",
+        udp_d
+    );
     println!("  TCP:  Timer D = {:?} (instant termination)", tcp_d);
-    println!("  Speedup: TCP/TLS complete {} seconds faster\n", udp_d.as_secs());
+    println!(
+        "  Speedup: TCP/TLS complete {} seconds faster\n",
+        udp_d.as_secs()
+    );
 
     assert_eq!(udp_d.as_secs(), 32);
     assert_eq!(tcp_d, Duration::ZERO);
@@ -384,9 +396,15 @@ fn integration_transport_performance_impact() {
     let udp_i = udp.duration(TransactionTimer::I);
     let tcp_i = tcp.duration(TransactionTimer::I);
 
-    println!("  UDP:  Timer I = {:?} (wait for ACK retransmissions)", udp_i);
+    println!(
+        "  UDP:  Timer I = {:?} (wait for ACK retransmissions)",
+        udp_i
+    );
     println!("  TCP:  Timer I = {:?} (instant termination)", tcp_i);
-    println!("  Speedup: TCP/TLS complete {} seconds faster\n", udp_i.as_secs());
+    println!(
+        "  Speedup: TCP/TLS complete {} seconds faster\n",
+        udp_i.as_secs()
+    );
 
     assert_eq!(udp_i.as_secs(), 5);
     assert_eq!(tcp_i, Duration::ZERO);
@@ -396,9 +414,15 @@ fn integration_transport_performance_impact() {
     let udp_j = udp.duration(TransactionTimer::J);
     let tcp_j = tcp.duration(TransactionTimer::J);
 
-    println!("  UDP:  Timer J = {:?} (wait for request retransmissions)", udp_j);
+    println!(
+        "  UDP:  Timer J = {:?} (wait for request retransmissions)",
+        udp_j
+    );
     println!("  TCP:  Timer J = {:?} (instant termination)", tcp_j);
-    println!("  Speedup: TCP/TLS complete {} seconds faster\n", udp_j.as_secs());
+    println!(
+        "  Speedup: TCP/TLS complete {} seconds faster\n",
+        udp_j.as_secs()
+    );
 
     assert_eq!(udp_j.as_secs(), 32);
     assert_eq!(tcp_j, Duration::ZERO);

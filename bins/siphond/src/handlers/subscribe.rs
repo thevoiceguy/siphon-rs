@@ -14,7 +14,9 @@ use async_trait::async_trait;
 use sip_core::{Request, Response};
 use sip_dialog::{Subscription, SubscriptionState};
 use sip_parse::header;
-use sip_transaction::{ClientTransactionUser, ServerTransactionHandle, TransactionKey, TransportContext};
+use sip_transaction::{
+    ClientTransactionUser, ServerTransactionHandle, TransactionKey, TransportContext,
+};
 use sip_uac::UserAgentClient;
 use sip_uas::UserAgentServer;
 use std::sync::Arc;
@@ -29,7 +31,10 @@ struct NotifyTransactionUser;
 #[async_trait]
 impl ClientTransactionUser for NotifyTransactionUser {
     async fn on_provisional(&self, _key: &TransactionKey, response: &Response) {
-        debug!(status = response.start.code, "NOTIFY received provisional response");
+        debug!(
+            status = response.start.code,
+            "NOTIFY received provisional response"
+        );
     }
 
     async fn on_final(&self, _key: &TransactionKey, response: &Response) {
@@ -54,7 +59,12 @@ impl ClientTransactionUser for NotifyTransactionUser {
         // NOTIFY is not INVITE, no ACK needed
     }
 
-    async fn send_prack(&self, _key: &TransactionKey, _response: Response, _ctx: &TransportContext) {
+    async fn send_prack(
+        &self,
+        _key: &TransactionKey,
+        _response: Response,
+        _ctx: &TransportContext,
+    ) {
         // PRACK not used for NOTIFY
     }
 
@@ -143,9 +153,7 @@ impl SubscribeHandler {
         Ok(())
     }
 
-    fn build_notify_body(
-        subscription: &Subscription,
-    ) -> (Option<String>, Option<String>) {
+    fn build_notify_body(subscription: &Subscription) -> (Option<String>, Option<String>) {
         let event = subscription.id.event.as_str();
         match event {
             "presence" => {
@@ -295,8 +303,7 @@ impl RequestHandler for SubscribeHandler {
                 } else {
                     info!(
                         call_id,
-                        event_package,
-                        "Initial NOTIFY sent successfully (RFC 3265 compliant)"
+                        event_package, "Initial NOTIFY sent successfully (RFC 3265 compliant)"
                     );
                 }
 

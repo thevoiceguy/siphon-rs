@@ -52,11 +52,7 @@ impl RequestHandler for MessageHandler {
             return Ok(());
         }
 
-        info!(
-            call_id,
-            len = request.body.len(),
-            "Received MESSAGE"
-        );
+        info!(call_id, len = request.body.len(), "Received MESSAGE");
 
         let response = UserAgentServer::create_response(request, 200, "OK");
         handle.send_final(response).await;

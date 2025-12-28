@@ -83,9 +83,11 @@ impl ProxyService {
         let mut ordered_targets = targets;
         if matches!(fork_mode, ForkMode::Sequential) {
             ordered_targets.sort_by(|a, b| {
-                a.priority
-                    .cmp(&b.priority)
-                    .then_with(|| b.q_value.partial_cmp(&a.q_value).unwrap_or(std::cmp::Ordering::Equal))
+                a.priority.cmp(&b.priority).then_with(|| {
+                    b.q_value
+                        .partial_cmp(&a.q_value)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
             });
         }
         if matches!(fork_mode, ForkMode::None | ForkMode::Sequential) {

@@ -557,10 +557,7 @@ mod tests {
         assert_eq!(WatcherStatus::Waiting.as_str(), "waiting");
         assert_eq!(WatcherStatus::Terminated.as_str(), "terminated");
 
-        assert_eq!(
-            WatcherStatus::parse("active"),
-            Some(WatcherStatus::Active)
-        );
+        assert_eq!(WatcherStatus::parse("active"), Some(WatcherStatus::Active));
         assert_eq!(
             WatcherStatus::parse("PENDING"),
             Some(WatcherStatus::Pending)
@@ -578,10 +575,7 @@ mod tests {
             WatcherEvent::parse("approved"),
             Some(WatcherEvent::Approved)
         );
-        assert_eq!(
-            WatcherEvent::parse("TIMEOUT"),
-            Some(WatcherEvent::Timeout)
-        );
+        assert_eq!(WatcherEvent::parse("TIMEOUT"), Some(WatcherEvent::Timeout));
         assert_eq!(WatcherEvent::parse("invalid"), None);
     }
 

@@ -55,10 +55,7 @@ impl PathHeader {
     /// Creates a Path header from a list of URIs.
     pub fn from_uris(uris: Vec<Uri>) -> Self {
         Self {
-            routes: uris
-                .into_iter()
-                .map(NameAddr::from_uri)
-                .collect(),
+            routes: uris.into_iter().map(NameAddr::from_uri).collect(),
         }
     }
 
@@ -87,14 +84,12 @@ impl PathHeader {
     /// Per RFC 3327, Path URIs should typically include the 'lr' parameter
     /// to indicate loose routing support.
     pub fn all_loose_routing(&self) -> bool {
-        self.routes
-            .iter()
-            .all(|r| {
-                r.uri()
-                    .as_sip()
-                    .map(|sip| sip.params.contains_key("lr"))
-                    .unwrap_or(false)
-            })
+        self.routes.iter().all(|r| {
+            r.uri()
+                .as_sip()
+                .map(|sip| sip.params.contains_key("lr"))
+                .unwrap_or(false)
+        })
     }
 }
 
@@ -166,10 +161,7 @@ impl ServiceRouteHeader {
     /// Creates a Service-Route header from a list of URIs.
     pub fn from_uris(uris: Vec<Uri>) -> Self {
         Self {
-            routes: uris
-                .into_iter()
-                .map(NameAddr::from_uri)
-                .collect(),
+            routes: uris.into_iter().map(NameAddr::from_uri).collect(),
         }
     }
 
@@ -195,14 +187,12 @@ impl ServiceRouteHeader {
 
     /// Checks if all routes have the 'lr' (loose routing) parameter.
     pub fn all_loose_routing(&self) -> bool {
-        self.routes
-            .iter()
-            .all(|r| {
-                r.uri()
-                    .as_sip()
-                    .map(|sip| sip.params.contains_key("lr"))
-                    .unwrap_or(false)
-            })
+        self.routes.iter().all(|r| {
+            r.uri()
+                .as_sip()
+                .map(|sip| sip.params.contains_key("lr"))
+                .unwrap_or(false)
+        })
     }
 }
 

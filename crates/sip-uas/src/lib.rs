@@ -121,7 +121,9 @@ impl UserAgentServer {
         }
 
         // Content-Length
-        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0")).unwrap();
+        headers
+            .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
+            .unwrap();
 
         Response::new(
             StatusLine::new(code, SmolStr::new(reason)),
@@ -154,10 +156,13 @@ impl UserAgentServer {
         let mut response = Self::create_response(request, 200, "OK");
 
         // Add Contact header
-        response.headers.push(
-            SmolStr::new("Contact"),
-            SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
-        ).unwrap();
+        response
+            .headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
+            )
+            .unwrap();
 
         // Add tag to To header if not present
         self.ensure_to_tag(&mut response);
@@ -172,10 +177,13 @@ impl UserAgentServer {
                 .expect("content-length should be valid");
 
             // Add Content-Type for SDP
-            response.headers.push(
-                SmolStr::new("Content-Type"),
-                SmolStr::new("application/sdp"),
-            ).unwrap();
+            response
+                .headers
+                .push(
+                    SmolStr::new("Content-Type"),
+                    SmolStr::new("application/sdp"),
+                )
+                .unwrap();
 
             response.body = Bytes::from(body_content.as_bytes().to_vec());
         }
@@ -197,7 +205,8 @@ impl UserAgentServer {
         if let Some(etag) = sip_etag {
             response
                 .headers
-                .push(SmolStr::new("SIP-ETag"), SmolStr::new(etag)).unwrap();
+                .push(SmolStr::new("SIP-ETag"), SmolStr::new(etag))
+                .unwrap();
         }
         response
     }
@@ -272,7 +281,8 @@ impl UserAgentServer {
         // Add Min-SE header per RFC 4028
         response
             .headers
-            .push(SmolStr::new("Min-SE"), SmolStr::new(min_se.to_string())).unwrap();
+            .push(SmolStr::new("Min-SE"), SmolStr::new(min_se.to_string()))
+            .unwrap();
 
         ensure_to_tag_header(&mut response);
         response
@@ -528,10 +538,13 @@ impl UserAgentServer {
         let mut response = Self::create_response(request, 200, "OK");
 
         // Add Contact header
-        response.headers.push(
-            SmolStr::new("Contact"),
-            SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
-        ).unwrap();
+        response
+            .headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
+            )
+            .unwrap();
 
         // Add Expires header
         let expires_value = expires.unwrap_or_else(|| {
@@ -541,10 +554,13 @@ impl UserAgentServer {
                 .and_then(|e| e.parse().ok())
                 .unwrap_or(3600)
         });
-        response.headers.push(
-            SmolStr::new("Expires"),
-            SmolStr::new(expires_value.to_string()),
-        ).unwrap();
+        response
+            .headers
+            .push(
+                SmolStr::new("Expires"),
+                SmolStr::new(expires_value.to_string()),
+            )
+            .unwrap();
 
         // Add tag to To header
         self.ensure_to_tag(&mut response);
@@ -601,13 +617,15 @@ impl UserAgentServer {
             .port
             .map(|p| format!(":{}", p))
             .unwrap_or_default();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new(format!(
-                "SIP/2.0/{} {}{};branch={}",
-                transport, host, port, branch
-            )),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new(format!(
+                    "SIP/2.0/{} {}{};branch={}",
+                    transport, host, port, branch
+                )),
+            )
+            .unwrap();
 
         // From (we are the notifier, so use local URI with To tag from subscription)
         let from = format!(
@@ -615,7 +633,9 @@ impl UserAgentServer {
             self.local_uri.as_str(),
             subscription.id.to_tag.as_str()
         );
-        headers.push(SmolStr::new("From"), SmolStr::new(from)).unwrap();
+        headers
+            .push(SmolStr::new("From"), SmolStr::new(from))
+            .unwrap();
 
         // To (subscriber, use From tag from subscription)
         let to = format!(
@@ -626,24 +646,32 @@ impl UserAgentServer {
         headers.push(SmolStr::new("To"), SmolStr::new(to)).unwrap();
 
         // Call-ID
-        headers.push(SmolStr::new("Call-ID"), subscription.id.call_id.clone()).unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), subscription.id.call_id.clone())
+            .unwrap();
 
         // CSeq
         subscription.local_cseq = subscription.local_cseq.saturating_add(1);
         let cseq = subscription.local_cseq;
-        headers.push(
-            SmolStr::new("CSeq"),
-            SmolStr::new(format!("{} NOTIFY", cseq)),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("CSeq"),
+                SmolStr::new(format!("{} NOTIFY", cseq)),
+            )
+            .unwrap();
 
         // Contact
-        headers.push(
-            SmolStr::new("Contact"),
-            SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
+            )
+            .unwrap();
 
         // Event (should be "refer")
-        headers.push(SmolStr::new("Event"), subscription.id.event.clone()).unwrap();
+        headers
+            .push(SmolStr::new("Event"), subscription.id.event.clone())
+            .unwrap();
 
         // Subscription-State (terminated after final response)
         let state = if (200..300).contains(&status_code) {
@@ -653,23 +681,31 @@ impl UserAgentServer {
         } else {
             "active"
         };
-        headers.push(SmolStr::new("Subscription-State"), SmolStr::new(state)).unwrap();
+        headers
+            .push(SmolStr::new("Subscription-State"), SmolStr::new(state))
+            .unwrap();
 
         // Content-Type: message/sipfrag;version=2.0
-        headers.push(
-            SmolStr::new("Content-Type"),
-            SmolStr::new("message/sipfrag;version=2.0"),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Content-Type"),
+                SmolStr::new("message/sipfrag;version=2.0"),
+            )
+            .unwrap();
 
         // Sipfrag body (just the status line)
         let sipfrag_body = format!("SIP/2.0 {} {}\r\n", status_code, reason_phrase);
-        headers.push(
-            SmolStr::new("Content-Length"),
-            SmolStr::new(sipfrag_body.len().to_string()),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Content-Length"),
+                SmolStr::new(sipfrag_body.len().to_string()),
+            )
+            .unwrap();
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70")).unwrap();
+        headers
+            .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
+            .unwrap();
 
         Request::new(
             RequestLine::new(Method::Notify, subscription.contact.clone()),
@@ -710,10 +746,13 @@ impl UserAgentServer {
         let mut response = Self::create_response(request, 202, "Accepted");
 
         // Add Contact header
-        response.headers.push(
-            SmolStr::new("Contact"),
-            SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
-        ).unwrap();
+        response
+            .headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
+            )
+            .unwrap();
 
         // Add tag to To header
         self.ensure_to_tag(&mut response);
@@ -773,18 +812,23 @@ impl UserAgentServer {
         let rseq = self.rseq_manager.next_rseq(&dialog.id);
         response
             .headers
-            .push(SmolStr::new("RSeq"), SmolStr::new(rseq.to_string())).unwrap();
+            .push(SmolStr::new("RSeq"), SmolStr::new(rseq.to_string()))
+            .unwrap();
 
         // Add Require: 100rel
         response
             .headers
-            .push(SmolStr::new("Require"), SmolStr::new("100rel")).unwrap();
+            .push(SmolStr::new("Require"), SmolStr::new("100rel"))
+            .unwrap();
 
         // Add Contact header
-        response.headers.push(
-            SmolStr::new("Contact"),
-            SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
-        ).unwrap();
+        response
+            .headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
+            )
+            .unwrap();
 
         // Add tag to To header if not present
         self.ensure_to_tag(&mut response);
@@ -813,10 +857,13 @@ impl UserAgentServer {
                 .expect("content-length should be valid");
 
             // Add Content-Type for SDP
-            response.headers.push(
-                SmolStr::new("Content-Type"),
-                SmolStr::new("application/sdp"),
-            ).unwrap();
+            response
+                .headers
+                .push(
+                    SmolStr::new("Content-Type"),
+                    SmolStr::new("application/sdp"),
+                )
+                .unwrap();
 
             response.body = Bytes::from(body_content.as_bytes().to_vec());
         }
@@ -839,9 +886,9 @@ impl UserAgentServer {
 
         validate_dialog_request(request, dialog)?;
 
-        if let Err(err) =
-            self.prack_validator
-                .validate_prack(&dialog_id_key(&dialog.id), request)
+        if let Err(err) = self
+            .prack_validator
+            .validate_prack(&dialog_id_key(&dialog.id), request)
         {
             let err_msg = err.to_string();
             // RFC 3262 §4: Return 400 for malformed/invalid RAck, 481 for no dialog/transaction
@@ -1078,17 +1125,27 @@ mod tests {
     #[test]
     fn creates_trying_response() {
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=abc"),
-        ).unwrap();
-        headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>")).unwrap();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id")).unwrap();
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE")).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=abc"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"))
+            .unwrap();
 
         let request = Request::new(
             RequestLine::new(
@@ -1118,17 +1175,27 @@ mod tests {
         let uas = UserAgentServer::new(local_uri, contact_uri);
 
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=abc"),
-        ).unwrap();
-        headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>")).unwrap();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id")).unwrap();
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE")).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=abc"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"))
+            .unwrap();
 
         let request = Request::new(
             RequestLine::new(
@@ -1157,17 +1224,27 @@ mod tests {
         let uas = UserAgentServer::new(local_uri, contact_uri);
 
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=abc"),
-        ).unwrap();
-        headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>")).unwrap();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id")).unwrap();
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE")).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=abc"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"))
+            .unwrap();
 
         let request = Request::new(
             RequestLine::new(
@@ -1197,17 +1274,27 @@ mod tests {
         let uas = UserAgentServer::new(local_uri, contact_uri);
 
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=abc"),
-        ).unwrap();
-        headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>")).unwrap();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id")).unwrap();
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE")).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=abc"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"))
+            .unwrap();
 
         let request = Request::new(
             RequestLine::new(
@@ -1236,17 +1323,27 @@ mod tests {
         let uas = UserAgentServer::new(local_uri, contact_uri);
 
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=abc"),
-        ).unwrap();
-        headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>")).unwrap();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id")).unwrap();
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE")).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=abc"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"))
+            .unwrap();
 
         let request = Request::new(
             RequestLine::new(
@@ -1275,17 +1372,27 @@ mod tests {
         let uas = UserAgentServer::new(local_uri, contact_uri);
 
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=abc"),
-        ).unwrap();
-        headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>")).unwrap();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id")).unwrap();
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE")).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=abc"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"))
+            .unwrap();
 
         let request = Request::new(
             RequestLine::new(
@@ -1314,21 +1421,33 @@ mod tests {
         let uas = UserAgentServer::new(local_uri, contact_uri);
 
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=abc"),
-        ).unwrap();
-        headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>")).unwrap();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id")).unwrap();
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE")).unwrap();
-        headers.push(
-            SmolStr::new("Contact"),
-            SmolStr::new("<sip:alice@192.168.1.200:5060>"),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=abc"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"))
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new("<sip:alice@192.168.1.200:5060>"),
+            )
+            .unwrap();
 
         let request = Request::new(
             RequestLine::new(
@@ -1350,17 +1469,27 @@ mod tests {
     #[test]
     fn rejects_invite_with_custom_code() {
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=abc"),
-        ).unwrap();
-        headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>")).unwrap();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id")).unwrap();
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE")).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=abc"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"))
+            .unwrap();
 
         let request = Request::new(
             RequestLine::new(
@@ -1385,17 +1514,27 @@ mod tests {
         let uas = UserAgentServer::new(local_uri, contact_uri);
 
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=abc"),
-        ).unwrap();
-        headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>")).unwrap();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id")).unwrap();
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 CANCEL")).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=abc"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 CANCEL"))
+            .unwrap();
 
         let request = Request::new(
             RequestLine::new(
@@ -1416,10 +1555,12 @@ mod tests {
     #[test]
     fn extracts_from_uri_with_brackets() {
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=abc"),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=abc"),
+            )
+            .unwrap();
 
         let request = Request::new(
             RequestLine::new(
@@ -1437,10 +1578,12 @@ mod tests {
     #[test]
     fn extracts_from_uri_without_brackets() {
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("sip:alice@example.com;tag=abc"),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("sip:alice@example.com;tag=abc"),
+            )
+            .unwrap();
 
         let request = Request::new(
             RequestLine::new(
@@ -1470,23 +1613,39 @@ mod tests {
         let uas = UserAgentServer::new(local_uri, contact_uri);
 
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=abc"),
-        ).unwrap();
-        headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>")).unwrap();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id")).unwrap();
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 SUBSCRIBE")).unwrap();
-        headers.push(SmolStr::new("Event"), SmolStr::new("refer")).unwrap();
-        headers.push(SmolStr::new("Expires"), SmolStr::new("3600")).unwrap();
-        headers.push(
-            SmolStr::new("Contact"),
-            SmolStr::new("<sip:alice@192.168.1.200:5060>"),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=abc"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 SUBSCRIBE"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Event"), SmolStr::new("refer"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Expires"), SmolStr::new("3600"))
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new("<sip:alice@192.168.1.200:5060>"),
+            )
+            .unwrap();
 
         let request = Request::new(
             RequestLine::new(
@@ -1526,21 +1685,33 @@ mod tests {
 
         // First create a dialog
         let mut invite_headers = Headers::new();
-        invite_headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
-        ).unwrap();
-        invite_headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=abc"),
-        ).unwrap();
-        invite_headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>")).unwrap();
-        invite_headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id")).unwrap();
-        invite_headers.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE")).unwrap();
-        invite_headers.push(
-            SmolStr::new("Contact"),
-            SmolStr::new("<sip:alice@192.168.1.200:5060>"),
-        ).unwrap();
+        invite_headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
+            )
+            .unwrap();
+        invite_headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=abc"),
+            )
+            .unwrap();
+        invite_headers
+            .push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"))
+            .unwrap();
+        invite_headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"))
+            .unwrap();
+        invite_headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"))
+            .unwrap();
+        invite_headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new("<sip:alice@192.168.1.200:5060>"),
+            )
+            .unwrap();
 
         let invite_request = Request::new(
             RequestLine::new(
@@ -1555,27 +1726,39 @@ mod tests {
 
         // Now create REFER request
         let mut refer_headers = Headers::new();
-        refer_headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK456"),
-        ).unwrap();
-        refer_headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=abc"),
-        ).unwrap();
-        refer_headers.push(
-            SmolStr::new("To"),
-            SmolStr::new(format!(
-                "<sip:bob@example.com>;tag={}",
-                dialog.id.local_tag.as_str()
-            )),
-        ).unwrap();
-        refer_headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id")).unwrap();
-        refer_headers.push(SmolStr::new("CSeq"), SmolStr::new("2 REFER")).unwrap();
-        refer_headers.push(
-            SmolStr::new("Refer-To"),
-            SmolStr::new("<sip:charlie@example.com>"),
-        ).unwrap();
+        refer_headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK456"),
+            )
+            .unwrap();
+        refer_headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=abc"),
+            )
+            .unwrap();
+        refer_headers
+            .push(
+                SmolStr::new("To"),
+                SmolStr::new(format!(
+                    "<sip:bob@example.com>;tag={}",
+                    dialog.id.local_tag.as_str()
+                )),
+            )
+            .unwrap();
+        refer_headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"))
+            .unwrap();
+        refer_headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("2 REFER"))
+            .unwrap();
+        refer_headers
+            .push(
+                SmolStr::new("Refer-To"),
+                SmolStr::new("<sip:charlie@example.com>"),
+            )
+            .unwrap();
 
         let refer_request = Request::new(
             RequestLine::new(Method::Refer, SipUri::parse("sip:bob@example.com").unwrap()),
@@ -1633,10 +1816,7 @@ mod tests {
         assert_eq!(notify_100.headers.get("Event").unwrap(), "refer");
         assert!(notify_100.headers.get("Subscription-State").is_some());
         assert_eq!(
-            notify_100
-                .headers
-                .get("Subscription-State")
-                .unwrap(),
+            notify_100.headers.get("Subscription-State").unwrap(),
             "active"
         );
         assert!(notify_100.headers.get("Content-Type").is_some());
@@ -1652,10 +1832,7 @@ mod tests {
         let notify_200 = uas.create_notify_sipfrag(&mut subscription, 200, "OK");
 
         assert_eq!(
-            notify_200
-                .headers
-                .get("Subscription-State")
-                .unwrap(),
+            notify_200.headers.get("Subscription-State").unwrap(),
             "terminated;reason=noresource"
         );
 
@@ -1666,10 +1843,7 @@ mod tests {
         let notify_603 = uas.create_notify_sipfrag(&mut subscription, 603, "Decline");
 
         assert_eq!(
-            notify_603
-                .headers
-                .get("Subscription-State")
-                .unwrap(),
+            notify_603.headers.get("Subscription-State").unwrap(),
             "terminated;reason=rejected"
         );
 
@@ -1680,21 +1854,33 @@ mod tests {
     #[test]
     fn rejects_refer_request() {
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=abc"),
-        ).unwrap();
-        headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>")).unwrap();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id")).unwrap();
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("2 REFER")).unwrap();
-        headers.push(
-            SmolStr::new("Refer-To"),
-            SmolStr::new("<sip:charlie@example.com>"),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=abc"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("2 REFER"))
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("Refer-To"),
+                SmolStr::new("<sip:charlie@example.com>"),
+            )
+            .unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Refer, SipUri::parse("sip:bob@example.com").unwrap()),
@@ -1721,21 +1907,33 @@ mod tests {
 
         // Create INVITE request
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=alice-tag"),
-        ).unwrap();
-        headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>")).unwrap();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id")).unwrap();
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE")).unwrap();
-        headers.push(
-            SmolStr::new("Contact"),
-            SmolStr::new("<sip:alice@192.168.1.100:5060>"),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=alice-tag"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"))
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new("<sip:alice@192.168.1.100:5060>"),
+            )
+            .unwrap();
 
         let request = Request::new(
             RequestLine::new(
@@ -1802,21 +2000,33 @@ mod tests {
         let uas = UserAgentServer::new(local_uri.clone(), contact_uri);
 
         let mut invite_headers = Headers::new();
-        invite_headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
-        ).unwrap();
-        invite_headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=alice-tag"),
-        ).unwrap();
-        invite_headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>")).unwrap();
-        invite_headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id")).unwrap();
-        invite_headers.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE")).unwrap();
-        invite_headers.push(
-            SmolStr::new("Contact"),
-            SmolStr::new("<sip:alice@192.168.1.100:5060>"),
-        ).unwrap();
+        invite_headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
+            )
+            .unwrap();
+        invite_headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=alice-tag"),
+            )
+            .unwrap();
+        invite_headers
+            .push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"))
+            .unwrap();
+        invite_headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"))
+            .unwrap();
+        invite_headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"))
+            .unwrap();
+        invite_headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new("<sip:alice@192.168.1.100:5060>"),
+            )
+            .unwrap();
 
         let invite_request = Request::new(
             RequestLine::new(
@@ -1849,25 +2059,38 @@ mod tests {
             is_uac: false,
         };
 
-        let _provisional = uas.create_reliable_provisional(&invite_request, &dialog, 180, "Ringing", None);
+        let _provisional =
+            uas.create_reliable_provisional(&invite_request, &dialog, 180, "Ringing", None);
 
         // Create PRACK request
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK456"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=alice-tag"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("To"),
-            SmolStr::new("<sip:bob@example.com>;tag=bob-tag"),
-        ).unwrap();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id")).unwrap();
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("2 PRACK")).unwrap();
-        headers.push(SmolStr::new("RAck"), SmolStr::new("1 1 INVITE")).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK456"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=alice-tag"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("To"),
+                SmolStr::new("<sip:bob@example.com>;tag=bob-tag"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("2 PRACK"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("RAck"), SmolStr::new("1 1 INVITE"))
+            .unwrap();
 
         let prack_request = Request::new(
             RequestLine::new(Method::Prack, SipUri::parse("sip:bob@example.com").unwrap()),
@@ -1890,18 +2113,30 @@ mod tests {
     fn validates_session_expires_success() {
         // Valid Session-Expires (>= 90s)
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=abc"),
-        ).unwrap();
-        headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>")).unwrap();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id")).unwrap();
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE")).unwrap();
-        headers.push(SmolStr::new("Session-Expires"), SmolStr::new("1800")).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=abc"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Session-Expires"), SmolStr::new("1800"))
+            .unwrap();
 
         let request = Request::new(
             RequestLine::new(
@@ -1920,18 +2155,30 @@ mod tests {
     fn validates_session_expires_too_small() {
         // Invalid Session-Expires (< 90s)
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=abc"),
-        ).unwrap();
-        headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>")).unwrap();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id")).unwrap();
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE")).unwrap();
-        headers.push(SmolStr::new("Session-Expires"), SmolStr::new("60")).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=abc"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Session-Expires"), SmolStr::new("60"))
+            .unwrap();
 
         let request = Request::new(
             RequestLine::new(
@@ -1959,18 +2206,30 @@ mod tests {
     fn validates_session_expires_custom_min() {
         // Test with custom minimum (120s)
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=abc"),
-        ).unwrap();
-        headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>")).unwrap();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id")).unwrap();
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE")).unwrap();
-        headers.push(SmolStr::new("Session-Expires"), SmolStr::new("100")).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=abc"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Session-Expires"), SmolStr::new("100"))
+            .unwrap();
 
         let request = Request::new(
             RequestLine::new(
@@ -1997,17 +2256,27 @@ mod tests {
     fn validates_session_expires_no_header() {
         // No Session-Expires header should pass validation
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=abc"),
-        ).unwrap();
-        headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>")).unwrap();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id")).unwrap();
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE")).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=abc"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"))
+            .unwrap();
 
         let request = Request::new(
             RequestLine::new(
@@ -2025,17 +2294,27 @@ mod tests {
     #[test]
     fn creates_422_response() {
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=abc"),
-        ).unwrap();
-        headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>")).unwrap();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id")).unwrap();
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE")).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=abc"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"))
+            .unwrap();
 
         let request = Request::new(
             RequestLine::new(
@@ -2093,25 +2372,39 @@ mod tests {
 
         // Create INFO request with DTMF payload
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK456"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=alice-tag"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("To"),
-            SmolStr::new("<sip:bob@example.com>;tag=bob-tag"),
-        ).unwrap();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id")).unwrap();
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("2 INFO")).unwrap();
-        headers.push(
-            SmolStr::new("Content-Type"),
-            SmolStr::new("application/dtmf-relay"),
-        ).unwrap();
-        headers.push(SmolStr::new("Content-Length"), SmolStr::new("26")).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK456"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=alice-tag"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("To"),
+                SmolStr::new("<sip:bob@example.com>;tag=bob-tag"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("2 INFO"))
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("Content-Type"),
+                SmolStr::new("application/dtmf-relay"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("Content-Length"), SmolStr::new("26"))
+            .unwrap();
 
         let dtmf_body = "Signal=1\r\nDuration=100\r\n";
         let info_request = Request::new(
@@ -2134,10 +2427,7 @@ mod tests {
         assert!(response.headers.get("Via").is_some());
         assert!(response.headers.get("From").is_some());
         assert!(response.headers.get("To").is_some());
-        assert_eq!(
-            response.headers.get("Call-ID").unwrap(),
-            "test-call-id"
-        );
+        assert_eq!(response.headers.get("Call-ID").unwrap(), "test-call-id");
         assert_eq!(response.headers.get("CSeq").unwrap(), "2 INFO");
     }
 
@@ -2174,30 +2464,44 @@ mod tests {
 
         // Create INFO request with JSON payload
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK789"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=alice-tag"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("To"),
-            SmolStr::new("<sip:bob@example.com>;tag=bob-tag"),
-        ).unwrap();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new("call-123")).unwrap();
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("6 INFO")).unwrap();
-        headers.push(
-            SmolStr::new("Content-Type"),
-            SmolStr::new("application/json"),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK789"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=alice-tag"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("To"),
+                SmolStr::new("<sip:bob@example.com>;tag=bob-tag"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("call-123"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("6 INFO"))
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("Content-Type"),
+                SmolStr::new("application/json"),
+            )
+            .unwrap();
 
         let json_body = r#"{"action":"mute","value":true}"#;
-        headers.push(
-            SmolStr::new("Content-Length"),
-            SmolStr::new(json_body.len().to_string()),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Content-Length"),
+                SmolStr::new(json_body.len().to_string()),
+            )
+            .unwrap();
 
         let info_request = Request::new(
             RequestLine::new(Method::Info, SipUri::parse("sip:bob@example.com").unwrap()),
@@ -2249,22 +2553,36 @@ mod tests {
 
         // Create INFO request with WRONG Call-ID
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK456"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=alice-tag"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("To"),
-            SmolStr::new("<sip:bob@example.com>;tag=bob-tag"),
-        ).unwrap();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new("wrong-call-id")).unwrap(); // Wrong!
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("2 INFO")).unwrap();
-        headers.push(SmolStr::new("Content-Type"), SmolStr::new("text/plain")).unwrap();
-        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0")).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK456"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=alice-tag"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("To"),
+                SmolStr::new("<sip:bob@example.com>;tag=bob-tag"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("wrong-call-id"))
+            .unwrap(); // Wrong!
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("2 INFO"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Content-Type"), SmolStr::new("text/plain"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
+            .unwrap();
 
         let info_request = Request::new(
             RequestLine::new(Method::Info, SipUri::parse("sip:bob@example.com").unwrap()),
@@ -2311,21 +2629,33 @@ mod tests {
 
         // Create BYE request (not INFO)
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK456"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=alice-tag"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("To"),
-            SmolStr::new("<sip:bob@example.com>;tag=bob-tag"),
-        ).unwrap();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id")).unwrap();
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("2 BYE")).unwrap();
-        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0")).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK456"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=alice-tag"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("To"),
+                SmolStr::new("<sip:bob@example.com>;tag=bob-tag"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("2 BYE"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
+            .unwrap();
 
         let bye_request = Request::new(
             RequestLine::new(Method::Bye, SipUri::parse("sip:bob@example.com").unwrap()),

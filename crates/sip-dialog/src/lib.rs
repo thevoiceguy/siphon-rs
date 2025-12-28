@@ -903,7 +903,8 @@ impl RSeqManager {
     /// Gets the next RSeq for a dialog and increments the counter.
     /// Returns 1 for the first call.
     pub fn next_rseq(&self, dialog_id: &DialogId) -> u32 {
-        *self.sequences
+        *self
+            .sequences
             .entry(dialog_id.clone())
             .and_modify(|rseq| *rseq = rseq.saturating_add(1))
             .or_insert(1)
@@ -949,30 +950,42 @@ mod tests {
         cseq: u32,
     ) -> Request {
         let mut headers = Headers::new();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new(call_id.to_owned())).unwrap();
-        headers.push(
-            SmolStr::new("From"),
-            SmolStr::new(format!("<sip:alice@example.com>;tag={}", from_tag)),
-        ).unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new(call_id.to_owned()))
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new(format!("<sip:alice@example.com>;tag={}", from_tag)),
+            )
+            .unwrap();
         if let Some(tag) = to_tag {
-            headers.push(
-                SmolStr::new("To"),
-                SmolStr::new(format!("<sip:bob@example.com>;tag={}", tag)),
-            ).unwrap();
+            headers
+                .push(
+                    SmolStr::new("To"),
+                    SmolStr::new(format!("<sip:bob@example.com>;tag={}", tag)),
+                )
+                .unwrap();
         } else {
-            headers.push(
-                SmolStr::new("To"),
-                SmolStr::new("<sip:bob@example.com>".to_owned()),
-            ).unwrap();
+            headers
+                .push(
+                    SmolStr::new("To"),
+                    SmolStr::new("<sip:bob@example.com>".to_owned()),
+                )
+                .unwrap();
         }
-        headers.push(
-            SmolStr::new("CSeq"),
-            SmolStr::new(format!("{} {}", cseq, method.as_str())),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("Contact"),
-            SmolStr::new("<sip:alice@client.example.com>".to_owned()),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("CSeq"),
+                SmolStr::new(format!("{} {}", cseq, method.as_str())),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new("<sip:alice@client.example.com>".to_owned()),
+            )
+            .unwrap();
 
         Request::new(
             RequestLine::new(method, SipUri::parse("sip:bob@example.com").unwrap()),
@@ -987,21 +1000,27 @@ mod tests {
         // Copy all headers from request except To
         for header in req.headers.iter() {
             if header.name() != "To" {
-                headers.push(header.name_smol().clone(), header.value_smol().clone()).unwrap();
+                headers
+                    .push(header.name_smol().clone(), header.value_smol().clone())
+                    .unwrap();
             }
         }
 
         // Add To header with tag
-        headers.push(
-            SmolStr::new("To"),
-            SmolStr::new(format!("<sip:bob@example.com>;tag={}", to_tag)),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("To"),
+                SmolStr::new(format!("<sip:bob@example.com>;tag={}", to_tag)),
+            )
+            .unwrap();
 
         // Add Contact header
-        headers.push(
-            SmolStr::new("Contact"),
-            SmolStr::new("<sip:bob@server.example.com>".to_owned()),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new("<sip:bob@server.example.com>".to_owned()),
+            )
+            .unwrap();
 
         Response::new(
             StatusLine::new(code, SmolStr::new("OK")),
@@ -1241,15 +1260,19 @@ mod tests {
         // Copy all headers except Contact
         for header in make_response(200, &reinvite_req, "uas-tag").headers.iter() {
             if header.name() != "Contact" {
-                reinvite_resp_headers.push(header.name_smol().clone(), header.value_smol().clone()).unwrap();
+                reinvite_resp_headers
+                    .push(header.name_smol().clone(), header.value_smol().clone())
+                    .unwrap();
             }
         }
 
         // Add new Contact header
-        reinvite_resp_headers.push(
-            SmolStr::new("Contact"),
-            SmolStr::new("<sip:bob@newserver.example.com>".to_owned()),
-        ).unwrap();
+        reinvite_resp_headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new("<sip:bob@newserver.example.com>".to_owned()),
+            )
+            .unwrap();
 
         let reinvite_resp = Response::new(
             StatusLine::new(200, SmolStr::new("OK")),

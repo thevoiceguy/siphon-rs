@@ -678,7 +678,9 @@ fn validate_param_value(value: &str) -> Result<(), CpimError> {
 
 fn validate_content_type(value: &str) -> Result<(), CpimError> {
     if value.is_empty() {
-        return Err(CpimError::InvalidContentType("empty content type".to_string()));
+        return Err(CpimError::InvalidContentType(
+            "empty content type".to_string(),
+        ));
     }
     if value.len() > MAX_CONTENT_TYPE_LENGTH {
         return Err(CpimError::ContentTypeTooLong {
@@ -888,8 +890,9 @@ fn parse_headers(input: &str) -> Result<BTreeMap<SmolStr, Vec<CpimHeader>>, Cpim
         }
 
         // Split into name and value
-        let (name_with_params, value) =
-            line.split_once(':').ok_or_else(|| CpimError::ParseError("missing ':'".to_string()))?;
+        let (name_with_params, value) = line
+            .split_once(':')
+            .ok_or_else(|| CpimError::ParseError("missing ':'".to_string()))?;
 
         // Parse header name and parameters
         let mut parts = name_with_params.split(';');

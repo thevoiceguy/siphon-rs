@@ -9,8 +9,8 @@
 use dashmap::DashMap;
 use sip_core::Request;
 use sip_parse::header;
-use smol_str::SmolStr;
 use sip_transaction::ServerTransactionHandle;
+use smol_str::SmolStr;
 
 /// Pending INVITE transaction information.
 #[derive(Clone)]
@@ -76,11 +76,7 @@ impl InviteStateManager {
     ///
     /// This should be called when sending a provisional response (100/180/183)
     /// to track the INVITE transaction so it can be canceled later.
-    pub fn store_pending_invite(
-        &self,
-        key: String,
-        pending: PendingInvite,
-    ) {
+    pub fn store_pending_invite(&self, key: String, pending: PendingInvite) {
         tracing::debug!(
             key = %key,
             call_id = %pending.call_id,
@@ -128,10 +124,7 @@ impl InviteStateManager {
         if result.is_none() {
             // Log all current keys to help debug
             let keys: Vec<String> = self.pending.iter().map(|e| e.key().clone()).collect();
-            tracing::debug!(
-                "Current pending INVITE keys: {:?}",
-                keys
-            );
+            tracing::debug!("Current pending INVITE keys: {:?}", keys);
         }
         result
     }

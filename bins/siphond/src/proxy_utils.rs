@@ -79,14 +79,14 @@ fn select_transport(uri: &SipUri) -> TransportKind {
     }
 }
 
-pub fn next_hop_from_request(
-    request: &Request,
-    local_uri: &SipUri,
-) -> (SipUri, bool) {
+pub fn next_hop_from_request(request: &Request, local_uri: &SipUri) -> (SipUri, bool) {
     if let Some(route_value) = extract_first_route(&request.headers) {
         if let Some(route_uri) = parse_route_uri(&route_value) {
             if is_route_local(&route_uri, local_uri) {
-                return (request.start.uri.as_sip().cloned().unwrap_or(route_uri), true);
+                return (
+                    request.start.uri.as_sip().cloned().unwrap_or(route_uri),
+                    true,
+                );
             }
             return (route_uri, false);
         }
@@ -131,15 +131,17 @@ pub async fn forward_request(
     };
 
     let branch = ProxyHelpers::add_via(&mut proxied_req, proxy_host, transport_name);
-    services.proxy_state.store_transaction(crate::proxy_state::ProxyTransaction {
-        branch: branch.clone(),
-        sender_addr: ctx.peer,
-        sender_transport: ctx.transport,
-        sender_stream: ctx.stream.clone(),
-        sender_ws_uri: ctx.ws_uri.clone(),
-        call_id: call_id.to_string(),
-        created_at: std::time::Instant::now(),
-    });
+    services
+        .proxy_state
+        .store_transaction(crate::proxy_state::ProxyTransaction {
+            branch: branch.clone(),
+            sender_addr: ctx.peer,
+            sender_transport: ctx.transport,
+            sender_stream: ctx.stream.clone(),
+            sender_ws_uri: ctx.ws_uri.clone(),
+            call_id: call_id.to_string(),
+            created_at: std::time::Instant::now(),
+        });
 
     if options.add_record_route {
         if let Some(proxy_uri) = sip_core::SipUri::parse(&services.config.local_uri) {
@@ -197,7 +199,11 @@ pub async fn forward_request(
         TransportKind::Ws | TransportKind::Wss => {
             #[cfg(feature = "ws")]
             {
-                let scheme = if transport == TransportKind::Wss { "wss" } else { "ws" };
+                let scheme = if transport == TransportKind::Wss {
+                    "wss"
+                } else {
+                    "ws"
+                };
                 let ws_url = format!("{}://{}:{}", scheme, target_uri.host, target_addr.port());
                 let data = bytes::Bytes::from(payload.to_vec());
                 if transport == TransportKind::Wss {

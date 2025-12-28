@@ -20,8 +20,9 @@ impl std::fmt::Display for DateHeaderError {
         match self {
             Self::InvalidFormat(msg) => write!(f, "invalid date format: {}", msg),
             Self::ContainsControlCharacters => write!(f, "date contains control characters"),
-            Self::TooLong { max, actual } => 
-                write!(f, "date too long (max {}, got {})", max, actual),
+            Self::TooLong { max, actual } => {
+                write!(f, "date too long (max {}, got {})", max, actual)
+            }
             Self::ParseError(msg) => write!(f, "parse error: {}", msg),
         }
     }
@@ -45,8 +46,8 @@ impl std::error::Error for DateHeaderError {}
 /// The raw string and parsed timestamp are kept in sync.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DateHeader {
-    raw: SmolStr,                      // ← Private
-    timestamp: Option<SystemTime>,     // ← Private
+    raw: SmolStr,                  // ← Private
+    timestamp: Option<SystemTime>, // ← Private
 }
 
 impl DateHeader {
@@ -82,7 +83,7 @@ impl DateHeader {
         // Validate basic format (should contain date-like components)
         if !is_valid_date_format(raw) {
             return Err(DateHeaderError::InvalidFormat(
-                "does not match RFC 1123 format".to_string()
+                "does not match RFC 1123 format".to_string(),
             ));
         }
 
@@ -99,7 +100,7 @@ impl DateHeader {
     pub fn now() -> Self {
         let timestamp = SystemTime::now();
         let raw = format_rfc1123_date(&timestamp);
-        
+
         Self {
             raw: SmolStr::new(&raw),
             timestamp: Some(timestamp),
@@ -109,7 +110,7 @@ impl DateHeader {
     /// Creates a DateHeader from a SystemTime.
     pub fn from_timestamp(timestamp: SystemTime) -> Self {
         let raw = format_rfc1123_date(&timestamp);
-        
+
         Self {
             raw: SmolStr::new(&raw),
             timestamp: Some(timestamp),
@@ -128,21 +129,14 @@ impl DateHeader {
 
     /// Validates and returns true if the date is in the past.
     pub fn is_past(&self) -> Option<bool> {
-        self.timestamp.and_then(|ts| {
-            SystemTime::now()
-                .duration_since(ts)
-                .ok()
-                .map(|_| true)
-        })
+        self.timestamp
+            .and_then(|ts| SystemTime::now().duration_since(ts).ok().map(|_| true))
     }
 
     /// Validates and returns true if the date is in the future.
     pub fn is_future(&self) -> Option<bool> {
-        self.timestamp.and_then(|ts| {
-            ts.duration_since(SystemTime::now())
-                .ok()
-                .map(|_| true)
-        })
+        self.timestamp
+            .and_then(|ts| ts.duration_since(SystemTime::now()).ok().map(|_| true))
     }
 }
 
@@ -151,8 +145,7 @@ const VALID_DAYS: &[&str] = &["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 /// Valid RFC 1123 month names (3-letter abbreviations)
 const VALID_MONTHS: &[&str] = &[
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
 /// Validates that a string looks like an RFC 1123 date.
@@ -313,7 +306,7 @@ mod tests {
         // This should compile (read-only access)
         let _ = date.raw();
         let _ = date.timestamp();
-        
+
         // These should NOT compile (no direct field access):
         // date.raw = SmolStr::new("evil");  // ← Does not compile!
         // date.timestamp = None;             // ← Does not compile!
@@ -324,7 +317,7 @@ mod tests {
         assert!(is_valid_date_format("Mon, 01 Jan 2024 00:00:00 GMT"));
         assert!(!is_valid_date_format("invalid"));
         assert!(!is_valid_date_format(""));
-        assert!(!is_valid_date_format("01 Jan 2024"));  // Missing day name
+        assert!(!is_valid_date_format("01 Jan 2024")); // Missing day name
     }
 
     #[test]
@@ -333,7 +326,7 @@ mod tests {
         assert!(result.is_err());
 
         let result = DateHeader::new("Monday, 01 Jan 2024 00:00:00 GMT");
-        assert!(result.is_err());  // Full name not allowed
+        assert!(result.is_err()); // Full name not allowed
     }
 
     #[test]
@@ -342,57 +335,57 @@ mod tests {
         assert!(result.is_err());
 
         let result = DateHeader::new("Mon, 01 January 2024 00:00:00 GMT");
-        assert!(result.is_err());  // Full name not allowed
+        assert!(result.is_err()); // Full name not allowed
     }
 
     #[test]
     fn reject_invalid_years() {
         let result = DateHeader::new("Mon, 01 Jan 0000 00:00:00 GMT");
-        assert!(result.is_err());  // Before Unix epoch
+        assert!(result.is_err()); // Before Unix epoch
 
         let result = DateHeader::new("Mon, 01 Jan 1969 00:00:00 GMT");
-        assert!(result.is_err());  // Before 1970
+        assert!(result.is_err()); // Before 1970
 
         let result = DateHeader::new("Mon, 01 Jan 2101 00:00:00 GMT");
-        assert!(result.is_err());  // After 2100
+        assert!(result.is_err()); // After 2100
     }
 
     #[test]
     fn reject_invalid_day_numbers() {
         let result = DateHeader::new("Mon, 00 Jan 2024 00:00:00 GMT");
-        assert!(result.is_err());  // Day 00
+        assert!(result.is_err()); // Day 00
 
         let result = DateHeader::new("Mon, 32 Jan 2024 00:00:00 GMT");
-        assert!(result.is_err());  // Day 32
+        assert!(result.is_err()); // Day 32
 
         let result = DateHeader::new("Mon, 99 Jan 2024 00:00:00 GMT");
-        assert!(result.is_err());  // Day 99
+        assert!(result.is_err()); // Day 99
     }
 
     #[test]
     fn reject_invalid_time_formats() {
         let result = DateHeader::new("Mon, 01 Jan 2024 99:00:00 GMT");
-        assert!(result.is_err());  // Hour 99
+        assert!(result.is_err()); // Hour 99
 
         let result = DateHeader::new("Mon, 01 Jan 2024 00:99:00 GMT");
-        assert!(result.is_err());  // Minute 99
+        assert!(result.is_err()); // Minute 99
 
         let result = DateHeader::new("Mon, 01 Jan 2024 00:00:99 GMT");
-        assert!(result.is_err());  // Second 99
+        assert!(result.is_err()); // Second 99
 
         let result = DateHeader::new("Mon, 01 Jan 2024 1:2:3 GMT");
-        assert!(result.is_err());  // Missing leading zeros
+        assert!(result.is_err()); // Missing leading zeros
 
         let result = DateHeader::new("Mon, 01 Jan 2024 a:b:c GMT");
-        assert!(result.is_err());  // Non-numeric
+        assert!(result.is_err()); // Non-numeric
     }
 
     #[test]
     fn accept_valid_date_ranges() {
         // Test boundary conditions
-        assert!(DateHeader::new("Mon, 01 Jan 1970 00:00:00 GMT").is_ok());  // Unix epoch
-        assert!(DateHeader::new("Mon, 31 Dec 2100 23:59:59 GMT").is_ok());  // Upper bound
-        assert!(DateHeader::new("Mon, 15 Jun 2024 12:30:45 GMT").is_ok());  // Typical date
+        assert!(DateHeader::new("Mon, 01 Jan 1970 00:00:00 GMT").is_ok()); // Unix epoch
+        assert!(DateHeader::new("Mon, 31 Dec 2100 23:59:59 GMT").is_ok()); // Upper bound
+        assert!(DateHeader::new("Mon, 15 Jun 2024 12:30:45 GMT").is_ok()); // Typical date
     }
 
     #[test]

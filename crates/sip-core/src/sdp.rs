@@ -930,8 +930,8 @@ impl CurrentStatus {
         }
 
         let precondition_type = PreconditionType::parse(parts[0]);
-        let status_type = StatusType::parse(parts[1])
-            .ok_or(SdpError::InvalidFormat("a=curr status-type"))?;
+        let status_type =
+            StatusType::parse(parts[1]).ok_or(SdpError::InvalidFormat("a=curr status-type"))?;
         let direction = PreconditionDirection::parse(parts[2])
             .ok_or(SdpError::InvalidFormat("a=curr direction"))?;
 
@@ -980,10 +980,10 @@ impl DesiredStatus {
         }
 
         let precondition_type = PreconditionType::parse(parts[0]);
-        let strength = StrengthTag::parse(parts[1])
-            .ok_or(SdpError::InvalidFormat("a=des strength-tag"))?;
-        let status_type = StatusType::parse(parts[2])
-            .ok_or(SdpError::InvalidFormat("a=des status-type"))?;
+        let strength =
+            StrengthTag::parse(parts[1]).ok_or(SdpError::InvalidFormat("a=des strength-tag"))?;
+        let status_type =
+            StatusType::parse(parts[2]).ok_or(SdpError::InvalidFormat("a=des status-type"))?;
         let direction = PreconditionDirection::parse(parts[3])
             .ok_or(SdpError::InvalidFormat("a=des direction"))?;
 
@@ -1032,8 +1032,8 @@ impl ConfirmStatus {
         }
 
         let precondition_type = PreconditionType::parse(parts[0]);
-        let status_type = StatusType::parse(parts[1])
-            .ok_or(SdpError::InvalidFormat("a=conf status-type"))?;
+        let status_type =
+            StatusType::parse(parts[1]).ok_or(SdpError::InvalidFormat("a=conf status-type"))?;
         let direction = PreconditionDirection::parse(parts[2])
             .ok_or(SdpError::InvalidFormat("a=conf direction"))?;
 
@@ -2043,9 +2043,7 @@ fn parse_attribute(line: &str) -> Result<Attribute, SdpError> {
 
 type MediaLineParsed = (String, u16, Option<u16>, String, Vec<String>);
 
-fn parse_media_line(
-    line: &str,
-) -> Result<MediaLineParsed, SdpError> {
+fn parse_media_line(line: &str) -> Result<MediaLineParsed, SdpError> {
     let parts: Vec<&str> = line[2..].split_whitespace().collect();
     if parts.len() < 4 {
         return Err(SdpError::InvalidFormat("m="));

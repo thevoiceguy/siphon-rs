@@ -2,8 +2,8 @@
 // Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use std::slice::Iter;
 use smol_str::SmolStr;
+use std::slice::Iter;
 
 const MAX_HEADER_NAME_LENGTH: usize = 128;
 const MAX_HEADER_VALUE_LENGTH: usize = 8192;
@@ -22,18 +22,18 @@ pub enum HeaderError {
 impl std::fmt::Display for HeaderError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NameTooLong { max, actual } =>
-                write!(f, "header name too long (max {}, got {})", max, actual),
-            Self::ValueTooLong { max, actual } =>
-                write!(f, "header value too long (max {}, got {})", max, actual),
-            Self::TooManyHeaders { max, actual } =>
-                write!(f, "too many headers (max {}, got {})", max, actual),
-            Self::InvalidName(msg) =>
-                write!(f, "invalid header name: {}", msg),
-            Self::InvalidValue(msg) =>
-                write!(f, "invalid header value: {}", msg),
-            Self::EmptyName =>
-                write!(f, "header name cannot be empty"),
+            Self::NameTooLong { max, actual } => {
+                write!(f, "header name too long (max {}, got {})", max, actual)
+            }
+            Self::ValueTooLong { max, actual } => {
+                write!(f, "header value too long (max {}, got {})", max, actual)
+            }
+            Self::TooManyHeaders { max, actual } => {
+                write!(f, "too many headers (max {}, got {})", max, actual)
+            }
+            Self::InvalidName(msg) => write!(f, "invalid header name: {}", msg),
+            Self::InvalidValue(msg) => write!(f, "invalid header value: {}", msg),
+            Self::EmptyName => write!(f, "header name cannot be empty"),
         }
     }
 }
@@ -91,10 +91,10 @@ impl Header {
     pub fn new(name: impl AsRef<str>, value: impl AsRef<str>) -> Result<Self, HeaderError> {
         let name = name.as_ref();
         let value = value.as_ref();
-        
+
         validate_header_name(name)?;
         validate_header_value(value)?;
-        
+
         Ok(Self {
             name: SmolStr::new(name),
             value: SmolStr::new(value),
@@ -130,7 +130,6 @@ impl Header {
     pub fn as_tuple(&self) -> (&str, &str) {
         (self.name.as_str(), self.value.as_str())
     }
-
 }
 
 /// Collection of SIP headers preserving insertion order.
@@ -213,7 +212,7 @@ impl Headers {
                 actual: self.inner.len() + 1,
             });
         }
-        
+
         self.inner.push(header);
         Ok(())
     }
@@ -411,9 +410,7 @@ impl FromIterator<Header> for Headers {
 
 impl Headers {
     /// Builds a header collection from an iterator with validation.
-    pub fn try_from_iter<T: IntoIterator<Item = Header>>(
-        iter: T,
-    ) -> Result<Self, HeaderError> {
+    pub fn try_from_iter<T: IntoIterator<Item = Header>>(iter: T) -> Result<Self, HeaderError> {
         let headers: Vec<Header> = iter.into_iter().collect();
         if headers.len() > MAX_HEADERS {
             return Err(HeaderError::TooManyHeaders {
@@ -451,18 +448,21 @@ fn validate_header_name(name: &str) -> Result<(), HeaderError> {
     // Check for control characters
     if name.chars().any(|c| c.is_ascii_control()) {
         return Err(HeaderError::InvalidName(
-            "contains control characters".to_string()
+            "contains control characters".to_string(),
         ));
     }
 
     // Check for invalid separators/special characters
     // Valid token characters per RFC 3261: alphanum + ! % ' * + - . ^ _ ` | ~
     if !name.chars().all(|c| {
-        c.is_ascii_alphanumeric() || 
-        matches!(c, '!' | '%' | '\'' | '*' | '+' | '-' | '.' | '^' | '_' | '`' | '|' | '~')
+        c.is_ascii_alphanumeric()
+            || matches!(
+                c,
+                '!' | '%' | '\'' | '*' | '+' | '-' | '.' | '^' | '_' | '`' | '|' | '~'
+            )
     }) {
         return Err(HeaderError::InvalidName(
-            "contains invalid characters for header name".to_string()
+            "contains invalid characters for header name".to_string(),
         ));
     }
 
@@ -490,15 +490,13 @@ fn validate_header_value(value: &str) -> Result<(), HeaderError> {
     // Header folding should be handled during serialization, not in raw values
     if value.contains('\r') || value.contains('\n') {
         return Err(HeaderError::InvalidValue(
-            "contains CRLF - header folding must be handled during serialization".to_string()
+            "contains CRLF - header folding must be handled during serialization".to_string(),
         ));
     }
 
     // Reject null bytes
     if value.contains('\0') {
-        return Err(HeaderError::InvalidValue(
-            "contains null byte".to_string()
-        ));
+        return Err(HeaderError::InvalidValue("contains null byte".to_string()));
     }
 
     Ok(())
@@ -566,7 +564,7 @@ mod tests {
         // Colon is not allowed in header names
         let result = Header::new("Content:Type", "value");
         assert!(result.is_err());
-        
+
         // Space is not allowed
         let result = Header::new("Content Type", "value");
         assert!(result.is_err());
@@ -577,7 +575,7 @@ mod tests {
         let mut headers = Headers::new();
         assert!(headers.is_empty());
         assert_eq!(headers.len(), 0);
-        
+
         headers.push("Via", "SIP/2.0/UDP pc33.example.com").unwrap();
         assert_eq!(headers.len(), 1);
         assert!(!headers.is_empty());
@@ -588,7 +586,7 @@ mod tests {
         let mut headers = Headers::new();
         headers.push("Content-Type", "application/sdp").unwrap();
         headers.push("Content-Length", "142").unwrap();
-        
+
         assert_eq!(headers.get("Content-Type"), Some("application/sdp"));
         assert_eq!(headers.get("content-type"), Some("application/sdp"));
         assert_eq!(headers.get("Content-Length"), Some("142"));
@@ -599,9 +597,11 @@ mod tests {
     fn headers_get_all() {
         let mut headers = Headers::new();
         headers.push("Via", "SIP/2.0/UDP pc33.example.com").unwrap();
-        headers.push("Via", "SIP/2.0/UDP proxy.example.com").unwrap();
+        headers
+            .push("Via", "SIP/2.0/UDP proxy.example.com")
+            .unwrap();
         headers.push("Content-Type", "application/sdp").unwrap();
-        
+
         let vias: Vec<&str> = headers.get_all("Via").collect();
         assert_eq!(vias.len(), 2);
         assert_eq!(vias[0], "SIP/2.0/UDP pc33.example.com");
@@ -612,7 +612,7 @@ mod tests {
     fn headers_contains() {
         let mut headers = Headers::new();
         headers.push("Content-Type", "application/sdp").unwrap();
-        
+
         assert!(headers.contains("Content-Type"));
         assert!(headers.contains("content-type"));
         assert!(!headers.contains("Unknown"));
@@ -622,8 +622,10 @@ mod tests {
     fn headers_count() {
         let mut headers = Headers::new();
         headers.push("Via", "SIP/2.0/UDP pc33.example.com").unwrap();
-        headers.push("Via", "SIP/2.0/UDP proxy.example.com").unwrap();
-        
+        headers
+            .push("Via", "SIP/2.0/UDP proxy.example.com")
+            .unwrap();
+
         assert_eq!(headers.count("Via"), 2);
         assert_eq!(headers.count("Unknown"), 0);
     }
@@ -634,7 +636,7 @@ mod tests {
         headers.push("Content-Type", "application/sdp").unwrap();
         headers.push("Content-Length", "142").unwrap();
         headers.push("Via", "SIP/2.0/UDP pc33.example.com").unwrap();
-        
+
         let removed = headers.remove("Content-Type");
         assert_eq!(removed, 1);
         assert_eq!(headers.len(), 2);
@@ -645,8 +647,10 @@ mod tests {
     fn headers_remove_multiple() {
         let mut headers = Headers::new();
         headers.push("Via", "SIP/2.0/UDP pc33.example.com").unwrap();
-        headers.push("Via", "SIP/2.0/UDP proxy.example.com").unwrap();
-        
+        headers
+            .push("Via", "SIP/2.0/UDP proxy.example.com")
+            .unwrap();
+
         let removed = headers.remove("Via");
         assert_eq!(removed, 2);
         assert_eq!(headers.len(), 0);
@@ -655,11 +659,11 @@ mod tests {
     #[test]
     fn reject_too_many_headers() {
         let mut headers = Headers::new();
-        
+
         for i in 0..MAX_HEADERS {
             headers.push(&format!("X-Header-{}", i), "value").unwrap();
         }
-        
+
         // Should fail
         let result = headers.push("X-Overflow", "value");
         assert!(matches!(result, Err(HeaderError::TooManyHeaders { .. })));
@@ -670,7 +674,7 @@ mod tests {
         let mut headers = Headers::new();
         headers.push("Content-Type", "application/sdp").unwrap();
         headers.push("Content-Length", "142").unwrap();
-        
+
         let collected: Vec<_> = headers.iter().map(|h| h.name()).collect();
         assert_eq!(collected, vec!["Content-Type", "Content-Length"]);
     }
@@ -680,7 +684,7 @@ mod tests {
         let mut headers = Headers::new();
         headers.push("Content-Type", "application/sdp").unwrap();
         headers.push("Content-Length", "142").unwrap();
-        
+
         let names: Vec<String> = headers.into_iter().map(|h| h.name().to_string()).collect();
         assert_eq!(names, vec!["Content-Type", "Content-Length"]);
     }
@@ -689,7 +693,7 @@ mod tests {
     fn headers_from_iter() {
         let header1 = Header::new("Content-Type", "application/sdp").unwrap();
         let header2 = Header::new("Content-Length", "142").unwrap();
-        
+
         let headers: Headers = vec![header1, header2].into_iter().collect();
         assert_eq!(headers.len(), 2);
     }
@@ -700,7 +704,7 @@ mod tests {
         headers.push("Content-Type", "application/sdp").unwrap();
         headers.push("Content-Length", "142").unwrap();
         headers.push("Via", "SIP/2.0/UDP pc33.example.com").unwrap();
-        
+
         headers.retain(|h| h.name() != "Content-Length");
         assert_eq!(headers.len(), 2);
         assert!(!headers.contains("Content-Length"));
@@ -709,11 +713,11 @@ mod tests {
     #[test]
     fn header_fields_are_private() {
         let header = Header::new("Content-Type", "application/sdp").unwrap();
-        
+
         // These should compile (read-only access)
         let _ = header.name();
         let _ = header.value();
-        
+
         // These should NOT compile (no direct field access):
         // header.name = SmolStr::new("evil");   // ← Does not compile!
         // header.value = SmolStr::new("evil");  // ← Does not compile!
@@ -723,12 +727,12 @@ mod tests {
     fn no_mutable_iteration() {
         let mut headers = Headers::new();
         headers.push("Content-Type", "application/sdp").unwrap();
-        
+
         // This should compile (immutable iteration)
         for header in headers.iter() {
             let _ = header.name();
         }
-        
+
         // This should NOT compile (no iter_mut exposed):
         // for header in headers.iter_mut() { ... }  // ← Does not compile!
     }

@@ -42,7 +42,5 @@ pub fn shard_by_dialog_id(call_id: &SmolStr, local_tag: &SmolStr, remote_tag: &S
 
 /// Extract Call-ID from headers for sharding; returns None if missing.
 pub fn shard_key_from_headers(headers: &Headers) -> Option<u64> {
-    headers
-        .get("Call-ID")
-        .map(shard_by_call_id)
+    headers.get("Call-ID").map(shard_by_call_id)
 }

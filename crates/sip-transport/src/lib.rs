@@ -374,10 +374,7 @@ pub struct TlsConfig {
 #[cfg(feature = "ws")]
 /// Sends bytes over a WebSocket (plaintext).
 pub async fn send_ws(url: &str, data: Bytes) -> Result<()> {
-    use tokio_tungstenite::tungstenite::{
-        client::IntoClientRequest,
-        http::header::HeaderValue,
-    };
+    use tokio_tungstenite::tungstenite::{client::IntoClientRequest, http::header::HeaderValue};
 
     let mut request = url.into_client_request()?;
     request
@@ -398,10 +395,7 @@ pub async fn send_ws(url: &str, data: Bytes) -> Result<()> {
 #[cfg(feature = "ws")]
 /// Sends bytes over a secure WebSocket (WSS).
 pub async fn send_wss(url: &str, data: Bytes) -> Result<()> {
-    use tokio_tungstenite::tungstenite::{
-        client::IntoClientRequest,
-        http::header::HeaderValue,
-    };
+    use tokio_tungstenite::tungstenite::{client::IntoClientRequest, http::header::HeaderValue};
 
     let mut request = url.into_client_request()?;
     request
@@ -830,10 +824,8 @@ async fn spawn_tls_session(
                             };
                             if tx.send(packet).await.is_err() {
                                 error!("receiver dropped; shutting down tls session");
-                                transport_metrics().on_error(
-                                    TransportLabel::Tls,
-                                    StageLabel::Dispatch,
-                                );
+                                transport_metrics()
+                                    .on_error(TransportLabel::Tls, StageLabel::Dispatch);
                                 break;
                             }
                         }
@@ -844,10 +836,7 @@ async fn spawn_tls_session(
                             error = %e,
                             "SIP framing error, closing tls connection"
                         );
-                        transport_metrics().on_error(
-                            TransportLabel::Tls,
-                            StageLabel::FramingError,
-                        );
+                        transport_metrics().on_error(TransportLabel::Tls, StageLabel::FramingError);
                         break;
                     }
                 }
@@ -935,10 +924,8 @@ async fn spawn_stream_session<S>(
                             };
                             if tx.send(packet).await.is_err() {
                                 error!("receiver dropped; shutting down {:?} session", transport);
-                                transport_metrics().on_error(
-                                    transport.into(),
-                                    StageLabel::Dispatch,
-                                );
+                                transport_metrics()
+                                    .on_error(transport.into(), StageLabel::Dispatch);
                                 break;
                             }
                         }
@@ -949,10 +936,7 @@ async fn spawn_stream_session<S>(
                             error = %e,
                             "SIP framing error, closing connection"
                         );
-                        transport_metrics().on_error(
-                            transport.into(),
-                            StageLabel::FramingError,
-                        );
+                        transport_metrics().on_error(transport.into(), StageLabel::FramingError);
                         break;
                     }
                 }
@@ -1132,9 +1116,7 @@ fn ensure_ws_subprotocol(
             if proto.eq_ignore_ascii_case("sip") {
                 Ok(())
             } else {
-                Err(anyhow!(
-                    "server did not accept Sec-WebSocket-Protocol: sip"
-                ))
+                Err(anyhow!("server did not accept Sec-WebSocket-Protocol: sip"))
             }
         }
         None => Err(anyhow!(
@@ -1149,7 +1131,12 @@ fn ws_subprotocol_error_response() -> tungstenite::handshake::server::ErrorRespo
     Response::builder()
         .status(StatusCode::BAD_REQUEST)
         .body(Some("Missing Sec-WebSocket-Protocol: sip".to_string()))
-        .unwrap_or_else(|_| Response::builder().status(StatusCode::BAD_REQUEST).body(None).unwrap())
+        .unwrap_or_else(|_| {
+            Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(None)
+                .unwrap()
+        })
 }
 
 #[cfg(test)]
@@ -1277,7 +1264,10 @@ mod tests {
         msg.extend_from_slice(b"\r\nContent-Length: 0\r\n\r\n");
         let mut buf = BytesMut::from(&msg[..]);
         let result = drain_sip_frames(&mut buf);
-        assert!(result.is_ok(), "should parse Content-Length with invalid UTF-8 elsewhere");
+        assert!(
+            result.is_ok(),
+            "should parse Content-Length with invalid UTF-8 elsewhere"
+        );
         let frames = result.unwrap();
         assert_eq!(frames.len(), 1);
     }

@@ -182,8 +182,7 @@ async fn main() -> Result<()> {
         .with_target(false)
         .with_level(true)
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info"))
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
 
@@ -274,10 +273,16 @@ async fn main() -> Result<()> {
     let transaction_mgr = Arc::new(TransactionManager::new(transport_dispatcher.clone()));
 
     // Set transaction manager, transport dispatcher, UDP socket, and TLS client config in service registry
-    if services.set_transaction_manager(transaction_mgr.clone()).is_err() {
+    if services
+        .set_transaction_manager(transaction_mgr.clone())
+        .is_err()
+    {
         panic!("Failed to set transaction manager - already initialized");
     }
-    if services.set_transport_dispatcher(transport_dispatcher.clone()).is_err() {
+    if services
+        .set_transport_dispatcher(transport_dispatcher.clone())
+        .is_err()
+    {
         panic!("Failed to set transport dispatcher - already initialized");
     }
     if services.set_udp_socket(udp_socket.clone()).is_err() {
@@ -431,8 +436,8 @@ async fn handle_packet(
     packet: InboundPacket,
 ) {
     use sip_core::Method;
-    use sip_parse::{header, parse_request, parse_response};
     use sip_core::SipUri;
+    use sip_parse::{header, parse_request, parse_response};
     use sip_transaction::{branch_from_via, request_branch_id, TransactionKey, TransportContext};
 
     // Try parsing as a request
@@ -621,7 +626,8 @@ async fn handle_packet(
                                     );
                                 }
                             }
-                            sip_transaction::TransportKind::Ws | sip_transaction::TransportKind::Wss => {
+                            sip_transaction::TransportKind::Ws
+                            | sip_transaction::TransportKind::Wss => {
                                 #[cfg(feature = "ws")]
                                 {
                                     let scheme = if tx.sender_transport
@@ -631,17 +637,14 @@ async fn handle_packet(
                                     } else {
                                         "ws"
                                     };
-                                    let ws_url = tx
-                                        .sender_ws_uri
-                                        .clone()
-                                        .unwrap_or_else(|| {
-                                            format!(
-                                                "{}://{}:{}",
-                                                scheme,
-                                                tx.sender_addr.ip(),
-                                                tx.sender_addr.port()
-                                            )
-                                        });
+                                    let ws_url = tx.sender_ws_uri.clone().unwrap_or_else(|| {
+                                        format!(
+                                            "{}://{}:{}",
+                                            scheme,
+                                            tx.sender_addr.ip(),
+                                            tx.sender_addr.port()
+                                        )
+                                    });
                                     let data = bytes::Bytes::from(payload.to_vec());
                                     let result = if scheme == "wss" {
                                         sip_transport::send_wss(&ws_url, data).await
@@ -659,9 +662,12 @@ async fn handle_packet(
                             }
                             sip_transaction::TransportKind::Udp => {
                                 if let Some(socket) = services.udp_socket.get() {
-                                    if let Err(e) =
-                                        sip_transport::send_udp(socket.as_ref(), &tx.sender_addr, &payload)
-                                            .await
+                                    if let Err(e) = sip_transport::send_udp(
+                                        socket.as_ref(),
+                                        &tx.sender_addr,
+                                        &payload,
+                                    )
+                                    .await
                                     {
                                         tracing::warn!(
                                             error = %e,

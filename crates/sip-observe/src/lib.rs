@@ -172,7 +172,10 @@ impl RateLimitedTracingTransportMetrics {
 
 impl Default for RateLimitedTracingTransportMetrics {
     fn default() -> Self {
-        Self::new(Duration::from_millis(5), NonZeroU64::new(10).expect("non-zero sample rate"))
+        Self::new(
+            Duration::from_millis(5),
+            NonZeroU64::new(10).expect("non-zero sample rate"),
+        )
     }
 }
 

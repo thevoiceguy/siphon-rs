@@ -157,7 +157,9 @@ impl ClientTransactionUser for ReferTransferTransactionUser {
             None
         };
 
-        let ack = self.uac.create_ack(&self.invite, &response, sdp_body.as_deref());
+        let ack = self
+            .uac
+            .create_ack(&self.invite, &response, sdp_body.as_deref());
         let payload = sip_parse::serialize_request(&ack);
 
         match ctx.transport {
@@ -203,7 +205,9 @@ impl ClientTransactionUser for ReferTransferTransactionUser {
             sip_transaction::TransportKind::Udp => {
                 // Send ACK over UDP using the socket from TransportContext
                 if let Some(socket) = &ctx.udp_socket {
-                    if let Err(e) = sip_transport::send_udp(socket.as_ref(), &ctx.peer, &payload).await {
+                    if let Err(e) =
+                        sip_transport::send_udp(socket.as_ref(), &ctx.peer, &payload).await
+                    {
                         warn!(error = %e, "Failed to send REFER ACK via UDP");
                     }
                 } else {
@@ -250,14 +254,10 @@ impl ReferHandler {
     }
 
     fn extract_tag(value: &str) -> Option<SmolStr> {
-        value
-            .split(';')
-            .find_map(|part| {
-                let trimmed = part.trim();
-                trimmed
-                    .strip_prefix("tag=")
-                    .map(SmolStr::new)
-            })
+        value.split(';').find_map(|part| {
+            let trimmed = part.trim();
+            trimmed.strip_prefix("tag=").map(SmolStr::new)
+        })
     }
 
     fn extract_replaces(value: &str) -> Option<String> {
@@ -281,7 +281,8 @@ impl ReferHandler {
             .clone();
         let from = header(&request.headers, "From").ok_or_else(|| anyhow!("Missing From"))?;
         let to = header(&response.headers, "To").ok_or_else(|| anyhow!("Missing To"))?;
-        let from_tag = Self::extract_tag(from.as_str()).ok_or_else(|| anyhow!("Missing From tag"))?;
+        let from_tag =
+            Self::extract_tag(from.as_str()).ok_or_else(|| anyhow!("Missing From tag"))?;
         let to_tag = Self::extract_tag(to).ok_or_else(|| anyhow!("Missing To tag"))?;
 
         let remote_uri = sdp_utils::parse_name_addr_uri(from.as_str())
@@ -431,30 +432,21 @@ impl RequestHandler for ReferHandler {
                 uas.rseq_manager = services.rseq_mgr.clone();
                 uas.prack_validator = services.prack_validator.clone();
 
-                let mut subscription =
-                    match Self::build_refer_subscription(
-                        request,
-                        &response_for_subscription,
-                        local_uri.clone(),
-                    ) {
-                        Ok(subscription) => subscription,
-                        Err(e) => {
-                            warn!(call_id, error = %e, "Failed to create REFER subscription");
-                            return Ok(());
-                        }
-                    };
+                let mut subscription = match Self::build_refer_subscription(
+                    request,
+                    &response_for_subscription,
+                    local_uri.clone(),
+                ) {
+                    Ok(subscription) => subscription,
+                    Err(e) => {
+                        warn!(call_id, error = %e, "Failed to create REFER subscription");
+                        return Ok(());
+                    }
+                };
 
                 services.subscription_mgr.insert(subscription.clone());
 
-                Self::send_notify(
-                    &uas,
-                    &mut subscription,
-                    100,
-                    "Trying",
-                    services,
-                    _ctx,
-                )
-                .await;
+                Self::send_notify(&uas, &mut subscription, 100, "Trying", services, _ctx).await;
 
                 let refer_uri = match sdp_utils::parse_name_addr_uri(&refer_to_target) {
                     Some(uri) => uri,
@@ -477,15 +469,8 @@ impl RequestHandler for ReferHandler {
                 let target_addr = format!("{}:{}", refer_uri.host, target_port);
                 let Ok(target_addr) = target_addr.parse::<std::net::SocketAddr>() else {
                     warn!(call_id, "Invalid Refer-To target address");
-                    Self::send_notify(
-                        &uas,
-                        &mut subscription,
-                        400,
-                        "Bad Request",
-                        services,
-                        _ctx,
-                    )
-                    .await;
+                    Self::send_notify(&uas, &mut subscription, 400, "Bad Request", services, _ctx)
+                        .await;
                     return Ok(());
                 };
 
@@ -558,10 +543,8 @@ impl RequestHandler for ReferHandler {
                             .filter(|value| !value.is_empty())
                             .map(|value| value.to_string())
                             .unwrap_or_else(|| sip_transaction::generate_branch_id().to_string());
-                        let new_via = format!(
-                            "SIP/2.0/{} placeholder;branch={}",
-                            transport_name, branch
-                        );
+                        let new_via =
+                            format!("SIP/2.0/{} placeholder;branch={}", transport_name, branch);
                         new_headers.push(header.name(), new_via).unwrap();
                         via_replaced = true;
                     } else {
@@ -574,7 +557,10 @@ impl RequestHandler for ReferHandler {
                     .with_ws_uri(ws_uri)
                     .with_udp_socket(services.udp_socket.get().cloned());
                 let Some(transaction_mgr) = services.transaction_mgr.get() else {
-                    warn!(call_id, "Transaction manager not available, cannot initiate transfer");
+                    warn!(
+                        call_id,
+                        "Transaction manager not available, cannot initiate transfer"
+                    );
                     return Ok(());
                 };
 

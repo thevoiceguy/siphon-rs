@@ -72,7 +72,8 @@ fn method_not_allowed_response(request: &Request) -> Response {
     let mut response = UserAgentServer::create_response(request, 405, "Method Not Allowed");
     response
         .headers
-        .push(SmolStr::new("Allow"), SmolStr::new(ALLOW_HEADER_VALUE)).unwrap();
+        .push(SmolStr::new("Allow"), SmolStr::new(ALLOW_HEADER_VALUE))
+        .unwrap();
     response
 }
 
@@ -288,8 +289,7 @@ impl IntegratedUAS {
     ) -> Result<()> {
         info!(
             "Dispatching {:?} request from {}",
-            &request.start.method,
-            ctx.peer
+            &request.start.method, ctx.peer
         );
 
         if self.config.require_authentication && request.start.method != Method::Ack {
@@ -458,7 +458,8 @@ impl IntegratedUAS {
             }
             _ => {
                 warn!("Unsupported method: {:?}", &request.start.method);
-                let mut response = UserAgentServer::create_response(request, 501, "Not Implemented");
+                let mut response =
+                    UserAgentServer::create_response(request, 501, "Not Implemented");
                 self.auto_fill_headers(&mut response, ctx).await;
                 handle.send_final(response).await;
             }
@@ -492,15 +493,19 @@ impl IntegratedUAS {
 
             response
                 .headers
-                .push(SmolStr::new("Contact"), SmolStr::new(&contact_value)).unwrap();
+                .push(SmolStr::new("Contact"), SmolStr::new(&contact_value))
+                .unwrap();
         }
 
         // Add User-Agent if not present
         if response.headers.get("User-Agent").is_none() {
-            response.headers.push(
-                SmolStr::new("User-Agent"),
-                SmolStr::new(&self.config.user_agent),
-            ).unwrap();
+            response
+                .headers
+                .push(
+                    SmolStr::new("User-Agent"),
+                    SmolStr::new(&self.config.user_agent),
+                )
+                .unwrap();
         }
     }
 }

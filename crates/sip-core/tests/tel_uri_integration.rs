@@ -52,14 +52,22 @@ fn request_with_mixed_uri_types() {
     let request_line = RequestLine::new(Method::Invite, sip_uri);
 
     let mut headers = Headers::new();
-    headers.push(
-        SmolStr::new("From"),
-        SmolStr::new("<sip:alice@example.com>;tag=123"),
-    ).unwrap();
+    headers
+        .push(
+            SmolStr::new("From"),
+            SmolStr::new("<sip:alice@example.com>;tag=123"),
+        )
+        .unwrap();
     // To header with tel URI
-    headers.push(SmolStr::new("To"), SmolStr::new("<tel:+1-555-123-4567>")).unwrap();
-    headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id")).unwrap();
-    headers.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE")).unwrap();
+    headers
+        .push(SmolStr::new("To"), SmolStr::new("<tel:+1-555-123-4567>"))
+        .unwrap();
+    headers
+        .push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"))
+        .unwrap();
+    headers
+        .push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"))
+        .unwrap();
 
     let request = Request::new(request_line, headers, Bytes::new());
 

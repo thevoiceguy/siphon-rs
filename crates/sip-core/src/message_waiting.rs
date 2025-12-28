@@ -62,22 +62,24 @@ pub enum MessageWaitingError {
 impl std::fmt::Display for MessageWaitingError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::AccountTooLong { max, actual } =>
-                write!(f, "account too long (max {}, got {})", max, actual),
-            Self::HeaderValueTooLong { max, actual } =>
-                write!(f, "header value too long (max {}, got {})", max, actual),
-            Self::TooManyHeaders { max, actual } =>
-                write!(f, "too many message headers (max {}, got {})", max, actual),
-            Self::TooManyClasses { max, actual } =>
-                write!(f, "too many message classes (max {}, got {})", max, actual),
-            Self::InvalidAccount(msg) =>
-                write!(f, "invalid account: {}", msg),
-            Self::InvalidHeaderValue(msg) =>
-                write!(f, "invalid header value: {}", msg),
-            Self::ParseError(msg) =>
-                write!(f, "parse error: {}", msg),
-            Self::InputTooLarge { max, actual } =>
-                write!(f, "input too large (max {}, got {})", max, actual),
+            Self::AccountTooLong { max, actual } => {
+                write!(f, "account too long (max {}, got {})", max, actual)
+            }
+            Self::HeaderValueTooLong { max, actual } => {
+                write!(f, "header value too long (max {}, got {})", max, actual)
+            }
+            Self::TooManyHeaders { max, actual } => {
+                write!(f, "too many message headers (max {}, got {})", max, actual)
+            }
+            Self::TooManyClasses { max, actual } => {
+                write!(f, "too many message classes (max {}, got {})", max, actual)
+            }
+            Self::InvalidAccount(msg) => write!(f, "invalid account: {}", msg),
+            Self::InvalidHeaderValue(msg) => write!(f, "invalid header value: {}", msg),
+            Self::ParseError(msg) => write!(f, "parse error: {}", msg),
+            Self::InputTooLarge { max, actual } => {
+                write!(f, "input too large (max {}, got {})", max, actual)
+            }
         }
     }
 }
@@ -149,10 +151,7 @@ impl MessageSummary {
     /// # Errors
     ///
     /// Returns an error if adding would exceed MAX_MESSAGE_HEADERS.
-    pub fn add_message_header(
-        &mut self,
-        header: MessageHeader,
-    ) -> Result<(), MessageWaitingError> {
+    pub fn add_message_header(&mut self, header: MessageHeader) -> Result<(), MessageWaitingError> {
         if self.message_headers.len() >= MAX_MESSAGE_HEADERS {
             return Err(MessageWaitingError::TooManyHeaders {
                 max: MAX_MESSAGE_HEADERS,
@@ -449,10 +448,7 @@ impl MessageHeader {
     }
 
     /// Sets the Subject header (builder pattern).
-    pub fn with_subject(
-        mut self,
-        subject: impl AsRef<str>,
-    ) -> Result<Self, MessageWaitingError> {
+    pub fn with_subject(mut self, subject: impl AsRef<str>) -> Result<Self, MessageWaitingError> {
         validate_header_value(subject.as_ref())?;
         self.subject = Some(SmolStr::new(subject.as_ref()));
         Ok(self)
@@ -466,10 +462,7 @@ impl MessageHeader {
     }
 
     /// Sets the Priority header (builder pattern).
-    pub fn with_priority(
-        mut self,
-        priority: impl AsRef<str>,
-    ) -> Result<Self, MessageWaitingError> {
+    pub fn with_priority(mut self, priority: impl AsRef<str>) -> Result<Self, MessageWaitingError> {
         validate_header_value(priority.as_ref())?;
         self.priority = Some(SmolStr::new(priority.as_ref()));
         Ok(self)
@@ -817,8 +810,7 @@ mod tests {
             .unwrap();
 
         if let Some(next_class) = classes.get(MAX_MESSAGE_CLASSES) {
-            let result =
-                summary.add_message_class(*next_class, MessageCounts::new(100, 0));
+            let result = summary.add_message_class(*next_class, MessageCounts::new(100, 0));
             assert!(result.is_err());
         }
     }
@@ -826,11 +818,11 @@ mod tests {
     #[test]
     fn reject_too_many_headers() {
         let mut summary = MessageSummary::new(true);
-        
+
         for _ in 0..MAX_MESSAGE_HEADERS {
             summary.add_message_header(MessageHeader::new()).unwrap();
         }
-        
+
         // Should fail
         let result = summary.add_message_header(MessageHeader::new());
         assert!(result.is_err());
@@ -947,14 +939,14 @@ mod tests {
         let summary = MessageSummary::new(true);
         let counts = MessageCounts::new(1, 2);
         let header = MessageHeader::new();
-        
+
         // These should compile (read-only access)
         let _ = summary.messages_waiting();
         let _ = summary.account();
         let _ = counts.new_count();
         let _ = counts.old_count();
         let _ = header.to();
-        
+
         // These should NOT compile (no direct field access):
         // summary.messages_waiting = false;  // ← Does not compile!
         // counts.new = 100;                  // ← Does not compile!

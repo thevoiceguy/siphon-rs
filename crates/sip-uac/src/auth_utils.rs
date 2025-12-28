@@ -17,7 +17,10 @@ pub fn extract_realm(response: &Response) -> Option<String> {
 
     split_auth_params(params).into_iter().find_map(|part| {
         let trimmed = part.trim();
-        let trimmed = trimmed.strip_prefix("Digest").unwrap_or(trimmed).trim_start();
+        let trimmed = trimmed
+            .strip_prefix("Digest")
+            .unwrap_or(trimmed)
+            .trim_start();
         let (key, value) = trimmed.split_once('=')?;
         if key.trim().eq_ignore_ascii_case("realm") {
             let value = value.trim();

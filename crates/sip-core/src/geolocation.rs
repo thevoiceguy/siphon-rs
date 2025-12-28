@@ -2,9 +2,9 @@
 // Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use std::collections::BTreeMap;
-use smol_str::SmolStr;
 use crate::Uri;
+use smol_str::SmolStr;
+use std::collections::BTreeMap;
 
 const MAX_PARAM_NAME_LENGTH: usize = 64;
 const MAX_PARAM_VALUE_LENGTH: usize = 256;
@@ -32,18 +32,20 @@ pub enum GeolocationError {
 impl std::fmt::Display for GeolocationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::ParamNameTooLong { max, actual } =>
-                write!(f, "param name too long (max {}, got {})", max, actual),
-            Self::TooManyParams { max, actual } =>
-                write!(f, "too many params (max {}, got {})", max, actual),
-            Self::TooManyValues { max, actual } =>
-                write!(f, "too many geolocation values (max {}, got {})", max, actual),
-            Self::InvalidParamName(msg) =>
-                write!(f, "invalid param name: {}", msg),
-            Self::DuplicateParam(name) =>
-                write!(f, "duplicate parameter: {}", name),
-            Self::EmptyValues =>
-                write!(f, "geolocation header must have at least one value"),
+            Self::ParamNameTooLong { max, actual } => {
+                write!(f, "param name too long (max {}, got {})", max, actual)
+            }
+            Self::TooManyParams { max, actual } => {
+                write!(f, "too many params (max {}, got {})", max, actual)
+            }
+            Self::TooManyValues { max, actual } => write!(
+                f,
+                "too many geolocation values (max {}, got {})",
+                max, actual
+            ),
+            Self::InvalidParamName(msg) => write!(f, "invalid param name: {}", msg),
+            Self::DuplicateParam(name) => write!(f, "duplicate parameter: {}", name),
+            Self::EmptyValues => write!(f, "geolocation header must have at least one value"),
             _ => write!(f, "{:?}", self),
         }
     }
@@ -98,23 +100,15 @@ impl GeolocationValue {
     }
 
     /// Adds a parameter with validation.
-    pub fn with_param(
-        mut self,
-        name: &str,
-        value: Option<&str>,
-    ) -> Result<Self, GeolocationError> {
+    pub fn with_param(mut self, name: &str, value: Option<&str>) -> Result<Self, GeolocationError> {
         self.add_param(name, value)?;
         Ok(self)
     }
 
     /// Adds a parameter (mutable version).
-    pub fn add_param(
-        &mut self,
-        name: &str,
-        value: Option<&str>,
-    ) -> Result<(), GeolocationError> {
+    pub fn add_param(&mut self, name: &str, value: Option<&str>) -> Result<(), GeolocationError> {
         validate_param_name(name)?;
-        
+
         if let Some(v) = value {
             validate_param_value(v)?;
         }
@@ -127,7 +121,7 @@ impl GeolocationValue {
         }
 
         let name_key = SmolStr::new(name.to_ascii_lowercase());
-        
+
         if self.params.contains_key(&name_key) {
             return Err(GeolocationError::DuplicateParam(name.to_string()));
         }
@@ -143,9 +137,9 @@ impl GeolocationValue {
 
     /// Returns an iterator over the parameters.
     pub fn params(&self) -> impl Iterator<Item = (&str, Option<&str>)> {
-        self.params.iter().map(|(k, v)| {
-            (k.as_str(), v.as_ref().map(|s| s.as_str()))
-        })
+        self.params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_ref().map(|s| s.as_str())))
     }
 
     /// Gets a parameter value by name (case-insensitive).
@@ -282,23 +276,15 @@ impl GeolocationErrorHeader {
     }
 
     /// Adds a parameter.
-    pub fn with_param(
-        mut self,
-        name: &str,
-        value: Option<&str>,
-    ) -> Result<Self, GeolocationError> {
+    pub fn with_param(mut self, name: &str, value: Option<&str>) -> Result<Self, GeolocationError> {
         self.add_param(name, value)?;
         Ok(self)
     }
 
     /// Adds a parameter (mutable version).
-    pub fn add_param(
-        &mut self,
-        name: &str,
-        value: Option<&str>,
-    ) -> Result<(), GeolocationError> {
+    pub fn add_param(&mut self, name: &str, value: Option<&str>) -> Result<(), GeolocationError> {
         validate_param_name(name)?;
-        
+
         if let Some(v) = value {
             validate_param_value(v)?;
         }
@@ -311,7 +297,7 @@ impl GeolocationErrorHeader {
         }
 
         let name_key = SmolStr::new(name.to_ascii_lowercase());
-        
+
         if self.params.contains_key(&name_key) {
             return Err(GeolocationError::DuplicateParam(name.to_string()));
         }
@@ -332,9 +318,9 @@ impl GeolocationErrorHeader {
 
     /// Returns an iterator over the parameters.
     pub fn params(&self) -> impl Iterator<Item = (&str, Option<&str>)> {
-        self.params.iter().map(|(k, v)| {
-            (k.as_str(), v.as_ref().map(|s| s.as_str()))
-        })
+        self.params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_ref().map(|s| s.as_str())))
     }
 
     /// Gets a parameter value by name (case-insensitive).
@@ -381,23 +367,15 @@ impl GeolocationRoutingHeader {
     }
 
     /// Adds a parameter.
-    pub fn with_param(
-        mut self,
-        name: &str,
-        value: Option<&str>,
-    ) -> Result<Self, GeolocationError> {
+    pub fn with_param(mut self, name: &str, value: Option<&str>) -> Result<Self, GeolocationError> {
         self.add_param(name, value)?;
         Ok(self)
     }
 
     /// Adds a parameter (mutable version).
-    pub fn add_param(
-        &mut self,
-        name: &str,
-        value: Option<&str>,
-    ) -> Result<(), GeolocationError> {
+    pub fn add_param(&mut self, name: &str, value: Option<&str>) -> Result<(), GeolocationError> {
         validate_param_name(name)?;
-        
+
         if let Some(v) = value {
             validate_param_value(v)?;
         }
@@ -410,7 +388,7 @@ impl GeolocationRoutingHeader {
         }
 
         let name_key = SmolStr::new(name.to_ascii_lowercase());
-        
+
         if self.params.contains_key(&name_key) {
             return Err(GeolocationError::DuplicateParam(name.to_string()));
         }
@@ -421,9 +399,9 @@ impl GeolocationRoutingHeader {
 
     /// Returns an iterator over the parameters.
     pub fn params(&self) -> impl Iterator<Item = (&str, Option<&str>)> {
-        self.params.iter().map(|(k, v)| {
-            (k.as_str(), v.as_ref().map(|s| s.as_str()))
-        })
+        self.params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_ref().map(|s| s.as_str())))
     }
 
     /// Gets a parameter value by name (case-insensitive).
@@ -459,14 +437,14 @@ fn validate_param_name(name: &str) -> Result<(), GeolocationError> {
 
     if name.chars().any(|c| c.is_ascii_control()) {
         return Err(GeolocationError::InvalidParamName(
-            "contains control characters".to_string()
+            "contains control characters".to_string(),
         ));
     }
 
     // Parameter names should be tokens
     if !is_token(name) {
         return Err(GeolocationError::InvalidParamName(
-            "contains invalid characters".to_string()
+            "contains invalid characters".to_string(),
         ));
     }
 
@@ -483,13 +461,13 @@ fn validate_param_value(value: &str) -> Result<(), GeolocationError> {
 
     if value.chars().any(|c| c.is_ascii_control()) {
         return Err(GeolocationError::InvalidParamValue(
-            "contains control characters".to_string()
+            "contains control characters".to_string(),
         ));
     }
 
     if !is_token(value) {
         return Err(GeolocationError::InvalidParamValue(
-            "contains invalid characters".to_string()
+            "contains invalid characters".to_string(),
         ));
     }
 
@@ -510,14 +488,17 @@ fn validate_error_code(code: &str) -> Result<(), GeolocationError> {
 
     if code.chars().any(|c| c.is_ascii_control()) {
         return Err(GeolocationError::InvalidErrorCode(
-            "contains control characters".to_string()
+            "contains control characters".to_string(),
         ));
     }
 
     // Error codes should be numeric or alphanumeric
-    if !code.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.') {
+    if !code
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+    {
         return Err(GeolocationError::InvalidErrorCode(
-            "contains invalid characters".to_string()
+            "contains invalid characters".to_string(),
         ));
     }
 
@@ -535,13 +516,13 @@ fn validate_description(description: &str) -> Result<(), GeolocationError> {
     // Allow most printable characters but not control characters
     if description.chars().any(|c| c.is_ascii_control()) {
         return Err(GeolocationError::InvalidDescription(
-            "contains control characters".to_string()
+            "contains control characters".to_string(),
         ));
     }
 
     if description.chars().any(|c| matches!(c, '"' | '\\')) {
         return Err(GeolocationError::InvalidDescription(
-            "contains invalid characters".to_string()
+            "contains invalid characters".to_string(),
         ));
     }
 
@@ -552,7 +533,10 @@ fn is_token(value: &str) -> bool {
     !value.is_empty()
         && value.chars().all(|c| {
             c.is_ascii_alphanumeric()
-                || matches!(c, '-' | '.' | '!' | '%' | '*' | '_' | '+' | '`' | '\'' | '~')
+                || matches!(
+                    c,
+                    '-' | '.' | '!' | '%' | '*' | '_' | '+' | '`' | '\'' | '~'
+                )
         })
 }
 
@@ -561,8 +545,7 @@ mod tests {
     use super::*;
 
     fn mock_uri() -> Uri {
-        Uri::parse("https://example.com/location.xml")
-            .expect("mock URI should parse")
+        Uri::parse("https://example.com/location.xml").expect("mock URI should parse")
     }
 
     #[test]
@@ -580,34 +563,28 @@ mod tests {
             .unwrap()
             .with_param("inserted-by", Some("proxy"))
             .unwrap();
-        
-        assert_eq!(
-            geo.get_param("cid"),
-            Some(&Some(SmolStr::new("abc123")))
-        );
+
+        assert_eq!(geo.get_param("cid"), Some(&Some(SmolStr::new("abc123"))));
     }
 
     #[test]
     fn reject_crlf_in_param_name() {
         let uri = mock_uri();
-        let result = GeolocationValue::new(uri)
-            .with_param("param\r\ninjected", Some("value"));
+        let result = GeolocationValue::new(uri).with_param("param\r\ninjected", Some("value"));
         assert!(result.is_err());
     }
 
     #[test]
     fn reject_crlf_in_param_value() {
         let uri = mock_uri();
-        let result = GeolocationValue::new(uri)
-            .with_param("param", Some("value\r\ninjected"));
+        let result = GeolocationValue::new(uri).with_param("param", Some("value\r\ninjected"));
         assert!(result.is_err());
     }
 
     #[test]
     fn reject_invalid_param_value() {
         let uri = mock_uri();
-        let result = GeolocationValue::new(uri)
-            .with_param("param", Some("bad value"));
+        let result = GeolocationValue::new(uri).with_param("param", Some("bad value"));
         assert!(result.is_err());
     }
 
@@ -615,11 +592,11 @@ mod tests {
     fn reject_too_many_params() {
         let uri = mock_uri();
         let mut geo = GeolocationValue::new(uri);
-        
+
         for i in 0..MAX_PARAMS {
             geo.add_param(&format!("p{}", i), None).unwrap();
         }
-        
+
         // Should fail
         let result = geo.add_param("overflow", None);
         assert!(result.is_err());
@@ -664,37 +641,33 @@ mod tests {
             .unwrap()
             .with_description("Location not found")
             .unwrap();
-        
+
         assert_eq!(error.code(), Some("404"));
         assert_eq!(error.description(), Some("Location not found"));
     }
 
     #[test]
     fn reject_crlf_in_error_code() {
-        let result = GeolocationErrorHeader::new()
-            .with_code("404\r\ninjected");
+        let result = GeolocationErrorHeader::new().with_code("404\r\ninjected");
         assert!(result.is_err());
     }
 
     #[test]
     fn reject_crlf_in_description() {
-        let result = GeolocationErrorHeader::new()
-            .with_description("Not found\r\nInjected: evil");
+        let result = GeolocationErrorHeader::new().with_description("Not found\r\nInjected: evil");
         assert!(result.is_err());
     }
 
     #[test]
     fn reject_invalid_description_chars() {
-        let result = GeolocationErrorHeader::new()
-            .with_description("Not \"found\"");
+        let result = GeolocationErrorHeader::new().with_description("Not \"found\"");
         assert!(result.is_err());
     }
 
     #[test]
     fn reject_oversized_description() {
         let long_desc = "x".repeat(MAX_ERROR_DESCRIPTION_LENGTH + 1);
-        let result = GeolocationErrorHeader::new()
-            .with_description(&long_desc);
+        let result = GeolocationErrorHeader::new().with_description(&long_desc);
         assert!(result.is_err());
     }
 
@@ -703,7 +676,7 @@ mod tests {
         let routing = GeolocationRoutingHeader::new()
             .with_param("routing-allowed", Some("yes"))
             .unwrap();
-        
+
         assert_eq!(
             routing.get_param("routing-allowed"),
             Some(&Some(SmolStr::new("yes")))
@@ -715,7 +688,7 @@ mod tests {
         let routing = GeolocationRoutingHeader::new()
             .with_param("Routing-Allowed", Some("yes"))
             .unwrap();
-        
+
         assert_eq!(
             routing.get_param("routing-allowed"),
             Some(&Some(SmolStr::new("yes")))

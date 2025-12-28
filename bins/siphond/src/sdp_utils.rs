@@ -99,12 +99,7 @@ pub fn generate_sdp_answer(config: &DaemonConfig, offer: &str) -> Result<String>
         crate::config::SdpProfile::AudioOnly => {
             let profile = MediaProfileBuilder::audio_only();
             sip_sdp::profiles::negotiate_answer(
-                &offer_sdp,
-                &profile,
-                &username,
-                &local_ip,
-                audio_port,
-                None,
+                &offer_sdp, &profile, &username, &local_ip, audio_port, None,
             )
         }
         crate::config::SdpProfile::AudioVideo => {

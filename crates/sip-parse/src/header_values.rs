@@ -5,17 +5,17 @@
 use std::collections::BTreeMap;
 
 use bytes::Bytes;
+use sip_core::geolocation::GeolocationError;
 use sip_core::{
     AllowHeader, AuthorizationHeader, ContactHeader, DateHeader, EventHeader, FromHeader,
     GeolocationErrorHeader, GeolocationHeader, GeolocationRoutingHeader, GeolocationValue, Headers,
     HistoryInfoEntry, HistoryInfoHeader, MimeType, MinSessionExpires, NameAddr, NameAddrHeader,
     PAccessNetworkInfo, PAssertedIdentityHeader, PPreferredIdentityHeader, PVisitedNetworkIdHeader,
-    PathHeader, PriorityValue, RAckHeader, RSeqHeader, ReasonHeader, RefresherRole, Uri,
+    PathHeader, PriorityValue, RAckHeader, RSeqHeader, ReasonHeader, RefresherRole,
     ResourcePriorityHeader, ResourcePriorityValue, RouteHeader, SdpSession, ServiceRouteHeader,
-    SessionExpires, SipETagHeader, SubjectHeader, SubscriptionState,
-    SubscriptionStateHeader, SupportedHeader, ToHeader, TokenList, ViaHeader,
+    SessionExpires, SipETagHeader, SubjectHeader, SubscriptionState, SubscriptionStateHeader,
+    SupportedHeader, ToHeader, TokenList, Uri, ViaHeader,
 };
-use sip_core::geolocation::GeolocationError;
 use smol_str::SmolStr;
 
 pub fn parse_via_header(value: &SmolStr) -> Option<ViaHeader> {
@@ -345,9 +345,7 @@ pub fn parse_sip_etag(value: &SmolStr) -> SipETagHeader {
     }
 }
 
-pub fn parse_geolocation_header(
-    headers: &Headers,
-) -> Result<GeolocationHeader, GeolocationError> {
+pub fn parse_geolocation_header(headers: &Headers) -> Result<GeolocationHeader, GeolocationError> {
     let mut values = Vec::new();
     for header in headers.get_all_smol("Geolocation") {
         for part in split_quoted_commas(header.as_str()) {
@@ -358,10 +356,8 @@ pub fn parse_geolocation_header(
             if let Some(name_addr) = parse_name_addr(&SmolStr::new(part)) {
                 let mut value = GeolocationValue::new(name_addr.uri().clone());
                 for (name, param_value) in name_addr.params_map() {
-                    let _ = value.add_param(
-                        name.as_str(),
-                        param_value.as_ref().map(|s| s.as_str()),
-                    );
+                    let _ =
+                        value.add_param(name.as_str(), param_value.as_ref().map(|s| s.as_str()));
                 }
                 values.push(value);
             }
@@ -408,10 +404,7 @@ pub fn parse_geolocation_routing(
 ) -> Result<GeolocationRoutingHeader, GeolocationError> {
     let mut header = GeolocationRoutingHeader::new();
     for (name, param_value) in parse_params(value.as_str()) {
-        let _ = header.add_param(
-            name.as_str(),
-            param_value.as_ref().map(|s| s.as_str()),
-        );
+        let _ = header.add_param(name.as_str(), param_value.as_ref().map(|s| s.as_str()));
     }
     Ok(header)
 }

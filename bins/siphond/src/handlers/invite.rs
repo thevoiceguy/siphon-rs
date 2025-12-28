@@ -61,7 +61,9 @@ impl InviteHandler {
                     break;
                 }
 
-                transaction_mgr.send_provisional(&key, response.clone()).await;
+                transaction_mgr
+                    .send_provisional(&key, response.clone())
+                    .await;
 
                 if elapsed >= max_total {
                     break;
@@ -117,7 +119,9 @@ impl InviteHandler {
             None
         };
 
-        let is_hold = sdp_str.map(|s| s.contains("a=inactive") || s.contains("a=sendonly")).unwrap_or(false);
+        let is_hold = sdp_str
+            .map(|s| s.contains("a=inactive") || s.contains("a=sendonly"))
+            .unwrap_or(false);
         let is_resume = sdp_str.map(|s| s.contains("a=sendrecv")).unwrap_or(false);
 
         // Get the other leg's dialog for forwarding
@@ -138,18 +142,36 @@ impl InviteHandler {
         // Log what's happening
         if is_from_alice {
             if is_hold {
-                info!(call_id, "Alice is putting Bob on hold - forwarding re-INVITE to Bob");
+                info!(
+                    call_id,
+                    "Alice is putting Bob on hold - forwarding re-INVITE to Bob"
+                );
             } else if is_resume {
-                info!(call_id, "Alice is resuming call with Bob - forwarding re-INVITE to Bob");
+                info!(
+                    call_id,
+                    "Alice is resuming call with Bob - forwarding re-INVITE to Bob"
+                );
             } else {
-                info!(call_id, "Alice sent re-INVITE (session modification) - forwarding to Bob");
+                info!(
+                    call_id,
+                    "Alice sent re-INVITE (session modification) - forwarding to Bob"
+                );
             }
         } else if is_hold {
-            info!(call_id, "Bob is putting Alice on hold - forwarding re-INVITE to Alice");
+            info!(
+                call_id,
+                "Bob is putting Alice on hold - forwarding re-INVITE to Alice"
+            );
         } else if is_resume {
-            info!(call_id, "Bob is resuming call with Alice - forwarding re-INVITE to Alice");
+            info!(
+                call_id,
+                "Bob is resuming call with Alice - forwarding re-INVITE to Alice"
+            );
         } else {
-            info!(call_id, "Bob sent re-INVITE (session modification) - forwarding to Alice");
+            info!(
+                call_id,
+                "Bob sent re-INVITE (session modification) - forwarding to Alice"
+            );
         }
 
         // Parse B2BUA URI for creating UAC
@@ -157,7 +179,8 @@ impl InviteHandler {
             .ok_or_else(|| anyhow!("Invalid local_uri"))?;
 
         // Create UAC for outgoing re-INVITE (use B2BUA as both local and contact)
-        let uac = sip_uac::UserAgentClient::new(b2bua_contact_uri.clone(), b2bua_contact_uri.clone());
+        let uac =
+            sip_uac::UserAgentClient::new(b2bua_contact_uri.clone(), b2bua_contact_uri.clone());
 
         // Create outgoing re-INVITE using the other dialog
         let outgoing_reinvite = uac.create_reinvite(other_dialog, sdp_str);
@@ -343,8 +366,8 @@ impl InviteHandler {
         info!(call_id, callee = %callee_contact.as_str(), "Found callee, creating outgoing INVITE");
 
         // Extract the From URI from Bob's original request to preserve caller ID
-        let from_header = header(&request.headers, "From")
-            .ok_or_else(|| anyhow!("Missing From header"))?;
+        let from_header =
+            header(&request.headers, "From").ok_or_else(|| anyhow!("Missing From header"))?;
 
         // Parse the From URI (format: "Display Name" <sip:user@host>;tag=xxx or sip:user@host;tag=xxx)
         let from_uri = if let Some(start) = from_header.find('<') {
@@ -580,20 +603,26 @@ impl InviteHandler {
 
                 // Create UAC dialog (B2BUA → Alice) for handling re-INVITEs
                 // Extract local URI from the From header of outgoing INVITE (B2BUA's URI)
-                let local_uri = if let Some(from_hdr) = header(&call_leg.outgoing_invite.headers, "From") {
-                    let from_uri = if let Some(start) = from_hdr.find('<') {
-                        let end = from_hdr.find('>').unwrap_or(from_hdr.len());
-                        &from_hdr[start + 1..end]
+                let local_uri =
+                    if let Some(from_hdr) = header(&call_leg.outgoing_invite.headers, "From") {
+                        let from_uri = if let Some(start) = from_hdr.find('<') {
+                            let end = from_hdr.find('>').unwrap_or(from_hdr.len());
+                            &from_hdr[start + 1..end]
+                        } else {
+                            from_hdr
+                                .split(';')
+                                .next()
+                                .unwrap_or(from_hdr.as_str())
+                                .trim()
+                        };
+                        sip_core::SipUri::parse(from_uri)
                     } else {
-                        from_hdr.split(';').next().unwrap_or(from_hdr.as_str()).trim()
+                        None
                     };
-                    sip_core::SipUri::parse(from_uri)
-                } else {
-                    None
-                };
 
                 // Extract remote URI from Alice's Contact header in the 200 OK
-                let remote_uri = if let Some(contact) = header(&callee_response.headers, "Contact") {
+                let remote_uri = if let Some(contact) = header(&callee_response.headers, "Contact")
+                {
                     // Extract URI from Contact header
                     let contact_uri = if let Some(start) = contact.find('<') {
                         let end = contact.find('>').unwrap_or(contact.len());
@@ -650,7 +679,11 @@ impl InviteHandler {
                     let end = caller_from.find('>').unwrap_or(caller_from.len());
                     &caller_from[start + 1..end]
                 } else {
-                    caller_from.split(';').next().unwrap_or(caller_from.as_str()).trim()
+                    caller_from
+                        .split(';')
+                        .next()
+                        .unwrap_or(caller_from.as_str())
+                        .trim()
                 };
 
                 if let Some(caller_uri) = sip_core::SipUri::parse(caller_uri_str) {
@@ -960,7 +993,8 @@ impl InviteHandler {
                     } else {
                         "ws"
                     };
-                    let ws_url = format!("{}://{}:{}", scheme, contact_uri.host, target_addr.port());
+                    let ws_url =
+                        format!("{}://{}:{}", scheme, contact_uri.host, target_addr.port());
                     if transport == sip_transaction::TransportKind::Wss {
                         sip_transport::send_wss(&ws_url, payload).await?;
                     } else {
@@ -978,7 +1012,10 @@ impl InviteHandler {
             }
         }
 
-        info!(call_id, "Proxy response forwarding enabled for this transaction");
+        info!(
+            call_id,
+            "Proxy response forwarding enabled for this transaction"
+        );
 
         Ok(())
     }
@@ -1045,16 +1082,21 @@ impl RequestHandler for InviteHandler {
 
             let sdp_body = if !request.body.is_empty() {
                 match std::str::from_utf8(&request.body) {
-                    Ok(offer_str) => match sdp_utils::generate_sdp_answer(&services.config, offer_str) {
-                        Ok(answer) => Some(answer),
-                        Err(e) => {
-                            warn!(call_id, error = %e, "Failed to generate SDP answer for re-INVITE");
-                            let response =
-                                UserAgentServer::create_response(request, 488, "Not Acceptable Here");
-                            handle.send_final(response).await;
-                            return Ok(());
+                    Ok(offer_str) => {
+                        match sdp_utils::generate_sdp_answer(&services.config, offer_str) {
+                            Ok(answer) => Some(answer),
+                            Err(e) => {
+                                warn!(call_id, error = %e, "Failed to generate SDP answer for re-INVITE");
+                                let response = UserAgentServer::create_response(
+                                    request,
+                                    488,
+                                    "Not Acceptable Here",
+                                );
+                                handle.send_final(response).await;
+                                return Ok(());
+                            }
                         }
-                    },
+                    }
                     Err(_) => None,
                 }
             } else {
@@ -1092,10 +1134,8 @@ impl RequestHandler for InviteHandler {
 
             if services.config.features.enable_session_timers {
                 if let Some(session_expires) = dialog.session_expires {
-                    let is_refresher = matches!(
-                        dialog.refresher,
-                        Some(sip_core::RefresherRole::Uac)
-                    );
+                    let is_refresher =
+                        matches!(dialog.refresher, Some(sip_core::RefresherRole::Uac));
                     services.session_timer_mgr.refresh_timer(
                         dialog.id.clone(),
                         session_expires,
@@ -1117,9 +1157,7 @@ impl RequestHandler for InviteHandler {
         }
 
         if services.config.features.enable_session_timers {
-            if let Err(response) =
-                UserAgentServer::validate_session_timer(request, None)
-            {
+            if let Err(response) = UserAgentServer::validate_session_timer(request, None) {
                 handle.send_final(response).await;
                 return Ok(());
             }
@@ -1150,15 +1188,17 @@ impl RequestHandler for InviteHandler {
         // Store transaction handle and headers for potential CANCEL
         let mut pending_key = None;
         if let Some((key, pending)) =
-            crate::invite_state::InviteStateManager::pending_from_request(
-                handle.clone(),
-                request,
-            )
+            crate::invite_state::InviteStateManager::pending_from_request(handle.clone(), request)
         {
-            services.invite_state.store_pending_invite(key.clone(), pending);
+            services
+                .invite_state
+                .store_pending_invite(key.clone(), pending);
             pending_key = Some(key);
         } else {
-            warn!(call_id, "Unable to track INVITE for CANCEL (missing headers)");
+            warn!(
+                call_id,
+                "Unable to track INVITE for CANCEL (missing headers)"
+            );
         }
 
         // Validate SDP early (if present) before sending 180 Ringing
@@ -1208,12 +1248,10 @@ impl RequestHandler for InviteHandler {
                     let rseq = services.rseq_mgr.next_rseq(&early_dialog.id);
                     reliable_info = Some((Self::dialog_id_key(&early_dialog.id), rseq));
                     let _ = ringing.headers.push("RSeq", rseq.to_string());
+                    let _ = ringing.headers.push("Require", "100rel");
                     let _ = ringing
                         .headers
-                        .push("Require", "100rel");
-                    let _ = ringing.headers.push("Contact",
-                        format!("<{}>", services.config.local_uri),
-                    );
+                        .push("Contact", format!("<{}>", services.config.local_uri));
 
                     if let Some(cseq) = header(&request.headers, "CSeq")
                         .and_then(|value| value.split_whitespace().next())
@@ -1309,29 +1347,26 @@ impl RequestHandler for InviteHandler {
                 if services.config.features.enable_session_timers {
                     let has_se = response.headers.get("Session-Expires").is_some();
                     if !has_se {
-                        let _ = response.headers.push("Session-Expires",
+                        let _ = response.headers.push(
+                            "Session-Expires",
                             sip_dialog::session_timer_manager::DEFAULT_SESSION_EXPIRES
                                 .as_secs()
                                 .to_string(),
                         );
-                        let _ = response
-                            .headers
-                            .push("Supported", "timer");
-                        let _ = response
-                            .headers
-                            .push("Min-SE", "90");
+                        let _ = response.headers.push("Supported", "timer");
+                        let _ = response.headers.push("Min-SE", "90");
                     }
 
                     dialog.update_from_response(&response);
 
                     if let Some(session_expires) = dialog.session_expires {
-                        let is_refresher = matches!(
-                            dialog.refresher,
-                            Some(sip_core::RefresherRole::Uac)
+                        let is_refresher =
+                            matches!(dialog.refresher, Some(sip_core::RefresherRole::Uac));
+                        services.session_timer_mgr.start_timer(
+                            dialog.id.clone(),
+                            session_expires,
+                            is_refresher,
                         );
-                        services
-                            .session_timer_mgr
-                            .start_timer(dialog.id.clone(), session_expires, is_refresher);
                     }
                 }
 

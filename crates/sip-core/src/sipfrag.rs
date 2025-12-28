@@ -123,7 +123,9 @@ impl SipFrag {
     pub fn with_header(mut self, name: impl Into<SmolStr>, value: impl Into<SmolStr>) -> Self {
         let name_str = name.into();
         let value_str = value.into();
-        self.headers.push(name_str.as_str(), value_str.as_str()).unwrap();
+        self.headers
+            .push(name_str.as_str(), value_str.as_str())
+            .unwrap();
         self
     }
 
@@ -256,14 +258,18 @@ mod tests {
     #[test]
     fn sipfrag_headers_only() {
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("From".to_owned()),
-            SmolStr::new("sip:alice@example.com".to_owned()),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("To".to_owned()),
-            SmolStr::new("sip:bob@example.com".to_owned()),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("From".to_owned()),
+                SmolStr::new("sip:alice@example.com".to_owned()),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("To".to_owned()),
+                SmolStr::new("sip:bob@example.com".to_owned()),
+            )
+            .unwrap();
 
         let frag = SipFrag::headers_only(headers);
         assert!(frag.start_line.is_none());

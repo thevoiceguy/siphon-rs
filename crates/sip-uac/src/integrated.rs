@@ -285,10 +285,13 @@ fn prepare_in_dialog_request(dialog: &mut Dialog, request: &mut Request) -> SipU
     // Increment local CSeq and overwrite header with the new value
     let cseq = dialog.next_local_cseq();
     request.headers.remove("CSeq");
-    request.headers.push(
-        SmolStr::new("CSeq"),
-        SmolStr::new(format!("{} {}", cseq, request.start.method.as_str())),
-    ).unwrap();
+    request
+        .headers
+        .push(
+            SmolStr::new("CSeq"),
+            SmolStr::new(format!("{} {}", cseq, request.start.method.as_str())),
+        )
+        .unwrap();
 
     // Ensure Route headers reflect the dialog route set
     request.headers.remove("Route");
@@ -305,7 +308,11 @@ fn prepare_in_dialog_request(dialog: &mut Dialog, request: &mut Request) -> SipU
         for route in dialog.route_set.iter() {
             request
                 .headers
-                .push(SmolStr::new("Route"), SmolStr::new(format!("<{}>", route.as_str()))).unwrap();
+                .push(
+                    SmolStr::new("Route"),
+                    SmolStr::new(format!("<{}>", route.as_str())),
+                )
+                .unwrap();
         }
     } else {
         // Strict routing: first route becomes Request-URI, remote target appended to Route
@@ -313,12 +320,19 @@ fn prepare_in_dialog_request(dialog: &mut Dialog, request: &mut Request) -> SipU
         for route in dialog.route_set.iter().skip(1) {
             request
                 .headers
-                .push(SmolStr::new("Route"), SmolStr::new(format!("<{}>", route.as_str()))).unwrap();
+                .push(
+                    SmolStr::new("Route"),
+                    SmolStr::new(format!("<{}>", route.as_str())),
+                )
+                .unwrap();
         }
-        request.headers.push(
-            SmolStr::new("Route"),
-            SmolStr::new(format!("<{}>", dialog.remote_target.as_str())),
-        ).unwrap();
+        request
+            .headers
+            .push(
+                SmolStr::new("Route"),
+                SmolStr::new(format!("<{}>", dialog.remote_target.as_str())),
+            )
+            .unwrap();
     }
 
     // Target for transport resolution is always the topmost route when present
@@ -340,19 +354,30 @@ fn apply_route_set_to_request(dialog: &Dialog, request: &mut Request) {
         for route in dialog.route_set.iter() {
             request
                 .headers
-                .push(SmolStr::new("Route"), SmolStr::new(format!("<{}>", route.as_str()))).unwrap();
+                .push(
+                    SmolStr::new("Route"),
+                    SmolStr::new(format!("<{}>", route.as_str())),
+                )
+                .unwrap();
         }
     } else {
         request.start.uri = first_route.clone().into();
         for route in dialog.route_set.iter().skip(1) {
             request
                 .headers
-                .push(SmolStr::new("Route"), SmolStr::new(format!("<{}>", route.as_str()))).unwrap();
+                .push(
+                    SmolStr::new("Route"),
+                    SmolStr::new(format!("<{}>", route.as_str())),
+                )
+                .unwrap();
         }
-        request.headers.push(
-            SmolStr::new("Route"),
-            SmolStr::new(format!("<{}>", dialog.remote_target.as_str())),
-        ).unwrap();
+        request
+            .headers
+            .push(
+                SmolStr::new("Route"),
+                SmolStr::new(format!("<{}>", dialog.remote_target.as_str())),
+            )
+            .unwrap();
     }
 }
 
@@ -822,7 +847,10 @@ impl IntegratedUAC {
 
             // Replace with actual Via using selected transport
             let via_transport = transport.map(|t| t.as_via_str()).unwrap_or("UDP");
-            let new_via = format!("SIP/2.0/{} {};branch={};rport", via_transport, via_addr, branch);
+            let new_via = format!(
+                "SIP/2.0/{} {};branch={};rport",
+                via_transport, via_addr, branch
+            );
             let _ = request.headers.set_or_push("Via", new_via);
         }
     }
@@ -867,8 +895,7 @@ impl IntegratedUAC {
                     extra_params.push_str(";ob");
                     extra_params.push_str(&format!(";reg-id={}", self.config.outbound_reg_id));
                     if let Some(instance_id) = &self.config.instance_id {
-                        extra_params
-                            .push_str(&format!(";+sip.instance=\"{}\"", instance_id));
+                        extra_params.push_str(&format!(";+sip.instance=\"{}\"", instance_id));
                     }
                     needs_supported = true;
                 }
@@ -898,7 +925,8 @@ impl IntegratedUAC {
             } else {
                 request
                     .headers
-                    .push(SmolStr::new("Supported"), SmolStr::new("outbound")).unwrap();
+                    .push(SmolStr::new("Supported"), SmolStr::new("outbound"))
+                    .unwrap();
             }
         }
     }
@@ -967,8 +995,7 @@ impl IntegratedUAC {
 
         info!(
             "Started client transaction {} for {:?}",
-            key.branch,
-            &request.start.method
+            key.branch, &request.start.method
         );
 
         // Wait for final response or termination
@@ -1042,8 +1069,7 @@ impl IntegratedUAC {
 
         info!(
             "Started authenticated client transaction {} for {:?}",
-            key.branch,
-            &auth_request.start.method
+            key.branch, &auth_request.start.method
         );
 
         tokio::select! {
@@ -1454,7 +1480,11 @@ impl IntegratedUAC {
     /// - Media changes (add/remove video, codec change)
     /// - Hold/resume (a=sendonly/a=sendrecv)
     /// - Transfer preparation
-    pub async fn reinvite(&self, dialog: &mut Dialog, sdp_body: Option<&str>) -> Result<CallHandle> {
+    pub async fn reinvite(
+        &self,
+        dialog: &mut Dialog,
+        sdp_body: Option<&str>,
+    ) -> Result<CallHandle> {
         // Generate re-INVITE using helper
         let helper = self.helper.lock().await;
         let mut request = helper.create_reinvite(dialog, sdp_body);
@@ -1462,9 +1492,7 @@ impl IntegratedUAC {
 
         let target_uri = prepare_in_dialog_request(dialog, &mut request);
         self.dialog_manager.insert(dialog.clone());
-        let dns_target = self
-            .resolve_target(&RequestTarget::Uri(target_uri))
-            .await?;
+        let dns_target = self.resolve_target(&RequestTarget::Uri(target_uri)).await?;
 
         // Auto-fill Via/Contact using resolved transport
         self.auto_fill_headers(&mut request, Some(dns_target.transport))
@@ -1492,7 +1520,11 @@ impl IntegratedUAC {
     /// - Early media changes (before call is answered)
     /// - QoS precondition updates
     /// - Session timer refresh without full re-INVITE
-    pub async fn send_update(&self, dialog: &mut Dialog, sdp_body: Option<&str>) -> Result<Response> {
+    pub async fn send_update(
+        &self,
+        dialog: &mut Dialog,
+        sdp_body: Option<&str>,
+    ) -> Result<Response> {
         let helper = self.helper.lock().await;
         let request = helper.create_update(dialog, sdp_body);
         drop(helper);
@@ -1597,9 +1629,7 @@ impl IntegratedUAC {
     ) -> Result<Response> {
         let target_uri = prepare_in_dialog_request(dialog, &mut request);
         self.dialog_manager.insert(dialog.clone());
-        let dns_target = self
-            .resolve_target(&RequestTarget::Uri(target_uri))
-            .await?;
+        let dns_target = self.resolve_target(&RequestTarget::Uri(target_uri)).await?;
 
         self.auto_fill_headers(&mut request, Some(dns_target.transport))
             .await;
@@ -1617,9 +1647,7 @@ impl IntegratedUAC {
     ) -> Result<Response> {
         let target_uri = prepare_in_dialog_request(dialog, &mut request);
         self.dialog_manager.insert(dialog.clone());
-        let dns_target = self
-            .resolve_target(&RequestTarget::Uri(target_uri))
-            .await?;
+        let dns_target = self.resolve_target(&RequestTarget::Uri(target_uri)).await?;
 
         self.auto_fill_headers(&mut request, Some(dns_target.transport))
             .await;
@@ -1633,7 +1661,11 @@ impl IntegratedUAC {
     }
 
     /// Sends PRACK for a reliable provisional response within a dialog.
-    pub async fn send_prack(&self, dialog: &mut Dialog, provisional: &Response) -> Result<Response> {
+    pub async fn send_prack(
+        &self,
+        dialog: &mut Dialog,
+        provisional: &Response,
+    ) -> Result<Response> {
         let helper = self.helper.lock().await;
         let request = helper.create_prack_from_provisional(provisional, dialog)?;
         drop(helper);
@@ -1801,8 +1833,7 @@ mod tests {
     #[test]
     fn prepare_in_dialog_respects_loose_routing() {
         let mut dialog = base_dialog();
-        dialog.route_set =
-            vec![SipUri::parse("sip:proxy.example.com;lr").expect("valid route")];
+        dialog.route_set = vec![SipUri::parse("sip:proxy.example.com;lr").expect("valid route")];
 
         let mut request = Request::new(
             RequestLine::new(Method::Info, dialog.remote_target.clone()),
@@ -1819,10 +1850,7 @@ mod tests {
             Some("<sip:proxy.example.com;lr>")
         );
         assert_eq!(dialog.local_cseq, 2);
-        assert_eq!(
-            request.headers.get("CSeq"),
-            Some("2 INFO")
-        );
+        assert_eq!(request.headers.get("CSeq"), Some("2 INFO"));
     }
 
     #[test]
@@ -1854,10 +1882,12 @@ mod tests {
         let mut dialog = base_dialog();
         let manager = DialogManager::new();
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Contact"),
-            SmolStr::new("<sip:new-remote@example.com>"),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new("<sip:new-remote@example.com>"),
+            )
+            .unwrap();
         let response = Response::new(
             StatusLine::new(200, SmolStr::new("OK")),
             headers,
@@ -1931,30 +1961,35 @@ impl CallHandle {
                 "Via" => {
                     // Generate new branch for CANCEL
                     let new_branch = crate::generate_branch();
-                    cancel_headers.push(
-                        SmolStr::new("Via"),
-                        SmolStr::new(crate::replace_via_branch(
-                            header.value(),
-                            &new_branch,
-                        )),
-                    ).unwrap();
+                    cancel_headers
+                        .push(
+                            SmolStr::new("Via"),
+                            SmolStr::new(crate::replace_via_branch(header.value(), &new_branch)),
+                        )
+                        .unwrap();
                 }
                 "From" | "To" | "Call-ID" => {
                     // Copy unchanged
-                    cancel_headers.push(header.name_smol().clone(), header.value_smol().clone()).unwrap();
+                    cancel_headers
+                        .push(header.name_smol().clone(), header.value_smol().clone())
+                        .unwrap();
                 }
                 "CSeq" => {
                     // Same number, but CANCEL method
                     if let Some((num, _)) = header.value().split_once(' ') {
-                        cancel_headers.push(
-                            SmolStr::new("CSeq"),
-                            SmolStr::new(format!("{} CANCEL", num)),
-                        ).unwrap();
+                        cancel_headers
+                            .push(
+                                SmolStr::new("CSeq"),
+                                SmolStr::new(format!("{} CANCEL", num)),
+                            )
+                            .unwrap();
                     }
                 }
                 "Route" => {
                     // Copy Route headers
-                    cancel_headers.push(header.name_smol().clone(), header.value_smol().clone()).unwrap();
+                    cancel_headers
+                        .push(header.name_smol().clone(), header.value_smol().clone())
+                        .unwrap();
                 }
                 _ => {
                     // Skip other headers
@@ -1963,10 +1998,14 @@ impl CallHandle {
         }
 
         // Add Max-Forwards
-        cancel_headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70")).unwrap();
+        cancel_headers
+            .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
+            .unwrap();
 
         // Add Content-Length
-        cancel_headers.push(SmolStr::new("Content-Length"), SmolStr::new("0")).unwrap();
+        cancel_headers
+            .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
+            .unwrap();
 
         // Create CANCEL request
         let cancel_request = Request::new(
@@ -2101,11 +2140,7 @@ impl ClientTransactionUser for InviteTransactionUser {
             response.start.code, is_2xx
         );
 
-        let original_via = self
-            .request
-            .headers
-            .get("Via")
-            .map(|via| via.to_string());
+        let original_via = self.request.headers.get("Via").map(|via| via.to_string());
 
         let helper = self.helper.lock().await;
         let dialog = if is_2xx {
@@ -2204,7 +2239,9 @@ impl ClientTransactionUser for InviteTransactionUser {
         } else {
             ack.headers.remove("Route");
             for route in self.request.headers.get_all_smol("Route") {
-                ack.headers.push(SmolStr::new("Route"), route.clone()).unwrap();
+                ack.headers
+                    .push(SmolStr::new("Route"), route.clone())
+                    .unwrap();
             }
         }
 
@@ -2239,7 +2276,9 @@ impl ClientTransactionUser for InviteTransactionUser {
         };
 
         ack.headers.remove("Via");
-        ack.headers.push(SmolStr::new("Via"), SmolStr::new(via_value)).unwrap();
+        ack.headers
+            .push(SmolStr::new("Via"), SmolStr::new(via_value))
+            .unwrap();
 
         // Serialize ACK
         let ack_bytes = serialize_request(&ack);

@@ -209,14 +209,18 @@ fn negotiate_media(
         ))?;
 
     if offer_media.protocol != local_media.protocol {
-        return Err(NegotiationError::NoCommonCodec(offer_media.media_type.clone()));
+        return Err(NegotiationError::NoCommonCodec(
+            offer_media.media_type.clone(),
+        ));
     }
 
     // Find common codecs (payload types)
     let common_formats = find_common_formats(offer_media, local_media);
 
     if common_formats.is_empty() {
-        return Err(NegotiationError::NoCommonCodec(offer_media.media_type.clone()));
+        return Err(NegotiationError::NoCommonCodec(
+            offer_media.media_type.clone(),
+        ));
     }
 
     // Get directions

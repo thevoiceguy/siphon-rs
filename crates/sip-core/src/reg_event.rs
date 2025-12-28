@@ -493,10 +493,7 @@ mod tests {
             ContactEvent::parse("registered"),
             Some(ContactEvent::Registered)
         );
-        assert_eq!(
-            ContactEvent::parse("expired"),
-            Some(ContactEvent::Expired)
-        );
+        assert_eq!(ContactEvent::parse("expired"), Some(ContactEvent::Expired));
         assert_eq!(
             ContactEvent::parse("refreshed"),
             Some(ContactEvent::Refreshed)

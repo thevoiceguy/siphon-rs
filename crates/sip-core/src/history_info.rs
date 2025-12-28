@@ -2,9 +2,9 @@
 // Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use std::collections::BTreeMap;
-use smol_str::SmolStr;
 use crate::Uri;
+use smol_str::SmolStr;
+use std::collections::BTreeMap;
 
 const MAX_PARAM_NAME_LENGTH: usize = 64;
 const MAX_PARAM_VALUE_LENGTH: usize = 256;
@@ -26,22 +26,22 @@ pub enum HistoryInfoError {
 impl std::fmt::Display for HistoryInfoError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::ParamNameTooLong { max, actual } =>
-                write!(f, "param name too long (max {}, got {})", max, actual),
-            Self::ParamValueTooLong { max, actual } =>
-                write!(f, "param value too long (max {}, got {})", max, actual),
-            Self::TooManyParams { max, actual } =>
-                write!(f, "too many params (max {}, got {})", max, actual),
-            Self::TooManyEntries { max, actual } =>
-                write!(f, "too many entries (max {}, got {})", max, actual),
-            Self::InvalidParamName(msg) =>
-                write!(f, "invalid param name: {}", msg),
-            Self::InvalidParamValue(msg) =>
-                write!(f, "invalid param value: {}", msg),
-            Self::DuplicateParam(name) =>
-                write!(f, "duplicate parameter: {}", name),
-            Self::EmptyEntries =>
-                write!(f, "history-info must have at least one entry"),
+            Self::ParamNameTooLong { max, actual } => {
+                write!(f, "param name too long (max {}, got {})", max, actual)
+            }
+            Self::ParamValueTooLong { max, actual } => {
+                write!(f, "param value too long (max {}, got {})", max, actual)
+            }
+            Self::TooManyParams { max, actual } => {
+                write!(f, "too many params (max {}, got {})", max, actual)
+            }
+            Self::TooManyEntries { max, actual } => {
+                write!(f, "too many entries (max {}, got {})", max, actual)
+            }
+            Self::InvalidParamName(msg) => write!(f, "invalid param name: {}", msg),
+            Self::InvalidParamValue(msg) => write!(f, "invalid param value: {}", msg),
+            Self::DuplicateParam(name) => write!(f, "duplicate parameter: {}", name),
+            Self::EmptyEntries => write!(f, "history-info must have at least one entry"),
         }
     }
 }
@@ -94,23 +94,15 @@ impl HistoryInfoEntry {
     }
 
     /// Adds a parameter with validation.
-    pub fn with_param(
-        mut self,
-        name: &str,
-        value: Option<&str>,
-    ) -> Result<Self, HistoryInfoError> {
+    pub fn with_param(mut self, name: &str, value: Option<&str>) -> Result<Self, HistoryInfoError> {
         self.add_param(name, value)?;
         Ok(self)
     }
 
     /// Adds a parameter (mutable version).
-    pub fn add_param(
-        &mut self,
-        name: &str,
-        value: Option<&str>,
-    ) -> Result<(), HistoryInfoError> {
+    pub fn add_param(&mut self, name: &str, value: Option<&str>) -> Result<(), HistoryInfoError> {
         validate_param_name(name)?;
-        
+
         if let Some(v) = value {
             validate_param_value(v)?;
         }
@@ -123,7 +115,7 @@ impl HistoryInfoEntry {
         }
 
         let name_key = SmolStr::new(name.to_ascii_lowercase());
-        
+
         if self.params.contains_key(&name_key) {
             return Err(HistoryInfoError::DuplicateParam(name.to_string()));
         }
@@ -139,9 +131,9 @@ impl HistoryInfoEntry {
 
     /// Returns an iterator over the parameters.
     pub fn params(&self) -> impl Iterator<Item = (&str, Option<&str>)> {
-        self.params.iter().map(|(k, v)| {
-            (k.as_str(), v.as_ref().map(|s| s.as_str()))
-        })
+        self.params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_ref().map(|s| s.as_str())))
     }
 
     /// Gets a parameter value by name (case-insensitive).
@@ -287,9 +279,7 @@ impl HistoryInfoHeader {
 
     /// Finds an entry by its index parameter value.
     pub fn find_by_index(&self, index: &str) -> Option<&HistoryInfoEntry> {
-        self.entries.iter().find(|e| {
-            e.index() == Some(index)
-        })
+        self.entries.iter().find(|e| e.index() == Some(index))
     }
 
     /// Returns all entries as a slice.
@@ -314,17 +304,20 @@ fn validate_param_name(name: &str) -> Result<(), HistoryInfoError> {
 
     if name.chars().any(|c| c.is_ascii_control()) {
         return Err(HistoryInfoError::InvalidParamName(
-            "contains control characters".to_string()
+            "contains control characters".to_string(),
         ));
     }
 
     // Parameter names should be tokens
     if !name.chars().all(|c| {
-        c.is_ascii_alphanumeric() || 
-        matches!(c, '-' | '.' | '_' | '!' | '%' | '*' | '+' | '`' | '\'' | '~')
+        c.is_ascii_alphanumeric()
+            || matches!(
+                c,
+                '-' | '.' | '_' | '!' | '%' | '*' | '+' | '`' | '\'' | '~'
+            )
     }) {
         return Err(HistoryInfoError::InvalidParamName(
-            "contains invalid characters".to_string()
+            "contains invalid characters".to_string(),
         ));
     }
 
@@ -341,17 +334,20 @@ fn validate_param_value(value: &str) -> Result<(), HistoryInfoError> {
 
     if value.chars().any(|c| c.is_ascii_control()) {
         return Err(HistoryInfoError::InvalidParamValue(
-            "contains control characters".to_string()
+            "contains control characters".to_string(),
         ));
     }
 
     // Parameter values must be tokens (quoted strings not supported).
     if !value.chars().all(|c| {
-        c.is_ascii_alphanumeric() || 
-        matches!(c, '-' | '.' | '_' | '!' | '%' | '*' | '+' | '`' | '\'' | '~')
+        c.is_ascii_alphanumeric()
+            || matches!(
+                c,
+                '-' | '.' | '_' | '!' | '%' | '*' | '+' | '`' | '\'' | '~'
+            )
     }) {
         return Err(HistoryInfoError::InvalidParamValue(
-            "contains invalid characters".to_string()
+            "contains invalid characters".to_string(),
         ));
     }
 
@@ -384,7 +380,7 @@ mod tests {
             .unwrap()
             .with_param("rc", Some("486"))
             .unwrap();
-        
+
         assert_eq!(entry.index(), Some("1"));
         assert_eq!(entry.reason_code(), Some("486"));
         assert_eq!(entry.param_count(), 2);
@@ -393,16 +389,14 @@ mod tests {
     #[test]
     fn reject_crlf_in_param_name() {
         let uri = mock_uri("sip:alice@example.com");
-        let result = HistoryInfoEntry::new(uri)
-            .with_param("param\r\ninjected", Some("value"));
+        let result = HistoryInfoEntry::new(uri).with_param("param\r\ninjected", Some("value"));
         assert!(result.is_err());
     }
 
     #[test]
     fn reject_crlf_in_param_value() {
         let uri = mock_uri("sip:alice@example.com");
-        let result = HistoryInfoEntry::new(uri)
-            .with_param("index", Some("1\r\ninjected"));
+        let result = HistoryInfoEntry::new(uri).with_param("index", Some("1\r\ninjected"));
         assert!(result.is_err());
     }
 
@@ -410,11 +404,11 @@ mod tests {
     fn reject_too_many_params() {
         let uri = mock_uri("sip:alice@example.com");
         let mut entry = HistoryInfoEntry::new(uri);
-        
+
         for i in 0..MAX_PARAMS {
             entry.add_param(&format!("p{}", i), Some("value")).unwrap();
         }
-        
+
         // Should fail
         let result = entry.add_param("overflow", Some("value"));
         assert!(result.is_err());
@@ -436,7 +430,7 @@ mod tests {
         let entry = HistoryInfoEntry::new(uri)
             .with_param("Index", Some("1"))
             .unwrap();
-        
+
         assert_eq!(entry.get_param("index"), Some(Some("1")));
         assert_eq!(entry.get_param("INDEX"), Some(Some("1")));
     }
@@ -446,7 +440,7 @@ mod tests {
         let uri = mock_uri("sip:alice@example.com");
         let entry = HistoryInfoEntry::new(uri);
         let header = HistoryInfoHeader::new(vec![entry]).unwrap();
-        
+
         assert_eq!(header.len(), 1);
         assert!(!header.is_empty());
     }
@@ -470,11 +464,11 @@ mod tests {
         let uri1 = mock_uri("sip:alice@example.com");
         let entry1 = HistoryInfoEntry::new(uri1);
         let mut header = HistoryInfoHeader::new(vec![entry1]).unwrap();
-        
+
         let uri2 = mock_uri("sip:bob@example.com");
         let entry2 = HistoryInfoEntry::new(uri2);
         header.push(entry2).unwrap();
-        
+
         assert_eq!(header.len(), 2);
     }
 
@@ -483,7 +477,7 @@ mod tests {
         let uri = mock_uri("sip:alice@example.com");
         let entries = vec![HistoryInfoEntry::new(uri.clone()); MAX_ENTRIES];
         let mut header = HistoryInfoHeader::new(entries).unwrap();
-        
+
         let result = header.push(HistoryInfoEntry::new(uri));
         assert!(result.is_err());
     }
@@ -494,14 +488,14 @@ mod tests {
         let entry1 = HistoryInfoEntry::new(uri1)
             .with_param("index", Some("1"))
             .unwrap();
-        
+
         let uri2 = mock_uri("sip:bob@example.com");
         let entry2 = HistoryInfoEntry::new(uri2)
             .with_param("index", Some("2"))
             .unwrap();
-        
+
         let header = HistoryInfoHeader::new(vec![entry1, entry2]).unwrap();
-        
+
         assert_eq!(header.first().unwrap().index(), Some("1"));
         assert_eq!(header.last().unwrap().index(), Some("2"));
         assert_eq!(header.get(0).unwrap().index(), Some("1"));
@@ -515,14 +509,14 @@ mod tests {
         let entry1 = HistoryInfoEntry::new(uri1)
             .with_param("index", Some("1"))
             .unwrap();
-        
+
         let uri2 = mock_uri("sip:bob@example.com");
         let entry2 = HistoryInfoEntry::new(uri2)
             .with_param("index", Some("2"))
             .unwrap();
-        
+
         let header = HistoryInfoHeader::new(vec![entry1, entry2]).unwrap();
-        
+
         assert!(header.find_by_index("1").is_some());
         assert!(header.find_by_index("2").is_some());
         assert!(header.find_by_index("3").is_none());
@@ -532,12 +526,12 @@ mod tests {
     fn header_iteration() {
         let uri1 = mock_uri("sip:alice@example.com");
         let uri2 = mock_uri("sip:bob@example.com");
-        
+
         let entry1 = HistoryInfoEntry::new(uri1);
         let entry2 = HistoryInfoEntry::new(uri2);
-        
+
         let header = HistoryInfoHeader::new(vec![entry1, entry2]).unwrap();
-        
+
         let count = header.entries().count();
         assert_eq!(count, 2);
     }
@@ -546,11 +540,11 @@ mod tests {
     fn fields_are_private() {
         let uri = mock_uri("sip:alice@example.com");
         let entry = HistoryInfoEntry::new(uri);
-        
+
         // These should compile (read-only access)
         let _ = entry.uri();
         let _ = entry.params();
-        
+
         // These should NOT compile (no direct field access):
         // entry.uri = mock_uri("sip:evil.com");  // ← Does not compile!
         // entry.params.clear();                   // ← Does not compile!

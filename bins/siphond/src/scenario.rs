@@ -29,7 +29,9 @@ pub struct Scenario {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ScenarioStep {
-    Sleep { ms: u64 },
+    Sleep {
+        ms: u64,
+    },
     Send {
         method: String,
         uri: String,
@@ -158,7 +160,10 @@ fn build_request(
     }
 
     let request_body = if let Some(content) = body {
-        let _ = hdrs.push(SmolStr::new("Content-Length"), SmolStr::new(content.len().to_string()));
+        let _ = hdrs.push(
+            SmolStr::new("Content-Length"),
+            SmolStr::new(content.len().to_string()),
+        );
         bytes::Bytes::from(content.as_bytes().to_vec())
     } else {
         let _ = hdrs.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
@@ -222,16 +227,15 @@ pub async fn run_scenario(path: &Path, services: &ServiceRegistry) -> Result<()>
                     cseq,
                 );
 
-                let transport = parse_transport(
-                    transport
-                        .as_deref()
-                        .or(default_transport.as_deref()),
-                );
+                let transport =
+                    parse_transport(transport.as_deref().or(default_transport.as_deref()));
                 let target_addr = format!("{}:{}", uri.host, uri.port.unwrap_or(5060))
                     .parse::<std::net::SocketAddr>()?;
                 let ws_uri = match transport {
                     TransportKind::Ws => Some(format!("ws://{}:{}", uri.host, target_addr.port())),
-                    TransportKind::Wss => Some(format!("wss://{}:{}", uri.host, target_addr.port())),
+                    TransportKind::Wss => {
+                        Some(format!("wss://{}:{}", uri.host, target_addr.port()))
+                    }
                     _ => None,
                 };
                 let ctx = TransportContext::new(transport, target_addr, None)

@@ -228,10 +228,7 @@ impl ReasonHeader {
             SmolStr::new("cause"),
             Some(SmolStr::new(cause.code().to_string())),
         );
-        params.insert(
-            SmolStr::new("text"),
-            Some(SmolStr::new(cause.text())),
-        );
+        params.insert(SmolStr::new("text"), Some(SmolStr::new(cause.text())));
 
         Self {
             protocol: SmolStr::new(ReasonProtocol::Q850.as_str()),

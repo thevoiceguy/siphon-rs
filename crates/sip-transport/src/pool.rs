@@ -281,8 +281,8 @@ impl TlsPool {
 
         // Create new connection
         let connector = TlsConnector::from(config.clone());
-        let server_name = ServerName::try_from(server_name)
-            .map_err(|_| anyhow!("invalid TLS server name"))?;
+        let server_name =
+            ServerName::try_from(server_name).map_err(|_| anyhow!("invalid TLS server name"))?;
         let stream = TcpStream::connect(addr).await?;
         let mut tls_stream = connector.connect(server_name, stream).await?;
 

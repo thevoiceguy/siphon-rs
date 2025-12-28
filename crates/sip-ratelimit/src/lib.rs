@@ -99,7 +99,11 @@ impl RateLimitConfig {
             0
         } else {
             let interval = (window_secs * 1000) / max_requests as u64;
-            if interval == 0 { 1 } else { interval }
+            if interval == 0 {
+                1
+            } else {
+                interval
+            }
         };
 
         Self {

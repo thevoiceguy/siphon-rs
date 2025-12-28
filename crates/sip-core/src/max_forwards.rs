@@ -65,20 +65,20 @@ pub fn decrement_max_forwards(headers: &mut Headers) -> Result<u32, MaxForwardsE
         let current = value
             .parse::<u32>()
             .map_err(|_| MaxForwardsError::Invalid)?;
-        
+
         // Check if exhausted
         if current == 0 {
             return Err(MaxForwardsError::Exhausted);
         }
-        
+
         // Decrement (using saturating_sub for safety)
         let decremented = current.saturating_sub(1);
-        
+
         // Update the header value
         headers
             .set_or_push("Max-Forwards", decremented.to_string())
             .map_err(|_| MaxForwardsError::Invalid)?;
-        
+
         return Ok(decremented);
     }
 
@@ -86,7 +86,7 @@ pub fn decrement_max_forwards(headers: &mut Headers) -> Result<u32, MaxForwardsE
     headers
         .push("Max-Forwards", "69")
         .map_err(|_| MaxForwardsError::Invalid)?;
-    
+
     Ok(69)
 }
 
@@ -136,8 +136,11 @@ pub fn is_valid_branch(branch: &str) -> bool {
     // Validate characters per RFC 3261 token rules
     // Valid token characters: alphanumeric + - . ! % * _ + ` ' ~
     branch.chars().all(|c| {
-        c.is_ascii_alphanumeric() || 
-        matches!(c, '-' | '.' | '!' | '%' | '*' | '_' | '+' | '`' | '\'' | '~')
+        c.is_ascii_alphanumeric()
+            || matches!(
+                c,
+                '-' | '.' | '!' | '%' | '*' | '_' | '+' | '`' | '\'' | '~'
+            )
     })
 }
 
@@ -194,7 +197,7 @@ mod tests {
     fn multiple_decrements() {
         let mut headers = Headers::new();
         headers.push("Max-Forwards", "3").unwrap();
-        
+
         assert_eq!(decrement_max_forwards(&mut headers).unwrap(), 2);
         assert_eq!(decrement_max_forwards(&mut headers).unwrap(), 1);
         assert_eq!(decrement_max_forwards(&mut headers).unwrap(), 0);
@@ -217,15 +220,15 @@ mod tests {
         // No magic cookie
         assert!(!is_valid_branch("badbranch"));
         assert!(!is_valid_branch("z9hG4b"));
-        
+
         // Too short (just the cookie, no value)
         assert!(!is_valid_branch("z9hG4bK"));
-        
+
         // CRLF injection attempts
         assert!(!is_valid_branch("z9hG4bK\r\ninjection"));
         assert!(!is_valid_branch("z9hG4bK\x00null"));
         assert!(!is_valid_branch("z9hG4bKtest\ttab"));
-        
+
         // Invalid characters
         assert!(!is_valid_branch("z9hG4bK<script>"));
         assert!(!is_valid_branch("z9hG4bK{bad}"));
@@ -250,10 +253,10 @@ mod tests {
     fn exact_length_boundaries() {
         // Exactly MIN_BRANCH_LENGTH (should pass)
         assert!(is_valid_branch("z9hG4bKa"));
-        
+
         // One less than min (should fail)
         assert!(!is_valid_branch("z9hG4b"));
-        
+
         // Exactly MAX_BRANCH_LENGTH (should pass if valid chars)
         let max_len = format!(
             "z9hG4bK{}",
@@ -261,7 +264,7 @@ mod tests {
         );
         assert_eq!(max_len.len(), MAX_BRANCH_LENGTH);
         assert!(is_valid_branch(&max_len));
-        
+
         // One more than max (should fail)
         let over_max = format!(
             "z9hG4bK{}",

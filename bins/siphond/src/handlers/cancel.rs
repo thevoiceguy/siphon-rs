@@ -86,7 +86,10 @@ impl CancelHandler {
         incoming_call_id: &str,
     ) -> Result<()> {
         // Look up the call leg pair
-        let call_leg = match services.b2bua_state.find_call_leg_by_incoming(incoming_call_id) {
+        let call_leg = match services
+            .b2bua_state
+            .find_call_leg_by_incoming(incoming_call_id)
+        {
             Some(leg) => leg,
             None => {
                 warn!(
@@ -224,10 +227,7 @@ impl RequestHandler for CancelHandler {
                         if call_leg.response_tx.send(response_487).is_ok() {
                             info!(call_id, "Sent 487 Request Terminated to INVITE transaction");
                         } else {
-                            warn!(
-                                call_id,
-                                "Failed to send 487 - response channel closed"
-                            );
+                            warn!(call_id, "Failed to send 487 - response channel closed");
                         }
 
                         // Forward CANCEL to the callee
@@ -258,10 +258,12 @@ impl RequestHandler for CancelHandler {
                     // Non-B2BUA mode: Send 487 to the original INVITE transaction
                     let pending_key =
                         crate::invite_state::InviteStateManager::key_from_request(request);
-                    if let Some((key, pending_invite)) = pending_key
-                        .as_deref()
-                        .and_then(|key| services.invite_state.get_pending_invite(key).map(|p| (key.to_string(), p)))
-                    {
+                    if let Some((key, pending_invite)) = pending_key.as_deref().and_then(|key| {
+                        services
+                            .invite_state
+                            .get_pending_invite(key)
+                            .map(|p| (key.to_string(), p))
+                    }) {
                         info!(
                             call_id,
                             "Sending 487 Request Terminated to original INVITE transaction"

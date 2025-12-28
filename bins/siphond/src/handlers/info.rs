@@ -55,11 +55,8 @@ impl RequestHandler for InfoHandler {
         let dialog = services.dialog_mgr.find_by_request(request);
         if dialog.is_none() {
             warn!(call_id, "INFO received for unknown dialog");
-            let response = UserAgentServer::create_response(
-                request,
-                481,
-                "Call/Transaction Does Not Exist",
-            );
+            let response =
+                UserAgentServer::create_response(request, 481, "Call/Transaction Does Not Exist");
             handle.send_final(response).await;
             return Ok(());
         }

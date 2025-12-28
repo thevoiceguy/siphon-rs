@@ -68,10 +68,18 @@ impl fmt::Display for CallerPrefsError {
                 write!(f, "too many contacts (max {})", MAX_CONTACTS)
             }
             CallerPrefsError::TooManyAcceptHeaders => {
-                write!(f, "too many Accept-Contact headers (max {})", MAX_ACCEPT_HEADERS)
+                write!(
+                    f,
+                    "too many Accept-Contact headers (max {})",
+                    MAX_ACCEPT_HEADERS
+                )
             }
             CallerPrefsError::TooManyRejectHeaders => {
-                write!(f, "too many Reject-Contact headers (max {})", MAX_REJECT_HEADERS)
+                write!(
+                    f,
+                    "too many Reject-Contact headers (max {})",
+                    MAX_REJECT_HEADERS
+                )
             }
             CallerPrefsError::CapabilityMismatch => write!(f, "capability list mismatch"),
             CallerPrefsError::InvalidQValue => write!(f, "q-value must be finite"),
@@ -141,7 +149,10 @@ fn is_valid_token(token: &str) -> bool {
     !token.is_empty()
         && token.chars().all(|c| {
             c.is_ascii_alphanumeric()
-                || matches!(c, '-' | '.' | '!' | '%' | '*' | '_' | '+' | '`' | '\'' | '~')
+                || matches!(
+                    c,
+                    '-' | '.' | '!' | '%' | '*' | '_' | '+' | '`' | '\'' | '~'
+                )
         })
 }
 
@@ -308,9 +319,9 @@ fn values_match(required: &FeatureValue, available: &FeatureValue) -> bool {
                 .iter()
                 .map(|token| token.to_ascii_lowercase())
                 .collect();
-            req_list.iter().all(|req_token| {
-                avail_set.contains(&req_token.to_ascii_lowercase())
-            })
+            req_list
+                .iter()
+                .all(|req_token| avail_set.contains(&req_token.to_ascii_lowercase()))
         }
         (FeatureValue::String(req), FeatureValue::String(avail)) => req == avail,
         (FeatureValue::Numeric(req), FeatureValue::Numeric(avail)) => {
@@ -749,9 +760,10 @@ pub fn score_contacts(
         // Capability list must match contact list
         return Err(CallerPrefsError::CapabilityMismatch);
     }
-    if contacts.iter().any(|contact| {
-        !contact.callee_q.is_finite() || !contact.caller_qa.is_finite()
-    }) {
+    if contacts
+        .iter()
+        .any(|contact| !contact.callee_q.is_finite() || !contact.caller_qa.is_finite())
+    {
         return Err(CallerPrefsError::InvalidQValue);
     }
 
@@ -962,8 +974,9 @@ mod tests {
                 .with_explicit_features(true),
         ];
 
-        let accept =
-            AcceptContact::new().with_feature(FeatureTag::Audio, FeatureValue::Boolean(true)).unwrap();
+        let accept = AcceptContact::new()
+            .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true))
+            .unwrap();
 
         let mut caps1 = CapabilitySet::new();
         caps1.add_boolean(FeatureTag::Audio, true).unwrap();
@@ -992,8 +1005,9 @@ mod tests {
                 .with_explicit_features(true),
         ];
 
-        let reject =
-            RejectContact::new().with_feature(FeatureTag::Automata, FeatureValue::Boolean(true)).unwrap();
+        let reject = RejectContact::new()
+            .with_feature(FeatureTag::Automata, FeatureValue::Boolean(true))
+            .unwrap();
 
         let mut caps1 = CapabilitySet::new();
         caps1.add_boolean(FeatureTag::Audio, true).unwrap();
@@ -1051,8 +1065,9 @@ mod tests {
                 .with_explicit_features(true),
         ];
 
-        let accept =
-            AcceptContact::new().with_feature(FeatureTag::Audio, FeatureValue::Boolean(true)).unwrap();
+        let accept = AcceptContact::new()
+            .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true))
+            .unwrap();
 
         let mut caps1 = CapabilitySet::new();
         caps1.add_boolean(FeatureTag::Audio, true).unwrap();

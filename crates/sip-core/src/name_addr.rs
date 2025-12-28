@@ -105,8 +105,7 @@ impl NameAddr {
         let name_lower = name.to_ascii_lowercase();
         validate_param_name(name_lower.as_str())?;
         let name_key = SmolStr::new(name_lower.as_str());
-        if !self.params.contains_key(&name_key) && self.params.len() >= Self::MAX_PARAM_COUNT
-        {
+        if !self.params.contains_key(&name_key) && self.params.len() >= Self::MAX_PARAM_COUNT {
             return Err(NameAddrError::TooManyParams {
                 max: Self::MAX_PARAM_COUNT,
                 actual: self.params.len() + 1,
@@ -184,7 +183,10 @@ fn validate_param_name(name: &str) -> Result<(), NameAddrError> {
     }
     let valid = name.chars().all(|c| {
         c.is_ascii_alphanumeric()
-            || matches!(c, '-' | '.' | '!' | '%' | '*' | '_' | '+' | '`' | '\'' | '~')
+            || matches!(
+                c,
+                '-' | '.' | '!' | '%' | '*' | '_' | '+' | '`' | '\'' | '~'
+            )
     });
     if !valid {
         return Err(NameAddrError::InvalidParamName(name.to_string()));

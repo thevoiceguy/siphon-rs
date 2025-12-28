@@ -59,10 +59,7 @@ impl SipUri {
                 continue;
             }
             if let Some((k, v)) = param.split_once('=') {
-                params.insert(
-                    SmolStr::new(k.trim()),
-                    Some(SmolStr::new(v.trim())),
-                );
+                params.insert(SmolStr::new(k.trim()), Some(SmolStr::new(v.trim())));
             } else {
                 params.insert(SmolStr::new(param), None);
             }
@@ -96,10 +93,7 @@ impl SipUri {
                     continue;
                 }
                 if let Some((k, v)) = pair.split_once('=') {
-                    headers.insert(
-                        SmolStr::new(k.trim()),
-                        SmolStr::new(v.trim()),
-                    );
+                    headers.insert(SmolStr::new(k.trim()), SmolStr::new(v.trim()));
                 }
             }
         }

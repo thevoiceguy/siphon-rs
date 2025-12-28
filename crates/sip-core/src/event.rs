@@ -31,14 +31,14 @@ pub enum EventHeaderError {
 impl std::fmt::Display for EventHeaderError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::PackageTooLong { max, actual } =>
-                write!(f, "package too long (max {}, got {})", max, actual),
-            Self::InvalidPackage(msg) =>
-                write!(f, "invalid package: {}", msg),
-            Self::TooManyParams { max, actual } =>
-                write!(f, "too many params (max {}, got {})", max, actual),
-            Self::DuplicateParam(name) =>
-                write!(f, "duplicate parameter: {}", name),
+            Self::PackageTooLong { max, actual } => {
+                write!(f, "package too long (max {}, got {})", max, actual)
+            }
+            Self::InvalidPackage(msg) => write!(f, "invalid package: {}", msg),
+            Self::TooManyParams { max, actual } => {
+                write!(f, "too many params (max {}, got {})", max, actual)
+            }
+            Self::DuplicateParam(name) => write!(f, "duplicate parameter: {}", name),
             _ => write!(f, "{:?}", self),
         }
     }
@@ -75,7 +75,7 @@ impl std::error::Error for EventHeaderError {}
 pub struct EventHeader {
     package: SmolStr,
     id: Option<SmolStr>,
-    params: BTreeMap<SmolStr, Option<SmolStr>>,  // Use BTreeMap for deduplication
+    params: BTreeMap<SmolStr, Option<SmolStr>>, // Use BTreeMap for deduplication
 }
 
 impl EventHeader {
@@ -85,7 +85,7 @@ impl EventHeader {
     /// validated for length and invalid characters.
     pub fn new(package: &str) -> Result<Self, EventHeaderError> {
         validate_package(package)?;
-        
+
         Ok(Self {
             package: SmolStr::new(package),
             id: None,
@@ -101,23 +101,15 @@ impl EventHeader {
     }
 
     /// Adds a parameter.
-    pub fn with_param(
-        mut self,
-        name: &str,
-        value: Option<&str>,
-    ) -> Result<Self, EventHeaderError> {
+    pub fn with_param(mut self, name: &str, value: Option<&str>) -> Result<Self, EventHeaderError> {
         self.add_param(name, value)?;
         Ok(self)
     }
 
     /// Adds a parameter (mutable version).
-    pub fn add_param(
-        &mut self,
-        name: &str,
-        value: Option<&str>,
-    ) -> Result<(), EventHeaderError> {
+    pub fn add_param(&mut self, name: &str, value: Option<&str>) -> Result<(), EventHeaderError> {
         validate_param_name(name)?;
-        
+
         if let Some(v) = value {
             validate_param_value(v)?;
         }
@@ -130,7 +122,7 @@ impl EventHeader {
         }
 
         let name_key = SmolStr::new(name.to_ascii_lowercase());
-        
+
         if self.params.contains_key(&name_key) {
             return Err(EventHeaderError::DuplicateParam(name.to_string()));
         }
@@ -151,9 +143,9 @@ impl EventHeader {
 
     /// Returns an iterator over the parameters.
     pub fn params(&self) -> impl Iterator<Item = (&str, Option<&str>)> {
-        self.params.iter().map(|(k, v)| {
-            (k.as_str(), v.as_ref().map(|s| s.as_str()))
-        })
+        self.params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_ref().map(|s| s.as_str())))
     }
 
     /// Gets a parameter value by name (case-insensitive).
@@ -186,23 +178,15 @@ impl SubscriptionStateHeader {
     }
 
     /// Adds a parameter.
-    pub fn with_param(
-        mut self,
-        name: &str,
-        value: Option<&str>,
-    ) -> Result<Self, EventHeaderError> {
+    pub fn with_param(mut self, name: &str, value: Option<&str>) -> Result<Self, EventHeaderError> {
         self.add_param(name, value)?;
         Ok(self)
     }
 
     /// Adds a parameter (mutable version).
-    pub fn add_param(
-        &mut self,
-        name: &str,
-        value: Option<&str>,
-    ) -> Result<(), EventHeaderError> {
+    pub fn add_param(&mut self, name: &str, value: Option<&str>) -> Result<(), EventHeaderError> {
         validate_param_name(name)?;
-        
+
         if let Some(v) = value {
             validate_param_value(v)?;
         }
@@ -215,7 +199,7 @@ impl SubscriptionStateHeader {
         }
 
         let name_key = SmolStr::new(name.to_ascii_lowercase());
-        
+
         if self.params.contains_key(&name_key) {
             return Err(EventHeaderError::DuplicateParam(name.to_string()));
         }
@@ -231,9 +215,9 @@ impl SubscriptionStateHeader {
 
     /// Returns an iterator over the parameters.
     pub fn params(&self) -> impl Iterator<Item = (&str, Option<&str>)> {
-        self.params.iter().map(|(k, v)| {
-            (k.as_str(), v.as_ref().map(|s| s.as_str()))
-        })
+        self.params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_ref().map(|s| s.as_str())))
     }
 
     /// Gets a parameter value by name (case-insensitive).
@@ -286,7 +270,9 @@ impl std::str::FromStr for SubscriptionState {
 
 fn validate_package(package: &str) -> Result<(), EventHeaderError> {
     if package.is_empty() {
-        return Err(EventHeaderError::InvalidPackage("empty package".to_string()));
+        return Err(EventHeaderError::InvalidPackage(
+            "empty package".to_string(),
+        ));
     }
 
     if package.len() > MAX_PACKAGE_LENGTH {
@@ -299,14 +285,14 @@ fn validate_package(package: &str) -> Result<(), EventHeaderError> {
     // Check for control characters
     if package.chars().any(|c| c.is_ascii_control()) {
         return Err(EventHeaderError::InvalidPackage(
-            "contains control characters".to_string()
+            "contains control characters".to_string(),
         ));
     }
 
     // Package should be a token (alphanumeric, hyphen, dot, underscore)
     if !is_token(package) {
         return Err(EventHeaderError::InvalidPackage(
-            "contains invalid characters".to_string()
+            "contains invalid characters".to_string(),
         ));
     }
 
@@ -327,13 +313,13 @@ fn validate_id(id: &str) -> Result<(), EventHeaderError> {
 
     if id.chars().any(|c| c.is_ascii_control()) {
         return Err(EventHeaderError::InvalidId(
-            "contains control characters".to_string()
+            "contains control characters".to_string(),
         ));
     }
 
     if !is_token(id) {
         return Err(EventHeaderError::InvalidId(
-            "contains invalid characters".to_string()
+            "contains invalid characters".to_string(),
         ));
     }
 
@@ -354,14 +340,14 @@ fn validate_param_name(name: &str) -> Result<(), EventHeaderError> {
 
     if name.chars().any(|c| c.is_ascii_control()) {
         return Err(EventHeaderError::InvalidParamName(
-            "contains control characters".to_string()
+            "contains control characters".to_string(),
         ));
     }
 
     // Parameter names should be tokens
     if !is_token(name) {
         return Err(EventHeaderError::InvalidParamName(
-            "contains invalid characters".to_string()
+            "contains invalid characters".to_string(),
         ));
     }
 
@@ -378,13 +364,13 @@ fn validate_param_value(value: &str) -> Result<(), EventHeaderError> {
 
     if value.chars().any(|c| c.is_ascii_control()) {
         return Err(EventHeaderError::InvalidParamValue(
-            "contains control characters".to_string()
+            "contains control characters".to_string(),
         ));
     }
 
     if !is_token(value) {
         return Err(EventHeaderError::InvalidParamValue(
-            "contains invalid characters".to_string()
+            "contains invalid characters".to_string(),
         ));
     }
 
@@ -405,13 +391,13 @@ fn validate_state(state: &str) -> Result<(), EventHeaderError> {
 
     if state.chars().any(|c| c.is_ascii_control()) {
         return Err(EventHeaderError::InvalidState(
-            "contains control characters".to_string()
+            "contains control characters".to_string(),
         ));
     }
 
     if !is_token(state) {
         return Err(EventHeaderError::InvalidState(
-            "contains invalid characters".to_string()
+            "contains invalid characters".to_string(),
         ));
     }
 
@@ -422,7 +408,10 @@ fn is_token(value: &str) -> bool {
     !value.is_empty()
         && value.chars().all(|c| {
             c.is_ascii_alphanumeric()
-                || matches!(c, '-' | '.' | '!' | '%' | '*' | '_' | '+' | '`' | '\'' | '~')
+                || matches!(
+                    c,
+                    '-' | '.' | '!' | '%' | '*' | '_' | '+' | '`' | '\'' | '~'
+                )
         })
 }
 
@@ -454,15 +443,12 @@ mod tests {
             .unwrap()
             .with_param("version", Some("1.0"))
             .unwrap();
-        
+
         assert_eq!(
             event.get_param("priority"),
             Some(&Some(SmolStr::new("urgent")))
         );
-        assert_eq!(
-            event.get_param("version"),
-            Some(&Some(SmolStr::new("1.0")))
-        );
+        assert_eq!(event.get_param("version"), Some(&Some(SmolStr::new("1.0"))));
     }
 
     #[test]
@@ -495,11 +481,11 @@ mod tests {
     #[test]
     fn reject_too_many_params() {
         let mut event = EventHeader::new("presence").unwrap();
-        
+
         for i in 0..MAX_PARAMS {
             event.add_param(&format!("p{}", i), None).unwrap();
         }
-        
+
         // Should fail
         let result = event.add_param("overflow", None);
         assert!(result.is_err());
@@ -521,7 +507,7 @@ mod tests {
             .unwrap()
             .with_param("Priority", Some("high"))
             .unwrap();
-        
+
         assert_eq!(
             event.get_param("priority"),
             Some(&Some(SmolStr::new("high")))
@@ -590,7 +576,7 @@ mod tests {
             .unwrap()
             .with_param("retry-after", Some("60"))
             .unwrap();
-        
+
         assert_eq!(
             state.get_param("expires"),
             Some(&Some(SmolStr::new("3600")))

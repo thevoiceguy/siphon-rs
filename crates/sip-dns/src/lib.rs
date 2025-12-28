@@ -277,9 +277,7 @@ impl SipResolver {
             Self::transport_param(uri)
         };
         let naptr_records = if self.enable_naptr {
-            self.lookup_naptr(uri, transport_override)
-                .await
-                .ok()
+            self.lookup_naptr(uri, transport_override).await.ok()
         } else {
             None
         };
@@ -1418,7 +1416,9 @@ mod tests {
     #[test]
     fn parse_dhcp_option_120_domain_missing_terminator() {
         // "example.com" without terminating zero-length label
-        let data = vec![0, 7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm'];
+        let data = vec![
+            0, 7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm',
+        ];
         let result = parse_dhcp_option_120(&data);
         assert!(result.is_err());
     }

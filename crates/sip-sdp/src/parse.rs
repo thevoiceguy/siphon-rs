@@ -93,7 +93,10 @@ pub fn parse_sdp_with_limits(
             return Err(ParseError::LimitExceeded("lines", limits.max_lines));
         }
         if line.len() > limits.max_line_length {
-            return Err(ParseError::LimitExceeded("line length", limits.max_line_length));
+            return Err(ParseError::LimitExceeded(
+                "line length",
+                limits.max_line_length,
+            ));
         }
     }
 
@@ -316,11 +319,7 @@ fn parse_r_line(input: &str) -> IResult<&str, RepeatTime> {
             let parts: Vec<&str> = s.split_whitespace().collect();
             let repeat_interval = parts.first().copied().unwrap_or("");
             let active_duration = parts.get(1).copied().unwrap_or("");
-            let offsets = parts
-                .iter()
-                .skip(2)
-                .map(|v| SmolStr::new(*v))
-                .collect();
+            let offsets = parts.iter().skip(2).map(|v| SmolStr::new(*v)).collect();
 
             RepeatTime {
                 repeat_interval: SmolStr::new(repeat_interval),
@@ -401,9 +400,10 @@ fn parse_m_line(input: &str) -> IResult<&str, MediaBlock> {
                 terminated(parse_protocol, space1),
                 separated_list0(
                     space1,
-                    map(take_till(|c| c == ' ' || c == '\r' || c == '\n'), |s: &str| {
-                        SmolStr::new(s)
-                    }),
+                    map(
+                        take_till(|c| c == ' ' || c == '\r' || c == '\n'),
+                        |s: &str| SmolStr::new(s),
+                    ),
                 ),
             )),
             |(media_type, (port, num_ports), protocol, formats)| MediaBlock {
@@ -705,10 +705,7 @@ fn validate_media_formats(block: &MediaBlock) -> Result<(), ParseError> {
         for fmt in &block.formats {
             let token = fmt.as_str();
             let value = token.parse::<u16>().map_err(|_| {
-                ParseError::InvalidFormat(
-                    "m=",
-                    format!("non-numeric RTP payload type: {}", token),
-                )
+                ParseError::InvalidFormat("m=", format!("non-numeric RTP payload type: {}", token))
             })?;
             if value > 127 {
                 return Err(ParseError::InvalidFormat(

@@ -119,9 +119,9 @@ impl ByeHandler {
                 // This is the remote side from Bob's perspective
                 if let Some(to_tag) = &leg.callee_to_tag {
                     if let Some(to) = leg.caller_request.headers.get("To") {
-                        let from_with_tag =
-                            format!("{};tag={}", to.trim_end_matches(';'), to_tag);
-                        let _ = bye_headers_base.push(SmolStr::new("From"), SmolStr::new(from_with_tag));
+                        let from_with_tag = format!("{};tag={}", to.trim_end_matches(';'), to_tag);
+                        let _ = bye_headers_base
+                            .push(SmolStr::new("From"), SmolStr::new(from_with_tag));
                     }
                 } else {
                     warn!(
@@ -140,7 +140,8 @@ impl ByeHandler {
                 }
 
                 // Call-ID - incoming call leg
-                let _ = bye_headers_base.push(SmolStr::new("Call-ID"), SmolStr::new(&leg.incoming_call_id));
+                let _ = bye_headers_base
+                    .push(SmolStr::new("Call-ID"), SmolStr::new(&leg.incoming_call_id));
 
                 // CSeq - increment from caller's INVITE CSeq
                 if let Some(cseq) = leg.caller_request.headers.get("CSeq") {
@@ -227,7 +228,8 @@ impl ByeHandler {
                                     generate_branch_id()
                                 );
                                 let mut bye_headers_tcp = Headers::new();
-                                let _ = bye_headers_tcp.push(SmolStr::new("Via"), SmolStr::new(via_tcp));
+                                let _ = bye_headers_tcp
+                                    .push(SmolStr::new("Via"), SmolStr::new(via_tcp));
 
                                 // Copy base headers
                                 for header in bye_headers_base.iter() {
@@ -277,7 +279,8 @@ impl ByeHandler {
                                 generate_branch_id()
                             );
                             let mut bye_headers_tcp = Headers::new();
-                            let _ = bye_headers_tcp.push(SmolStr::new("Via"), SmolStr::new(via_tcp));
+                            let _ =
+                                bye_headers_tcp.push(SmolStr::new("Via"), SmolStr::new(via_tcp));
 
                             // Copy base headers
                             for header in bye_headers_base.iter() {

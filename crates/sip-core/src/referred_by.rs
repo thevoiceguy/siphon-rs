@@ -99,8 +99,8 @@ impl ReferredByHeader {
     /// ```
     pub fn new(uri: &str) -> Self {
         let parsed_uri = SipUri::parse(uri).expect("Invalid SIP URI");
-        let name_addr = NameAddr::new(None, Uri::from(parsed_uri), BTreeMap::new())
-            .expect("valid name-addr");
+        let name_addr =
+            NameAddr::new(None, Uri::from(parsed_uri), BTreeMap::new()).expect("valid name-addr");
         Self {
             name_addr,
             cid: None,
@@ -367,7 +367,10 @@ mod tests {
 
         assert!(referred_by.has_signature());
         assert_eq!(referred_by.get_cid(), Some("signature123@example.com"));
-        assert_eq!(referred_by.cid, Some(SmolStr::new("signature123@example.com")));
+        assert_eq!(
+            referred_by.cid,
+            Some(SmolStr::new("signature123@example.com"))
+        );
     }
 
     #[test]

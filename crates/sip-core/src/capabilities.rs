@@ -439,10 +439,7 @@ impl FeatureValue {
     /// Parses a feature value from a Contact header parameter value.
     ///
     /// The tag is needed to determine the expected value type.
-    pub fn from_param_value(
-        tag: FeatureTag,
-        value: Option<&str>,
-    ) -> Result<Self, CapabilityError> {
+    pub fn from_param_value(tag: FeatureTag, value: Option<&str>) -> Result<Self, CapabilityError> {
         match value {
             None => {
                 // No value = boolean true
@@ -486,7 +483,10 @@ fn is_valid_token(token: &str) -> bool {
         && !token.chars().any(|c| c.is_ascii_control())
         && token.chars().all(|c| {
             c.is_ascii_alphanumeric()
-                || matches!(c, '-' | '.' | '!' | '%' | '*' | '_' | '+' | '`' | '\'' | '~')
+                || matches!(
+                    c,
+                    '-' | '.' | '!' | '%' | '*' | '_' | '+' | '`' | '\'' | '~'
+                )
         })
 }
 
@@ -674,9 +674,10 @@ impl CapabilitySet {
 
     /// Returns an iterator over all capabilities.
     pub fn iter(&self) -> impl Iterator<Item = Capability> + '_ {
-        self.capabilities
-            .iter()
-            .map(|(tag, value)| Capability { tag: *tag, value: value.clone() })
+        self.capabilities.iter().map(|(tag, value)| Capability {
+            tag: *tag,
+            value: value.clone(),
+        })
     }
 
     /// Returns the number of capabilities in the set.
@@ -693,9 +694,7 @@ impl CapabilitySet {
     ///
     /// Returns a map of parameter names to optional values suitable for
     /// inclusion in a Contact header, or an error if any value is invalid.
-    pub fn to_params(
-        &self,
-    ) -> Result<BTreeMap<SmolStr, Option<SmolStr>>, CapabilityError> {
+    pub fn to_params(&self) -> Result<BTreeMap<SmolStr, Option<SmolStr>>, CapabilityError> {
         let mut params = BTreeMap::new();
         for capability in self.iter() {
             let (name, value) = capability.to_param()?;
@@ -835,10 +834,7 @@ mod tests {
     fn token_feature_value() {
         let val = FeatureValue::Token(SmolStr::new("fixed"));
         assert_eq!(val.as_token(), Some(&SmolStr::new("fixed")));
-        assert_eq!(
-            val.to_param_value().unwrap(),
-            Some(SmolStr::new("fixed"))
-        );
+        assert_eq!(val.to_param_value().unwrap(), Some(SmolStr::new("fixed")));
     }
 
     #[test]
@@ -862,10 +858,7 @@ mod tests {
     #[test]
     fn numeric_feature_value() {
         let val = FeatureValue::Numeric(100.5);
-        assert_eq!(
-            val.to_param_value().unwrap(),
-            Some(SmolStr::new("100.5"))
-        );
+        assert_eq!(val.to_param_value().unwrap(), Some(SmolStr::new("100.5")));
     }
 
     #[test]
@@ -882,7 +875,8 @@ mod tests {
 
     #[test]
     fn parse_feature_value_token_list() {
-        let val = FeatureValue::from_param_value(FeatureTag::Methods, Some("\"INVITE,BYE\"")).unwrap();
+        let val =
+            FeatureValue::from_param_value(FeatureTag::Methods, Some("\"INVITE,BYE\"")).unwrap();
         assert_eq!(
             val,
             FeatureValue::TokenList(vec![SmolStr::new("INVITE"), SmolStr::new("BYE"),])
@@ -999,14 +993,14 @@ mod tests {
         let mut available = CapabilitySet::new();
         available
             .add_token_list(
-            FeatureTag::Methods,
-            vec![
-                SmolStr::new("INVITE"),
-                SmolStr::new("BYE"),
-                SmolStr::new("CANCEL"),
-            ],
-        )
-        .unwrap();
+                FeatureTag::Methods,
+                vec![
+                    SmolStr::new("INVITE"),
+                    SmolStr::new("BYE"),
+                    SmolStr::new("CANCEL"),
+                ],
+            )
+            .unwrap();
 
         let mut required = CapabilitySet::new();
         required
@@ -1017,19 +1011,19 @@ mod tests {
         required = CapabilitySet::new();
         required
             .add_token_list(
-            FeatureTag::Methods,
-            vec![SmolStr::new("INVITE"), SmolStr::new("BYE")],
-        )
-        .unwrap();
+                FeatureTag::Methods,
+                vec![SmolStr::new("INVITE"), SmolStr::new("BYE")],
+            )
+            .unwrap();
         assert!(available.matches(&required));
 
         required = CapabilitySet::new();
         required
             .add_token_list(
-            FeatureTag::Methods,
-            vec![SmolStr::new("INVITE"), SmolStr::new("REGISTER")],
-        )
-        .unwrap();
+                FeatureTag::Methods,
+                vec![SmolStr::new("INVITE"), SmolStr::new("REGISTER")],
+            )
+            .unwrap();
         assert!(!available.matches(&required)); // REGISTER not available
     }
 

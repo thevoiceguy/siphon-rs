@@ -119,10 +119,12 @@ impl RequestHandler for OptionsHandler {
         // Add capability headers
         let _ = headers.push("Allow", Self::build_allow_header(services));
         let _ = headers.push("Supported", Self::build_supported_header(services));
-        let _ = headers.push("Accept",
+        let _ = headers.push(
+            "Accept",
             SmolStr::new("application/sdp, application/sdp-answer"),
         );
-        let _ = headers.push("User-Agent",
+        let _ = headers.push(
+            "User-Agent",
             SmolStr::new(services.config.user_agent.clone()),
         );
 

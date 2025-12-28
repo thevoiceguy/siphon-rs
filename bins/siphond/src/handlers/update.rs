@@ -75,17 +75,21 @@ impl RequestHandler for UpdateHandler {
 
         let sdp_body = if !request.body.is_empty() {
             match std::str::from_utf8(&request.body) {
-                Ok(offer_str) => match sdp_utils::generate_sdp_answer(&services.config, offer_str)
-                {
-                    Ok(answer) => Some(answer),
-                    Err(e) => {
-                        warn!(call_id, error = %e, "Failed to generate SDP answer for UPDATE");
-                        let response =
-                            UserAgentServer::create_response(request, 488, "Not Acceptable Here");
-                        handle.send_final(response).await;
-                        return Ok(());
+                Ok(offer_str) => {
+                    match sdp_utils::generate_sdp_answer(&services.config, offer_str) {
+                        Ok(answer) => Some(answer),
+                        Err(e) => {
+                            warn!(call_id, error = %e, "Failed to generate SDP answer for UPDATE");
+                            let response = UserAgentServer::create_response(
+                                request,
+                                488,
+                                "Not Acceptable Here",
+                            );
+                            handle.send_final(response).await;
+                            return Ok(());
+                        }
                     }
-                },
+                }
                 Err(_) => None,
             }
         } else {
