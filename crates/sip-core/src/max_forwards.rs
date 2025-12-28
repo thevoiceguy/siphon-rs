@@ -31,7 +31,7 @@ pub fn decrement_max_forwards(headers: &mut Headers) -> Result<u32, MaxForwardsE
     }
 
     // Insert default 70 -> 69 when missing.
-    headers.push_unchecked(SmolStr::new("Max-Forwards"), SmolStr::new("69"));
+    headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("69")).unwrap();
     Ok(69)
 }
 
@@ -49,7 +49,7 @@ mod tests {
     #[test]
     fn decrements_existing_header() {
         let mut headers = Headers::new();
-        headers.push_unchecked("Max-Forwards", "5");
+        headers.push("Max-Forwards", "5").unwrap();
         let remaining = decrement_max_forwards(&mut headers).unwrap();
         assert_eq!(remaining, 4);
     }
@@ -65,7 +65,7 @@ mod tests {
     #[test]
     fn returns_error_when_exhausted() {
         let mut headers = Headers::new();
-        headers.push_unchecked("Max-Forwards", "0");
+        headers.push("Max-Forwards", "0").unwrap();
         assert_eq!(
             decrement_max_forwards(&mut headers),
             Err(MaxForwardsError::Exhausted)
@@ -75,7 +75,7 @@ mod tests {
     #[test]
     fn returns_error_when_invalid() {
         let mut headers = Headers::new();
-        headers.push_unchecked("Max-Forwards", "bogus");
+        headers.push("Max-Forwards", "bogus").unwrap();
         assert_eq!(
             decrement_max_forwards(&mut headers),
             Err(MaxForwardsError::Invalid)

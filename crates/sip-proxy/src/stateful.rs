@@ -536,12 +536,12 @@ mod tests {
 
     fn make_request() -> Request {
         let mut headers = Headers::new();
-        headers.push_unchecked("Call-ID", "test-call-123");
-        headers.push_unchecked(
+        headers.push("Call-ID", "test-call-123").unwrap();
+        headers.push(
             "Via",
             "SIP/2.0/UDP client;branch=z9hG4bKclient",
-        );
-        headers.push_unchecked("Max-Forwards", "70");
+        ).unwrap();
+        headers.push("Max-Forwards", "70").unwrap();
 
         Request::new(
             RequestLine::new(
@@ -555,12 +555,12 @@ mod tests {
 
     fn make_response(code: u16) -> Response {
         let mut headers = Headers::new();
-        headers.push_unchecked("Call-ID", "test-call-123");
-        headers.push_unchecked("Via", "SIP/2.0/UDP proxy;branch=z9hG4bKproxy");
-        headers.push_unchecked(
+        headers.push("Call-ID", "test-call-123").unwrap();
+        headers.push("Via", "SIP/2.0/UDP proxy;branch=z9hG4bKproxy").unwrap();
+        headers.push(
             "Via",
             "SIP/2.0/UDP client;branch=z9hG4bKclient",
-        );
+        ).unwrap();
 
         Response::new(StatusLine::new(code, "OK".into()), headers, Bytes::new())
     }
@@ -671,9 +671,9 @@ mod tests {
         // Incoming ACK with Route header (dialog path)
         let mut ack = {
             let mut headers = Headers::new();
-            headers.push_unchecked("Call-ID", "test-call-123");
-            headers.push_unchecked("CSeq", "1 ACK");
-            headers.push_unchecked("Route", "<sip:proxy.example.com>");
+            headers.push("Call-ID", "test-call-123").unwrap();
+            headers.push("CSeq", "1 ACK").unwrap();
+            headers.push("Route", "<sip:proxy.example.com>").unwrap();
             Request::new(
                 RequestLine::new(Method::Ack, SipUri::parse("sip:bob@example.com").unwrap()),
                 headers,
@@ -696,15 +696,15 @@ mod tests {
         let proxy = StatefulProxy::new();
         let invite = {
             let mut headers = Headers::new();
-            headers.push_unchecked("Call-ID", "call-123");
-            headers.push_unchecked("CSeq", "1 INVITE");
-            headers.push_unchecked(
+            headers.push("Call-ID", "call-123").unwrap();
+            headers.push("CSeq", "1 INVITE").unwrap();
+            headers.push(
                 "Via",
                 "SIP/2.0/UDP client;branch=z9hG4bKclient",
-            );
-            headers.push_unchecked("From", "<sip:alice@example.com>;tag=a");
-            headers.push_unchecked("To", "<sip:bob@example.com>");
-            headers.push_unchecked("Max-Forwards", "70");
+            ).unwrap();
+            headers.push("From", "<sip:alice@example.com>;tag=a").unwrap();
+            headers.push("To", "<sip:bob@example.com>").unwrap();
+            headers.push("Max-Forwards", "70").unwrap();
             Request::new(
                 RequestLine::new(
                     Method::Invite,
@@ -737,14 +737,14 @@ mod tests {
         // Template CANCEL (matches INVITE headers)
         let cancel_template = {
             let mut headers = Headers::new();
-            headers.push_unchecked("Call-ID", "call-123");
-            headers.push_unchecked("CSeq", "1 CANCEL");
-            headers.push_unchecked("From", "<sip:alice@example.com>;tag=a");
-            headers.push_unchecked("To", "<sip:bob@example.com>");
-            headers.push_unchecked(
+            headers.push("Call-ID", "call-123").unwrap();
+            headers.push("CSeq", "1 CANCEL").unwrap();
+            headers.push("From", "<sip:alice@example.com>;tag=a").unwrap();
+            headers.push("To", "<sip:bob@example.com>").unwrap();
+            headers.push(
                 "Via",
                 "SIP/2.0/UDP proxy;branch=z9hG4bKtemplate",
-            );
+            ).unwrap();
             Request::new(
                 RequestLine::new(
                     Method::Cancel,

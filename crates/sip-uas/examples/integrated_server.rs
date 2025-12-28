@@ -215,7 +215,7 @@ impl UasRequestHandler for AutoAnswerServer {
                 .push("Contact", contact_with_expires.into());
         }
 
-        response.headers.push_unchecked("Expires", expires);
+        response.headers.push("Expires", expires).unwrap();
 
         handle.send_final(response).await;
         println!("   → 200 OK (registered)");
@@ -231,10 +231,10 @@ impl UasRequestHandler for AutoAnswerServer {
         let mut response = UserAgentServer::create_response(request, 200, "OK");
 
         // Add Allow header with supported methods
-        response.headers.push_unchecked(
+        response.headers.push(
             "Allow",
             "INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, SUBSCRIBE, NOTIFY, REFER, UPDATE, PRACK, INFO",
-        );
+        ).unwrap();
 
         // Add Accept header
         response

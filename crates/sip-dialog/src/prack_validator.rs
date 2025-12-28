@@ -343,7 +343,7 @@ mod tests {
 
         // Create PRACK request
         let mut headers = Headers::new();
-        headers.push_unchecked("RAck", "1 100 INVITE");
+        headers.push("RAck", "1 100 INVITE").unwrap();
 
         let prack = Request::new(
             RequestLine::new(Method::Prack, SipUri::parse("sip:bob@example.com").unwrap()),
@@ -368,7 +368,7 @@ mod tests {
         validator.register_reliable_provisional(dialog_id, 1, 100, Method::Invite, 180);
 
         let mut headers = Headers::new();
-        headers.push_unchecked("RAck", "1 100 INVITE");
+        headers.push("RAck", "1 100 INVITE").unwrap();
 
         let prack = Request::new(
             RequestLine::new(Method::Prack, SipUri::parse("sip:bob@example.com").unwrap()),
@@ -391,7 +391,7 @@ mod tests {
         validator.register_reliable_provisional(dialog_id, 1, 100, Method::Invite, 180);
 
         let mut headers = Headers::new();
-        headers.push_unchecked("RAck", "1 999 INVITE"); // Wrong CSeq
+        headers.push("RAck", "1 999 INVITE").unwrap(); // Wrong CSeq
 
         let prack = Request::new(
             RequestLine::new(Method::Prack, SipUri::parse("sip:bob@example.com").unwrap()),
@@ -410,7 +410,7 @@ mod tests {
         validator.register_reliable_provisional(dialog_id, 1, 100, Method::Invite, 180);
 
         let mut headers = Headers::new();
-        headers.push_unchecked("RAck", "1 100 UPDATE"); // Wrong method
+        headers.push("RAck", "1 100 UPDATE").unwrap(); // Wrong method
 
         let prack = Request::new(
             RequestLine::new(Method::Prack, SipUri::parse("sip:bob@example.com").unwrap()),
@@ -438,7 +438,7 @@ mod tests {
     #[test]
     fn is_reliable_provisional_detection() {
         let mut headers = Headers::new();
-        headers.push_unchecked("RSeq", "1");
+        headers.push("RSeq", "1").unwrap();
 
         let response_180 = Response::new(
             StatusLine::new(180, "Ringing".into()),

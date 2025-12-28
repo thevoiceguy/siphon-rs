@@ -187,7 +187,7 @@ impl ByeHandler {
 
                     // Copy base headers
                     for header in bye_headers_base.iter() {
-                        bye_headers_udp.push_unchecked(header.name(), header.value());
+                        bye_headers_udp.push(header.name(), header.value()).unwrap();
                     }
 
                     // Now serialize the request with correct Via
@@ -231,7 +231,7 @@ impl ByeHandler {
 
                                 // Copy base headers
                                 for header in bye_headers_base.iter() {
-                                    bye_headers_tcp.push_unchecked(header.name(), header.value());
+                                    bye_headers_tcp.push(header.name(), header.value()).unwrap();
                                 }
 
                                 let bye_request_tcp = sip_core::Request::new(

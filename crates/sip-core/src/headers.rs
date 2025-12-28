@@ -131,12 +131,6 @@ impl Header {
         (self.name.as_str(), self.value.as_str())
     }
 
-    /// Internal constructor that bypasses validation.
-    /// Only for use in parser and testing code that needs to create
-    /// potentially invalid headers for security testing.
-    pub(crate) fn new_unchecked(name: SmolStr, value: SmolStr) -> Self {
-        Self { name, value }
-    }
 }
 
 /// Collection of SIP headers preserving insertion order.
@@ -222,14 +216,6 @@ impl Headers {
         
         self.inner.push(header);
         Ok(())
-    }
-
-    /// Appends a header to the collection, panicking on validation failure.
-    pub fn push_unchecked(&mut self, name: impl AsRef<str>, value: impl AsRef<str>) {
-        self.inner.push(Header::new_unchecked(
-            SmolStr::new(name.as_ref()),
-            SmolStr::new(value.as_ref()),
-        ));
     }
 
     /// Returns an iterator over the stored headers.

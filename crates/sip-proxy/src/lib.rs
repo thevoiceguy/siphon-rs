@@ -73,7 +73,7 @@ impl ProxyHelpers {
     /// * `proxy_uri` - The proxy's SIP URI (will be in Route headers of future requests)
     pub fn add_record_route(request: &mut Request, proxy_uri: &SipUri) {
         let rr_value = format!("<{}>", proxy_uri.as_str());
-        request.headers.push_unchecked("Record-Route", rr_value);
+        request.headers.push("Record-Route", rr_value).unwrap();
     }
 
     /// Decrements Max-Forwards header and checks for loop.
@@ -145,8 +145,8 @@ mod tests {
     #[test]
     fn adds_via_header() {
         let mut headers = Headers::new();
-        headers.push_unchecked("Via", "SIP/2.0/UDP old;branch=z9hG4bK123");
-        headers.push_unchecked("Max-Forwards", "70");
+        headers.push("Via", "SIP/2.0/UDP old;branch=z9hG4bK123").unwrap();
+        headers.push("Max-Forwards", "70").unwrap();
 
         let mut req = Request::new(
             RequestLine::new(
@@ -189,7 +189,7 @@ mod tests {
     #[test]
     fn decrements_max_forwards() {
         let mut headers = Headers::new();
-        headers.push_unchecked("Max-Forwards", "70");
+        headers.push("Max-Forwards", "70").unwrap();
 
         let mut req = Request::new(
             RequestLine::new(
@@ -207,7 +207,7 @@ mod tests {
     #[test]
     fn rejects_zero_max_forwards() {
         let mut headers = Headers::new();
-        headers.push_unchecked("Max-Forwards", "0");
+        headers.push("Max-Forwards", "0").unwrap();
 
         let mut req = Request::new(
             RequestLine::new(
@@ -224,9 +224,9 @@ mod tests {
     #[test]
     fn removes_top_via() {
         let mut headers = Headers::new();
-        headers.push_unchecked("Via", "SIP/2.0/UDP proxy;branch=z9hG4bK456");
-        headers.push_unchecked("Via", "SIP/2.0/UDP client;branch=z9hG4bK123");
-        headers.push_unchecked("From", "<sip:alice@example.com>");
+        headers.push("Via", "SIP/2.0/UDP proxy;branch=z9hG4bK456").unwrap();
+        headers.push("Via", "SIP/2.0/UDP client;branch=z9hG4bK123").unwrap();
+        headers.push("From", "<sip:alice@example.com>").unwrap();
 
         ProxyHelpers::remove_top_via(&mut headers);
 

@@ -57,22 +57,22 @@ fn location_service_lookup(username: &str) -> Vec<ProxyTarget> {
 
 fn make_invite(target_user: &str) -> Request {
     let mut headers = Headers::new();
-    headers.push_unchecked("Call-ID", "call-12345");
-    headers.push_unchecked("CSeq", "1 INVITE");
-    headers.push_unchecked(
+    headers.push("Call-ID", "call-12345").unwrap();
+    headers.push("CSeq", "1 INVITE").unwrap();
+    headers.push(
         "From",
         "<sip:alice@example.com>;tag=alice-tag",
-    );
-    headers.push_unchecked(
+    ).unwrap();
+    headers.push(
         "To",
         format!("<sip:{}@example.com>", target_user).into(),
-    );
-    headers.push_unchecked(
+    ).unwrap();
+    headers.push(
         "Via",
         "SIP/2.0/UDP alice-client:5060;branch=z9hG4bKclient123",
-    );
-    headers.push_unchecked("Max-Forwards", "70");
-    headers.push_unchecked("Contact", "<sip:alice@192.168.1.50:5060>");
+    ).unwrap();
+    headers.push("Max-Forwards", "70").unwrap();
+    headers.push("Contact", "<sip:alice@192.168.1.50:5060>").unwrap();
 
     // SDP offer
     let sdp = "v=0\r\no=alice 100 0 IN IP4 192.168.1.50\r\ns=Call\r\nc=IN IP4 192.168.1.50\r\nt=0 0\r\nm=audio 8000 RTP/AVP 0 8\r\n";
@@ -94,25 +94,25 @@ fn make_invite(target_user: &str) -> Request {
 
 fn make_response(code: u16, to_tag: &str) -> Response {
     let mut headers = Headers::new();
-    headers.push_unchecked("Call-ID", "call-12345");
-    headers.push_unchecked("CSeq", "1 INVITE");
-    headers.push_unchecked(
+    headers.push("Call-ID", "call-12345").unwrap();
+    headers.push("CSeq", "1 INVITE").unwrap();
+    headers.push(
         "From",
         "<sip:alice@example.com>;tag=alice-tag",
-    );
-    headers.push_unchecked(
+    ).unwrap();
+    headers.push(
         "To",
         format!("<sip:bob@example.com>;tag={}", to_tag).into(),
-    );
-    headers.push_unchecked(
+    ).unwrap();
+    headers.push(
         "Via",
         "SIP/2.0/UDP proxy:5060;branch=z9hG4bKproxy456",
-    );
-    headers.push_unchecked(
+    ).unwrap();
+    headers.push(
         "Via",
         "SIP/2.0/UDP alice-client:5060;branch=z9hG4bKclient123",
-    );
-    headers.push_unchecked("Contact", "<sip:bob@192.168.1.100:5060>");
+    ).unwrap();
+    headers.push("Contact", "<sip:bob@192.168.1.100:5060>").unwrap();
 
     Response::new(StatusLine::new(code, "OK"), headers, Bytes::new())
 }

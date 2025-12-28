@@ -27,7 +27,7 @@
 /// // Create methods capability
 /// let methods = Capability::new(
 ///     FeatureTag::Methods,
-///     FeatureValue::TokenList(vec!["INVITE", "BYE"])
+///     FeatureValue::TokenList(vec!["INVITE".into(), "BYE".into()])
 /// )
 /// .unwrap();
 /// ```

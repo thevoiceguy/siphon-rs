@@ -795,7 +795,7 @@ impl<S> DigestAuthenticator<S> {
             "WWW-Authenticate"
         };
 
-        hdrs.push_unchecked(SmolStr::new(header_name), SmolStr::new(value));
+        hdrs.push(SmolStr::new(header_name), SmolStr::new(value)).unwrap();
         hdrs
     }
 
@@ -863,20 +863,20 @@ impl<S: CredentialStore> Authenticator for DigestAuthenticator<S> {
 
         // RFC 3261: Copy required headers from request to response
         if let Some(via) = request.headers.get("Via") {
-            headers.push_unchecked(SmolStr::new("Via"), via);
+            headers.push(SmolStr::new("Via"), via).unwrap();
         }
         if let Some(from) = request.headers.get("From") {
-            headers.push_unchecked(SmolStr::new("From"), from);
+            headers.push(SmolStr::new("From"), from).unwrap();
         }
         // RFC 3261 §8.2.6.2: UAS MUST add tag to To header if not present
         if let Some(to) = request.headers.get("To") {
-            headers.push_unchecked(SmolStr::new("To"), ensure_to_tag(to));
+            headers.push(SmolStr::new("To"), ensure_to_tag(to)).unwrap();
         }
         if let Some(call_id) = request.headers.get("Call-ID") {
-            headers.push_unchecked(SmolStr::new("Call-ID"), call_id);
+            headers.push(SmolStr::new("Call-ID"), call_id).unwrap();
         }
         if let Some(cseq) = request.headers.get("CSeq") {
-            headers.push_unchecked(SmolStr::new("CSeq"), cseq);
+            headers.push(SmolStr::new("CSeq"), cseq).unwrap();
         }
 
         info!(realm = %self.realm, proxy = self.proxy_auth, "issuing digest challenge");
@@ -1223,13 +1223,13 @@ mod tests {
         );
 
         let mut headers = Headers::new();
-        headers.push_unchecked(
+        headers.push(
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
                 creds.username, creds.realm, nonce.value, uri, response, cnonce, nc, auth.opaque
             )),
-        );
+        ).unwrap();
 
         let request = Request::new(
             RequestLine::new(method, SipUri::parse(uri).unwrap()),
@@ -1270,13 +1270,13 @@ mod tests {
         );
 
         let mut headers = Headers::new();
-        headers.push_unchecked(
+        headers.push(
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=SHA-256, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
                 creds.username, creds.realm, nonce.value, uri, response, cnonce, nc, auth.opaque
             )),
-        );
+        ).unwrap();
 
         let request = Request::new(
             RequestLine::new(method, SipUri::parse(uri).unwrap()),
@@ -1317,13 +1317,13 @@ mod tests {
         );
 
         let mut headers = Headers::new();
-        headers.push_unchecked(
+        headers.push(
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=SHA-512, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
                 creds.username, creds.realm, nonce.value, uri, response, cnonce, nc, auth.opaque
             )),
-        );
+        ).unwrap();
 
         let request = Request::new(
             RequestLine::new(method, SipUri::parse(uri).unwrap()),
@@ -1346,12 +1346,12 @@ mod tests {
             .with_algorithm(DigestAlgorithm::Md5);
 
         let mut headers = Headers::new();
-        headers.push_unchecked(
+        headers.push(
             SmolStr::new("Authorization"),
             SmolStr::new(
                 "Digest username=\"alice\", realm=\"example.com\", nonce=\"invalid\", uri=\"sip:bob@example.com\", response=\"abcd\""
             ),
-        );
+        ).unwrap();
 
         let request = Request::new(
             RequestLine::new(
@@ -1378,13 +1378,13 @@ mod tests {
 
         let nonce = auth.nonce_manager.generate();
         let mut headers = Headers::new();
-        headers.push_unchecked(
+        headers.push(
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"alice\", realm=\"wrong.com\", nonce=\"{}\", uri=\"sip:bob@example.com\", response=\"abcd\"",
                 nonce.value
             )),
-        );
+        ).unwrap();
 
         let request = Request::new(
             RequestLine::new(
@@ -1429,13 +1429,13 @@ mod tests {
         );
 
         let mut headers = Headers::new();
-        headers.push_unchecked(
+        headers.push(
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
                 creds.username, creds.realm, nonce.value, auth_uri, response, cnonce, nc, auth.opaque
             )),
-        );
+        ).unwrap();
 
         let request = Request::new(
             RequestLine::new(method, SipUri::parse(request_uri).unwrap()),
@@ -1474,13 +1474,13 @@ mod tests {
         );
 
         let mut headers = Headers::new();
-        headers.push_unchecked(
+        headers.push(
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, opaque=\"{}\"",
                 creds.username, creds.realm, nonce.value, uri, response, auth.opaque
             )),
-        );
+        ).unwrap();
 
         let request = Request::new(
             RequestLine::new(method, SipUri::parse(uri).unwrap()),
@@ -1577,7 +1577,7 @@ mod tests {
 
         // Create request with authorization
         let mut headers = Headers::new();
-        headers.push_unchecked(SmolStr::new("Authorization"), SmolStr::new(auth_header));
+        headers.push(SmolStr::new("Authorization"), SmolStr::new(auth_header)).unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Invite, SipUri::parse(uri).unwrap()),
@@ -1621,13 +1621,13 @@ mod tests {
         );
 
         let mut headers = Headers::new();
-        headers.push_unchecked(
+        headers.push(
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth-int, opaque=\"{}\"",
                 creds.username, creds.realm, nonce.value, uri, response, cnonce, nc, auth.opaque
             )),
-        );
+        ).unwrap();
 
         let request = Request::new(
             RequestLine::new(method, SipUri::parse(uri).unwrap()),
@@ -1669,13 +1669,13 @@ mod tests {
 
         // First request with nc=00000001 should succeed
         let mut headers = Headers::new();
-        headers.push_unchecked(
+        headers.push(
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
                 creds.username, creds.realm, nonce.value, uri, response, cnonce, nc, auth.opaque
             )),
-        );
+        ).unwrap();
 
         let request = Request::new(
             RequestLine::new(method.clone(), SipUri::parse(uri).unwrap()),
@@ -2051,13 +2051,13 @@ mod tests {
 
         // Authorization without opaque parameter
         let mut headers = Headers::new();
-        headers.push_unchecked(
+        headers.push(
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth",
                 creds.username, creds.realm, nonce.value, uri, response, cnonce, nc
             )),
-        );
+        ).unwrap();
 
         let request = Request::new(
             RequestLine::new(method, SipUri::parse(uri).unwrap()),
@@ -2099,13 +2099,13 @@ mod tests {
 
         // Authorization with wrong opaque parameter
         let mut headers = Headers::new();
-        headers.push_unchecked(
+        headers.push(
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth, opaque=\"wrong-opaque\"",
                 creds.username, creds.realm, nonce.value, uri, response, cnonce, nc
             )),
-        );
+        ).unwrap();
 
         let request = Request::new(
             RequestLine::new(method, SipUri::parse(uri).unwrap()),
@@ -2123,13 +2123,13 @@ mod tests {
 
         let long_username = "a".repeat(300);
         let mut headers = Headers::new();
-        headers.push_unchecked(
+        headers.push(
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"{}\", realm=\"example.com\", nonce=\"abc\", uri=\"sip:test\", response=\"xyz\", algorithm=SHA-256, cnonce=\"abc\", nc=00000001, qop=auth, opaque=\"test\"",
                 long_username
             )),
-        );
+        ).unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Invite, SipUri::parse("sip:test").unwrap()),
@@ -2152,13 +2152,13 @@ mod tests {
         let nonce = auth.nonce_manager.generate();
 
         let mut headers = Headers::new();
-        headers.push_unchecked(
+        headers.push(
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"alice\", realm=\"example.com\", nonce=\"{}\", uri=\"sip:test\", response=\"xyz\", nc=F0000000, cnonce=\"abc\", qop=auth, opaque=\"{}\"",
                 nonce.value, auth.opaque
             )),
-        );
+        ).unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Invite, SipUri::parse("sip:test").unwrap()),
@@ -2263,12 +2263,12 @@ mod tests {
         let auth = DigestAuthenticator::new("example.com", store);
 
         let mut headers = Headers::new();
-        headers.push_unchecked(
+        headers.push(
             SmolStr::new("Authorization"),
             SmolStr::new(
                 "Digest username=\"alice\x00evil\", realm=\"example.com\", nonce=\"abc\", uri=\"sip:test\", response=\"xyz\", algorithm=SHA-256, cnonce=\"abc\", nc=00000001, qop=auth, opaque=\"test\"",
             ),
-        );
+        ).unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Invite, SipUri::parse("sip:test").unwrap()),

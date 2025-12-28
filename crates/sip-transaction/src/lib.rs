@@ -291,7 +291,7 @@ mod tests {
     fn build_request(headers: Vec<(&str, &str)>) -> Request {
         let mut hdrs = Headers::new();
         for (name, value) in headers {
-            hdrs.push_unchecked(name, value);
+            hdrs.push(name, value).unwrap();
         }
 
         Request::new(
@@ -319,8 +319,8 @@ mod tests {
     fn record_routes_preserve_order() {
         let headers = {
             let mut h = Headers::new();
-            h.push_unchecked("Record-Route", "<sip:proxy1>");
-            h.push_unchecked("Record-Route", "<sip:proxy2>");
+            h.push("Record-Route", "<sip:proxy1>").unwrap();
+            h.push("Record-Route", "<sip:proxy2>").unwrap();
             h
         };
 

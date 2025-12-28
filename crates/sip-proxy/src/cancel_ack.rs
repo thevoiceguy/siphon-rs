@@ -319,14 +319,14 @@ mod tests {
 
     fn make_cancel() -> Request {
         let mut headers = Headers::new();
-        headers.push_unchecked("Call-ID", "test-123");
-        headers.push_unchecked("CSeq", "1 CANCEL");
-        headers.push_unchecked("From", "<sip:alice@example.com>;tag=abc");
-        headers.push_unchecked("To", "<sip:bob@example.com>");
-        headers.push_unchecked(
+        headers.push("Call-ID", "test-123").unwrap();
+        headers.push("CSeq", "1 CANCEL").unwrap();
+        headers.push("From", "<sip:alice@example.com>;tag=abc").unwrap();
+        headers.push("To", "<sip:bob@example.com>").unwrap();
+        headers.push(
             "Via",
             "SIP/2.0/UDP proxy;branch=z9hG4bKtemplate",
-        );
+        ).unwrap();
 
         Request::new(
             RequestLine::new(
@@ -340,10 +340,10 @@ mod tests {
 
     fn make_ack() -> Request {
         let mut headers = Headers::new();
-        headers.push_unchecked("Call-ID", "test-123");
-        headers.push_unchecked("CSeq", "1 ACK");
-        headers.push_unchecked("From", "<sip:alice@example.com>;tag=abc");
-        headers.push_unchecked("To", "<sip:bob@example.com>");
+        headers.push("Call-ID", "test-123").unwrap();
+        headers.push("CSeq", "1 ACK").unwrap();
+        headers.push("From", "<sip:alice@example.com>;tag=abc").unwrap();
+        headers.push("To", "<sip:bob@example.com>").unwrap();
 
         Request::new(
             RequestLine::new(Method::Ack, SipUri::parse("sip:bob@example.com").unwrap()),

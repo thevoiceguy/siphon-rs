@@ -80,12 +80,12 @@ async fn demonstrate_prack_flow() {
 
     // Create PRACK request
     let mut prack_headers = Headers::new();
-    prack_headers.push_unchecked(
+    prack_headers.push(
         SmolStr::new("Call-ID"),
         SmolStr::new("call-abc123".to_owned()),
-    );
-    prack_headers.push_unchecked(SmolStr::new("CSeq"), SmolStr::new("101 PRACK".to_owned()));
-    prack_headers.push_unchecked(SmolStr::new("RAck"), SmolStr::new(rack.to_string()));
+    ).unwrap();
+    prack_headers.push(SmolStr::new("CSeq"), SmolStr::new("101 PRACK".to_owned())).unwrap();
+    prack_headers.push(SmolStr::new("RAck"), SmolStr::new(rack.to_string())).unwrap();
 
     let prack = Request::new(
         RequestLine::new(
@@ -148,7 +148,7 @@ async fn demonstrate_prack_flow() {
     // Check if response is reliable provisional
     println!("┌─ Helper: is_reliable_provisional() ──────────────────────┐");
     let mut reliable_headers = Headers::new();
-    reliable_headers.push_unchecked(SmolStr::new("RSeq"), SmolStr::new("1".to_owned()));
+    reliable_headers.push(SmolStr::new("RSeq"), SmolStr::new("1".to_owned())).unwrap();
     let response_180 = Response::new(
         StatusLine::new(180, SmolStr::new("Ringing")),
         reliable_headers.clone(),

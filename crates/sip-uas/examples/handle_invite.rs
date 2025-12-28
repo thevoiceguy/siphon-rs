@@ -28,29 +28,29 @@ fn main() {
 
     // Step 2: Simulate receiving an INVITE request
     let mut headers = Headers::new();
-    headers.push_unchecked(
+    headers.push(
         SmolStr::new("Via"),
         SmolStr::new("SIP/2.0/UDP 192.168.1.100:5060;branch=z9hG4bKnashds8"),
-    );
-    headers.push_unchecked(
+    ).unwrap();
+    headers.push(
         SmolStr::new("From"),
         SmolStr::new("\"Alice Smith\" <sip:alice@example.com>;tag=1928301774"),
-    );
-    headers.push_unchecked(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"));
-    headers.push_unchecked(
+    ).unwrap();
+    headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>")).unwrap();
+    headers.push(
         SmolStr::new("Call-ID"),
         SmolStr::new("a84b4c76e66710@pc33.example.com"),
-    );
-    headers.push_unchecked(SmolStr::new("CSeq"), SmolStr::new("314159 INVITE"));
-    headers.push_unchecked(
+    ).unwrap();
+    headers.push(SmolStr::new("CSeq"), SmolStr::new("314159 INVITE")).unwrap();
+    headers.push(
         SmolStr::new("Contact"),
         SmolStr::new("<sip:alice@192.168.1.100:5060>"),
-    );
-    headers.push_unchecked(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
-    headers.push_unchecked(
+    ).unwrap();
+    headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70")).unwrap();
+    headers.push(
         SmolStr::new("Content-Type"),
         SmolStr::new("application/sdp"),
-    );
+    ).unwrap();
 
     let sdp_offer = "\
 v=0

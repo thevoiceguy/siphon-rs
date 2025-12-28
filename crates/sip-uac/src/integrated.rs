@@ -285,10 +285,10 @@ fn prepare_in_dialog_request(dialog: &mut Dialog, request: &mut Request) -> SipU
     // Increment local CSeq and overwrite header with the new value
     let cseq = dialog.next_local_cseq();
     request.headers.remove("CSeq");
-    request.headers.push_unchecked(
+    request.headers.push(
         SmolStr::new("CSeq"),
         SmolStr::new(format!("{} {}", cseq, request.start.method.as_str())),
-    );
+    ).unwrap();
 
     // Ensure Route headers reflect the dialog route set
     request.headers.remove("Route");
@@ -305,7 +305,7 @@ fn prepare_in_dialog_request(dialog: &mut Dialog, request: &mut Request) -> SipU
         for route in dialog.route_set.iter() {
             request
                 .headers
-                .push_unchecked(SmolStr::new("Route"), SmolStr::new(format!("<{}>", route.as_str())));
+                .push(SmolStr::new("Route"), SmolStr::new(format!("<{}>", route.as_str()))).unwrap();
         }
     } else {
         // Strict routing: first route becomes Request-URI, remote target appended to Route
@@ -313,12 +313,12 @@ fn prepare_in_dialog_request(dialog: &mut Dialog, request: &mut Request) -> SipU
         for route in dialog.route_set.iter().skip(1) {
             request
                 .headers
-                .push_unchecked(SmolStr::new("Route"), SmolStr::new(format!("<{}>", route.as_str())));
+                .push(SmolStr::new("Route"), SmolStr::new(format!("<{}>", route.as_str()))).unwrap();
         }
-        request.headers.push_unchecked(
+        request.headers.push(
             SmolStr::new("Route"),
             SmolStr::new(format!("<{}>", dialog.remote_target.as_str())),
-        );
+        ).unwrap();
     }
 
     // Target for transport resolution is always the topmost route when present
@@ -340,19 +340,19 @@ fn apply_route_set_to_request(dialog: &Dialog, request: &mut Request) {
         for route in dialog.route_set.iter() {
             request
                 .headers
-                .push_unchecked(SmolStr::new("Route"), SmolStr::new(format!("<{}>", route.as_str())));
+                .push(SmolStr::new("Route"), SmolStr::new(format!("<{}>", route.as_str()))).unwrap();
         }
     } else {
         request.start.uri = first_route.clone().into();
         for route in dialog.route_set.iter().skip(1) {
             request
                 .headers
-                .push_unchecked(SmolStr::new("Route"), SmolStr::new(format!("<{}>", route.as_str())));
+                .push(SmolStr::new("Route"), SmolStr::new(format!("<{}>", route.as_str()))).unwrap();
         }
-        request.headers.push_unchecked(
+        request.headers.push(
             SmolStr::new("Route"),
             SmolStr::new(format!("<{}>", dialog.remote_target.as_str())),
-        );
+        ).unwrap();
     }
 }
 
@@ -893,7 +893,7 @@ impl IntegratedUAC {
             } else {
                 request
                     .headers
-                    .push_unchecked(SmolStr::new("Supported"), SmolStr::new("outbound"));
+                    .push(SmolStr::new("Supported"), SmolStr::new("outbound")).unwrap();
             }
         }
     }
@@ -1849,10 +1849,10 @@ mod tests {
         let mut dialog = base_dialog();
         let manager = DialogManager::new();
         let mut headers = Headers::new();
-        headers.push_unchecked(
+        headers.push(
             SmolStr::new("Contact"),
             SmolStr::new("<sip:new-remote@example.com>"),
-        );
+        ).unwrap();
         let response = Response::new(
             StatusLine::new(200, SmolStr::new("OK")),
             headers,
@@ -1926,30 +1926,30 @@ impl CallHandle {
                 "Via" => {
                     // Generate new branch for CANCEL
                     let new_branch = crate::generate_branch();
-                    cancel_headers.push_unchecked(
+                    cancel_headers.push(
                         SmolStr::new("Via"),
                         SmolStr::new(crate::replace_via_branch(
                             header.value(),
                             &new_branch,
                         )),
-                    );
+                    ).unwrap();
                 }
                 "From" | "To" | "Call-ID" => {
                     // Copy unchanged
-                    cancel_headers.push_unchecked(header.name_smol().clone(), header.value_smol().clone());
+                    cancel_headers.push(header.name_smol().clone(), header.value_smol().clone()).unwrap();
                 }
                 "CSeq" => {
                     // Same number, but CANCEL method
                     if let Some((num, _)) = header.value().split_once(' ') {
-                        cancel_headers.push_unchecked(
+                        cancel_headers.push(
                             SmolStr::new("CSeq"),
                             SmolStr::new(format!("{} CANCEL", num)),
-                        );
+                        ).unwrap();
                     }
                 }
                 "Route" => {
                     // Copy Route headers
-                    cancel_headers.push_unchecked(header.name_smol().clone(), header.value_smol().clone());
+                    cancel_headers.push(header.name_smol().clone(), header.value_smol().clone()).unwrap();
                 }
                 _ => {
                     // Skip other headers
@@ -1958,10 +1958,10 @@ impl CallHandle {
         }
 
         // Add Max-Forwards
-        cancel_headers.push_unchecked(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
+        cancel_headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70")).unwrap();
 
         // Add Content-Length
-        cancel_headers.push_unchecked(SmolStr::new("Content-Length"), SmolStr::new("0"));
+        cancel_headers.push(SmolStr::new("Content-Length"), SmolStr::new("0")).unwrap();
 
         // Create CANCEL request
         let cancel_request = Request::new(
@@ -2199,7 +2199,7 @@ impl ClientTransactionUser for InviteTransactionUser {
         } else {
             ack.headers.remove("Route");
             for route in self.request.headers.get_all_smol("Route") {
-                ack.headers.push_unchecked(SmolStr::new("Route"), route.clone());
+                ack.headers.push(SmolStr::new("Route"), route.clone()).unwrap();
             }
         }
 
@@ -2234,7 +2234,7 @@ impl ClientTransactionUser for InviteTransactionUser {
         };
 
         ack.headers.remove("Via");
-        ack.headers.push_unchecked(SmolStr::new("Via"), SmolStr::new(via_value));
+        ack.headers.push(SmolStr::new("Via"), SmolStr::new(via_value)).unwrap();
 
         // Serialize ACK
         let ack_bytes = serialize_request(&ack);

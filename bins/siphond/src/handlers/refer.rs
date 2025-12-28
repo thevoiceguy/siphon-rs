@@ -561,10 +561,10 @@ impl RequestHandler for ReferHandler {
                             "SIP/2.0/{} placeholder;branch={}",
                             transport_name, branch
                         );
-                        new_headers.push_unchecked(header.name(), new_via);
+                        new_headers.push(header.name(), new_via).unwrap();
                         via_replaced = true;
                     } else {
-                        new_headers.push_unchecked(header.name(), header.value());
+                        new_headers.push(header.name(), header.value()).unwrap();
                     }
                 }
                 invite.headers = new_headers;

@@ -852,23 +852,23 @@ impl<S, A> BasicRegistrar<S, A> {
 
         // RFC 3261: Copy required headers from request to response
         if let Some(via) = request.headers.get("Via") {
-            headers.push_unchecked(SmolStr::new("Via"), via);
+            headers.push(SmolStr::new("Via"), via).unwrap();
         }
         if let Some(from) = request.headers.get("From") {
-            headers.push_unchecked(SmolStr::new("From"), from);
+            headers.push(SmolStr::new("From"), from).unwrap();
         }
         // RFC 3261 §8.2.6.2: UAS MUST add tag to To header if not present
         if let Some(to) = request.headers.get("To") {
-            headers.push_unchecked(SmolStr::new("To"), ensure_to_tag(to));
+            headers.push(SmolStr::new("To"), ensure_to_tag(to)).unwrap();
         }
         if let Some(call_id) = request.headers.get("Call-ID") {
-            headers.push_unchecked(SmolStr::new("Call-ID"), call_id);
+            headers.push(SmolStr::new("Call-ID"), call_id).unwrap();
         }
         if let Some(cseq) = request.headers.get("CSeq") {
-            headers.push_unchecked(SmolStr::new("CSeq"), cseq);
+            headers.push(SmolStr::new("CSeq"), cseq).unwrap();
         }
 
-        headers.push_unchecked(SmolStr::new("Content-Length"), SmolStr::new("0"));
+        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0")).unwrap();
 
         Ok(Response::new(
             StatusLine::new(code, SmolStr::new(reason)),
@@ -883,10 +883,10 @@ impl<S, A> BasicRegistrar<S, A> {
         min_expires: u64,
     ) -> Result<Response> {
         let mut response = self.build_error_response(request, 423, "Interval Too Brief")?;
-        response.headers.push_unchecked(
+        response.headers.push(
             SmolStr::new("Min-Expires"),
             SmolStr::new(min_expires.to_string()),
-        );
+        ).unwrap();
         Ok(response)
     }
 }
@@ -1047,24 +1047,24 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
             let mut headers = Headers::new();
 
             if let Some(via) = request.headers.get("Via") {
-                headers.push_unchecked(SmolStr::new("Via"), via);
+                headers.push(SmolStr::new("Via"), via).unwrap();
             }
             if let Some(from) = request.headers.get("From") {
-                headers.push_unchecked(SmolStr::new("From"), from);
+                headers.push(SmolStr::new("From"), from).unwrap();
             }
             if let Some(to) = request.headers.get("To") {
-                headers.push_unchecked(SmolStr::new("To"), ensure_to_tag(to));
+                headers.push(SmolStr::new("To"), ensure_to_tag(to)).unwrap();
             }
             if let Some(call_id) = request.headers.get("Call-ID") {
-                headers.push_unchecked(SmolStr::new("Call-ID"), call_id);
+                headers.push(SmolStr::new("Call-ID"), call_id).unwrap();
             }
             if let Some(cseq) = request.headers.get("CSeq") {
-                headers.push_unchecked(SmolStr::new("CSeq"), cseq);
+                headers.push(SmolStr::new("CSeq"), cseq).unwrap();
             }
 
-            headers.push_unchecked(SmolStr::new("Contact"), SmolStr::new("*"));
-            headers.push_unchecked(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()));
-            headers.push_unchecked(SmolStr::new("Content-Length"), SmolStr::new("0"));
+            headers.push(SmolStr::new("Contact"), SmolStr::new("*")).unwrap();
+            headers.push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822())).unwrap();
+            headers.push(SmolStr::new("Content-Length"), SmolStr::new("0")).unwrap();
 
             return Ok(Response::new(
                 StatusLine::new(200, SmolStr::new("OK")),
@@ -1159,31 +1159,31 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
         let mut headers = Headers::new();
 
         if let Some(via) = request.headers.get("Via") {
-            headers.push_unchecked(SmolStr::new("Via"), via);
+            headers.push(SmolStr::new("Via"), via).unwrap();
         }
         if let Some(from) = request.headers.get("From") {
-            headers.push_unchecked(SmolStr::new("From"), from);
+            headers.push(SmolStr::new("From"), from).unwrap();
         }
         if let Some(to) = request.headers.get("To") {
-            headers.push_unchecked(SmolStr::new("To"), ensure_to_tag(to));
+            headers.push(SmolStr::new("To"), ensure_to_tag(to)).unwrap();
         }
         if let Some(call_id) = request.headers.get("Call-ID") {
-            headers.push_unchecked(SmolStr::new("Call-ID"), call_id);
+            headers.push(SmolStr::new("Call-ID"), call_id).unwrap();
         }
         if let Some(cseq) = request.headers.get("CSeq") {
-            headers.push_unchecked(SmolStr::new("CSeq"), cseq);
+            headers.push(SmolStr::new("CSeq"), cseq).unwrap();
         }
 
         let bindings = self.store.lookup(&aor).await?;
         for binding in &bindings {
-            headers.push_unchecked(
+            headers.push(
                 SmolStr::new("Contact"),
                 format_contact(&binding.contact, binding.expires, binding.q_value),
-            );
+            ).unwrap();
         }
 
-        headers.push_unchecked(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()));
-        headers.push_unchecked(SmolStr::new("Content-Length"), SmolStr::new("0"));
+        headers.push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822())).unwrap();
+        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0")).unwrap();
 
         Ok(Response::new(
             StatusLine::new(200, SmolStr::new("OK")),
@@ -1320,25 +1320,25 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
 
             // RFC 3261: Copy required headers from request to response
             if let Some(via) = request.headers.get("Via") {
-                headers.push_unchecked(SmolStr::new("Via"), via);
+                headers.push(SmolStr::new("Via"), via).unwrap();
             }
             if let Some(from) = request.headers.get("From") {
-                headers.push_unchecked(SmolStr::new("From"), from);
+                headers.push(SmolStr::new("From"), from).unwrap();
             }
             // RFC 3261 §8.2.6.2: UAS MUST add tag to To header if not present
             if let Some(to) = request.headers.get("To") {
-                headers.push_unchecked(SmolStr::new("To"), ensure_to_tag(to));
+                headers.push(SmolStr::new("To"), ensure_to_tag(to)).unwrap();
             }
             if let Some(call_id) = request.headers.get("Call-ID") {
-                headers.push_unchecked(SmolStr::new("Call-ID"), call_id);
+                headers.push(SmolStr::new("Call-ID"), call_id).unwrap();
             }
             if let Some(cseq) = request.headers.get("CSeq") {
-                headers.push_unchecked(SmolStr::new("CSeq"), cseq);
+                headers.push(SmolStr::new("CSeq"), cseq).unwrap();
             }
 
-            headers.push_unchecked(SmolStr::new("Contact"), SmolStr::new("*"));
-            headers.push_unchecked(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()));
-            headers.push_unchecked(SmolStr::new("Content-Length"), SmolStr::new("0"));
+            headers.push(SmolStr::new("Contact"), SmolStr::new("*")).unwrap();
+            headers.push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822())).unwrap();
+            headers.push(SmolStr::new("Content-Length"), SmolStr::new("0")).unwrap();
 
             return Ok(Response::new(
                 StatusLine::new(200, SmolStr::new("OK")),
@@ -1438,32 +1438,32 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
 
         // RFC 3261: Copy required headers from request to response
         if let Some(via) = request.headers.get("Via") {
-            headers.push_unchecked(SmolStr::new("Via"), via);
+            headers.push(SmolStr::new("Via"), via).unwrap();
         }
         if let Some(from) = request.headers.get("From") {
-            headers.push_unchecked(SmolStr::new("From"), from);
+            headers.push(SmolStr::new("From"), from).unwrap();
         }
         // RFC 3261 §8.2.6.2: UAS MUST add tag to To header if not present
         if let Some(to) = request.headers.get("To") {
-            headers.push_unchecked(SmolStr::new("To"), ensure_to_tag(to));
+            headers.push(SmolStr::new("To"), ensure_to_tag(to)).unwrap();
         }
         if let Some(call_id) = request.headers.get("Call-ID") {
-            headers.push_unchecked(SmolStr::new("Call-ID"), call_id);
+            headers.push(SmolStr::new("Call-ID"), call_id).unwrap();
         }
         if let Some(cseq) = request.headers.get("CSeq") {
-            headers.push_unchecked(SmolStr::new("CSeq"), cseq);
+            headers.push(SmolStr::new("CSeq"), cseq).unwrap();
         }
 
         let bindings = self.store.lookup(&aor)?;
         for binding in &bindings {
-            headers.push_unchecked(
+            headers.push(
                 SmolStr::new("Contact"),
                 format_contact(&binding.contact, binding.expires, binding.q_value),
-            );
+            ).unwrap();
         }
 
-        headers.push_unchecked(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()));
-        headers.push_unchecked(SmolStr::new("Content-Length"), SmolStr::new("0"));
+        headers.push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822())).unwrap();
+        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0")).unwrap();
 
         Ok(Response::new(
             StatusLine::new(200, SmolStr::new("OK")),
@@ -1564,17 +1564,17 @@ mod tests {
 
     fn base_headers() -> Headers {
         let mut headers = Headers::new();
-        headers.push_unchecked(
-            "Via",            "SIP/2.0/UDP client.example.com;branch=z9hG4bKtest",        );
-        headers.push_unchecked("From", "<sip:alice@example.com>;tag=from123");
+        headers.push(
+            "Via",            "SIP/2.0/UDP client.example.com;branch=z9hG4bKtest",        ).unwrap();
+        headers.push("From", "<sip:alice@example.com>;tag=from123").unwrap();
         headers
     }
 
     #[test]
     fn collects_contact_headers() {
         let mut headers = Headers::new();
-        headers.push_unchecked("Contact", "<sip:a@example.com>");
-        headers.push_unchecked("Contact", "<sip:b@example.com>");
+        headers.push("Contact", "<sip:a@example.com>").unwrap();
+        headers.push("Contact", "<sip:b@example.com>").unwrap();
         let contacts = contact_headers(&headers);
         assert_eq!(contacts.len(), 2);
     }
@@ -1582,8 +1582,8 @@ mod tests {
     #[test]
     fn contact_headers_split_commas() {
         let mut headers = Headers::new();
-        headers.push_unchecked(
-            "Contact",            "\"Alice, A\" <sip:alice@example.com>, <sip:bob@example.com>",        );
+        headers.push(
+            "Contact",            "\"Alice, A\" <sip:alice@example.com>, <sip:bob@example.com>",        ).unwrap();
         let contacts = contact_headers(&headers);
         assert_eq!(contacts.len(), 2);
         assert_eq!(contacts[0].as_str(), "\"Alice, A\" <sip:alice@example.com>");
@@ -1706,10 +1706,10 @@ mod tests {
             BasicRegistrar::new(store.clone(), None);
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Contact", "<sip:ua.example.com>;expires=60");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Contact", "<sip:ua.example.com>;expires=60").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -1734,11 +1734,11 @@ mod tests {
             BasicRegistrar::new(store.clone(), None);
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Contact", "<sip:ua1.example.com>;expires=60");
-        headers.push_unchecked("Contact", "<sip:ua2.example.com>;expires=120");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Contact", "<sip:ua1.example.com>;expires=60").unwrap();
+        headers.push("Contact", "<sip:ua2.example.com>;expires=120").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -1761,10 +1761,10 @@ mod tests {
 
         // First register
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Contact", "<sip:ua.example.com>;expires=60");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Contact", "<sip:ua.example.com>;expires=60").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -1777,10 +1777,10 @@ mod tests {
 
         // Now deregister with expires=0
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Contact", "<sip:ua.example.com>;expires=0");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "2 REGISTER");
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Contact", "<sip:ua.example.com>;expires=0").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "2 REGISTER").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -1801,11 +1801,11 @@ mod tests {
 
         // Register multiple contacts
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Contact", "<sip:ua1.example.com>;expires=60");
-        headers.push_unchecked("Contact", "<sip:ua2.example.com>;expires=60");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Contact", "<sip:ua1.example.com>;expires=60").unwrap();
+        headers.push("Contact", "<sip:ua2.example.com>;expires=60").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -1818,11 +1818,11 @@ mod tests {
 
         // Deregister all with wildcard
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Contact", "*");
-        headers.push_unchecked("Expires", "0");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "2 REGISTER");
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Contact", "*").unwrap();
+        headers.push("Expires", "0").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "2 REGISTER").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -1842,11 +1842,11 @@ mod tests {
             BasicRegistrar::new(store.clone(), None);
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked(
-            "Contact",            "<sip:ua.example.com>;q=0.5;expires=60",        );
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push(
+            "Contact",            "<sip:ua.example.com>;q=0.5;expires=60",        ).unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -1868,10 +1868,10 @@ mod tests {
             BasicRegistrar::new(store.clone(), None).with_min_expires(Duration::from_secs(100));
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Contact", "<sip:ua.example.com>;expires=10");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Contact", "<sip:ua.example.com>;expires=10").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -1894,11 +1894,11 @@ mod tests {
             BasicRegistrar::new(store.clone(), None).with_max_expires(Duration::from_secs(1000));
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked(
-            "Contact",            "<sip:ua.example.com>;expires=99999",        );
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push(
+            "Contact",            "<sip:ua.example.com>;expires=99999",        ).unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -1921,13 +1921,13 @@ mod tests {
         let registrar = BasicRegistrar::new(store, Some(auth));
 
         let mut headers = Headers::new();
-        headers.push_unchecked(
-            "Via",            "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8",        );
-        headers.push_unchecked("From", "<sip:alice@example.com>;tag=1234");
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
-        headers.push_unchecked("Contact", "<sip:ua.example.com>");
+        headers.push(
+            "Via",            "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8",        ).unwrap();
+        headers.push("From", "<sip:alice@example.com>;tag=1234").unwrap();
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
+        headers.push("Contact", "<sip:ua.example.com>").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2023,20 +2023,20 @@ mod tests {
             .generate();
 
         let mut headers = Headers::new();
-        headers.push_unchecked(
-            "Via",            "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8",        );
-        headers.push_unchecked("From", "<sip:bob@example.com>;tag=1234");
-        headers.push_unchecked("To", "<sip:bob@example.com>");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
-        headers.push_unchecked("Contact", "<sip:ua.example.com>");
-        headers.push_unchecked(
+        headers.push(
+            "Via",            "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8",        ).unwrap();
+        headers.push("From", "<sip:bob@example.com>;tag=1234").unwrap();
+        headers.push("To", "<sip:bob@example.com>").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
+        headers.push("Contact", "<sip:ua.example.com>").unwrap();
+        headers.push(
             "Authorization",            format!(
                 "Digest username=\"bob\", realm=\"example.com\", nonce=\"{}\", uri=\"sip:example.com\", response=\"invalid\", opaque=\"{}\"",
                 nonce.value,
                 registrar.authenticator.as_ref().unwrap().opaque
             )
-        );
+        ).unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2065,15 +2065,15 @@ mod tests {
         let registrar = BasicRegistrar::new(store, Some(auth));
 
         let mut headers = Headers::new();
-        headers.push_unchecked(
-            "Via",            "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8",        );
-        headers.push_unchecked("From", "<sip:alice@example.com>;tag=1234");
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
-        headers.push_unchecked("Contact", "<sip:ua.example.com>");
+        headers.push(
+            "Via",            "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8",        ).unwrap();
+        headers.push("From", "<sip:alice@example.com>;tag=1234").unwrap();
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
+        headers.push("Contact", "<sip:ua.example.com>").unwrap();
         // Malformed Authorization header (missing required fields)
-        headers.push_unchecked("Authorization", "Digest username=\"alice\"");
+        headers.push("Authorization", "Digest username=\"alice\"").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2109,21 +2109,21 @@ mod tests {
             .generate();
 
         let mut headers = Headers::new();
-        headers.push_unchecked(
-            "Via",            "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8",        );
-        headers.push_unchecked("From", "<sip:alice@example.com>;tag=1234");
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
-        headers.push_unchecked("Contact", "<sip:ua.example.com>");
+        headers.push(
+            "Via",            "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8",        ).unwrap();
+        headers.push("From", "<sip:alice@example.com>;tag=1234").unwrap();
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
+        headers.push("Contact", "<sip:ua.example.com>").unwrap();
         // Invalid nc format (not hex)
-        headers.push_unchecked(
+        headers.push(
             "Authorization",            format!(
                 "Digest username=\"alice\", realm=\"example.com\", nonce=\"{}\", uri=\"sip:example.com\", response=\"test\", nc=INVALID, cnonce=\"abc\", qop=auth, opaque=\"{}\"",
                 nonce.value,
                 registrar.authenticator.as_ref().unwrap().opaque
             )
-        );
+        ).unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2149,13 +2149,13 @@ mod tests {
             BasicRegistrar::new(store, None);
 
         let mut headers = Headers::new();
-        headers.push_unchecked(
-            "Via",            "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8",        );
-        headers.push_unchecked("From", "<sip:alice@example.com>;tag=1234");
+        headers.push(
+            "Via",            "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8",        ).unwrap();
+        headers.push("From", "<sip:alice@example.com>;tag=1234").unwrap();
         // Missing To header
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
-        headers.push_unchecked("Contact", "<sip:ua.example.com>");
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
+        headers.push("Contact", "<sip:ua.example.com>").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2180,13 +2180,13 @@ mod tests {
             BasicRegistrar::new(store, None);
 
         let mut headers = Headers::new();
-        headers.push_unchecked(
-            "Via",            "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8",        );
-        headers.push_unchecked("From", "<sip:alice@example.com>;tag=1234");
-        headers.push_unchecked("To", "invalid-header-format"); // Invalid To header
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
-        headers.push_unchecked("Contact", "<sip:ua.example.com>");
+        headers.push(
+            "Via",            "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8",        ).unwrap();
+        headers.push("From", "<sip:alice@example.com>;tag=1234").unwrap();
+        headers.push("To", "invalid-header-format").unwrap(); // Invalid To header
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
+        headers.push("Contact", "<sip:ua.example.com>").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2211,12 +2211,12 @@ mod tests {
             BasicRegistrar::new(store, None);
 
         let mut headers = Headers::new();
-        headers.push_unchecked(
-            "Via",            "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8",        );
-        headers.push_unchecked("From", "<sip:alice@example.com>;tag=1234");
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
+        headers.push(
+            "Via",            "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8",        ).unwrap();
+        headers.push("From", "<sip:alice@example.com>;tag=1234").unwrap();
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
         // Missing Contact header
 
         let request = Request::new(
@@ -2242,11 +2242,11 @@ mod tests {
             BasicRegistrar::new(store, None);
 
         let mut headers = Headers::new();
-        headers.push_unchecked("From", "<sip:alice@example.com>;tag=1234");
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
-        headers.push_unchecked("Contact", "<sip:ua.example.com>");
+        headers.push("From", "<sip:alice@example.com>;tag=1234").unwrap();
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
+        headers.push("Contact", "<sip:ua.example.com>").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2268,12 +2268,12 @@ mod tests {
             BasicRegistrar::new(store, None);
 
         let mut headers = Headers::new();
-        headers.push_unchecked(
-            "Via",            "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8",        );
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
-        headers.push_unchecked("Contact", "<sip:ua.example.com>");
+        headers.push(
+            "Via",            "SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8",        ).unwrap();
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
+        headers.push("Contact", "<sip:ua.example.com>").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2295,9 +2295,9 @@ mod tests {
             BasicRegistrar::new(store, None);
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("CSeq", "1 REGISTER");
-        headers.push_unchecked("Contact", "<sip:ua.example.com>");
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
+        headers.push("Contact", "<sip:ua.example.com>").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2319,9 +2319,9 @@ mod tests {
             BasicRegistrar::new(store, None);
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("Contact", "<sip:ua.example.com>");
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("Contact", "<sip:ua.example.com>").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2343,10 +2343,10 @@ mod tests {
             BasicRegistrar::new(store, None);
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Contact", "<sip:ua.example.com>");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 INVITE");
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Contact", "<sip:ua.example.com>").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 INVITE").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2368,11 +2368,11 @@ mod tests {
             BasicRegistrar::new(store, None);
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked(
-            "Contact",            "<sip:ua.example.com>;expires=abc",        );
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push(
+            "Contact",            "<sip:ua.example.com>;expires=abc",        ).unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2394,11 +2394,11 @@ mod tests {
             BasicRegistrar::new(store, None);
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked(
-            "Contact",            "<sip:ua.example.com>;q=abc;expires=60",        );
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push(
+            "Contact",            "<sip:ua.example.com>;q=abc;expires=60",        ).unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2420,10 +2420,10 @@ mod tests {
             BasicRegistrar::new(store, None);
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Contact", "<mailto:alice@example.com>;expires=60");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Contact", "<mailto:alice@example.com>;expires=60").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2445,12 +2445,12 @@ mod tests {
             BasicRegistrar::new(store, None);
 
         let mut headers = Headers::new();
-        headers.push_unchecked(
-            "Via",            "SIP/2.0/UDP client.example.com;branch=z9hG4bKtest",        );
-        headers.push_unchecked("From", "<sip:alice@example.com>;tag=from123");
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Call-ID", "callid-test-123");
-        headers.push_unchecked("CSeq", "42 REGISTER");
+        headers.push(
+            "Via",            "SIP/2.0/UDP client.example.com;branch=z9hG4bKtest",        ).unwrap();
+        headers.push("From", "<sip:alice@example.com>;tag=from123").unwrap();
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Call-ID", "callid-test-123").unwrap();
+        headers.push("CSeq", "42 REGISTER").unwrap();
         // Missing Contact header to trigger 400
 
         let request = Request::new(
@@ -2546,10 +2546,10 @@ mod tests {
             BasicRegistrar::new(store.clone(), None);
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<tel:+1-555-123-4567>");
-        headers.push_unchecked("Contact", "<sip:ua.example.com>;expires=60");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
+        headers.push("To", "<tel:+1-555-123-4567>").unwrap();
+        headers.push("Contact", "<sip:ua.example.com>;expires=60").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2574,10 +2574,10 @@ mod tests {
             BasicRegistrar::new(store.clone(), None);
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<tel:5551234;phone-context=example.com>");
-        headers.push_unchecked("Contact", "<sip:ua.example.com>;expires=60");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
+        headers.push("To", "<tel:5551234;phone-context=example.com>").unwrap();
+        headers.push("Contact", "<sip:ua.example.com>;expires=60").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2602,10 +2602,10 @@ mod tests {
 
         // First register
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<tel:+15551234567>");
-        headers.push_unchecked("Contact", "<sip:ua.example.com>;expires=60");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
+        headers.push("To", "<tel:+15551234567>").unwrap();
+        headers.push("Contact", "<sip:ua.example.com>;expires=60").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2618,10 +2618,10 @@ mod tests {
 
         // Now deregister with expires=0
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<tel:+1-555-123-4567>"); // Different format, same number
-        headers.push_unchecked("Contact", "<sip:ua.example.com>;expires=0");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "2 REGISTER");
+        headers.push("To", "<tel:+1-555-123-4567>").unwrap(); // Different format, same number
+        headers.push("Contact", "<sip:ua.example.com>;expires=0").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "2 REGISTER").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2643,11 +2643,11 @@ mod tests {
             BasicRegistrar::new(store.clone(), None);
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<tel:+15551234567>");
-        headers.push_unchecked("Contact", "<sip:ua1.example.com>;expires=60");
-        headers.push_unchecked("Contact", "<sip:ua2.example.com>;expires=120");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
+        headers.push("To", "<tel:+15551234567>").unwrap();
+        headers.push("Contact", "<sip:ua1.example.com>;expires=60").unwrap();
+        headers.push("Contact", "<sip:ua2.example.com>;expires=120").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2674,11 +2674,11 @@ mod tests {
 
         // Register multiple contacts
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<tel:+15551234567>");
-        headers.push_unchecked("Contact", "<sip:ua1.example.com>;expires=60");
-        headers.push_unchecked("Contact", "<sip:ua2.example.com>;expires=60");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
+        headers.push("To", "<tel:+15551234567>").unwrap();
+        headers.push("Contact", "<sip:ua1.example.com>;expires=60").unwrap();
+        headers.push("Contact", "<sip:ua2.example.com>;expires=60").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2691,11 +2691,11 @@ mod tests {
 
         // Deregister all with wildcard
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<tel:+1-555-123-4567>");
-        headers.push_unchecked("Contact", "*");
-        headers.push_unchecked("Expires", "0");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "2 REGISTER");
+        headers.push("To", "<tel:+1-555-123-4567>").unwrap();
+        headers.push("Contact", "*").unwrap();
+        headers.push("Expires", "0").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "2 REGISTER").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2715,10 +2715,10 @@ mod tests {
             BasicRegistrar::new(store, None);
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<mailto:alice@example.com>");
-        headers.push_unchecked("Contact", "<sip:ua.example.com>;expires=60");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
+        headers.push("To", "<mailto:alice@example.com>").unwrap();
+        headers.push("Contact", "<sip:ua.example.com>;expires=60").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2769,11 +2769,11 @@ mod tests {
             BasicRegistrar::new(store.clone(), None);
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
         // Multiple commas and empty entries
-        headers.push_unchecked("Contact", "<sip:a@example.com>,,<sip:b@example.com>");
+        headers.push("Contact", "<sip:a@example.com>,,<sip:b@example.com>").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2796,11 +2796,11 @@ mod tests {
             BasicRegistrar::new(store.clone(), None);
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
         // Display name with escaped quote
-        headers.push_unchecked("Contact", r#""Alice \"CEO\"" <sip:alice@example.com>"#);
+        headers.push("Contact", r#""Alice \"CEO\"" <sip:alice@example.com>"#).unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2823,10 +2823,10 @@ mod tests {
             BasicRegistrar::new(store, None);
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
-        headers.push_unchecked("Contact", "<>"); // Empty URI
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
+        headers.push("Contact", "<>").unwrap(); // Empty URI
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2846,10 +2846,10 @@ mod tests {
             BasicRegistrar::new(store, None);
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
-        headers.push_unchecked("Contact", "<sip:alice@example.com"); // Missing >
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
+        headers.push("Contact", "<sip:alice@example.com").unwrap(); // Missing >
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2869,12 +2869,12 @@ mod tests {
             BasicRegistrar::new(store, None);
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
-        headers.push_unchecked("Expires", "0");
-        headers.push_unchecked("Contact", "*");
-        headers.push_unchecked("Contact", "<sip:bob@example.com>");
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
+        headers.push("Expires", "0").unwrap();
+        headers.push("Contact", "*").unwrap();
+        headers.push("Contact", "<sip:bob@example.com>").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2894,11 +2894,11 @@ mod tests {
             BasicRegistrar::new(store, None);
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
-        headers.push_unchecked("Expires", "3600"); // Non-zero
-        headers.push_unchecked("Contact", "*");
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
+        headers.push("Expires", "3600").unwrap(); // Non-zero
+        headers.push("Contact", "*").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2919,10 +2919,10 @@ mod tests {
 
         // Register with uppercase domain
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@EXAMPLE.COM>");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
-        headers.push_unchecked("Contact", "<sip:alice@device.com>");
+        headers.push("To", "<sip:alice@EXAMPLE.COM>").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
+        headers.push("Contact", "<sip:alice@device.com>").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2945,10 +2945,10 @@ mod tests {
             BasicRegistrar::new(store, None);
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
-        headers.push_unchecked("Contact", "<sip:alice@device.com>;expires=-1");
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
+        headers.push("Contact", "<sip:alice@device.com>;expires=-1").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2968,10 +2968,10 @@ mod tests {
             BasicRegistrar::new(store, None);
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
-        headers.push_unchecked("Contact", "<sip:alice@device.com>;expires=abc");
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
+        headers.push("Contact", "<sip:alice@device.com>;expires=abc").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -2991,10 +2991,10 @@ mod tests {
             BasicRegistrar::new(store, None);
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
-        headers.push_unchecked("Contact", "<sip:alice@device.com>;q=1.5"); // > 1.0
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
+        headers.push("Contact", "<sip:alice@device.com>;q=1.5").unwrap(); // > 1.0
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -3014,10 +3014,10 @@ mod tests {
             BasicRegistrar::new(store, None);
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
-        headers.push_unchecked("Contact", "<sip:alice@device.com>;q=high");
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
+        headers.push("Contact", "<sip:alice@device.com>;q=high").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -3037,10 +3037,10 @@ mod tests {
             BasicRegistrar::new(store.clone(), None);
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "  1   REGISTER  "); // Extra whitespace
-        headers.push_unchecked("Contact", "<sip:alice@device.com>");
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "  1   REGISTER  ").unwrap(); // Extra whitespace
+        headers.push("Contact", "<sip:alice@device.com>").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -3062,10 +3062,10 @@ mod tests {
             BasicRegistrar::new(store, None);
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 INVITE"); // Wrong method
-        headers.push_unchecked("Contact", "<sip:alice@device.com>");
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 INVITE").unwrap(); // Wrong method
+        headers.push("Contact", "<sip:alice@device.com>").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -3085,10 +3085,10 @@ mod tests {
             BasicRegistrar::new(store, None);
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1"); // Missing method
-        headers.push_unchecked("Contact", "<sip:alice@device.com>");
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1").unwrap(); // Missing method
+        headers.push("Contact", "<sip:alice@device.com>").unwrap();
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -3108,10 +3108,10 @@ mod tests {
             BasicRegistrar::new(store, None);
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
-        headers.push_unchecked("Contact", "<tel:+15551234567>"); // tel URI not allowed
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
+        headers.push("Contact", "<tel:+15551234567>").unwrap(); // tel URI not allowed
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
@@ -3131,10 +3131,10 @@ mod tests {
             BasicRegistrar::new(store.clone(), None);
 
         let mut headers = base_headers();
-        headers.push_unchecked("To", "<sip:alice@example.com>");
-        headers.push_unchecked("Call-ID", "call123");
-        headers.push_unchecked("CSeq", "1 REGISTER");
-        headers.push_unchecked("Contact", "sip:alice@device.com;expires=60"); // No angle brackets
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
+        headers.push("Contact", "sip:alice@device.com;expires=60").unwrap(); // No angle brackets
 
         let request = Request::new(
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
