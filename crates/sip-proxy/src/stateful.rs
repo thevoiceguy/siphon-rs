@@ -537,10 +537,9 @@ mod tests {
     fn make_request() -> Request {
         let mut headers = Headers::new();
         headers.push("Call-ID", "test-call-123").unwrap();
-        headers.push(
-            "Via",
-            "SIP/2.0/UDP client;branch=z9hG4bKclient",
-        ).unwrap();
+        headers
+            .push("Via", "SIP/2.0/UDP client;branch=z9hG4bKclient")
+            .unwrap();
         headers.push("Max-Forwards", "70").unwrap();
 
         Request::new(
@@ -556,11 +555,12 @@ mod tests {
     fn make_response(code: u16) -> Response {
         let mut headers = Headers::new();
         headers.push("Call-ID", "test-call-123").unwrap();
-        headers.push("Via", "SIP/2.0/UDP proxy;branch=z9hG4bKproxy").unwrap();
-        headers.push(
-            "Via",
-            "SIP/2.0/UDP client;branch=z9hG4bKclient",
-        ).unwrap();
+        headers
+            .push("Via", "SIP/2.0/UDP proxy;branch=z9hG4bKproxy")
+            .unwrap();
+        headers
+            .push("Via", "SIP/2.0/UDP client;branch=z9hG4bKclient")
+            .unwrap();
 
         Response::new(StatusLine::new(code, "OK".into()), headers, Bytes::new())
     }
@@ -669,7 +669,7 @@ mod tests {
         context.process_response("z9hG4bKclient".into(), resp).await;
 
         // Incoming ACK with Route header (dialog path)
-        let mut ack = {
+        let ack = {
             let mut headers = Headers::new();
             headers.push("Call-ID", "test-call-123").unwrap();
             headers.push("CSeq", "1 ACK").unwrap();
@@ -698,11 +698,12 @@ mod tests {
             let mut headers = Headers::new();
             headers.push("Call-ID", "call-123").unwrap();
             headers.push("CSeq", "1 INVITE").unwrap();
-            headers.push(
-                "Via",
-                "SIP/2.0/UDP client;branch=z9hG4bKclient",
-            ).unwrap();
-            headers.push("From", "<sip:alice@example.com>;tag=a").unwrap();
+            headers
+                .push("Via", "SIP/2.0/UDP client;branch=z9hG4bKclient")
+                .unwrap();
+            headers
+                .push("From", "<sip:alice@example.com>;tag=a")
+                .unwrap();
             headers.push("To", "<sip:bob@example.com>").unwrap();
             headers.push("Max-Forwards", "70").unwrap();
             Request::new(
@@ -739,12 +740,13 @@ mod tests {
             let mut headers = Headers::new();
             headers.push("Call-ID", "call-123").unwrap();
             headers.push("CSeq", "1 CANCEL").unwrap();
-            headers.push("From", "<sip:alice@example.com>;tag=a").unwrap();
+            headers
+                .push("From", "<sip:alice@example.com>;tag=a")
+                .unwrap();
             headers.push("To", "<sip:bob@example.com>").unwrap();
-            headers.push(
-                "Via",
-                "SIP/2.0/UDP proxy;branch=z9hG4bKtemplate",
-            ).unwrap();
+            headers
+                .push("Via", "SIP/2.0/UDP proxy;branch=z9hG4bKtemplate")
+                .unwrap();
             Request::new(
                 RequestLine::new(
                     Method::Cancel,

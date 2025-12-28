@@ -178,7 +178,7 @@ async fn dns_target_equality() {
 
 #[tokio::test]
 async fn priority_affects_ordering() {
-    let mut targets = vec![
+    let targets = vec![
         DnsTarget::new("low.example.com", 5060, Transport::Udp).with_priority(100),
         DnsTarget::new("high.example.com", 5060, Transport::Udp).with_priority(10),
         DnsTarget::new("medium.example.com", 5060, Transport::Udp).with_priority(50),

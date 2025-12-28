@@ -25,16 +25,17 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use sip_core::{Request, Response};
+use sip_core::Request;
 use sip_dialog::Dialog;
 use sip_transaction::{ServerTransactionHandle, TransportContext};
-use sip_uas::integrated::{IntegratedUAS, UasRequestHandler};
+use sip_uas::integrated::UasRequestHandler;
 use sip_uas::UserAgentServer;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// Simple auto-answer SIP server application
+#[allow(dead_code)]
 struct AutoAnswerServer {
     /// Track active dialogs
     active_dialogs: Arc<RwLock<HashMap<String, Dialog>>>,
@@ -44,6 +45,7 @@ struct AutoAnswerServer {
     auto_accept: bool,
 }
 
+#[allow(dead_code)]
 impl AutoAnswerServer {
     fn new(local_uri: String) -> Self {
         Self {
@@ -108,20 +110,18 @@ impl UasRequestHandler for AutoAnswerServer {
                 );
 
                 ok_response.body = sdp_answer.as_bytes().to_vec().into();
-                ok_response
+                let _ = ok_response.headers.push("Content-Type", "application/sdp");
+                let _ = ok_response
                     .headers
-                    .push("Content-Type", "application/sdp");
-                ok_response
-                    .headers
-                    .push("Content-Length", sdp_answer.len().to_string().into());
+                    .push("Content-Length", sdp_answer.len().to_string());
 
                 println!("   Generated SDP answer ({} bytes)", sdp_answer.len());
             }
 
             // Add Contact header
-            ok_response
+            let _ = ok_response
                 .headers
-                .push("Contact", format!("<{}>", self.local_uri).into());
+                .push("Contact", format!("<{}>", self.local_uri));
 
             // Send 200 OK
             handle.send_final(ok_response).await;
@@ -193,11 +193,7 @@ impl UasRequestHandler for AutoAnswerServer {
             println!("   Contact: {}", contact);
         }
 
-        let expires = request
-            .headers
-            .get("Expires")
-            .map(|e| e.as_str())
-            .unwrap_or("3600");
+        let expires = request.headers.get("Expires").map(|e| e).unwrap_or("3600");
         println!("   Expires: {} seconds", expires);
 
         // Accept registration
@@ -210,9 +206,7 @@ impl UasRequestHandler for AutoAnswerServer {
             } else {
                 format!("{};expires={}", contact, expires)
             };
-            response
-                .headers
-                .push("Contact", contact_with_expires.into());
+            let _ = response.headers.push("Contact", contact_with_expires);
         }
 
         response.headers.push("Expires", expires).unwrap();
@@ -237,12 +231,12 @@ impl UasRequestHandler for AutoAnswerServer {
         ).unwrap();
 
         // Add Accept header
-        response
+        let _ = response
             .headers
             .push("Accept", "application/sdp, message/sipfrag");
 
         // Add Supported header
-        response
+        let _ = response
             .headers
             .push("Supported", "replaces, timer, 100rel");
 
@@ -302,12 +296,10 @@ impl UasRequestHandler for AutoAnswerServer {
         if !request.body.is_empty() {
             let sdp_answer = "v=0\r\no=- 0 0 IN IP4 192.168.1.1\r\ns=-\r\nc=IN IP4 192.168.1.1\r\nt=0 0\r\nm=audio 9000 RTP/AVP 0\r\n";
             response.body = sdp_answer.as_bytes().to_vec().into();
-            response
+            let _ = response.headers.push("Content-Type", "application/sdp");
+            let _ = response
                 .headers
-                .push("Content-Type", "application/sdp");
-            response
-                .headers
-                .push("Content-Length", sdp_answer.len().to_string().into());
+                .push("Content-Length", sdp_answer.len().to_string());
         }
 
         handle.send_final(response).await;

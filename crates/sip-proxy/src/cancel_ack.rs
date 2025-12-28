@@ -67,10 +67,8 @@ impl CancelForwarder {
             target_branch
         );
         if let Some(via_value) = cancel.headers.get("Via") {
-            let mut parts: Vec<String> = via_value
-                .split(';')
-                .map(|s| s.trim().to_string())
-                .collect();
+            let mut parts: Vec<String> =
+                via_value.split(';').map(|s| s.trim().to_string()).collect();
 
             let mut branch_updated = false;
             for part in parts.iter_mut() {
@@ -251,12 +249,12 @@ impl RouteProcessor {
             debug!("Request-URI matches our Record-Route - processing Route headers");
 
             // Get the last Route header value
-        let route_values: Vec<_> = request
-            .headers
-            .iter()
-            .filter(|h| h.name().eq_ignore_ascii_case("Route"))
-            .map(|h| h.value_smol().clone())
-            .collect();
+            let route_values: Vec<_> = request
+                .headers
+                .iter()
+                .filter(|h| h.name().eq_ignore_ascii_case("Route"))
+                .map(|h| h.value_smol().clone())
+                .collect();
 
             if let Some(last_route) = route_values.last() {
                 // Extract URI from Route header (remove angle brackets)
@@ -321,12 +319,13 @@ mod tests {
         let mut headers = Headers::new();
         headers.push("Call-ID", "test-123").unwrap();
         headers.push("CSeq", "1 CANCEL").unwrap();
-        headers.push("From", "<sip:alice@example.com>;tag=abc").unwrap();
+        headers
+            .push("From", "<sip:alice@example.com>;tag=abc")
+            .unwrap();
         headers.push("To", "<sip:bob@example.com>").unwrap();
-        headers.push(
-            "Via",
-            "SIP/2.0/UDP proxy;branch=z9hG4bKtemplate",
-        ).unwrap();
+        headers
+            .push("Via", "SIP/2.0/UDP proxy;branch=z9hG4bKtemplate")
+            .unwrap();
 
         Request::new(
             RequestLine::new(
@@ -342,7 +341,9 @@ mod tests {
         let mut headers = Headers::new();
         headers.push("Call-ID", "test-123").unwrap();
         headers.push("CSeq", "1 ACK").unwrap();
-        headers.push("From", "<sip:alice@example.com>;tag=abc").unwrap();
+        headers
+            .push("From", "<sip:alice@example.com>;tag=abc")
+            .unwrap();
         headers.push("To", "<sip:bob@example.com>").unwrap();
 
         Request::new(
@@ -389,8 +390,7 @@ mod tests {
     #[test]
     fn detects_ack_with_sdp() {
         let mut ack = make_ack();
-        ack.headers
-            .push("Content-Type", "application/sdp");
+        let _ = ack.headers.push("Content-Type", "application/sdp");
         ack.body = Bytes::from("v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\n");
 
         assert!(AckForwarder::has_sdp(&ack));

@@ -28,7 +28,7 @@
 
 use anyhow::Result;
 use sip_sdp::{MediaDescription, SessionDescription};
-use sip_uac::integrated::{IntegratedUAC, SdpAnswerGenerator};
+use sip_uac::integrated::SdpAnswerGenerator;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::{sleep, Duration};
 
@@ -39,6 +39,7 @@ use tokio::time::{sleep, Duration};
 /// - Determine codec compatibility
 /// - Allocate RTP ports
 /// - Generate appropriate SDP answer
+#[allow(dead_code)]
 struct SimpleSdpGenerator;
 
 #[async_trait::async_trait]

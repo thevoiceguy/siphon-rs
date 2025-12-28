@@ -225,7 +225,10 @@ impl TransportContext {
 
     /// Builder-style helper to set the UDP socket.
     /// Required for sending ACKs for 2xx responses over UDP.
-    pub fn with_udp_socket(mut self, socket: Option<std::sync::Arc<tokio::net::UdpSocket>>) -> Self {
+    pub fn with_udp_socket(
+        mut self,
+        socket: Option<std::sync::Arc<tokio::net::UdpSocket>>,
+    ) -> Self {
         self.udp_socket = socket;
         self
     }
@@ -1363,7 +1366,9 @@ mod tests {
     fn build_client_request(method: Method, branch: &str) -> Request {
         let mut headers = Headers::new();
         let via = format!("SIP/2.0/UDP host.invalid;branch={}", branch);
-        headers.push(SmolStr::new("Via"), SmolStr::new(via)).unwrap();
+        headers
+            .push(SmolStr::new("Via"), SmolStr::new(via))
+            .unwrap();
         Request::new(
             RequestLine::new(method, SipUri::parse("sip:example.com").unwrap()),
             headers,
@@ -1374,10 +1379,14 @@ mod tests {
     fn build_response_with_branch(code: u16, branch: &str, method: Method) -> Response {
         let mut headers = Headers::new();
         let via = format!("SIP/2.0/UDP host.invalid;branch={}", branch);
-        headers.push(SmolStr::new("Via"), SmolStr::new(via)).unwrap();
+        headers
+            .push(SmolStr::new("Via"), SmolStr::new(via))
+            .unwrap();
         // Add CSeq header with method for transaction matching
         let cseq = format!("1 {}", method.as_str());
-        headers.push(SmolStr::new("CSeq"), SmolStr::new(cseq)).unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new(cseq))
+            .unwrap();
         Response::new(
             StatusLine::new(code, SmolStr::new("OK")),
             headers,
@@ -1387,10 +1396,10 @@ mod tests {
 
     fn build_response_with_branch_reliable(code: u16, branch: &str, method: Method) -> Response {
         let mut response = build_response_with_branch(code, branch, method);
-        response
+        let _ = response
             .headers
             .push(SmolStr::new("Require"), SmolStr::new("100rel"));
-        response
+        let _ = response
             .headers
             .push(SmolStr::new("RSeq"), SmolStr::new("1"));
         response
@@ -1602,10 +1611,13 @@ mod tests {
         let ctx =
             TransportContext::new(TransportKind::Udp, "127.0.0.1:5090".parse().unwrap(), None);
         let mut request = build_request(Method::Invite);
-        request.headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP host;branch=z9hG4bKretrans".to_owned()),
-        ).unwrap();
+        request
+            .headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP host;branch=z9hG4bKretrans".to_owned()),
+            )
+            .unwrap();
         let handle = manager.receive_request(request.clone(), ctx.clone()).await;
         handle.send_final(build_response(486)).await;
 
@@ -1638,10 +1650,13 @@ mod tests {
         // Create 5 transactions (at limit)
         for i in 0..5 {
             let mut request = build_request(Method::Invite);
-            request.headers.push(
-                SmolStr::new("Via"),
-                SmolStr::new(format!("SIP/2.0/UDP host;branch=z9hG4bKtest{}", i)),
-            ).unwrap();
+            request
+                .headers
+                .push(
+                    SmolStr::new("Via"),
+                    SmolStr::new(format!("SIP/2.0/UDP host;branch=z9hG4bKtest{}", i)),
+                )
+                .unwrap();
             manager.receive_request(request, ctx.clone()).await;
         }
 
@@ -1650,10 +1665,13 @@ mod tests {
 
         // Add one more transaction - should trigger eviction
         let mut request = build_request(Method::Invite);
-        request.headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP host;branch=z9hG4bKtest_overflow".to_owned()),
-        ).unwrap();
+        request
+            .headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP host;branch=z9hG4bKtest_overflow".to_owned()),
+            )
+            .unwrap();
         manager.receive_request(request, ctx).await;
 
         // Should still have 5 transactions (oldest evicted, new one added)
@@ -1679,10 +1697,13 @@ mod tests {
         // Create 3 client transactions (at limit)
         for i in 0..3 {
             let mut request = build_request(Method::Invite);
-            request.headers.push(
-                SmolStr::new("Via"),
-                SmolStr::new(format!("SIP/2.0/UDP host;branch=z9hG4bKclient{}", i)),
-            ).unwrap();
+            request
+                .headers
+                .push(
+                    SmolStr::new("Via"),
+                    SmolStr::new(format!("SIP/2.0/UDP host;branch=z9hG4bKclient{}", i)),
+                )
+                .unwrap();
             let _ = manager
                 .start_client_transaction(request, ctx.clone(), tu.clone())
                 .await;
@@ -1693,10 +1714,13 @@ mod tests {
 
         // Add one more transaction - should trigger eviction
         let mut request = build_request(Method::Invite);
-        request.headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP host;branch=z9hG4bKclient_overflow".to_owned()),
-        ).unwrap();
+        request
+            .headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP host;branch=z9hG4bKclient_overflow".to_owned()),
+            )
+            .unwrap();
         let _ = manager
             .start_client_transaction(request, ctx.clone(), tu.clone())
             .await;
@@ -1722,10 +1746,13 @@ mod tests {
         // Create 3 transactions with small delays to ensure ordering
         for i in 0..3 {
             let mut request = build_request(Method::Options);
-            request.headers.push(
-                SmolStr::new("Via"),
-                SmolStr::new(format!("SIP/2.0/UDP host;branch=z9hG4bKorder{}", i)),
-            ).unwrap();
+            request
+                .headers
+                .push(
+                    SmolStr::new("Via"),
+                    SmolStr::new(format!("SIP/2.0/UDP host;branch=z9hG4bKorder{}", i)),
+                )
+                .unwrap();
             manager.receive_request(request, ctx.clone()).await;
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -1740,10 +1767,13 @@ mod tests {
 
         // Add one more - should evict the oldest (first one)
         let mut request = build_request(Method::Options);
-        request.headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP host;branch=z9hG4bKorder3".to_owned()),
-        ).unwrap();
+        request
+            .headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP host;branch=z9hG4bKorder3".to_owned()),
+            )
+            .unwrap();
         manager.receive_request(request, ctx).await;
 
         // First transaction should be gone
@@ -1769,10 +1799,13 @@ mod tests {
         // Create many transactions without hitting limit
         for i in 0..100 {
             let mut request = build_request(Method::Options);
-            request.headers.push(
-                SmolStr::new("Via"),
-                SmolStr::new(format!("SIP/2.0/UDP host;branch=z9hG4bKunlim{}", i)),
-            ).unwrap();
+            request
+                .headers
+                .push(
+                    SmolStr::new("Via"),
+                    SmolStr::new(format!("SIP/2.0/UDP host;branch=z9hG4bKunlim{}", i)),
+                )
+                .unwrap();
             manager.receive_request(request, ctx.clone()).await;
         }
 

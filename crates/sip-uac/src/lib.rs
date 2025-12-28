@@ -26,7 +26,9 @@ use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use sip_auth::{DigestAlgorithm, DigestClient, Qop};
-use sip_core::{Header, Headers, Method, Request, RequestLine, Response, ServiceRouteHeader, SipUri};
+use sip_core::{
+    Header, Headers, Method, Request, RequestLine, Response, ServiceRouteHeader, SipUri,
+};
 use sip_dialog::{Dialog, DialogManager, Subscription, SubscriptionManager, SubscriptionState};
 use sip_parse::header;
 use smol_str::SmolStr;
@@ -110,43 +112,56 @@ impl UserAgentClient {
 
         // Via (placeholder)
         let branch = generate_branch();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
+            )
+            .unwrap();
 
         // From/To
-        headers.push(
-            SmolStr::new("From"),
-            SmolStr::new(format!(
-                "<{}>;tag={}",
-                self.local_uri.as_str(),
-                self.local_tag
-            )),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("To"),
-            SmolStr::new(format!("<{}>", target.as_str())),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new(format!(
+                    "<{}>;tag={}",
+                    self.local_uri.as_str(),
+                    self.local_tag
+                )),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("To"),
+                SmolStr::new(format!("<{}>", target.as_str())),
+            )
+            .unwrap();
 
         // Call-ID (OPTIONS doesn't need Call-ID reuse like REGISTER)
         let call_id = generate_call_id();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new(call_id)).unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new(call_id))
+            .unwrap();
 
         // CSeq
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 OPTIONS")).unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 OPTIONS"))
+            .unwrap();
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70")).unwrap();
+        headers
+            .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
+            .unwrap();
 
         // User-Agent
-        headers.push(
-            SmolStr::new("User-Agent"),
-            SmolStr::new("siphon-rs/0.1.0"),
-        ).unwrap();
+        headers
+            .push(SmolStr::new("User-Agent"), SmolStr::new("siphon-rs/0.1.0"))
+            .unwrap();
 
         // Content-Length
-        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0")).unwrap();
+        headers
+            .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
+            .unwrap();
 
         Request::new(
             RequestLine::new(Method::Options, target.clone()),
@@ -168,52 +183,67 @@ impl UserAgentClient {
 
         // Via header (will be filled by transport layer with actual address)
         let branch = generate_branch();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
+            )
+            .unwrap();
 
         // From header
         let from = self.format_from_header();
-        headers.push(SmolStr::new("From"), SmolStr::new(from)).unwrap();
+        headers
+            .push(SmolStr::new("From"), SmolStr::new(from))
+            .unwrap();
 
         // To header (same as From for REGISTER)
-        headers.push(
-            SmolStr::new("To"),
-            SmolStr::new(format!("<{}>", self.local_uri.as_str())),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("To"),
+                SmolStr::new(format!("<{}>", self.local_uri.as_str())),
+            )
+            .unwrap();
 
         // Call-ID (reuse per-registrar for refreshes)
         let call_id = self.register_call_id(registrar_uri);
         headers.push(SmolStr::new("Call-ID"), call_id).unwrap();
 
         // CSeq
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 REGISTER")).unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 REGISTER"))
+            .unwrap();
 
         // Contact
-        headers.push(
-            SmolStr::new("Contact"),
-            SmolStr::new(format!(
-                "<{}>;expires={}",
-                self.contact_uri.as_str(),
-                expires
-            )),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new(format!(
+                    "<{}>;expires={}",
+                    self.contact_uri.as_str(),
+                    expires
+                )),
+            )
+            .unwrap();
 
         // Expires header
-        headers.push(SmolStr::new("Expires"), SmolStr::new(expires.to_string())).unwrap();
+        headers
+            .push(SmolStr::new("Expires"), SmolStr::new(expires.to_string()))
+            .unwrap();
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70")).unwrap();
+        headers
+            .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
+            .unwrap();
 
         // User-Agent
-        headers.push(
-            SmolStr::new("User-Agent"),
-            SmolStr::new("siphon-rs/0.1.0"),
-        ).unwrap();
+        headers
+            .push(SmolStr::new("User-Agent"), SmolStr::new("siphon-rs/0.1.0"))
+            .unwrap();
 
         // Content-Length
-        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0")).unwrap();
+        headers
+            .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
+            .unwrap();
 
         Request::new(
             RequestLine::new(Method::Register, registrar_uri.clone()),
@@ -360,14 +390,13 @@ impl UserAgentClient {
                 for route in &service_route.routes {
                     let route_value = format!("<{}>", route.uri().as_str());
                     new_headers.push(
-                        Header::new("Route", route_value)
-                            .expect("route header should be valid"),
+                        Header::new("Route", route_value).expect("route header should be valid"),
                     );
                 }
             }
 
-            request.headers = Headers::from_vec(new_headers)
-                .expect("route header list should be within limits");
+            request.headers =
+                Headers::from_vec(new_headers).expect("route header list should be within limits");
 
             info!(
                 "Applied {} Service-Route entries as Route headers",
@@ -481,28 +510,38 @@ impl UserAgentClient {
         for header in original_request.headers.iter() {
             if header.name() == "Via" {
                 let via_value = replace_via_branch(header.value(), &new_branch);
-                new_headers.push(SmolStr::new("Via"), SmolStr::new(via_value)).unwrap();
+                new_headers
+                    .push(SmolStr::new("Via"), SmolStr::new(via_value))
+                    .unwrap();
             } else if header.name() == "CSeq" && !cseq_incremented {
                 if let Some((num, method)) = header.value().split_once(' ') {
                     if let Ok(mut cseq_num) = num.parse::<u32>() {
                         cseq_num += 1;
-                        new_headers.push(
-                            SmolStr::new("CSeq"),
-                            SmolStr::new(format!("{} {}", cseq_num, method)),
-                        ).unwrap();
+                        new_headers
+                            .push(
+                                SmolStr::new("CSeq"),
+                                SmolStr::new(format!("{} {}", cseq_num, method)),
+                            )
+                            .unwrap();
                         cseq_incremented = true;
                         continue;
                     }
                 }
                 // If parsing failed, just copy as-is
-                new_headers.push(header.name_smol().clone(), header.value_smol().clone()).unwrap();
+                new_headers
+                    .push(header.name_smol().clone(), header.value_smol().clone())
+                    .unwrap();
             } else {
-                new_headers.push(header.name_smol().clone(), header.value_smol().clone()).unwrap();
+                new_headers
+                    .push(header.name_smol().clone(), header.value_smol().clone())
+                    .unwrap();
             }
         }
 
         // Add authorization header
-        new_headers.push(SmolStr::new(response_header_name), SmolStr::new(auth_value)).unwrap();
+        new_headers
+            .push(SmolStr::new(response_header_name), SmolStr::new(auth_value))
+            .unwrap();
 
         let new_request = Request::new(
             original_request.start.clone(),
@@ -526,59 +565,78 @@ impl UserAgentClient {
 
         // Via
         let branch = generate_branch();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
+            )
+            .unwrap();
 
         // From
         let from = self.format_from_header();
-        headers.push(SmolStr::new("From"), SmolStr::new(from)).unwrap();
+        headers
+            .push(SmolStr::new("From"), SmolStr::new(from))
+            .unwrap();
 
         // To
-        headers.push(
-            SmolStr::new("To"),
-            SmolStr::new(format!("<{}>", target_uri.as_str())),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("To"),
+                SmolStr::new(format!("<{}>", target_uri.as_str())),
+            )
+            .unwrap();
 
         // Call-ID
         let call_id = generate_call_id();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new(call_id)).unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new(call_id))
+            .unwrap();
 
         // CSeq
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE")).unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"))
+            .unwrap();
 
         // Contact
-        headers.push(
-            SmolStr::new("Contact"),
-            SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
+            )
+            .unwrap();
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70")).unwrap();
+        headers
+            .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
+            .unwrap();
 
         // User-Agent
-        headers.push(
-            SmolStr::new("User-Agent"),
-            SmolStr::new("siphon-rs/0.1.0"),
-        ).unwrap();
+        headers
+            .push(SmolStr::new("User-Agent"), SmolStr::new("siphon-rs/0.1.0"))
+            .unwrap();
 
         let body = if let Some(sdp) = sdp_body {
             // Content-Type
-            headers.push(
-                SmolStr::new("Content-Type"),
-                SmolStr::new("application/sdp"),
-            ).unwrap();
+            headers
+                .push(
+                    SmolStr::new("Content-Type"),
+                    SmolStr::new("application/sdp"),
+                )
+                .unwrap();
 
             // Content-Length
-            headers.push(
-                SmolStr::new("Content-Length"),
-                SmolStr::new(sdp.len().to_string()),
-            ).unwrap();
+            headers
+                .push(
+                    SmolStr::new("Content-Length"),
+                    SmolStr::new(sdp.len().to_string()),
+                )
+                .unwrap();
 
             Bytes::from(sdp.as_bytes().to_vec())
         } else {
-            headers.push(SmolStr::new("Content-Length"), SmolStr::new("0")).unwrap();
+            headers
+                .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
+                .unwrap();
             Bytes::new()
         };
 
@@ -612,10 +670,12 @@ impl UserAgentClient {
 
         // Via (same branch as INVITE for non-2xx, new branch for 2xx)
         let branch = generate_branch();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
+            )
+            .unwrap();
 
         // From (same as INVITE)
         if let Some(from) = invite_request.headers.get("From") {
@@ -635,31 +695,41 @@ impl UserAgentClient {
         // CSeq (same number as INVITE, but ACK method)
         if let Some(cseq) = invite_request.headers.get("CSeq") {
             if let Some((num, _)) = cseq.split_once(' ') {
-                headers.push(SmolStr::new("CSeq"), SmolStr::new(format!("{} ACK", num))).unwrap();
+                headers
+                    .push(SmolStr::new("CSeq"), SmolStr::new(format!("{} ACK", num)))
+                    .unwrap();
             }
         }
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70")).unwrap();
+        headers
+            .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
+            .unwrap();
 
         // Handle SDP body (for late offer scenario)
         let body = if let Some(sdp) = sdp_body {
             // Content-Type
-            headers.push(
-                SmolStr::new("Content-Type"),
-                SmolStr::new("application/sdp"),
-            ).unwrap();
+            headers
+                .push(
+                    SmolStr::new("Content-Type"),
+                    SmolStr::new("application/sdp"),
+                )
+                .unwrap();
 
             // Content-Length
-            headers.push(
-                SmolStr::new("Content-Length"),
-                SmolStr::new(sdp.len().to_string()),
-            ).unwrap();
+            headers
+                .push(
+                    SmolStr::new("Content-Length"),
+                    SmolStr::new(sdp.len().to_string()),
+                )
+                .unwrap();
 
             Bytes::from(sdp.as_bytes().to_vec())
         } else {
             // Content-Length
-            headers.push(SmolStr::new("Content-Length"), SmolStr::new("0")).unwrap();
+            headers
+                .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
+                .unwrap();
             Bytes::new()
         };
 
@@ -682,10 +752,12 @@ impl UserAgentClient {
 
         // Via
         let branch = generate_branch();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
+            )
+            .unwrap();
 
         // From (with local tag)
         let from = format!(
@@ -693,7 +765,9 @@ impl UserAgentClient {
             self.local_uri.as_str(),
             dialog.id.local_tag.as_str()
         );
-        headers.push(SmolStr::new("From"), SmolStr::new(from)).unwrap();
+        headers
+            .push(SmolStr::new("From"), SmolStr::new(from))
+            .unwrap();
 
         // To (with remote tag)
         let to = format!(
@@ -704,18 +778,26 @@ impl UserAgentClient {
         headers.push(SmolStr::new("To"), SmolStr::new(to)).unwrap();
 
         // Call-ID
-        headers.push(SmolStr::new("Call-ID"), dialog.id.call_id.clone()).unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), dialog.id.call_id.clone())
+            .unwrap();
 
         // CSeq (next local CSeq)
         let mut mutable_dialog = dialog.clone();
         let cseq = mutable_dialog.next_local_cseq();
-        headers.push(SmolStr::new("CSeq"), SmolStr::new(format!("{} BYE", cseq))).unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new(format!("{} BYE", cseq)))
+            .unwrap();
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70")).unwrap();
+        headers
+            .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
+            .unwrap();
 
         // Content-Length
-        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0")).unwrap();
+        headers
+            .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
+            .unwrap();
 
         // Request-URI is the remote target
         let request_uri = dialog.remote_target.clone();
@@ -740,10 +822,12 @@ impl UserAgentClient {
 
         // Via
         let branch = generate_branch();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
+            )
+            .unwrap();
 
         // From (with local tag)
         let from = if let Some(ref display) = self.display_name {
@@ -760,7 +844,9 @@ impl UserAgentClient {
                 dialog.id.local_tag.as_str()
             )
         };
-        headers.push(SmolStr::new("From"), SmolStr::new(from)).unwrap();
+        headers
+            .push(SmolStr::new("From"), SmolStr::new(from))
+            .unwrap();
 
         // To (with remote tag)
         let to = format!(
@@ -771,47 +857,60 @@ impl UserAgentClient {
         headers.push(SmolStr::new("To"), SmolStr::new(to)).unwrap();
 
         // Call-ID
-        headers.push(SmolStr::new("Call-ID"), dialog.id.call_id.clone()).unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), dialog.id.call_id.clone())
+            .unwrap();
 
         // CSeq (next local CSeq)
         let mut mutable_dialog = dialog.clone();
         let cseq = mutable_dialog.next_local_cseq();
-        headers.push(
-            SmolStr::new("CSeq"),
-            SmolStr::new(format!("{} INVITE", cseq)),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("CSeq"),
+                SmolStr::new(format!("{} INVITE", cseq)),
+            )
+            .unwrap();
 
         // Contact
-        headers.push(
-            SmolStr::new("Contact"),
-            SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
+            )
+            .unwrap();
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70")).unwrap();
+        headers
+            .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
+            .unwrap();
 
         // User-Agent
-        headers.push(
-            SmolStr::new("User-Agent"),
-            SmolStr::new("siphon-rs/0.1.0"),
-        ).unwrap();
+        headers
+            .push(SmolStr::new("User-Agent"), SmolStr::new("siphon-rs/0.1.0"))
+            .unwrap();
 
         let body = if let Some(sdp) = sdp_body {
             // Content-Type
-            headers.push(
-                SmolStr::new("Content-Type"),
-                SmolStr::new("application/sdp"),
-            ).unwrap();
+            headers
+                .push(
+                    SmolStr::new("Content-Type"),
+                    SmolStr::new("application/sdp"),
+                )
+                .unwrap();
 
             // Content-Length
-            headers.push(
-                SmolStr::new("Content-Length"),
-                SmolStr::new(sdp.len().to_string()),
-            ).unwrap();
+            headers
+                .push(
+                    SmolStr::new("Content-Length"),
+                    SmolStr::new(sdp.len().to_string()),
+                )
+                .unwrap();
 
             Bytes::from(sdp.as_bytes().to_vec())
         } else {
-            headers.push(SmolStr::new("Content-Length"), SmolStr::new("0")).unwrap();
+            headers
+                .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
+                .unwrap();
             Bytes::new()
         };
 
@@ -834,10 +933,12 @@ impl UserAgentClient {
 
         // Via
         let branch = generate_branch();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
+            )
+            .unwrap();
 
         // From (with local tag)
         let from = if let Some(ref display) = self.display_name {
@@ -854,7 +955,9 @@ impl UserAgentClient {
                 dialog.id.local_tag.as_str()
             )
         };
-        headers.push(SmolStr::new("From"), SmolStr::new(from)).unwrap();
+        headers
+            .push(SmolStr::new("From"), SmolStr::new(from))
+            .unwrap();
 
         // To (with remote tag)
         let to = format!(
@@ -865,47 +968,60 @@ impl UserAgentClient {
         headers.push(SmolStr::new("To"), SmolStr::new(to)).unwrap();
 
         // Call-ID
-        headers.push(SmolStr::new("Call-ID"), dialog.id.call_id.clone()).unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), dialog.id.call_id.clone())
+            .unwrap();
 
         // CSeq (next local CSeq)
         let mut mutable_dialog = dialog.clone();
         let cseq = mutable_dialog.next_local_cseq();
-        headers.push(
-            SmolStr::new("CSeq"),
-            SmolStr::new(format!("{} UPDATE", cseq)),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("CSeq"),
+                SmolStr::new(format!("{} UPDATE", cseq)),
+            )
+            .unwrap();
 
         // Contact
-        headers.push(
-            SmolStr::new("Contact"),
-            SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
+            )
+            .unwrap();
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70")).unwrap();
+        headers
+            .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
+            .unwrap();
 
         // User-Agent
-        headers.push(
-            SmolStr::new("User-Agent"),
-            SmolStr::new("siphon-rs/0.1.0"),
-        ).unwrap();
+        headers
+            .push(SmolStr::new("User-Agent"), SmolStr::new("siphon-rs/0.1.0"))
+            .unwrap();
 
         let body = if let Some(sdp) = sdp_body {
             // Content-Type
-            headers.push(
-                SmolStr::new("Content-Type"),
-                SmolStr::new("application/sdp"),
-            ).unwrap();
+            headers
+                .push(
+                    SmolStr::new("Content-Type"),
+                    SmolStr::new("application/sdp"),
+                )
+                .unwrap();
 
             // Content-Length
-            headers.push(
-                SmolStr::new("Content-Length"),
-                SmolStr::new(sdp.len().to_string()),
-            ).unwrap();
+            headers
+                .push(
+                    SmolStr::new("Content-Length"),
+                    SmolStr::new(sdp.len().to_string()),
+                )
+                .unwrap();
 
             Bytes::from(sdp.as_bytes().to_vec())
         } else {
-            headers.push(SmolStr::new("Content-Length"), SmolStr::new("0")).unwrap();
+            headers
+                .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
+                .unwrap();
             Bytes::new()
         };
 
@@ -926,37 +1042,51 @@ impl UserAgentClient {
         let mut headers = Headers::new();
 
         let branch = generate_branch();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
+            )
+            .unwrap();
 
         let from = self.format_from_header();
-        headers.push(SmolStr::new("From"), SmolStr::new(from.clone())).unwrap();
-        headers.push(
-            SmolStr::new("To"),
-            SmolStr::new(format!("<{}>", target.as_str())),
-        ).unwrap();
+        headers
+            .push(SmolStr::new("From"), SmolStr::new(from.clone()))
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("To"),
+                SmolStr::new(format!("<{}>", target.as_str())),
+            )
+            .unwrap();
 
         let call_id = generate_call_id();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new(call_id)).unwrap();
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 PUBLISH")).unwrap();
-        headers.push(SmolStr::new("Event"), SmolStr::new(event)).unwrap();
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70")).unwrap();
-        headers.push(
-            SmolStr::new("User-Agent"),
-            SmolStr::new("siphon-rs/0.1.0"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("Content-Type"),
-            SmolStr::new(content_type),
-        ).unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new(call_id))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 PUBLISH"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Event"), SmolStr::new(event))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("User-Agent"), SmolStr::new("siphon-rs/0.1.0"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Content-Type"), SmolStr::new(content_type))
+            .unwrap();
 
         let body_bytes = Bytes::from(body.as_bytes().to_vec());
-        headers.push(
-            SmolStr::new("Content-Length"),
-            SmolStr::new(body_bytes.len().to_string()),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Content-Length"),
+                SmolStr::new(body_bytes.len().to_string()),
+            )
+            .unwrap();
 
         Request::new(
             RequestLine::new(Method::Publish, target.clone()),
@@ -1032,16 +1162,20 @@ impl UserAgentClient {
 
         // Add Session-Expires header per RFC 4028 §7.4
         let session_expires_value = format!("{};refresher={}", session_expires, refresher);
-        request.headers.push(
-            SmolStr::new("Session-Expires"),
-            SmolStr::new(session_expires_value),
-        ).unwrap();
+        request
+            .headers
+            .push(
+                SmolStr::new("Session-Expires"),
+                SmolStr::new(session_expires_value),
+            )
+            .unwrap();
 
         // Add Supported: timer to indicate session timer support
         if request.headers.get("Supported").is_none() {
             request
                 .headers
-                .push(SmolStr::new("Supported"), SmolStr::new("timer")).unwrap();
+                .push(SmolStr::new("Supported"), SmolStr::new("timer"))
+                .unwrap();
         }
 
         request
@@ -1082,10 +1216,12 @@ impl UserAgentClient {
 
         // Via
         let branch = generate_branch();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
+            )
+            .unwrap();
 
         // From (with local tag)
         let from = format!(
@@ -1093,7 +1229,9 @@ impl UserAgentClient {
             self.local_uri.as_str(),
             dialog.id.local_tag.as_str()
         );
-        headers.push(SmolStr::new("From"), SmolStr::new(from)).unwrap();
+        headers
+            .push(SmolStr::new("From"), SmolStr::new(from))
+            .unwrap();
 
         // To (with remote tag)
         let to = format!(
@@ -1104,27 +1242,34 @@ impl UserAgentClient {
         headers.push(SmolStr::new("To"), SmolStr::new(to)).unwrap();
 
         // Call-ID
-        headers.push(SmolStr::new("Call-ID"), dialog.id.call_id.clone()).unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), dialog.id.call_id.clone())
+            .unwrap();
 
         // CSeq (next local CSeq)
         let mut mutable_dialog = dialog.clone();
         let cseq = mutable_dialog.next_local_cseq();
-        headers.push(SmolStr::new("CSeq"), SmolStr::new(format!("{} INFO", cseq))).unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new(format!("{} INFO", cseq)))
+            .unwrap();
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70")).unwrap();
+        headers
+            .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
+            .unwrap();
 
         // Content-Type
-        headers.push(
-            SmolStr::new("Content-Type"),
-            SmolStr::new(content_type),
-        ).unwrap();
+        headers
+            .push(SmolStr::new("Content-Type"), SmolStr::new(content_type))
+            .unwrap();
 
         // Content-Length
-        headers.push(
-            SmolStr::new("Content-Length"),
-            SmolStr::new(body.len().to_string()),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Content-Length"),
+                SmolStr::new(body.len().to_string()),
+            )
+            .unwrap();
 
         // Request-URI is the remote target
         let request_uri = dialog.remote_target.clone();
@@ -1156,8 +1301,8 @@ impl UserAgentClient {
     ///
     /// // Add critical privacy (must be honored or request fails)
     /// UserAgentClient::add_privacy_header(&mut invite, vec![
-        ///     PrivacyValue::Id,
-        ///     PrivacyValue::Critical,
+    ///     PrivacyValue::Id,
+    ///     PrivacyValue::Critical,
     /// ]);
     /// ```
     pub fn add_privacy_header(request: &mut Request, privacy_values: Vec<sip_core::PrivacyValue>) {
@@ -1166,7 +1311,8 @@ impl UserAgentClient {
         let privacy = PrivacyHeader::new(privacy_values);
         request
             .headers
-            .push(SmolStr::new("Privacy"), SmolStr::new(privacy.to_string())).unwrap();
+            .push(SmolStr::new("Privacy"), SmolStr::new(privacy.to_string()))
+            .unwrap();
     }
 
     /// Creates a new request with Privacy header (RFC 3323).
@@ -1226,7 +1372,8 @@ impl UserAgentClient {
     pub fn add_reason_header(request: &mut Request, reason: sip_core::ReasonHeader) {
         request
             .headers
-            .push(SmolStr::new("Reason"), SmolStr::new(reason.to_string())).unwrap();
+            .push(SmolStr::new("Reason"), SmolStr::new(reason.to_string()))
+            .unwrap();
     }
 
     /// Creates a BYE request with a Reason header (RFC 3326).
@@ -1301,10 +1448,13 @@ impl UserAgentClient {
         request: &mut Request,
         header: sip_core::PPreferredIdentityHeader,
     ) {
-        request.headers.push(
-            SmolStr::new("P-Preferred-Identity"),
-            SmolStr::new(header.to_string()),
-        ).unwrap();
+        request
+            .headers
+            .push(
+                SmolStr::new("P-Preferred-Identity"),
+                SmolStr::new(header.to_string()),
+            )
+            .unwrap();
     }
 
     /// Creates a new request with P-Preferred-Identity header (RFC 3325).
@@ -1377,10 +1527,13 @@ impl UserAgentClient {
         request: &mut Request,
         header: sip_core::PAssertedIdentityHeader,
     ) {
-        request.headers.push(
-            SmolStr::new("P-Asserted-Identity"),
-            SmolStr::new(header.to_string()),
-        ).unwrap();
+        request
+            .headers
+            .push(
+                SmolStr::new("P-Asserted-Identity"),
+                SmolStr::new(header.to_string()),
+            )
+            .unwrap();
     }
 
     /// Creates a PRACK request to acknowledge a reliable provisional response (RFC 3262).
@@ -1451,19 +1604,17 @@ impl UserAgentClient {
         self.build_prack_request(dialog, rack_value)
     }
 
-    fn build_prack_request(
-        &self,
-        dialog: &Dialog,
-        rack_value: String,
-    ) -> Result<Request> {
+    fn build_prack_request(&self, dialog: &Dialog, rack_value: String) -> Result<Request> {
         let mut headers = Headers::new();
 
         // Via
         let branch = generate_branch();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
+            )
+            .unwrap();
 
         // From (with local tag)
         let from = if let Some(ref display) = self.display_name {
@@ -1480,7 +1631,9 @@ impl UserAgentClient {
                 dialog.id.local_tag.as_str()
             )
         };
-        headers.push(SmolStr::new("From"), SmolStr::new(from)).unwrap();
+        headers
+            .push(SmolStr::new("From"), SmolStr::new(from))
+            .unwrap();
 
         // To (with remote tag from provisional response)
         let to = format!(
@@ -1491,30 +1644,42 @@ impl UserAgentClient {
         headers.push(SmolStr::new("To"), SmolStr::new(to)).unwrap();
 
         // Call-ID
-        headers.push(SmolStr::new("Call-ID"), dialog.id.call_id.clone()).unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), dialog.id.call_id.clone())
+            .unwrap();
 
         // CSeq (next local CSeq for PRACK)
         let mut mutable_dialog = dialog.clone();
         let prack_cseq = mutable_dialog.next_local_cseq();
-        headers.push(
-            SmolStr::new("CSeq"),
-            SmolStr::new(format!("{} PRACK", prack_cseq)),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("CSeq"),
+                SmolStr::new(format!("{} PRACK", prack_cseq)),
+            )
+            .unwrap();
 
         // RAck: RSeq CSeq-number Method
-        headers.push(SmolStr::new("RAck"), SmolStr::new(rack_value)).unwrap();
+        headers
+            .push(SmolStr::new("RAck"), SmolStr::new(rack_value))
+            .unwrap();
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70")).unwrap();
+        headers
+            .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
+            .unwrap();
 
         // Contact
-        headers.push(
-            SmolStr::new("Contact"),
-            SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
+            )
+            .unwrap();
 
         // Content-Length
-        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0")).unwrap();
+        headers
+            .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
+            .unwrap();
 
         // Request-URI is the remote target (Contact from provisional response)
         let request_uri = dialog.remote_target.clone();
@@ -1578,51 +1743,70 @@ impl UserAgentClient {
 
         // Via
         let branch = generate_branch();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
+            )
+            .unwrap();
 
         // From
         let from = self.format_from_header();
-        headers.push(SmolStr::new("From"), SmolStr::new(from)).unwrap();
+        headers
+            .push(SmolStr::new("From"), SmolStr::new(from))
+            .unwrap();
 
         // To
-        headers.push(
-            SmolStr::new("To"),
-            SmolStr::new(format!("<{}>", target_uri.as_str())),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("To"),
+                SmolStr::new(format!("<{}>", target_uri.as_str())),
+            )
+            .unwrap();
 
         // Call-ID
         let call_id = generate_call_id();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new(call_id)).unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new(call_id))
+            .unwrap();
 
         // CSeq
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 SUBSCRIBE")).unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 SUBSCRIBE"))
+            .unwrap();
 
         // Contact
-        headers.push(
-            SmolStr::new("Contact"),
-            SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
+            )
+            .unwrap();
 
         // Event
-        headers.push(SmolStr::new("Event"), SmolStr::new(event)).unwrap();
+        headers
+            .push(SmolStr::new("Event"), SmolStr::new(event))
+            .unwrap();
 
         // Expires
-        headers.push(SmolStr::new("Expires"), SmolStr::new(expires.to_string())).unwrap();
+        headers
+            .push(SmolStr::new("Expires"), SmolStr::new(expires.to_string()))
+            .unwrap();
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70")).unwrap();
+        headers
+            .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
+            .unwrap();
 
         // User-Agent
-        headers.push(
-            SmolStr::new("User-Agent"),
-            SmolStr::new("siphon-rs/0.1.0"),
-        ).unwrap();
+        headers
+            .push(SmolStr::new("User-Agent"), SmolStr::new("siphon-rs/0.1.0"))
+            .unwrap();
 
         // Content-Length
-        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0")).unwrap();
+        headers
+            .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
+            .unwrap();
 
         Request::new(
             RequestLine::new(Method::Subscribe, target_uri.clone()),
@@ -1682,10 +1866,12 @@ impl UserAgentClient {
 
         // Via
         let branch = generate_branch();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
+            )
+            .unwrap();
 
         // From
         let from = format!(
@@ -1693,7 +1879,9 @@ impl UserAgentClient {
             self.local_uri.as_str(),
             subscription.id.to_tag.as_str()
         );
-        headers.push(SmolStr::new("From"), SmolStr::new(from)).unwrap();
+        headers
+            .push(SmolStr::new("From"), SmolStr::new(from))
+            .unwrap();
 
         // To
         let to = format!(
@@ -1704,47 +1892,62 @@ impl UserAgentClient {
         headers.push(SmolStr::new("To"), SmolStr::new(to)).unwrap();
 
         // Call-ID
-        headers.push(SmolStr::new("Call-ID"), subscription.id.call_id.clone()).unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), subscription.id.call_id.clone())
+            .unwrap();
 
         // CSeq (use subscription's CSeq)
         let cseq = subscription.local_cseq + 1;
-        headers.push(
-            SmolStr::new("CSeq"),
-            SmolStr::new(format!("{} NOTIFY", cseq)),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("CSeq"),
+                SmolStr::new(format!("{} NOTIFY", cseq)),
+            )
+            .unwrap();
 
         // Contact
-        headers.push(
-            SmolStr::new("Contact"),
-            SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
+            )
+            .unwrap();
 
         // Event
-        headers.push(SmolStr::new("Event"), subscription.id.event.clone()).unwrap();
+        headers
+            .push(SmolStr::new("Event"), subscription.id.event.clone())
+            .unwrap();
 
         // Subscription-State
-        headers.push(
-            SmolStr::new("Subscription-State"),
-            SmolStr::new(state.as_str()),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Subscription-State"),
+                SmolStr::new(state.as_str()),
+            )
+            .unwrap();
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70")).unwrap();
+        headers
+            .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
+            .unwrap();
 
         // Handle body
         let request_body = if let Some(content) = body {
             // Content-Type (depends on event package, defaulting to plain text)
-            headers.push(
-                SmolStr::new("Content-Type"),
-                SmolStr::new("text/plain"),
-            ).unwrap();
-            headers.push(
-                SmolStr::new("Content-Length"),
-                SmolStr::new(content.len().to_string()),
-            ).unwrap();
+            headers
+                .push(SmolStr::new("Content-Type"), SmolStr::new("text/plain"))
+                .unwrap();
+            headers
+                .push(
+                    SmolStr::new("Content-Length"),
+                    SmolStr::new(content.len().to_string()),
+                )
+                .unwrap();
             Bytes::from(content.as_bytes().to_vec())
         } else {
-            headers.push(SmolStr::new("Content-Length"), SmolStr::new("0")).unwrap();
+            headers
+                .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
+                .unwrap();
             Bytes::new()
         };
 
@@ -1792,10 +1995,13 @@ impl UserAgentClient {
         let mut request = self.create_subscribe(target_uri, "reg", expires);
 
         // RFC 3680: Accept header must include application/reginfo+xml
-        request.headers.push(
-            SmolStr::new("Accept"),
-            SmolStr::new("application/reginfo+xml"),
-        ).unwrap();
+        request
+            .headers
+            .push(
+                SmolStr::new("Accept"),
+                SmolStr::new("application/reginfo+xml"),
+            )
+            .unwrap();
 
         request
     }
@@ -1863,10 +2069,12 @@ impl UserAgentClient {
 
         // Via
         let branch = generate_branch();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
+            )
+            .unwrap();
 
         // From
         let from = format!(
@@ -1874,7 +2082,9 @@ impl UserAgentClient {
             self.local_uri.as_str(),
             subscription.id.to_tag.as_str()
         );
-        headers.push(SmolStr::new("From"), SmolStr::new(from)).unwrap();
+        headers
+            .push(SmolStr::new("From"), SmolStr::new(from))
+            .unwrap();
 
         // To
         let to = format!(
@@ -1885,45 +2095,61 @@ impl UserAgentClient {
         headers.push(SmolStr::new("To"), SmolStr::new(to)).unwrap();
 
         // Call-ID
-        headers.push(SmolStr::new("Call-ID"), subscription.id.call_id.clone()).unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), subscription.id.call_id.clone())
+            .unwrap();
 
         // CSeq (use subscription's CSeq)
         let cseq = subscription.local_cseq + 1;
-        headers.push(
-            SmolStr::new("CSeq"),
-            SmolStr::new(format!("{} NOTIFY", cseq)),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("CSeq"),
+                SmolStr::new(format!("{} NOTIFY", cseq)),
+            )
+            .unwrap();
 
         // Contact
-        headers.push(
-            SmolStr::new("Contact"),
-            SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
+            )
+            .unwrap();
 
         // Event: reg
-        headers.push(SmolStr::new("Event"), SmolStr::new("reg")).unwrap();
+        headers
+            .push(SmolStr::new("Event"), SmolStr::new("reg"))
+            .unwrap();
 
         // Subscription-State
-        headers.push(
-            SmolStr::new("Subscription-State"),
-            SmolStr::new(state.as_str()),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Subscription-State"),
+                SmolStr::new(state.as_str()),
+            )
+            .unwrap();
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70")).unwrap();
+        headers
+            .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
+            .unwrap();
 
         // Content-Type: application/reginfo+xml
-        headers.push(
-            SmolStr::new("Content-Type"),
-            SmolStr::new("application/reginfo+xml"),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Content-Type"),
+                SmolStr::new("application/reginfo+xml"),
+            )
+            .unwrap();
 
         // Body (reginfo XML)
         let body = reginfo.to_string();
-        headers.push(
-            SmolStr::new("Content-Length"),
-            SmolStr::new(body.len().to_string()),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Content-Length"),
+                SmolStr::new(body.len().to_string()),
+            )
+            .unwrap();
 
         Request::new(
             RequestLine::new(Method::Notify, subscription.contact.clone()),
@@ -1950,10 +2176,12 @@ impl UserAgentClient {
 
         // Via
         let branch = generate_branch();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
+            )
+            .unwrap();
 
         // From (with local tag from dialog)
         let from = format!(
@@ -1961,7 +2189,9 @@ impl UserAgentClient {
             self.local_uri.as_str(),
             dialog.id.local_tag.as_str()
         );
-        headers.push(SmolStr::new("From"), SmolStr::new(from)).unwrap();
+        headers
+            .push(SmolStr::new("From"), SmolStr::new(from))
+            .unwrap();
 
         // To (with remote tag from dialog)
         let to = format!(
@@ -1972,33 +2202,45 @@ impl UserAgentClient {
         headers.push(SmolStr::new("To"), SmolStr::new(to)).unwrap();
 
         // Call-ID (same as dialog)
-        headers.push(SmolStr::new("Call-ID"), dialog.id.call_id.clone()).unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), dialog.id.call_id.clone())
+            .unwrap();
 
         // CSeq (next in dialog)
         let mut mutable_dialog = dialog.clone();
         let cseq = mutable_dialog.next_local_cseq();
-        headers.push(
-            SmolStr::new("CSeq"),
-            SmolStr::new(format!("{} REFER", cseq)),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("CSeq"),
+                SmolStr::new(format!("{} REFER", cseq)),
+            )
+            .unwrap();
 
         // Contact
-        headers.push(
-            SmolStr::new("Contact"),
-            SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
+            )
+            .unwrap();
 
         // Refer-To (the transfer target)
-        headers.push(
-            SmolStr::new("Refer-To"),
-            SmolStr::new(format!("<{}>", refer_to_uri.as_str())),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Refer-To"),
+                SmolStr::new(format!("<{}>", refer_to_uri.as_str())),
+            )
+            .unwrap();
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70")).unwrap();
+        headers
+            .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
+            .unwrap();
 
         // Content-Length
-        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0")).unwrap();
+        headers
+            .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
+            .unwrap();
 
         Request::new(
             RequestLine::new(Method::Refer, dialog.remote_target.clone()),
@@ -2041,10 +2283,12 @@ impl UserAgentClient {
 
         // Via
         let branch = generate_branch();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
+            )
+            .unwrap();
 
         // From (with local tag from dialog)
         let from = format!(
@@ -2052,7 +2296,9 @@ impl UserAgentClient {
             self.local_uri.as_str(),
             dialog.id.local_tag.as_str()
         );
-        headers.push(SmolStr::new("From"), SmolStr::new(from)).unwrap();
+        headers
+            .push(SmolStr::new("From"), SmolStr::new(from))
+            .unwrap();
 
         // To (with remote tag from dialog)
         let to = format!(
@@ -2063,39 +2309,53 @@ impl UserAgentClient {
         headers.push(SmolStr::new("To"), SmolStr::new(to)).unwrap();
 
         // Call-ID (same as dialog)
-        headers.push(SmolStr::new("Call-ID"), dialog.id.call_id.clone()).unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), dialog.id.call_id.clone())
+            .unwrap();
 
         // CSeq (next in dialog)
         let mut mutable_dialog = dialog.clone();
         let cseq = mutable_dialog.next_local_cseq();
-        headers.push(
-            SmolStr::new("CSeq"),
-            SmolStr::new(format!("{} REFER", cseq)),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("CSeq"),
+                SmolStr::new(format!("{} REFER", cseq)),
+            )
+            .unwrap();
 
         // Contact
-        headers.push(
-            SmolStr::new("Contact"),
-            SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
+            )
+            .unwrap();
 
         // Refer-To with Replaces
-        headers.push(
-            SmolStr::new("Refer-To"),
-            SmolStr::new(refer_to_with_replaces),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Refer-To"),
+                SmolStr::new(refer_to_with_replaces),
+            )
+            .unwrap();
 
         // Referred-By (optional but recommended for attended transfer)
-        headers.push(
-            SmolStr::new("Referred-By"),
-            SmolStr::new(format!("<{}>", self.local_uri.as_str())),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Referred-By"),
+                SmolStr::new(format!("<{}>", self.local_uri.as_str())),
+            )
+            .unwrap();
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70")).unwrap();
+        headers
+            .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
+            .unwrap();
 
         // Content-Length
-        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0")).unwrap();
+        headers
+            .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
+            .unwrap();
 
         Request::new(
             RequestLine::new(Method::Refer, dialog.remote_target.clone()),
@@ -2144,42 +2404,55 @@ impl UserAgentClient {
 
         // Via header (will be filled by transport layer)
         let branch = generate_branch();
-        headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
+            )
+            .unwrap();
 
         // From header with tag
         let from = self.format_from_header();
-        headers.push(SmolStr::new("From"), SmolStr::new(from)).unwrap();
+        headers
+            .push(SmolStr::new("From"), SmolStr::new(from))
+            .unwrap();
 
         // To header (no tag for out-of-dialog MESSAGE)
-        headers.push(
-            SmolStr::new("To"),
-            SmolStr::new(format!("<{}>", target_uri.as_str())),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("To"),
+                SmolStr::new(format!("<{}>", target_uri.as_str())),
+            )
+            .unwrap();
 
         // Call-ID
         let call_id = generate_call_id();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new(call_id)).unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new(call_id))
+            .unwrap();
 
         // CSeq
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 MESSAGE")).unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 MESSAGE"))
+            .unwrap();
 
         // Max-Forwards
-        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70")).unwrap();
+        headers
+            .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
+            .unwrap();
 
         // Content-Type
-        headers.push(
-            SmolStr::new("Content-Type"),
-            SmolStr::new(content_type),
-        ).unwrap();
+        headers
+            .push(SmolStr::new("Content-Type"), SmolStr::new(content_type))
+            .unwrap();
 
         // Content-Length
-        headers.push(
-            SmolStr::new("Content-Length"),
-            SmolStr::new(body.len().to_string()),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Content-Length"),
+                SmolStr::new(body.len().to_string()),
+            )
+            .unwrap();
 
         // NOTE: RFC 3428 explicitly forbids Contact header in MESSAGE requests
         // "User Agents MUST NOT insert Contact header fields into MESSAGE requests"
@@ -2237,7 +2510,8 @@ impl UserAgentClient {
         for header in extra_headers.iter() {
             request
                 .headers
-                .push(header.name_smol().clone(), header.value_smol().clone()).unwrap();
+                .push(header.name_smol().clone(), header.value_smol().clone())
+                .unwrap();
         }
 
         request
@@ -2269,11 +2543,7 @@ impl UserAgentClient {
                 self.local_tag.as_str()
             )
         } else {
-            format!(
-                "<{}>;tag={}",
-                uri.as_str(),
-                self.local_tag.as_str()
-            )
+            format!("<{}>;tag={}", uri.as_str(), self.local_tag.as_str())
         }
     }
 }
@@ -2343,7 +2613,10 @@ fn parse_www_authenticate(value: &SmolStr) -> Result<std::collections::HashMap<S
 
     for param in split_auth_params(params) {
         let trimmed = param.trim();
-        let trimmed = trimmed.strip_prefix("Digest").unwrap_or(trimmed).trim_start();
+        let trimmed = trimmed
+            .strip_prefix("Digest")
+            .unwrap_or(trimmed)
+            .trim_start();
         if let Some(eq_pos) = trimmed.find('=') {
             let key = trimmed[..eq_pos].trim().to_string();
             let value = trimmed[eq_pos + 1..].trim();
@@ -2552,10 +2825,12 @@ mod tests {
     #[test]
     fn extracts_to_uri_with_brackets() {
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("To"),
-            SmolStr::new("<sip:bob@example.com>;tag=xyz"),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("To"),
+                SmolStr::new("<sip:bob@example.com>;tag=xyz"),
+            )
+            .unwrap();
 
         let response = Response::new(
             StatusLine::new(200, SmolStr::new("OK")),
@@ -2570,10 +2845,12 @@ mod tests {
     #[test]
     fn extracts_to_uri_without_brackets() {
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("To"),
-            SmolStr::new("sip:bob@example.com;tag=xyz"),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("To"),
+                SmolStr::new("sip:bob@example.com;tag=xyz"),
+            )
+            .unwrap();
 
         let response = Response::new(
             StatusLine::new(200, SmolStr::new("OK")),
@@ -2604,19 +2881,25 @@ mod tests {
             response_headers.push(SmolStr::new("From"), from).unwrap();
         }
         if let Some(call_id) = invite.headers.get("Call-ID") {
-            response_headers.push(SmolStr::new("Call-ID"), call_id).unwrap();
+            response_headers
+                .push(SmolStr::new("Call-ID"), call_id)
+                .unwrap();
         }
         if let Some(cseq) = invite.headers.get("CSeq") {
             response_headers.push(SmolStr::new("CSeq"), cseq).unwrap();
         }
-        response_headers.push(
-            SmolStr::new("To"),
-            SmolStr::new("<sip:bob@example.com>;tag=abc123"),
-        ).unwrap();
-        response_headers.push(
-            SmolStr::new("Contact"),
-            SmolStr::new("<sip:bob@192.168.1.200:5060>"),
-        ).unwrap();
+        response_headers
+            .push(
+                SmolStr::new("To"),
+                SmolStr::new("<sip:bob@example.com>;tag=abc123"),
+            )
+            .unwrap();
+        response_headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new("<sip:bob@192.168.1.200:5060>"),
+            )
+            .unwrap();
 
         let response = Response::new(
             StatusLine::new(200, SmolStr::new("OK")),
@@ -2657,19 +2940,25 @@ mod tests {
             response_headers.push(SmolStr::new("From"), from).unwrap();
         }
         if let Some(call_id) = invite.headers.get("Call-ID") {
-            response_headers.push(SmolStr::new("Call-ID"), call_id).unwrap();
+            response_headers
+                .push(SmolStr::new("Call-ID"), call_id)
+                .unwrap();
         }
         if let Some(cseq) = invite.headers.get("CSeq") {
             response_headers.push(SmolStr::new("CSeq"), cseq).unwrap();
         }
-        response_headers.push(
-            SmolStr::new("To"),
-            SmolStr::new("<sip:bob@example.com>;tag=abc123"),
-        ).unwrap();
-        response_headers.push(
-            SmolStr::new("Contact"),
-            SmolStr::new("<sip:bob@192.168.1.200:5060>"),
-        ).unwrap();
+        response_headers
+            .push(
+                SmolStr::new("To"),
+                SmolStr::new("<sip:bob@example.com>;tag=abc123"),
+            )
+            .unwrap();
+        response_headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new("<sip:bob@192.168.1.200:5060>"),
+            )
+            .unwrap();
 
         let sdp_offer = "v=0\r\no=- 234 567 IN IP4 192.168.1.200\r\n";
         let response = Response::new(
@@ -2687,10 +2976,7 @@ mod tests {
 
         assert_eq!(ack.start.method.as_str(), Method::Ack.as_str());
         assert_eq!(ack.body.len(), sdp_answer.len());
-        assert_eq!(
-            ack.headers.get("Content-Type").unwrap(),
-            "application/sdp"
-        );
+        assert_eq!(ack.headers.get("Content-Type").unwrap(), "application/sdp");
         assert_eq!(
             ack.headers.get("Content-Length").unwrap(),
             sdp_answer.len().to_string()
@@ -2722,20 +3008,30 @@ mod tests {
 
         // Create a mock dialog
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=abc123"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("To"),
-            SmolStr::new("<sip:bob@example.com>;tag=def456"),
-        ).unwrap();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id")).unwrap();
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE")).unwrap();
-        headers.push(
-            SmolStr::new("Contact"),
-            SmolStr::new("<sip:bob@192.168.1.200:5060>"),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=abc123"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("To"),
+                SmolStr::new("<sip:bob@example.com>;tag=def456"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"))
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new("<sip:bob@192.168.1.200:5060>"),
+            )
+            .unwrap();
 
         let invite = Request::new(
             RequestLine::new(
@@ -2764,10 +3060,7 @@ mod tests {
             .get("Refer-To")
             .unwrap()
             .contains("charlie@example.com"));
-        assert_eq!(
-            refer.headers.get("Call-ID").unwrap(),
-            "test-call-id"
-        );
+        assert_eq!(refer.headers.get("Call-ID").unwrap(), "test-call-id");
     }
 
     #[test]
@@ -2779,17 +3072,17 @@ mod tests {
 
         // Create two mock dialogs
         let mut headers1 = Headers::new();
-        headers1.push(
+        let _ = headers1.push(
             SmolStr::new("From"),
             SmolStr::new("<sip:alice@example.com>;tag=abc123"),
         );
-        headers1.push(
+        let _ = headers1.push(
             SmolStr::new("To"),
             SmolStr::new("<sip:bob@example.com>;tag=def456"),
         );
-        headers1.push(SmolStr::new("Call-ID"), SmolStr::new("call-1"));
-        headers1.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"));
-        headers1.push(
+        let _ = headers1.push(SmolStr::new("Call-ID"), SmolStr::new("call-1"));
+        let _ = headers1.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"));
+        let _ = headers1.push(
             SmolStr::new("Contact"),
             SmolStr::new("<sip:bob@192.168.1.200:5060>"),
         );
@@ -2813,17 +3106,17 @@ mod tests {
 
         // Second dialog
         let mut headers2 = Headers::new();
-        headers2.push(
+        let _ = headers2.push(
             SmolStr::new("From"),
             SmolStr::new("<sip:alice@example.com>;tag=xyz789"),
         );
-        headers2.push(
+        let _ = headers2.push(
             SmolStr::new("To"),
             SmolStr::new("<sip:charlie@example.com>;tag=uvw321"),
         );
-        headers2.push(SmolStr::new("Call-ID"), SmolStr::new("call-2"));
-        headers2.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"));
-        headers2.push(
+        let _ = headers2.push(SmolStr::new("Call-ID"), SmolStr::new("call-2"));
+        let _ = headers2.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"));
+        let _ = headers2.push(
             SmolStr::new("Contact"),
             SmolStr::new("<sip:charlie@192.168.1.300:5060>"),
         );
@@ -2868,21 +3161,33 @@ mod tests {
 
         // Create a mock subscription
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=abc123"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("To"),
-            SmolStr::new("<sip:bob@example.com>;tag=def456"),
-        ).unwrap();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new("sub-call-id")).unwrap();
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 SUBSCRIBE")).unwrap();
-        headers.push(SmolStr::new("Event"), SmolStr::new("refer")).unwrap();
-        headers.push(
-            SmolStr::new("Contact"),
-            SmolStr::new("<sip:bob@192.168.1.200:5060>"),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=abc123"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("To"),
+                SmolStr::new("<sip:bob@example.com>;tag=def456"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("sub-call-id"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 SUBSCRIBE"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Event"), SmolStr::new("refer"))
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new("<sip:bob@192.168.1.200:5060>"),
+            )
+            .unwrap();
 
         let subscribe = Request::new(
             RequestLine::new(
@@ -2894,7 +3199,9 @@ mod tests {
         );
 
         let mut resp_headers = headers.clone();
-        resp_headers.push(SmolStr::new("Expires"), SmolStr::new("3600")).unwrap();
+        resp_headers
+            .push(SmolStr::new("Expires"), SmolStr::new("3600"))
+            .unwrap();
 
         let response = Response::new(
             StatusLine::new(200, SmolStr::new("OK")),
@@ -2911,10 +3218,7 @@ mod tests {
 
         assert_eq!(notify.start.method.as_str(), Method::Notify.as_str());
         assert_eq!(notify.headers.get("Event").unwrap(), "refer");
-        assert_eq!(
-            notify.headers.get("Subscription-State").unwrap(),
-            "active"
-        );
+        assert_eq!(notify.headers.get("Subscription-State").unwrap(), "active");
         assert_eq!(notify.body.len(), 9); // "test body"
     }
 
@@ -2957,25 +3261,39 @@ mod tests {
 
         // Create reliable provisional response (180 Ringing with RSeq)
         let mut prov_headers = Headers::new();
-        prov_headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
-        ).unwrap();
-        prov_headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=alice-tag"),
-        ).unwrap();
-        prov_headers.push(
-            SmolStr::new("To"),
-            SmolStr::new("<sip:bob@example.com>;tag=bob-tag"),
-        ).unwrap();
-        prov_headers.push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id")).unwrap();
-        prov_headers.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE")).unwrap();
-        prov_headers.push(SmolStr::new("RSeq"), SmolStr::new("1")).unwrap();
-        prov_headers.push(
-            SmolStr::new("Contact"),
-            SmolStr::new("<sip:bob@192.168.1.200:5060>"),
-        ).unwrap();
+        prov_headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
+            )
+            .unwrap();
+        prov_headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=alice-tag"),
+            )
+            .unwrap();
+        prov_headers
+            .push(
+                SmolStr::new("To"),
+                SmolStr::new("<sip:bob@example.com>;tag=bob-tag"),
+            )
+            .unwrap();
+        prov_headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"))
+            .unwrap();
+        prov_headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"))
+            .unwrap();
+        prov_headers
+            .push(SmolStr::new("RSeq"), SmolStr::new("1"))
+            .unwrap();
+        prov_headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new("<sip:bob@192.168.1.200:5060>"),
+            )
+            .unwrap();
 
         let reliable_provisional = Response::new(
             StatusLine::new(180, SmolStr::new("Ringing")),
@@ -3001,10 +3319,7 @@ mod tests {
         assert!(prack.headers.get("To").unwrap().contains("bob-tag"));
 
         // Verify Call-ID matches
-        assert_eq!(
-            prack.headers.get("Call-ID").unwrap(),
-            "test-call-id"
-        );
+        assert_eq!(prack.headers.get("Call-ID").unwrap(), "test-call-id");
 
         // Verify CSeq is for PRACK
         let cseq = prack.headers.get("CSeq").unwrap();
@@ -3053,10 +3368,7 @@ mod tests {
         // Verify headers
         assert!(info.headers.get("From").unwrap().contains("alice-tag"));
         assert!(info.headers.get("To").unwrap().contains("bob-tag"));
-        assert_eq!(
-            info.headers.get("Call-ID").unwrap(),
-            "test-call-id"
-        );
+        assert_eq!(info.headers.get("Call-ID").unwrap(), "test-call-id");
 
         // Verify CSeq is incremented (was 1, should be 2)
         let cseq = info.headers.get("CSeq").unwrap();
@@ -3191,7 +3503,10 @@ mod tests {
         // Verify Privacy header
         let privacy = private_invite.headers.get("Privacy").unwrap();
         assert_eq!(privacy, "header; session");
-        assert_eq!(private_invite.start.method.as_str(), Method::Invite.as_str());
+        assert_eq!(
+            private_invite.start.method.as_str(),
+            Method::Invite.as_str()
+        );
     }
 
     #[test]
@@ -3375,10 +3690,7 @@ mod tests {
         // Verify
         assert_eq!(invite.start.method.as_str(), Method::Invite.as_str());
         let reason_header = invite.headers.get("Reason").unwrap();
-        assert_eq!(
-            reason_header,
-            "Q.850;cause=21;text=\"Call Rejected\""
-        );
+        assert_eq!(reason_header, "Q.850;cause=21;text=\"Call Rejected\"");
     }
 
     #[test]
@@ -3486,14 +3798,8 @@ mod tests {
         assert!(request.headers.get("Call-ID").is_some());
         assert!(request.headers.get("CSeq").is_some());
         assert_eq!(request.headers.get("CSeq").unwrap(), "1 MESSAGE");
-        assert_eq!(
-            request.headers.get("Content-Type").unwrap(),
-            "text/plain"
-        );
-        assert_eq!(
-            request.headers.get("Content-Length").unwrap(),
-            "11"
-        );
+        assert_eq!(request.headers.get("Content-Type").unwrap(), "text/plain");
+        assert_eq!(request.headers.get("Content-Length").unwrap(), "11");
     }
 
     #[test]
@@ -3523,10 +3829,7 @@ mod tests {
         let request = uac.create_message(&target_uri, "text/html", html_body);
 
         assert_eq!(request.start.method.as_str(), Method::Message.as_str());
-        assert_eq!(
-            request.headers.get("Content-Type").unwrap(),
-            "text/html"
-        );
+        assert_eq!(request.headers.get("Content-Type").unwrap(), "text/html");
         assert_eq!(request.body.len(), html_body.len());
         assert_eq!(String::from_utf8_lossy(&request.body), html_body);
     }
@@ -3542,11 +3845,15 @@ mod tests {
 
         // Create custom headers
         let mut extra_headers = Headers::new();
-        extra_headers.push(
-            SmolStr::new("Date"),
-            SmolStr::new("Wed, 15 Jan 2025 10:00:00 GMT"),
-        ).unwrap();
-        extra_headers.push(SmolStr::new("Expires"), SmolStr::new("3600")).unwrap();
+        extra_headers
+            .push(
+                SmolStr::new("Date"),
+                SmolStr::new("Wed, 15 Jan 2025 10:00:00 GMT"),
+            )
+            .unwrap();
+        extra_headers
+            .push(SmolStr::new("Expires"), SmolStr::new("3600"))
+            .unwrap();
 
         let request = uac.create_message_with_headers(
             &target_uri,
@@ -3633,10 +3940,7 @@ mod tests {
 
         assert_eq!(request.body.len(), 0);
         assert_eq!(request.headers.get("Content-Length").unwrap(), "0");
-        assert_eq!(
-            request.headers.get("Content-Type").unwrap(),
-            "text/plain"
-        );
+        assert_eq!(request.headers.get("Content-Type").unwrap(), "text/plain");
     }
 
     #[test]
@@ -3651,10 +3955,12 @@ mod tests {
 
         // Create 200 OK response with Service-Route
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Service-Route"),
-            SmolStr::new("<sip:proxy.example.com;lr>"),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Service-Route"),
+                SmolStr::new("<sip:proxy.example.com;lr>"),
+            )
+            .unwrap();
 
         let response = Response::new(
             StatusLine::new(200, SmolStr::new("OK")),
@@ -3684,10 +3990,12 @@ mod tests {
 
         // Create 200 OK response with multiple Service-Route entries
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Service-Route"),
-            SmolStr::new("<sip:proxy1.example.com;lr>, <sip:proxy2.example.com;lr>"),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Service-Route"),
+                SmolStr::new("<sip:proxy1.example.com;lr>, <sip:proxy2.example.com;lr>"),
+            )
+            .unwrap();
 
         let response = Response::new(
             StatusLine::new(200, SmolStr::new("OK")),
@@ -3718,7 +4026,7 @@ mod tests {
 
         // First, set a service route
         let mut headers1 = Headers::new();
-        headers1.push(
+        let _ = headers1.push(
             SmolStr::new("Service-Route"),
             SmolStr::new("<sip:proxy.example.com;lr>"),
         );
@@ -3755,10 +4063,12 @@ mod tests {
 
         // Create 401 response with Service-Route (shouldn't be processed)
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Service-Route"),
-            SmolStr::new("<sip:proxy.example.com;lr>"),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Service-Route"),
+                SmolStr::new("<sip:proxy.example.com;lr>"),
+            )
+            .unwrap();
 
         let response = Response::new(
             StatusLine::new(401, SmolStr::new("Unauthorized")),
@@ -3781,10 +4091,12 @@ mod tests {
 
         // Set up service route
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Service-Route"),
-            SmolStr::new("<sip:proxy.example.com;lr>"),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Service-Route"),
+                SmolStr::new("<sip:proxy.example.com;lr>"),
+            )
+            .unwrap();
 
         let response = Response::new(
             StatusLine::new(200, SmolStr::new("OK")),
@@ -3819,10 +4131,12 @@ mod tests {
 
         // Set up multiple service routes
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Service-Route"),
-            SmolStr::new("<sip:proxy1.example.com;lr>, <sip:proxy2.example.com;lr>"),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Service-Route"),
+                SmolStr::new("<sip:proxy1.example.com;lr>, <sip:proxy2.example.com;lr>"),
+            )
+            .unwrap();
 
         let response = Response::new(
             StatusLine::new(200, SmolStr::new("OK")),
@@ -3876,10 +4190,12 @@ mod tests {
 
         // Set up service route
         let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Service-Route"),
-            SmolStr::new("<sip:im-proxy.example.com;lr>"),
-        ).unwrap();
+        headers
+            .push(
+                SmolStr::new("Service-Route"),
+                SmolStr::new("<sip:im-proxy.example.com;lr>"),
+            )
+            .unwrap();
 
         let response = Response::new(
             StatusLine::new(200, SmolStr::new("OK")),
@@ -3931,30 +4247,40 @@ mod tests {
         };
 
         let mut headers = Headers::new();
-        headers.push(SmolStr::new("RSeq"), SmolStr::new("42")).unwrap();
-        headers.push(SmolStr::new("CSeq"), SmolStr::new("7 INVITE")).unwrap();
-        headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>;tag=rtag")).unwrap();
-        headers.push(
-            SmolStr::new("From"),
-            SmolStr::new("<sip:alice@example.com>;tag=ltag"),
-        ).unwrap();
-        headers.push(
-            SmolStr::new("Call-ID"),
-            SmolStr::new("call-id"),
-        ).unwrap();
+        headers
+            .push(SmolStr::new("RSeq"), SmolStr::new("42"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("7 INVITE"))
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("To"),
+                SmolStr::new("<sip:bob@example.com>;tag=rtag"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=ltag"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("call-id"))
+            .unwrap();
 
-        let provisional =
-            Response::new(StatusLine::new(183, SmolStr::new("Session Progress")), headers, Bytes::new());
+        let provisional = Response::new(
+            StatusLine::new(183, SmolStr::new("Session Progress")),
+            headers,
+            Bytes::new(),
+        );
 
         let prack = uac
             .create_prack_from_provisional(&provisional, &dialog)
             .expect("should build prack");
 
         assert_eq!(prack.start.method, Method::Prack);
-        assert_eq!(
-            prack.headers.get("RAck"),
-            Some("42 7 INVITE")
-        );
+        assert_eq!(prack.headers.get("RAck"), Some("42 7 INVITE"));
         assert_eq!(prack.start.uri, dialog.remote_target.into());
         assert!(prack.headers.get("CSeq").unwrap().contains("PRACK"));
     }

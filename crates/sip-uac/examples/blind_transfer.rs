@@ -56,9 +56,9 @@ fn main() {
 
     let dialog = Dialog {
         id: DialogId {
-            call_id: "call-abc-123",
-            local_tag: "bob-tag-456",
-            remote_tag: "alice-tag-789",
+            call_id: "call-abc-123".into(),
+            local_tag: "bob-tag-456".into(),
+            remote_tag: "alice-tag-789".into(),
         },
         state: DialogStateType::Confirmed,
         local_uri: bob_uri.clone(),
@@ -126,10 +126,10 @@ fn main() {
     use sip_dialog::{Subscription, SubscriptionId, SubscriptionState};
     let subscription = Subscription {
         id: SubscriptionId {
-            call_id: "call-abc-123",
-            from_tag: "bob-tag-456",
-            to_tag: "alice-tag-789",
-            event: "refer",
+            call_id: "call-abc-123".into(),
+            from_tag: "bob-tag-456".into(),
+            to_tag: "alice-tag-789".into(),
+            event: "refer".into(),
         },
         state: SubscriptionState::Active,
         local_uri: alice_uri.clone(),

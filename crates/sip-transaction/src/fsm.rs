@@ -95,7 +95,7 @@
 //! #     Request::new(line, Headers::new(), Bytes::new())
 //! # }
 //! # fn create_200_ok() -> Response {
-//! #     Response::new(StatusLine::new(200, "OK"), Headers::new(), Bytes::new())
+//! #     Response::new(StatusLine::new(200, "OK".into()), Headers::new(), Bytes::new())
 //! # }
 //! // Create FSM with UDP timers (full retransmissions)
 //! let timers = TransportAwareTimers::new(Transport::Udp);
@@ -1144,10 +1144,10 @@ mod tests {
 
     fn reliable_provisional(code: u16) -> Response {
         let mut response = sample_response(code);
-        response
+        let _ = response
             .headers
             .push(SmolStr::new("Require"), SmolStr::new("100rel"));
-        response
+        let _ = response
             .headers
             .push(SmolStr::new("RSeq"), SmolStr::new("1"));
         response
@@ -1205,7 +1205,9 @@ mod tests {
             .iter()
             .any(|a| matches!(a, ClientInviteAction::Transmit { .. })));
 
-        let actions = fsm.on_event(ClientInviteEvent::ReceiveProvisional(reliable_provisional(180)));
+        let actions = fsm.on_event(ClientInviteEvent::ReceiveProvisional(reliable_provisional(
+            180,
+        )));
         assert!(matches!(fsm.state, crate::ClientInviteState::Proceeding));
         assert!(actions
             .iter()

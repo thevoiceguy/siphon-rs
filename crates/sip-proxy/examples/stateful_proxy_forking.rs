@@ -21,11 +21,8 @@ use bytes::Bytes;
 use sip_core::{Headers, Method, Request, RequestLine, Response, SipUri, StatusLine};
 use sip_proxy::{
     cancel_ack::{CancelForwarder, RouteProcessor},
-    stateful::{
-        forwarding, BranchInfo, BranchState, ForkMode, ProxyContext, ProxyTarget, StatefulProxy,
-    },
+    stateful::{forwarding, BranchInfo, BranchState, ForkMode, ProxyTarget, StatefulProxy},
 };
-use std::sync::Arc;
 use tokio::time::{sleep, Duration};
 
 /// Simulate location service lookup
@@ -59,20 +56,22 @@ fn make_invite(target_user: &str) -> Request {
     let mut headers = Headers::new();
     headers.push("Call-ID", "call-12345").unwrap();
     headers.push("CSeq", "1 INVITE").unwrap();
-    headers.push(
-        "From",
-        "<sip:alice@example.com>;tag=alice-tag",
-    ).unwrap();
-    headers.push(
-        "To",
-        format!("<sip:{}@example.com>", target_user).into(),
-    ).unwrap();
-    headers.push(
-        "Via",
-        "SIP/2.0/UDP alice-client:5060;branch=z9hG4bKclient123",
-    ).unwrap();
+    headers
+        .push("From", "<sip:alice@example.com>;tag=alice-tag")
+        .unwrap();
+    headers
+        .push("To", format!("<sip:{}@example.com>", target_user))
+        .unwrap();
+    headers
+        .push(
+            "Via",
+            "SIP/2.0/UDP alice-client:5060;branch=z9hG4bKclient123",
+        )
+        .unwrap();
     headers.push("Max-Forwards", "70").unwrap();
-    headers.push("Contact", "<sip:alice@192.168.1.50:5060>").unwrap();
+    headers
+        .push("Contact", "<sip:alice@192.168.1.50:5060>")
+        .unwrap();
 
     // SDP offer
     let sdp = "v=0\r\no=alice 100 0 IN IP4 192.168.1.50\r\ns=Call\r\nc=IN IP4 192.168.1.50\r\nt=0 0\r\nm=audio 8000 RTP/AVP 0 8\r\n";
@@ -84,10 +83,8 @@ fn make_invite(target_user: &str) -> Request {
         headers,
         Bytes::from(sdp),
     );
-    req.headers
-        .push("Content-Type", "application/sdp");
-    req.headers
-        .push("Content-Length", sdp.len().to_string().into());
+    let _ = req.headers.push("Content-Type", "application/sdp");
+    let _ = req.headers.push("Content-Length", sdp.len().to_string());
 
     req
 }
@@ -96,25 +93,26 @@ fn make_response(code: u16, to_tag: &str) -> Response {
     let mut headers = Headers::new();
     headers.push("Call-ID", "call-12345").unwrap();
     headers.push("CSeq", "1 INVITE").unwrap();
-    headers.push(
-        "From",
-        "<sip:alice@example.com>;tag=alice-tag",
-    ).unwrap();
-    headers.push(
-        "To",
-        format!("<sip:bob@example.com>;tag={}", to_tag).into(),
-    ).unwrap();
-    headers.push(
-        "Via",
-        "SIP/2.0/UDP proxy:5060;branch=z9hG4bKproxy456",
-    ).unwrap();
-    headers.push(
-        "Via",
-        "SIP/2.0/UDP alice-client:5060;branch=z9hG4bKclient123",
-    ).unwrap();
-    headers.push("Contact", "<sip:bob@192.168.1.100:5060>").unwrap();
+    headers
+        .push("From", "<sip:alice@example.com>;tag=alice-tag")
+        .unwrap();
+    headers
+        .push("To", format!("<sip:bob@example.com>;tag={}", to_tag))
+        .unwrap();
+    headers
+        .push("Via", "SIP/2.0/UDP proxy:5060;branch=z9hG4bKproxy456")
+        .unwrap();
+    headers
+        .push(
+            "Via",
+            "SIP/2.0/UDP alice-client:5060;branch=z9hG4bKclient123",
+        )
+        .unwrap();
+    headers
+        .push("Contact", "<sip:bob@192.168.1.100:5060>")
+        .unwrap();
 
-    Response::new(StatusLine::new(code, "OK"), headers, Bytes::new())
+    Response::new(StatusLine::new(code, "OK".into()), headers, Bytes::new())
 }
 
 #[tokio::main]
@@ -156,12 +154,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create proxy context for parallel forking
     println!("Step 3: Creating proxy context (Parallel fork mode)");
-    let (context, mut response_rx) = proxy.start_context(
+    let (context, _response_rx) = proxy.start_context(
         invite.clone(),
-        "call-12345",
-        "z9hG4bKclient123",
-        "proxy.example.com",
-        "UDP",
+        "call-12345".into(),
+        "z9hG4bKclient123".into(),
+        "proxy.example.com".into(),
+        "UDP".into(),
         ForkMode::Parallel,
     );
     println!(
@@ -174,7 +172,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut branch_ids = Vec::new();
     for (i, target) in targets.iter().enumerate() {
         // Prepare forwarded request
-        let (forwarded, branch_id) = forwarding::prepare_forward(
+        let (_forwarded, branch_id) = forwarding::prepare_forward(
             &invite,
             &target.uri,
             "proxy.example.com",
@@ -209,7 +207,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     sleep(Duration::from_millis(100)).await;
     println!("  t=100ms: Branch 1 (mobile) → 100 Trying");
     let resp1 = make_response(100, "mobile-tag");
-    if let Some(to_forward) = context.process_response(&branch_ids[0], resp1).await {
+    if context
+        .process_response(&branch_ids[0], resp1)
+        .await
+        .is_some()
+    {
         println!("           → Forwarding 100 Trying upstream");
     }
 
@@ -221,14 +223,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     sleep(Duration::from_millis(100)).await;
     println!("  t=400ms: Branch 1 (mobile) → 180 Ringing");
     let resp3 = make_response(180, "mobile-tag");
-    if let Some(to_forward) = context.process_response(&branch_ids[0], resp3).await {
+    if context
+        .process_response(&branch_ids[0], resp3)
+        .await
+        .is_some()
+    {
         println!("           → Forwarding 180 Ringing upstream");
     }
 
     sleep(Duration::from_millis(200)).await;
     println!("\n  t=600ms: Branch 2 (desktop) → 180 Ringing");
     let resp4 = make_response(180, "desktop-tag");
-    if let Some(to_forward) = context.process_response(&branch_ids[1], resp4).await {
+    if context
+        .process_response(&branch_ids[1], resp4)
+        .await
+        .is_some()
+    {
         println!("           → Forwarding 180 Ringing upstream");
     }
 
@@ -236,7 +246,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     sleep(Duration::from_millis(400)).await;
     println!("\n  t=1000ms: Branch 1 (mobile) → 200 OK (WINNER!)");
     let resp5 = make_response(200, "mobile-tag");
-    if let Some(to_forward) = context.process_response(&branch_ids[0], resp5).await {
+    if context
+        .process_response(&branch_ids[0], resp5)
+        .await
+        .is_some()
+    {
         println!("            → Forwarding 200 OK upstream");
         println!("            → Response selection: 200 OK wins over pending branches");
     }
@@ -362,10 +376,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Request with Route headers:\n");
 
     let mut routed_req = make_invite("bob");
-    routed_req
+    let _ = routed_req
         .headers
         .push("Route", "<sip:proxy1.example.com;lr>");
-    routed_req
+    let _ = routed_req
         .headers
         .push("Route", "<sip:proxy2.example.com;lr>");
 

@@ -55,7 +55,7 @@ async fn main() -> Result<()> {
     // Step 1: Alice calls Bob
     println!("Step 1: Alice → Bob (Initial Call)");
     println!("  Alice: Calling Bob...");
-    let sdp = "v=0\r\no=- 100 0 IN IP4 192.168.1.100\r\ns=-\r\nc=IN IP4 192.168.1.100\r\nt=0 0\r\nm=audio 8000 RTP/AVP 0\r\n";
+    let _sdp = "v=0\r\no=- 100 0 IN IP4 192.168.1.100\r\ns=-\r\nc=IN IP4 192.168.1.100\r\nt=0 0\r\nm=audio 8000 RTP/AVP 0\r\n";
 
     sleep(Duration::from_millis(200)).await;
     println!("  Bob: ← INVITE from Alice");

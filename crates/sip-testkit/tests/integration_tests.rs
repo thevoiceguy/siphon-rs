@@ -3,15 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use bytes::Bytes;
-use sip_core::Method;
-use sip_parse::{parse_request, parse_response, serialize_request, serialize_response};
-use sip_testkit::{
-    as_bytes, build_invite, build_options, build_prack, build_register, build_response,
-    build_refer, build_provisional_with_rseq, scenario_invite_prack,
-    scenario_refer_with_notify, scenario_register_with_auth,
-};
 #[cfg(feature = "proptest")]
 use proptest::prelude::*;
+use sip_core::Method;
+use sip_parse::{parse_request, parse_response, serialize_request, serialize_response};
+#[cfg(feature = "proptest")]
+use sip_testkit::build_prack;
+use sip_testkit::{
+    as_bytes, build_invite, build_options, build_provisional_with_rseq, build_refer,
+    build_register, build_response, scenario_invite_prack, scenario_refer_with_notify,
+    scenario_register_with_auth,
+};
 
 /// Test that OPTIONS requests can be built, serialized, parsed, and round-tripped.
 #[test]
@@ -149,7 +151,7 @@ fn call_id_preservation() {
     let parsed = parse_request(&bytes).expect("Should parse");
 
     let parsed_call_id = parsed.headers.get("Call-ID").expect("Call-ID required");
-    assert_eq!(parsed_call_id.as_str(), call_id);
+    assert_eq!(parsed_call_id, call_id);
 }
 
 /// Test that From and To headers with tags are preserved.
@@ -193,7 +195,7 @@ fn max_forwards_present() {
         .headers
         .get("Max-Forwards")
         .expect("Max-Forwards required");
-    assert_eq!(max_forwards.as_str(), "70");
+    assert_eq!(max_forwards, "70");
 }
 
 /// Test that multiple requests can be created with different parameters.
@@ -268,10 +270,8 @@ fn provisional_with_rseq_has_headers() {
 /// REFER with NOTIFY scenario helper.
 #[test]
 fn refer_notify_scenario() {
-    let (refer, accepted, notify) = scenario_refer_with_notify(
-        "sip:bob@example.com",
-        "<sip:carol@example.com>",
-    );
+    let (refer, accepted, notify) =
+        scenario_refer_with_notify("sip:bob@example.com", "<sip:carol@example.com>");
     assert_eq!(
         parse_request(&serialize_request(&refer))
             .unwrap()
@@ -280,10 +280,20 @@ fn refer_notify_scenario() {
             .as_str(),
         Method::Refer.as_str()
     );
-    assert_eq!(parse_response(&serialize_response(&accepted)).unwrap().start.code, 202);
+    assert_eq!(
+        parse_response(&serialize_response(&accepted))
+            .unwrap()
+            .start
+            .code,
+        202
+    );
     let parsed_notify = parse_request(&serialize_request(&notify)).unwrap();
     assert_eq!(parsed_notify.start.method.as_str(), Method::Notify.as_str());
-    assert!(parsed_notify.headers.get("Subscription-State").unwrap().contains("active"));
+    assert!(parsed_notify
+        .headers
+        .get("Subscription-State")
+        .unwrap()
+        .contains("active"));
 }
 
 /// REGISTER auth retry scenario helper.
@@ -305,7 +315,10 @@ fn register_auth_scenario() {
     let parsed_chal = parse_response(&serialize_response(&challenge)).unwrap();
     assert_eq!(parsed_chal.start.code, 401);
     let parsed_retry = parse_request(&serialize_request(&retry)).unwrap();
-    assert_eq!(parsed_retry.start.method.as_str(), Method::Register.as_str());
+    assert_eq!(
+        parsed_retry.start.method.as_str(),
+        Method::Register.as_str()
+    );
     assert!(parsed_retry.headers.get("Authorization").is_some());
 }
 
@@ -360,7 +373,7 @@ fn empty_body_handling() {
         .headers
         .get("Content-Length")
         .expect("Content-Length required");
-    assert_eq!(content_length.as_str(), "0");
+    assert_eq!(content_length, "0");
 }
 
 #[cfg(feature = "proptest")]
@@ -372,7 +385,7 @@ proptest! {
         let via = parsed.headers.get("Via").unwrap();
         let parsed_call_id = parsed.headers.get("Call-ID").unwrap();
         prop_assert!(via.contains(&branch));
-        prop_assert_eq!(parsed_call_id.as_str(), callid);
+        prop_assert_eq!(parsed_call_id, callid);
     }
 
     #[test]
@@ -380,6 +393,6 @@ proptest! {
         let prack = build_prack("sip:bob@example.com", &rack, "call@example.com", 2);
         let parsed = parse_request(&serialize_request(&prack)).unwrap();
         let rack_header = parsed.headers.get("RAck").unwrap();
-        prop_assert_eq!(rack_header.as_str(), rack);
+        prop_assert_eq!(rack_header, rack);
     }
 }
