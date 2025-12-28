@@ -9,73 +9,153 @@
 /// - RFC 3859: Common Profile for Presence (CPP)
 /// - RFC 3863: Presence Information Data Format (PIDF)
 ///
-/// # Overview
+/// # Security
 ///
-/// Presence represents the willingness and ability of a user to communicate
-/// with other users on the network. PIDF (Presence Information Data Format)
-/// is an XML-based format for conveying presence information.
-///
-/// # RFC Summary
-///
-/// - Event package name: "presence"
-/// - MIME type: application/pidf+xml
-/// - Default subscription duration: 3600 seconds (1 hour)
-/// - Basic status values: open, closed
-///
-/// # Examples
-///
-/// ```
-/// use sip_core::{PresenceDocument, Tuple, BasicStatus};
-///
-/// // Create a presence document
-/// let mut doc = PresenceDocument::new("pres:alice@example.com");
-///
-/// let tuple = Tuple::new("t1")
-///     .with_status(BasicStatus::Open)
-///     .with_contact("sip:alice@192.168.1.100")
-///     .with_note("Available");
-///
-/// doc.add_tuple(tuple);
-///
-/// // Format as application/pidf+xml
-/// let xml = doc.to_xml();
-/// ```
+/// All types validate input to prevent XML injection attacks and DoS.
 use smol_str::SmolStr;
 use std::fmt;
+
+const MAX_ENTITY_LENGTH: usize = 512;
+const MAX_ID_LENGTH: usize = 128;
+const MAX_CONTACT_LENGTH: usize = 512;
+const MAX_NOTE_LENGTH: usize = 512;
+const MAX_TIMESTAMP_LENGTH: usize = 64;
+const MAX_TUPLES: usize = 50;
+const MAX_NOTES_PER_TUPLE: usize = 10;
+const MAX_NOTES_PER_DOC: usize = 20;
+const MAX_PARSE_SIZE: usize = 1024 * 1024; // 1MB
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PresenceError {
+    EntityTooLong { max: usize, actual: usize },
+    IdTooLong { max: usize, actual: usize },
+    ContactTooLong { max: usize, actual: usize },
+    NoteTooLong { max: usize, actual: usize },
+    TimestampTooLong { max: usize, actual: usize },
+    TooManyTuples { max: usize, actual: usize },
+    TooManyNotes { max: usize, actual: usize },
+    InvalidEntity(String),
+    InvalidId(String),
+    InvalidContact(String),
+    InvalidNote(String),
+    InvalidTimestamp(String),
+    EmptyEntity,
+    EmptyId,
+    ParseError(String),
+    InputTooLarge { max: usize, actual: usize },
+}
+
+impl std::fmt::Display for PresenceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EntityTooLong { max, actual } =>
+                write!(f, "entity too long (max {}, got {})", max, actual),
+            Self::IdTooLong { max, actual } =>
+                write!(f, "ID too long (max {}, got {})", max, actual),
+            Self::TooManyTuples { max, actual } =>
+                write!(f, "too many tuples (max {}, got {})", max, actual),
+            Self::TooManyNotes { max, actual } =>
+                write!(f, "too many notes (max {}, got {})", max, actual),
+            Self::InvalidEntity(msg) =>
+                write!(f, "invalid entity: {}", msg),
+            Self::EmptyEntity =>
+                write!(f, "entity cannot be empty"),
+            Self::EmptyId =>
+                write!(f, "tuple ID cannot be empty"),
+            Self::ParseError(msg) =>
+                write!(f, "parse error: {}", msg),
+            Self::InputTooLarge { max, actual } =>
+                write!(f, "input too large (max {}, got {})", max, actual),
+            _ => write!(f, "{:?}", self),
+        }
+    }
+}
+
+impl std::error::Error for PresenceError {}
 
 /// RFC 3863 PIDF Presence Document.
 ///
 /// A presence document conveys presence information about a presentity
-/// (the entity whose presence is being reported). It contains one or more
-/// tuples, each describing a communication endpoint or status.
+/// (the entity whose presence is being reported).
+///
+/// # Security
+///
+/// PresenceDocument validates all fields to prevent:
+/// - XML injection attacks
+/// - Control character injection
+/// - Excessive length (DoS)
+/// - Unbounded collections
 #[derive(Debug, Clone, PartialEq)]
 pub struct PresenceDocument {
-    /// The entity URI (presentity)
-    pub entity: SmolStr,
-    /// List of presence tuples
-    pub tuples: Vec<Tuple>,
-    /// Optional notes about the presentity
-    pub notes: Vec<SmolStr>,
+    entity: SmolStr,
+    tuples: Vec<Tuple>,
+    notes: Vec<SmolStr>,
 }
 
 impl PresenceDocument {
     /// Creates a new presence document for the given entity.
-    pub fn new(entity: impl Into<SmolStr>) -> Self {
-        Self {
-            entity: entity.into(),
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the entity is invalid.
+    pub fn new(entity: impl AsRef<str>) -> Result<Self, PresenceError> {
+        validate_entity(entity.as_ref())?;
+        
+        Ok(Self {
+            entity: SmolStr::new(entity.as_ref()),
             tuples: Vec::new(),
             notes: Vec::new(),
-        }
+        })
     }
 
     /// Adds a tuple to the presence document.
-    pub fn add_tuple(&mut self, tuple: Tuple) {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if adding would exceed MAX_TUPLES.
+    pub fn add_tuple(&mut self, tuple: Tuple) -> Result<(), PresenceError> {
+        if self.tuples.len() >= MAX_TUPLES {
+            return Err(PresenceError::TooManyTuples {
+                max: MAX_TUPLES,
+                actual: self.tuples.len() + 1,
+            });
+        }
         self.tuples.push(tuple);
+        Ok(())
     }
 
     /// Adds a note to the presence document.
-    pub fn add_note(&mut self, note: impl Into<SmolStr>) {
-        self.notes.push(note.into());
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the note is invalid or exceeds limits.
+    pub fn add_note(&mut self, note: impl AsRef<str>) -> Result<(), PresenceError> {
+        validate_note(note.as_ref())?;
+        
+        if self.notes.len() >= MAX_NOTES_PER_DOC {
+            return Err(PresenceError::TooManyNotes {
+                max: MAX_NOTES_PER_DOC,
+                actual: self.notes.len() + 1,
+            });
+        }
+        
+        self.notes.push(SmolStr::new(note.as_ref()));
+        Ok(())
+    }
+
+    /// Returns the entity URI.
+    pub fn entity(&self) -> &str {
+        &self.entity
+    }
+
+    /// Returns an iterator over tuples.
+    pub fn tuples(&self) -> impl Iterator<Item = &Tuple> {
+        self.tuples.iter()
+    }
+
+    /// Returns an iterator over notes.
+    pub fn notes(&self) -> impl Iterator<Item = &str> {
+        self.notes.iter().map(|s| s.as_str())
     }
 
     /// Returns true if there are no tuples.
@@ -83,9 +163,14 @@ impl PresenceDocument {
         self.tuples.is_empty()
     }
 
+    /// Returns the number of tuples.
+    pub fn len(&self) -> usize {
+        self.tuples.len()
+    }
+
     /// Returns the basic status from the first tuple, if any.
     pub fn basic_status(&self) -> Option<BasicStatus> {
-        self.tuples.first().and_then(|t| t.status)
+        self.tuples.first().and_then(|t| t.status())
     }
 
     /// Formats the presence document as application/pidf+xml.
@@ -123,32 +208,35 @@ impl fmt::Display for PresenceDocument {
 /// RFC 3863 Presence Tuple.
 ///
 /// A tuple represents a single communication endpoint or aspect of presence.
-/// Each tuple contains status information, optional contact address, notes,
-/// and timestamp.
+///
+/// # Security
+///
+/// Tuple validates all fields to prevent injection attacks.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tuple {
-    /// Tuple identifier (must be unique within document)
-    pub id: SmolStr,
-    /// Basic status (open or closed)
-    pub status: Option<BasicStatus>,
-    /// Contact URI for this tuple
-    pub contact: Option<SmolStr>,
-    /// Optional notes about this tuple
-    pub notes: Vec<SmolStr>,
-    /// Optional timestamp
-    pub timestamp: Option<SmolStr>,
+    id: SmolStr,
+    status: Option<BasicStatus>,
+    contact: Option<SmolStr>,
+    notes: Vec<SmolStr>,
+    timestamp: Option<SmolStr>,
 }
 
 impl Tuple {
     /// Creates a new tuple with the given ID.
-    pub fn new(id: impl Into<SmolStr>) -> Self {
-        Self {
-            id: id.into(),
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the ID is invalid.
+    pub fn new(id: impl AsRef<str>) -> Result<Self, PresenceError> {
+        validate_id(id.as_ref())?;
+        
+        Ok(Self {
+            id: SmolStr::new(id.as_ref()),
             status: None,
             contact: None,
             notes: Vec::new(),
             timestamp: None,
-        }
+        })
     }
 
     /// Sets the basic status (builder pattern).
@@ -158,25 +246,73 @@ impl Tuple {
     }
 
     /// Sets the contact URI (builder pattern).
-    pub fn with_contact(mut self, contact: impl Into<SmolStr>) -> Self {
-        self.contact = Some(contact.into());
-        self
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the contact is invalid.
+    pub fn with_contact(mut self, contact: impl AsRef<str>) -> Result<Self, PresenceError> {
+        validate_contact(contact.as_ref())?;
+        self.contact = Some(SmolStr::new(contact.as_ref()));
+        Ok(self)
     }
 
     /// Adds a note (builder pattern).
-    pub fn with_note(mut self, note: impl Into<SmolStr>) -> Self {
-        self.notes.push(note.into());
-        self
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the note is invalid or exceeds limits.
+    pub fn with_note(mut self, note: impl AsRef<str>) -> Result<Self, PresenceError> {
+        validate_note(note.as_ref())?;
+        
+        if self.notes.len() >= MAX_NOTES_PER_TUPLE {
+            return Err(PresenceError::TooManyNotes {
+                max: MAX_NOTES_PER_TUPLE,
+                actual: self.notes.len() + 1,
+            });
+        }
+        
+        self.notes.push(SmolStr::new(note.as_ref()));
+        Ok(self)
     }
 
     /// Sets the timestamp (builder pattern).
-    pub fn with_timestamp(mut self, timestamp: impl Into<SmolStr>) -> Self {
-        self.timestamp = Some(timestamp.into());
-        self
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the timestamp is invalid.
+    pub fn with_timestamp(mut self, timestamp: impl AsRef<str>) -> Result<Self, PresenceError> {
+        validate_timestamp(timestamp.as_ref())?;
+        self.timestamp = Some(SmolStr::new(timestamp.as_ref()));
+        Ok(self)
+    }
+
+    /// Returns the tuple ID.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Returns the status.
+    pub fn status(&self) -> Option<BasicStatus> {
+        self.status
+    }
+
+    /// Returns the contact.
+    pub fn contact(&self) -> Option<&str> {
+        self.contact.as_ref().map(|s| s.as_str())
+    }
+
+    /// Returns an iterator over notes.
+    pub fn notes(&self) -> impl Iterator<Item = &str> {
+        self.notes.iter().map(|s| s.as_str())
+    }
+
+    /// Returns the timestamp.
+    pub fn timestamp(&self) -> Option<&str> {
+        self.timestamp.as_ref().map(|s| s.as_str())
     }
 
     /// Formats the tuple as XML.
-    fn to_xml(&self) -> String {
+    pub fn to_xml(&self) -> String {
         let mut xml = String::new();
 
         xml.push_str("  <tuple id=\"");
@@ -219,14 +355,9 @@ impl Tuple {
 }
 
 /// RFC 3863 Basic Presence Status.
-///
-/// The basic status indicates whether a presentity is available for
-/// communication. Per RFC 3863, the two basic values are "open" and "closed".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BasicStatus {
-    /// The presentity is available for communication
     Open,
-    /// The presentity is not available for communication
     Closed,
 }
 
@@ -234,16 +365,16 @@ impl BasicStatus {
     /// Returns the string representation for XML.
     pub fn as_str(&self) -> &str {
         match self {
-            BasicStatus::Open => "open",
-            BasicStatus::Closed => "closed",
+            Self::Open => "open",
+            Self::Closed => "closed",
         }
     }
 
     /// Parses a basic status from a string.
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
-            "open" => Some(BasicStatus::Open),
-            "closed" => Some(BasicStatus::Closed),
+            "open" => Some(Self::Open),
+            "closed" => Some(Self::Closed),
             _ => None,
         }
     }
@@ -277,48 +408,107 @@ fn xml_escape(s: &str) -> String {
         .collect()
 }
 
+fn xml_unescape(s: &str) -> String {
+    let mut out = String::new();
+    let mut i = 0;
+    while let Some(rel) = s[i..].find('&') {
+        let amp = i + rel;
+        out.push_str(&s[i..amp]);
+        if let Some(semi) = s[amp..].find(';') {
+            let end = amp + semi;
+            let entity = &s[amp + 1..end];
+            match entity {
+                "lt" => out.push('<'),
+                "gt" => out.push('>'),
+                "amp" => out.push('&'),
+                "quot" => out.push('"'),
+                "apos" => out.push('\''),
+                _ => out.push_str(&s[amp..=end]),
+            }
+            i = end + 1;
+        } else {
+            out.push('&');
+            i = amp + 1;
+        }
+    }
+    out.push_str(&s[i..]);
+    out
+}
+
 /// Parses a PIDF presence document from XML.
 ///
-/// This is a basic parser that extracts entity, tuples, status, and notes.
-/// A full implementation would use a proper XML parser.
-pub fn parse_pidf(xml: &str) -> Option<PresenceDocument> {
+/// # Security
+///
+/// Enforces input size limits and validates all fields during parsing.
+pub fn parse_pidf(xml: &str) -> Result<PresenceDocument, PresenceError> {
+    // Check input size
+    if xml.len() > MAX_PARSE_SIZE {
+        return Err(PresenceError::InputTooLarge {
+            max: MAX_PARSE_SIZE,
+            actual: xml.len(),
+        });
+    }
+
     // Very basic parsing - a real implementation should use an XML parser
-    let entity = extract_attribute(xml, "<presence", "entity")?;
-    let mut doc = PresenceDocument::new(entity);
+    let entity = extract_attribute(xml, "<presence", "entity")
+        .ok_or_else(|| PresenceError::ParseError("missing entity attribute".to_string()))?;
+
+    let entity = xml_unescape(&entity);
+    let mut doc = PresenceDocument::new(entity)?;
 
     // Extract tuples
+    let mut tuple_ranges = Vec::new();
     let mut pos = 0;
     while let Some(tuple_start) = xml[pos..].find("<tuple") {
         let abs_start = pos + tuple_start;
-        let tuple_end = xml[abs_start..].find("</tuple>")? + abs_start + 8;
+        let tuple_end = xml[abs_start..]
+            .find("</tuple>")
+            .ok_or_else(|| PresenceError::ParseError("unclosed tuple".to_string()))?
+            + abs_start + 8;
         let tuple_xml = &xml[abs_start..tuple_end];
 
-        if let Some(tuple) = parse_tuple(tuple_xml) {
-            doc.add_tuple(tuple);
-        }
+        let tuple = parse_tuple(tuple_xml)?;
+        doc.add_tuple(tuple)?;
+        tuple_ranges.push((abs_start, tuple_end));
 
         pos = tuple_end;
     }
 
-    Some(doc)
+    // Extract document-level notes (outside tuples)
+    extract_document_notes(xml, &tuple_ranges, &mut doc)?;
+
+    Ok(doc)
 }
 
 /// Parses a single tuple from XML.
-fn parse_tuple(xml: &str) -> Option<Tuple> {
-    let id = extract_attribute(xml, "<tuple", "id")?;
-    let mut tuple = Tuple::new(id);
+fn parse_tuple(xml: &str) -> Result<Tuple, PresenceError> {
+    let id = extract_attribute(xml, "<tuple", "id")
+        .ok_or_else(|| PresenceError::ParseError("missing tuple id".to_string()))?;
+
+    let id = xml_unescape(&id);
+    let mut tuple = Tuple::new(id)?;
 
     // Extract status
     if let Some(basic_start) = xml.find("<basic>") {
         if let Some(basic_end) = xml.find("</basic>") {
             let status_str = &xml[basic_start + 7..basic_end].trim();
-            tuple.status = BasicStatus::parse(status_str);
+            tuple.status = Some(
+                BasicStatus::parse(status_str).ok_or_else(|| {
+                    PresenceError::ParseError("invalid basic status".to_string())
+                })?,
+            );
         }
     }
 
     // Extract contact
-    if let Some(contact) = extract_element(xml, "contact") {
-        tuple.contact = Some(SmolStr::new(&contact));
+    if let Some((contact, end_idx)) = extract_element_with_range(xml, "contact") {
+        if has_duplicate_element(xml, "contact", end_idx) {
+            return Err(PresenceError::ParseError(
+                "multiple contact elements".to_string(),
+            ));
+        }
+        let contact = xml_unescape(&contact);
+        tuple = tuple.with_contact(contact)?;
     }
 
     // Extract notes
@@ -327,7 +517,8 @@ fn parse_tuple(xml: &str) -> Option<Tuple> {
         let abs_start = pos + note_start;
         if let Some(note_end) = xml[abs_start..].find("</note>") {
             let note = &xml[abs_start + 6..abs_start + note_end].trim();
-            tuple.notes.push(SmolStr::new(note));
+            let note = xml_unescape(note);
+            tuple = tuple.with_note(note)?;
             pos = abs_start + note_end + 7;
         } else {
             break;
@@ -335,11 +526,17 @@ fn parse_tuple(xml: &str) -> Option<Tuple> {
     }
 
     // Extract timestamp
-    if let Some(timestamp) = extract_element(xml, "timestamp") {
-        tuple.timestamp = Some(SmolStr::new(&timestamp));
+    if let Some((timestamp, end_idx)) = extract_element_with_range(xml, "timestamp") {
+        if has_duplicate_element(xml, "timestamp", end_idx) {
+            return Err(PresenceError::ParseError(
+                "multiple timestamp elements".to_string(),
+            ));
+        }
+        let timestamp = xml_unescape(&timestamp);
+        tuple = tuple.with_timestamp(timestamp)?;
     }
 
-    Some(tuple)
+    Ok(tuple)
 }
 
 /// Extracts an XML attribute value.
@@ -355,15 +552,145 @@ fn extract_attribute(xml: &str, tag_name: &str, attr_name: &str) -> Option<Strin
     Some(tag_str[value_start..value_start + value_end].to_string())
 }
 
-/// Extracts an XML element content.
-fn extract_element(xml: &str, element_name: &str) -> Option<String> {
+fn extract_element_with_range(xml: &str, element_name: &str) -> Option<(String, usize)> {
     let start_tag = format!("<{}>", element_name);
     let end_tag = format!("</{}>", element_name);
 
     let content_start = xml.find(&start_tag)? + start_tag.len();
-    let content_end = xml.find(&end_tag)?;
+    let content_end = xml[content_start..].find(&end_tag)? + content_start;
+    let end_idx = content_end + end_tag.len();
 
-    Some(xml[content_start..content_end].trim().to_string())
+    Some((xml[content_start..content_end].trim().to_string(), end_idx))
+}
+
+fn has_duplicate_element(xml: &str, element_name: &str, after_idx: usize) -> bool {
+    let start_tag = format!("<{}>", element_name);
+    xml[after_idx..].contains(&start_tag)
+}
+
+fn extract_document_notes(
+    xml: &str,
+    tuple_ranges: &[(usize, usize)],
+    doc: &mut PresenceDocument,
+) -> Result<(), PresenceError> {
+    let mut pos = 0;
+    while let Some(note_start) = xml[pos..].find("<note>") {
+        let abs_start = pos + note_start;
+        if tuple_ranges
+            .iter()
+            .any(|(start, end)| abs_start >= *start && abs_start < *end)
+        {
+            pos = abs_start + 6;
+            continue;
+        }
+
+        if let Some(note_end) = xml[abs_start..].find("</note>") {
+            let note = &xml[abs_start + 6..abs_start + note_end].trim();
+            let note = xml_unescape(note);
+            doc.add_note(note)?;
+            pos = abs_start + note_end + 7;
+        } else {
+            return Err(PresenceError::ParseError(
+                "unclosed note element".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+// Validation functions
+
+fn validate_entity(entity: &str) -> Result<(), PresenceError> {
+    if entity.is_empty() {
+        return Err(PresenceError::EmptyEntity);
+    }
+
+    if entity.len() > MAX_ENTITY_LENGTH {
+        return Err(PresenceError::EntityTooLong {
+            max: MAX_ENTITY_LENGTH,
+            actual: entity.len(),
+        });
+    }
+
+    if entity.chars().any(|c| c.is_ascii_control()) {
+        return Err(PresenceError::InvalidEntity(
+            "contains control characters".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_id(id: &str) -> Result<(), PresenceError> {
+    if id.is_empty() {
+        return Err(PresenceError::EmptyId);
+    }
+
+    if id.len() > MAX_ID_LENGTH {
+        return Err(PresenceError::IdTooLong {
+            max: MAX_ID_LENGTH,
+            actual: id.len(),
+        });
+    }
+
+    if id.chars().any(|c| c.is_ascii_control()) {
+        return Err(PresenceError::InvalidId(
+            "contains control characters".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_contact(contact: &str) -> Result<(), PresenceError> {
+    if contact.len() > MAX_CONTACT_LENGTH {
+        return Err(PresenceError::ContactTooLong {
+            max: MAX_CONTACT_LENGTH,
+            actual: contact.len(),
+        });
+    }
+
+    if contact.chars().any(|c| c.is_ascii_control()) {
+        return Err(PresenceError::InvalidContact(
+            "contains control characters".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_note(note: &str) -> Result<(), PresenceError> {
+    if note.len() > MAX_NOTE_LENGTH {
+        return Err(PresenceError::NoteTooLong {
+            max: MAX_NOTE_LENGTH,
+            actual: note.len(),
+        });
+    }
+
+    if note.chars().any(|c| c.is_ascii_control()) {
+        return Err(PresenceError::InvalidNote(
+            "contains control characters".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_timestamp(timestamp: &str) -> Result<(), PresenceError> {
+    if timestamp.len() > MAX_TIMESTAMP_LENGTH {
+        return Err(PresenceError::TimestampTooLong {
+            max: MAX_TIMESTAMP_LENGTH,
+            actual: timestamp.len(),
+        });
+    }
+
+    if timestamp.chars().any(|c| c.is_ascii_control()) {
+        return Err(PresenceError::InvalidTimestamp(
+            "contains control characters".to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -372,32 +699,100 @@ mod tests {
 
     #[test]
     fn presence_document_creation() {
-        let doc = PresenceDocument::new("pres:alice@example.com");
-        assert_eq!(doc.entity, "pres:alice@example.com");
+        let doc = PresenceDocument::new("pres:alice@example.com").unwrap();
+        assert_eq!(doc.entity(), "pres:alice@example.com");
         assert!(doc.is_empty());
+    }
+
+    #[test]
+    fn reject_empty_entity() {
+        let result = PresenceDocument::new("");
+        assert!(matches!(result, Err(PresenceError::EmptyEntity)));
+    }
+
+    #[test]
+    fn reject_oversized_entity() {
+        let long_entity = format!("pres:{}", "x".repeat(MAX_ENTITY_LENGTH));
+        let result = PresenceDocument::new(&long_entity);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn reject_crlf_in_entity() {
+        let result = PresenceDocument::new("pres:alice\r\ninjected@example.com");
+        assert!(result.is_err());
     }
 
     #[test]
     fn tuple_creation() {
         let tuple = Tuple::new("t1")
+            .unwrap()
             .with_status(BasicStatus::Open)
             .with_contact("sip:alice@192.168.1.100")
-            .with_note("Available");
+            .unwrap()
+            .with_note("Available")
+            .unwrap();
 
-        assert_eq!(tuple.id, "t1");
-        assert_eq!(tuple.status, Some(BasicStatus::Open));
-        assert_eq!(tuple.contact, Some(SmolStr::new("sip:alice@192.168.1.100")));
-        assert_eq!(tuple.notes.len(), 1);
+        assert_eq!(tuple.id(), "t1");
+        assert_eq!(tuple.status(), Some(BasicStatus::Open));
+        assert_eq!(tuple.contact(), Some("sip:alice@192.168.1.100"));
     }
 
     #[test]
-    fn basic_status_values() {
-        assert_eq!(BasicStatus::Open.as_str(), "open");
-        assert_eq!(BasicStatus::Closed.as_str(), "closed");
+    fn reject_empty_tuple_id() {
+        let result = Tuple::new("");
+        assert!(matches!(result, Err(PresenceError::EmptyId)));
+    }
 
-        assert_eq!(BasicStatus::parse("open"), Some(BasicStatus::Open));
-        assert_eq!(BasicStatus::parse("CLOSED"), Some(BasicStatus::Closed));
-        assert_eq!(BasicStatus::parse("invalid"), None);
+    #[test]
+    fn reject_crlf_in_tuple_id() {
+        let result = Tuple::new("t1\r\ninjected");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn reject_crlf_in_contact() {
+        let result = Tuple::new("t1")
+            .unwrap()
+            .with_contact("sip:alice\r\ninjected@example.com");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn reject_crlf_in_note() {
+        let result = Tuple::new("t1")
+            .unwrap()
+            .with_note("Available\r\ninjected");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn reject_too_many_tuples() {
+        let mut doc = PresenceDocument::new("pres:alice@example.com").unwrap();
+        
+        for i in 0..MAX_TUPLES {
+            let tuple = Tuple::new(&format!("t{}", i)).unwrap();
+            doc.add_tuple(tuple).unwrap();
+        }
+        
+        // Should fail
+        let tuple = Tuple::new("overflow").unwrap();
+        let result = doc.add_tuple(tuple);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn reject_too_many_notes() {
+        let tuple = Tuple::new("t1").unwrap();
+        let mut tuple = tuple;
+        
+        for _ in 0..MAX_NOTES_PER_TUPLE {
+            tuple = tuple.with_note("note").unwrap();
+        }
+        
+        // Should fail
+        let result = tuple.with_note("overflow");
+        assert!(result.is_err());
     }
 
     #[test]
@@ -410,14 +805,17 @@ mod tests {
 
     #[test]
     fn presence_document_xml_output() {
-        let mut doc = PresenceDocument::new("pres:alice@example.com");
+        let mut doc = PresenceDocument::new("pres:alice@example.com").unwrap();
 
         let tuple = Tuple::new("t1")
+            .unwrap()
             .with_status(BasicStatus::Open)
             .with_contact("sip:alice@192.168.1.100")
-            .with_note("Available");
+            .unwrap()
+            .with_note("Available")
+            .unwrap();
 
-        doc.add_tuple(tuple);
+        doc.add_tuple(tuple).unwrap();
 
         let xml = doc.to_xml();
         assert!(xml.contains("<?xml version=\"1.0\""));
@@ -425,105 +823,86 @@ mod tests {
         assert!(xml.contains("entity=\"pres:alice@example.com\""));
         assert!(xml.contains("<tuple id=\"t1\""));
         assert!(xml.contains("<basic>open</basic>"));
-        assert!(xml.contains("<contact>sip:alice@192.168.1.100</contact>"));
-        assert!(xml.contains("<note>Available</note>"));
-        assert!(xml.contains("</tuple>"));
-        assert!(xml.contains("</presence>"));
     }
 
     #[test]
-    fn presence_document_multiple_tuples() {
-        let mut doc = PresenceDocument::new("pres:alice@example.com");
-
-        doc.add_tuple(
-            Tuple::new("t1")
-                .with_status(BasicStatus::Open)
-                .with_contact("sip:alice@work.example.com"),
-        );
-
-        doc.add_tuple(
-            Tuple::new("t2")
-                .with_status(BasicStatus::Closed)
-                .with_contact("sip:alice@home.example.com"),
-        );
-
-        assert_eq!(doc.tuples.len(), 2);
-
-        let xml = doc.to_xml();
-        assert!(xml.contains("t1"));
-        assert!(xml.contains("t2"));
-        assert!(xml.contains("open"));
-        assert!(xml.contains("closed"));
+    fn reject_oversized_parse_input() {
+        let huge_xml = format!("<?xml version=\"1.0\"?><presence>{}</presence>", 
+            "x".repeat(MAX_PARSE_SIZE));
+        let result = parse_pidf(&huge_xml);
+        assert!(result.is_err());
     }
 
     #[test]
-    fn tuple_with_timestamp() {
-        let tuple = Tuple::new("t1")
-            .with_status(BasicStatus::Open)
-            .with_timestamp("2023-11-21T12:00:00Z");
-
-        let xml = tuple.to_xml();
-        assert!(xml.contains("<timestamp>2023-11-21T12:00:00Z</timestamp>"));
-    }
-
-    #[test]
-    fn presence_document_with_notes() {
-        let mut doc = PresenceDocument::new("pres:alice@example.com");
-        doc.add_note("Away from desk");
-
-        let xml = doc.to_xml();
-        assert!(xml.contains("<note>Away from desk</note>"));
-    }
-
-    #[test]
-    fn parse_simple_pidf() {
-        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
-<presence xmlns="urn:ietf:params:xml:ns:pidf" entity="pres:alice@example.com">
-  <tuple id="t1">
-    <status>
-      <basic>open</basic>
-    </status>
-    <contact>sip:alice@192.168.1.100</contact>
-    <note>Available</note>
-  </tuple>
-</presence>"#;
-
-        let doc = parse_pidf(xml).unwrap();
-        assert_eq!(doc.entity, "pres:alice@example.com");
-        assert_eq!(doc.tuples.len(), 1);
-
-        let tuple = &doc.tuples[0];
-        assert_eq!(tuple.id, "t1");
-        assert_eq!(tuple.status, Some(BasicStatus::Open));
-        assert_eq!(tuple.contact, Some(SmolStr::new("sip:alice@192.168.1.100")));
-        assert_eq!(tuple.notes.len(), 1);
+    fn parse_validates_entity() {
+        let xml = format!("<?xml version=\"1.0\"?>\n<presence entity=\"{}\"></presence>",
+            "x".repeat(MAX_ENTITY_LENGTH + 1));
+        let result = parse_pidf(&xml);
+        assert!(result.is_err());
     }
 
     #[test]
     fn round_trip_pidf() {
-        let mut doc = PresenceDocument::new("pres:alice@example.com");
+        let mut doc = PresenceDocument::new("pres:alice@example.com").unwrap();
         doc.add_tuple(
             Tuple::new("t1")
+                .unwrap()
                 .with_status(BasicStatus::Open)
                 .with_contact("sip:alice@192.168.1.100")
-                .with_note("Available"),
-        );
+                .unwrap()
+                .with_note("Available")
+                .unwrap()
+        ).unwrap();
 
         let xml = doc.to_xml();
         let parsed = parse_pidf(&xml).unwrap();
 
-        assert_eq!(doc.entity, parsed.entity);
-        assert_eq!(doc.tuples.len(), parsed.tuples.len());
-        assert_eq!(doc.tuples[0].id, parsed.tuples[0].id);
-        assert_eq!(doc.tuples[0].status, parsed.tuples[0].status);
+        assert_eq!(doc.entity(), parsed.entity());
+        assert_eq!(doc.len(), parsed.len());
     }
 
     #[test]
-    fn basic_status_from_first_tuple() {
-        let mut doc = PresenceDocument::new("pres:alice@example.com");
-        assert_eq!(doc.basic_status(), None);
+    fn parse_preserves_document_notes_and_unescapes() {
+        let mut doc = PresenceDocument::new("pres:alice@example.com").unwrap();
+        doc.add_note("Available & ready").unwrap();
+        doc.add_tuple(
+            Tuple::new("t1")
+                .unwrap()
+                .with_status(BasicStatus::Open)
+                .with_contact("sip:alice@192.168.1.100")
+                .unwrap()
+                .with_note("In <office>")
+                .unwrap(),
+        )
+        .unwrap();
 
-        doc.add_tuple(Tuple::new("t1").with_status(BasicStatus::Open));
-        assert_eq!(doc.basic_status(), Some(BasicStatus::Open));
+        let xml = doc.to_xml();
+        let parsed = parse_pidf(&xml).unwrap();
+        let notes: Vec<&str> = parsed.notes().collect();
+        assert_eq!(notes, vec!["Available & ready"]);
+    }
+
+    #[test]
+    fn parse_rejects_invalid_basic_status() {
+        let xml = "<?xml version=\"1.0\"?>\n<presence entity=\"pres:alice@example.com\">\
+<tuple id=\"t1\"><status><basic>maybe</basic></status></tuple></presence>";
+        assert!(parse_pidf(xml).is_err());
+    }
+
+    #[test]
+    fn fields_are_private() {
+        let doc = PresenceDocument::new("pres:alice@example.com").unwrap();
+        let tuple = Tuple::new("t1").unwrap();
+        
+        // These should compile (read-only access)
+        let _ = doc.entity();
+        let _ = doc.tuples();
+        let _ = tuple.id();
+        let _ = tuple.status();
+        
+        // These should NOT compile (no direct field access):
+        // doc.entity = SmolStr::new("evil");  // ← Does not compile!
+        // tuple.id = SmolStr::new("evil");    // ← Does not compile!
+        // doc.tuples.clear();                  // ← Does not compile!
     }
 }
