@@ -1015,17 +1015,22 @@ l: 0\r\n\r\n",
         let pani =
             parse_p_access_network_info(header(resp.headers(), "P-Access-Network-Info").unwrap())
                 .expect("pani");
-        assert_eq!(pani.access_type.as_str(), "3GPP-E-UTRAN-FDD");
+        assert_eq!(pani.access_type(), "3GPP-E-UTRAN-FDD");
 
         let visited =
-            parse_p_visited_network_id(header(resp.headers(), "P-Visited-Network-ID").unwrap());
-        assert_eq!(visited.values.len(), 2);
+            parse_p_visited_network_id(header(resp.headers(), "P-Visited-Network-ID").unwrap())
+                .expect("visited");
+        assert_eq!(visited.len(), 2);
 
-        let asserted = parse_p_asserted_identity(resp.headers());
-        assert_eq!(asserted.identities.len(), 1);
+        let asserted = parse_p_asserted_identity(resp.headers())
+            .expect("asserted")
+            .expect("asserted");
+        assert_eq!(asserted.len(), 1);
 
-        let preferred = parse_p_preferred_identity(resp.headers());
-        assert_eq!(preferred.identities.len(), 1);
+        let preferred = parse_p_preferred_identity(resp.headers())
+            .expect("preferred")
+            .expect("preferred");
+        assert_eq!(preferred.len(), 1);
     }
 
     #[test]
@@ -1045,13 +1050,13 @@ l: 0\r\n\r\n",
                 SmolStr::new("\"Bob <Ops>\" <sip:bob@example.com>".to_owned()),
             )
             .unwrap();
-        let asserted = parse_p_asserted_identity(&headers);
-        assert_eq!(asserted.identities.len(), 1);
-        assert_eq!(
-            asserted.identities[0].display_name.as_deref(),
-            Some("Bob <Ops>")
-        );
-        assert_eq!(asserted.identities[0].uri.as_str(), "sip:bob@example.com");
+        let asserted = parse_p_asserted_identity(&headers)
+            .expect("asserted")
+            .expect("asserted");
+        assert_eq!(asserted.len(), 1);
+        let identity = asserted.identities().next().expect("identity");
+        assert_eq!(identity.display_name(), Some("Bob <Ops>"));
+        assert_eq!(identity.uri().as_str(), "sip:bob@example.com");
     }
 
     #[test]

@@ -3756,7 +3756,7 @@ mod tests {
         let mut invite = uac.create_invite(&remote_uri, None);
 
         // Add P-Preferred-Identity with Tel URI
-        let ppi = PPreferredIdentityHeader::single_tel("+15551234567");
+        let ppi = PPreferredIdentityHeader::single_tel("+15551234567").expect("valid tel");
         UserAgentClient::add_p_preferred_identity_header(&mut invite, ppi);
 
         // Verify
@@ -3800,7 +3800,8 @@ mod tests {
 
         // Add P-Asserted-Identity (for testing/proxy use)
         let asserted_uri = SipUri::parse("sip:alice@example.com").unwrap();
-        let pai = PAssertedIdentityHeader::sip_and_tel(asserted_uri, "+15551234567");
+        let pai =
+            PAssertedIdentityHeader::sip_and_tel(asserted_uri, "+15551234567").expect("valid tel");
         UserAgentClient::add_p_asserted_identity_header(&mut invite, pai);
 
         // Verify

@@ -10,8 +10,9 @@ use sip_core::{
     AllowHeader, AuthorizationHeader, ContactHeader, DateHeader, EventHeader, FromHeader,
     GeolocationErrorHeader, GeolocationHeader, GeolocationRoutingHeader, GeolocationValue, Headers,
     HistoryInfoEntry, HistoryInfoHeader, MimeType, MinSessionExpires, NameAddr, NameAddrHeader,
-    PAccessNetworkInfo, PAssertedIdentityHeader, PPreferredIdentityHeader, PVisitedNetworkIdHeader,
-    PathHeader, PriorityValue, RAckHeader, RSeqHeader, ReasonHeader, RefresherRole,
+    p_headers::PHeaderError, PAccessNetworkInfo, PAssertedIdentityHeader, PPreferredIdentityHeader,
+    PVisitedNetworkIdHeader, PathHeader, PriorityValue, RAckHeader, RSeqHeader, ReasonHeader,
+    RefresherRole,
     ResourcePriorityHeader, ResourcePriorityValue, RouteHeader, SdpSession, ServiceRouteHeader,
     SessionExpires, SipETagHeader, SubjectHeader, SubscriptionState, SubscriptionStateHeader,
     SupportedHeader, ToHeader, TokenList, Uri, ViaHeader,
@@ -391,34 +392,42 @@ pub fn parse_geolocation_routing(
 
 pub fn parse_p_access_network_info(value: &SmolStr) -> Option<PAccessNetworkInfo> {
     let mut parts = value.split(';');
-    let access_type = SmolStr::new(parts.next()?.trim());
-    let mut params = BTreeMap::new();
+    let access_type = parts.next()?.trim();
+    let mut header = PAccessNetworkInfo::new(access_type).ok()?;
     for part in parts {
         let part = part.trim();
         if part.is_empty() {
             continue;
         }
         if let Some((name, val)) = part.split_once('=') {
-            params.insert(
-                SmolStr::new(name.trim().to_ascii_lowercase()),
-                Some(SmolStr::new(val.trim().trim_matches('"'))),
-            );
+            if header
+                .add_param(name.trim(), Some(val.trim().trim_matches('"')))
+                .is_err()
+            {
+                return None;
+            }
         } else {
-            params.insert(SmolStr::new(part.to_ascii_lowercase()), None);
+            if header.add_param(part, Option::<&str>::None).is_err() {
+                return None;
+            }
         }
     }
-    Some(PAccessNetworkInfo {
-        access_type,
-        params,
-    })
+    Some(header)
 }
 
-pub fn parse_p_visited_network_id(value: &SmolStr) -> PVisitedNetworkIdHeader {
-    let values = split_quoted_commas(value.as_str())
+pub fn parse_p_visited_network_id(value: &SmolStr) -> Option<PVisitedNetworkIdHeader> {
+    let values: Vec<SmolStr> = split_quoted_commas(value.as_str())
         .into_iter()
-        .map(|token| SmolStr::new(token.trim_matches('"')))
+        .filter_map(|token| {
+            let trimmed = token.trim_matches('"').trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(SmolStr::new(trimmed))
+            }
+        })
         .collect();
-    PVisitedNetworkIdHeader { values }
+    PVisitedNetworkIdHeader::new(values).ok()
 }
 
 #[allow(dead_code)]
@@ -434,68 +443,18 @@ fn parse_name_addr_list<'a>(header_values: impl Iterator<Item = &'a SmolStr>) ->
     out
 }
 
-pub fn parse_p_asserted_identity(headers: &Headers) -> PAssertedIdentityHeader {
-    let identities = parse_p_identity_list(headers.get_all_smol("P-Asserted-Identity"));
-    PAssertedIdentityHeader { identities }
+pub fn parse_p_asserted_identity(
+    headers: &Headers,
+) -> Result<Option<PAssertedIdentityHeader>, PHeaderError> {
+    sip_core::parse_p_asserted_identity(headers)
 }
 
-pub fn parse_p_preferred_identity(headers: &Headers) -> PPreferredIdentityHeader {
-    let identities = parse_p_identity_list(headers.get_all_smol("P-Preferred-Identity"));
-    PPreferredIdentityHeader { identities }
+pub fn parse_p_preferred_identity(
+    headers: &Headers,
+) -> Result<Option<PPreferredIdentityHeader>, PHeaderError> {
+    sip_core::parse_p_preferred_identity(headers)
 }
 
-fn parse_p_identity_list<'a, I>(header_values: I) -> Vec<sip_core::PIdentity>
-where
-    I: Iterator<Item = &'a SmolStr>,
-{
-    let mut out = Vec::new();
-    for value in header_values {
-        for part in split_quoted_commas(value.as_str()) {
-            if let Some(identity) = parse_p_identity(&SmolStr::new(part.trim())) {
-                out.push(identity);
-            }
-        }
-    }
-    out
-}
-
-fn parse_p_identity(value: &SmolStr) -> Option<sip_core::PIdentity> {
-    use sip_core::{PIdentity, Uri};
-    let input = value.trim();
-    if input.is_empty() {
-        return None;
-    }
-    match find_unquoted_angle_brackets(input) {
-        Ok(Some((start, end))) => {
-            let display = input[..start].trim();
-            let uri_str = input[start + 1..end].trim();
-            let params = parse_params(input[end + 1..].trim());
-
-            // Parse as Uri (supports both SIP and Tel)
-            let uri = Uri::parse(uri_str)?;
-
-            Some(PIdentity {
-                display_name: if display.is_empty() {
-                    None
-                } else {
-                    Some(SmolStr::new(display.trim_matches('"')))
-                },
-                uri,
-                params,
-            })
-        }
-        Ok(None) => {
-            let (uri_part, param_part) = input.split_once(';').unwrap_or((input, ""));
-            let uri = Uri::parse(uri_part.trim())?;
-            Some(PIdentity {
-                display_name: None,
-                uri,
-                params: parse_params(param_part),
-            })
-        }
-        Err(()) => None,
-    }
-}
 
 fn parse_name_addr(value: &SmolStr) -> Option<NameAddr> {
     let input = value.trim();
