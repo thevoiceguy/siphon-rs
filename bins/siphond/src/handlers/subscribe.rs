@@ -31,17 +31,18 @@ struct NotifyTransactionUser;
 #[async_trait]
 impl ClientTransactionUser for NotifyTransactionUser {
     async fn on_provisional(&self, _key: &TransactionKey, response: &Response) {
-        debug!(
-            status = response.start.code,
-            "NOTIFY received provisional response"
-        );
+        debug!(status = response.code(), "NOTIFY received provisional response");
     }
 
     async fn on_final(&self, _key: &TransactionKey, response: &Response) {
-        if response.start.code >= 200 && response.start.code < 300 {
-            debug!(status = response.start.code, "NOTIFY accepted");
+        if response.code() >= 200 && response.code() < 300 {
+            debug!(status = response.code(), "NOTIFY accepted");
         } else {
-            warn!(status = response.start.code, reason = %response.start.reason, "NOTIFY rejected");
+            warn!(
+                status = response.code(),
+                reason = %response.reason(),
+                "NOTIFY rejected"
+            );
         }
     }
 
@@ -82,7 +83,7 @@ impl SubscribeHandler {
 
     /// Extract event package from Event header
     fn extract_event_package(request: &Request) -> Option<String> {
-        let event = header(&request.headers, "Event")?;
+        let event = header(request.headers(), "Event")?;
         // Event header format: "event-package;param=value"
         let package = event.split(';').next()?.trim();
         Some(package.to_string())
@@ -90,7 +91,7 @@ impl SubscribeHandler {
 
     /// Extract requested expiry from Expires header
     fn extract_expiry(request: &Request) -> Option<u32> {
-        let expires = header(&request.headers, "Expires")?;
+        let expires = header(request.headers(), "Expires")?;
         expires.parse().ok()
     }
 
@@ -130,10 +131,10 @@ impl SubscribeHandler {
         );
 
         if let Some(content_type) = content_type {
-            let _ = notify.headers.push("Content-Type", content_type);
+            let _ = notify.headers_mut().push("Content-Type", content_type);
             if let Some(body) = body.as_ref() {
                 let _ = notify
-                    .headers
+                    .headers_mut()
                     .push("Content-Length", body.len().to_string());
             }
         }
@@ -202,7 +203,7 @@ impl RequestHandler for SubscribeHandler {
         _ctx: &TransportContext,
         services: &ServiceRegistry,
     ) -> Result<()> {
-        let call_id = header(&request.headers, "Call-ID")
+        let call_id = header(request.headers(), "Call-ID")
             .map(|s| s.as_str())
             .unwrap_or("unknown");
 
@@ -212,10 +213,11 @@ impl RequestHandler for SubscribeHandler {
             let mut headers = sip_core::Headers::new();
             copy_headers(request, &mut headers);
             let response = sip_core::Response::new(
-                sip_core::StatusLine::new(501, "Not Implemented".into()),
+                sip_core::StatusLine::new(501, "Not Implemented").expect("valid status line"),
                 headers,
                 bytes::Bytes::new(),
-            );
+            )
+            .expect("valid response");
             handle.send_final(response).await;
             return Ok(());
         }
@@ -247,10 +249,11 @@ impl RequestHandler for SubscribeHandler {
             let mut headers = sip_core::Headers::new();
             copy_headers(request, &mut headers);
             let response = sip_core::Response::new(
-                sip_core::StatusLine::new(603, "Decline".into()),
+                sip_core::StatusLine::new(603, "Decline").expect("valid status line"),
                 headers,
                 bytes::Bytes::new(),
-            );
+            )
+            .expect("valid response");
             handle.send_final(response).await;
             return Ok(());
         }
@@ -328,19 +331,19 @@ impl RequestHandler for SubscribeHandler {
 
 /// Copy essential headers from request to response
 fn copy_headers(request: &Request, headers: &mut sip_core::Headers) {
-    if let Some(via) = header(&request.headers, "Via") {
+    if let Some(via) = header(request.headers(), "Via") {
         let _ = headers.push("Via", via.clone());
     }
-    if let Some(from) = header(&request.headers, "From") {
+    if let Some(from) = header(request.headers(), "From") {
         let _ = headers.push("From", from.clone());
     }
-    if let Some(to) = header(&request.headers, "To") {
+    if let Some(to) = header(request.headers(), "To") {
         let _ = headers.push("To", to.clone());
     }
-    if let Some(call_id) = header(&request.headers, "Call-ID") {
+    if let Some(call_id) = header(request.headers(), "Call-ID") {
         let _ = headers.push("Call-ID", call_id.clone());
     }
-    if let Some(cseq) = header(&request.headers, "CSeq") {
+    if let Some(cseq) = header(request.headers(), "CSeq") {
         let _ = headers.push("CSeq", cseq.clone());
     }
 }

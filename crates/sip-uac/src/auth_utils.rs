@@ -7,9 +7,9 @@ use sip_core::Response;
 /// Extract realm value from WWW-Authenticate/Proxy-Authenticate headers.
 pub fn extract_realm(response: &Response) -> Option<String> {
     let header_val = response
-        .headers
+        .headers()
         .get("WWW-Authenticate")
-        .or_else(|| response.headers.get("Proxy-Authenticate"))?;
+        .or_else(|| response.headers().get("Proxy-Authenticate"))?;
     let header = header_val.trim();
     let header_lower = header.to_ascii_lowercase();
     let digest_pos = header_lower.find("digest")?;

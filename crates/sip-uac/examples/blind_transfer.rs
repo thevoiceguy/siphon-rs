@@ -80,13 +80,13 @@ fn main() {
     let refer_request = bob_uac.create_refer(&dialog, &charlie_uri);
 
     println!("REFER sip:alice@192.168.1.100:5060 SIP/2.0");
-    println!("From: {}", refer_request.headers.get("From").unwrap());
-    println!("To: {}", refer_request.headers.get("To").unwrap());
-    println!("Call-ID: {}", refer_request.headers.get("Call-ID").unwrap());
-    println!("CSeq: {}", refer_request.headers.get("CSeq").unwrap());
+    println!("From: {}", refer_request.headers().get("From").unwrap());
+    println!("To: {}", refer_request.headers().get("To").unwrap());
+    println!("Call-ID: {}", refer_request.headers().get("Call-ID").unwrap());
+    println!("CSeq: {}", refer_request.headers().get("CSeq").unwrap());
     println!(
         "Refer-To: {}",
-        refer_request.headers.get("Refer-To").unwrap()
+        refer_request.headers().get("Refer-To").unwrap()
     );
     println!();
     println!("Note: REFER tells Alice to call Charlie");
@@ -114,7 +114,7 @@ fn main() {
     );
 
     println!("INVITE sip:charlie@example.com SIP/2.0");
-    println!("From: {}", invite_to_charlie.headers.get("From").unwrap());
+    println!("From: {}", invite_to_charlie.headers().get("From").unwrap());
     println!("To: <sip:charlie@example.com>");
     println!("Referred-By: <sip:bob@example.com>");
     println!();

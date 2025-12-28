@@ -164,7 +164,7 @@ impl PrackValidator {
     pub fn validate_prack(&self, dialog_id: &str, prack: &Request) -> Result<RAck> {
         // Extract RAck header
         let rack_value = prack
-            .headers
+            .headers()
             .get("RAck")
             .ok_or_else(|| anyhow!("PRACK missing RAck header"))?;
 
@@ -273,7 +273,7 @@ impl Default for PrackValidator {
 /// Extract RSeq from a response
 pub fn extract_rseq(response: &Response) -> Option<u32> {
     response
-        .headers
+        .headers()
         .get("RSeq")
         .and_then(|v| v.parse::<u32>().ok())
 }
@@ -296,10 +296,10 @@ pub fn extract_cseq_method(headers: &Headers) -> Option<Method> {
 
 /// Check if a response is a reliable provisional (1xx with RSeq header)
 pub fn is_reliable_provisional(response: &Response) -> bool {
-    response.start.code >= 100
-        && response.start.code < 200
-        && response.start.code != 100 // 100 Trying is never reliable
-        && response.headers.get("RSeq").is_some()
+    response.code() >= 100
+        && response.code() < 200
+        && response.code() != 100 // 100 Trying is never reliable
+        && response.headers().get("RSeq").is_some()
 }
 
 #[cfg(test)]
@@ -349,7 +349,8 @@ mod tests {
             RequestLine::new(Method::Prack, SipUri::parse("sip:bob@example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid PRACK");
 
         // Validate PRACK
         let rack = validator.validate_prack(dialog_id, &prack).unwrap();
@@ -374,7 +375,8 @@ mod tests {
             RequestLine::new(Method::Prack, SipUri::parse("sip:bob@example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid PRACK");
 
         // First PRACK - should succeed
         assert!(validator.validate_prack(dialog_id, &prack).is_ok());
@@ -397,7 +399,8 @@ mod tests {
             RequestLine::new(Method::Prack, SipUri::parse("sip:bob@example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid PRACK");
 
         assert!(validator.validate_prack(dialog_id, &prack).is_err());
     }
@@ -416,7 +419,8 @@ mod tests {
             RequestLine::new(Method::Prack, SipUri::parse("sip:bob@example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid PRACK");
 
         assert!(validator.validate_prack(dialog_id, &prack).is_err());
     }
@@ -441,22 +445,25 @@ mod tests {
         headers.push("RSeq", "1").unwrap();
 
         let response_180 = Response::new(
-            StatusLine::new(180, "Ringing".into()),
+            StatusLine::new(180, "Ringing").expect("valid status line"),
             headers.clone(),
             Bytes::new(),
-        );
+        )
+        .expect("valid response");
 
         let response_100 = Response::new(
-            StatusLine::new(100, "Trying".into()),
+            StatusLine::new(100, "Trying").expect("valid status line"),
             headers.clone(),
             Bytes::new(),
-        );
+        )
+        .expect("valid response");
 
         let response_200 = Response::new(
-            StatusLine::new(200, "OK".into()),
+            StatusLine::new(200, "OK").expect("valid status line"),
             headers.clone(),
             Bytes::new(),
-        );
+        )
+        .expect("valid response");
 
         assert!(is_reliable_provisional(&response_180)); // 180 with RSeq
         assert!(!is_reliable_provisional(&response_100)); // 100 never reliable

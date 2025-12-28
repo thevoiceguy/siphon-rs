@@ -71,7 +71,7 @@ const ALLOW_HEADER_VALUE: &str =
 fn method_not_allowed_response(request: &Request) -> Response {
     let mut response = UserAgentServer::create_response(request, 405, "Method Not Allowed");
     response
-        .headers
+        .headers_mut()
         .push(SmolStr::new("Allow"), SmolStr::new(ALLOW_HEADER_VALUE))
         .unwrap();
     response
@@ -289,10 +289,10 @@ impl IntegratedUAS {
     ) -> Result<()> {
         info!(
             "Dispatching {:?} request from {}",
-            &request.start.method, ctx.peer
+            request.method(), ctx.peer
         );
 
-        if self.config.require_authentication && request.start.method != Method::Ack {
+        if self.config.require_authentication && request.method() != &Method::Ack {
             let helper = self.helper.lock().await;
             let is_authenticated = helper.verify_authentication(request)?;
             if !is_authenticated {
@@ -305,7 +305,7 @@ impl IntegratedUAS {
         }
 
         // Route based on method
-        match request.start.method.as_str() {
+        match request.method().as_str() {
             "INVITE" => {
                 if let Err(mut response) = UserAgentServer::validate_invite_headers(request) {
                     self.auto_fill_headers(&mut response, ctx).await;
@@ -457,7 +457,7 @@ impl IntegratedUAS {
                 }
             }
             _ => {
-                warn!("Unsupported method: {:?}", &request.start.method);
+                warn!("Unsupported method: {:?}", request.method());
                 let mut response =
                     UserAgentServer::create_response(request, 501, "Not Implemented");
                 self.auto_fill_headers(&mut response, ctx).await;
@@ -492,15 +492,15 @@ impl IntegratedUAS {
             );
 
             response
-                .headers
+                .headers_mut()
                 .push(SmolStr::new("Contact"), SmolStr::new(&contact_value))
                 .unwrap();
         }
 
         // Add User-Agent if not present
-        if response.headers.get("User-Agent").is_none() {
+        if response.headers().get("User-Agent").is_none() {
             response
-                .headers
+                .headers_mut()
                 .push(
                     SmolStr::new("User-Agent"),
                     SmolStr::new(&self.config.user_agent),

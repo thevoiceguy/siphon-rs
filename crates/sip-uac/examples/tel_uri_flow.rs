@@ -49,11 +49,11 @@ fn main() {
     );
 
     println!("INVITE sip:gateway.example.com SIP/2.0");
-    println!("From: {}", invite_request.headers.get("From").unwrap());
+    println!("From: {}", invite_request.headers().get("From").unwrap());
     println!("To: <sip:gateway.example.com>");
     println!(
         "Call-ID: {}",
-        invite_request.headers.get("Call-ID").unwrap()
+        invite_request.headers().get("Call-ID").unwrap()
     );
     println!();
     println!("Note: The Request-URI is the gateway, but the application logic");

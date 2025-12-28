@@ -42,11 +42,11 @@
 ///
 /// // Wait for response
 /// match call.await_final().await {
-///     Ok(response) if response.start.code == 200 => {
+///     Ok(response) if response.code() == 200 => {
 ///         println!("Call connected!");
 ///     }
 ///     Ok(response) => {
-///         println!("Call rejected: {}", response.start.code);
+///         println!("Call rejected: {}", response.code());
 ///     }
 ///     Err(e) => {
 ///         println!("Call failed: {}", e);
@@ -58,7 +58,7 @@
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
-use sip_core::{Method, Request, Response, SipUri};
+use sip_core::{Method, Request, RequestLine, Response, SipUri};
 use sip_dialog::{Dialog, DialogManager, Subscription, SubscriptionManager};
 use sip_dns::{DnsTarget, Resolver, SipResolver};
 use sip_parse::serialize_request;
@@ -282,67 +282,87 @@ impl From<SipUri> for RequestTarget {
 }
 
 fn prepare_in_dialog_request(dialog: &mut Dialog, request: &mut Request) -> SipUri {
+    let method = request.method().clone();
+    let body = request.body().clone();
+    let mut headers = request.headers().clone();
+
     // Increment local CSeq and overwrite header with the new value
     let cseq = dialog.next_local_cseq();
-    request.headers.remove("CSeq");
-    request
-        .headers
+    headers.remove("CSeq");
+    headers
         .push(
             SmolStr::new("CSeq"),
-            SmolStr::new(format!("{} {}", cseq, request.start.method.as_str())),
+            SmolStr::new(format!("{} {}", cseq, method.as_str())),
         )
         .unwrap();
 
     // Ensure Route headers reflect the dialog route set
-    request.headers.remove("Route");
+    headers.remove("Route");
     if dialog.route_set.is_empty() {
-        request.start.uri = dialog.remote_target.clone().into();
-        return dialog.remote_target.clone();
+        let request_uri = dialog.remote_target.clone();
+        let new_request =
+            Request::new(RequestLine::new(method, request_uri.clone()), headers, body)
+                .expect("valid in-dialog request");
+        *request = new_request;
+        return request_uri;
     }
 
     let first_route = dialog.route_set.first().cloned().unwrap();
     let loose_route = first_route.params.contains_key("lr");
 
     if loose_route {
-        request.start.uri = dialog.remote_target.clone().into();
+        let request_uri = dialog.remote_target.clone();
         for route in dialog.route_set.iter() {
-            request
-                .headers
+            headers
                 .push(
                     SmolStr::new("Route"),
                     SmolStr::new(format!("<{}>", route.as_str())),
                 )
                 .unwrap();
         }
+        let new_request =
+            Request::new(RequestLine::new(method, request_uri.clone()), headers, body)
+                .expect("valid in-dialog request");
+        *request = new_request;
+        // RFC 3261: For loose routing, return first route as transport target
+        first_route
     } else {
         // Strict routing: first route becomes Request-URI, remote target appended to Route
-        request.start.uri = first_route.clone().into();
+        let request_uri = first_route.clone();
         for route in dialog.route_set.iter().skip(1) {
-            request
-                .headers
+            headers
                 .push(
                     SmolStr::new("Route"),
                     SmolStr::new(format!("<{}>", route.as_str())),
                 )
                 .unwrap();
         }
-        request
-            .headers
+        headers
             .push(
                 SmolStr::new("Route"),
                 SmolStr::new(format!("<{}>", dialog.remote_target.as_str())),
             )
             .unwrap();
+        let new_request =
+            Request::new(RequestLine::new(method, request_uri.clone()), headers, body)
+                .expect("valid in-dialog request");
+        *request = new_request;
+        request_uri
     }
-
-    // Target for transport resolution is always the topmost route when present
-    first_route
 }
 
 fn apply_route_set_to_request(dialog: &Dialog, request: &mut Request) {
-    request.headers.remove("Route");
+    let method = request.method().clone();
+    let body = request.body().clone();
+    let mut headers = request.headers().clone();
+
+    headers.remove("Route");
     if dialog.route_set.is_empty() {
-        request.start.uri = dialog.remote_target.clone().into();
+        let request_uri = dialog.remote_target.clone();
+        let new_request =
+            Request::new(RequestLine::new(method, request_uri.clone()), headers, body)
+                .expect("valid in-dialog request");
+        *request = new_request;
         return;
     }
 
@@ -350,34 +370,39 @@ fn apply_route_set_to_request(dialog: &Dialog, request: &mut Request) {
     let loose_route = first_route.params.contains_key("lr");
 
     if loose_route {
-        request.start.uri = dialog.remote_target.clone().into();
+        let request_uri = dialog.remote_target.clone();
         for route in dialog.route_set.iter() {
-            request
-                .headers
+            headers
                 .push(
                     SmolStr::new("Route"),
                     SmolStr::new(format!("<{}>", route.as_str())),
                 )
                 .unwrap();
         }
+        let new_request =
+            Request::new(RequestLine::new(method, request_uri), headers, body)
+                .expect("valid in-dialog request");
+        *request = new_request;
     } else {
-        request.start.uri = first_route.clone().into();
+        let request_uri = first_route.clone();
         for route in dialog.route_set.iter().skip(1) {
-            request
-                .headers
+            headers
                 .push(
                     SmolStr::new("Route"),
                     SmolStr::new(format!("<{}>", route.as_str())),
                 )
                 .unwrap();
         }
-        request
-            .headers
+        headers
             .push(
                 SmolStr::new("Route"),
                 SmolStr::new(format!("<{}>", dialog.remote_target.as_str())),
             )
             .unwrap();
+        let new_request =
+            Request::new(RequestLine::new(method, request_uri), headers, body)
+                .expect("valid in-dialog request");
+        *request = new_request;
     }
 }
 
@@ -386,19 +411,19 @@ fn apply_in_dialog_response(
     dialog: &mut Dialog,
     response: &Response,
 ) -> Result<()> {
-    if (200..300).contains(&response.start.code) {
+    if (200..300).contains(&response.code()) {
         dialog.update_from_response(response);
         dialog_manager.insert(dialog.clone());
         return Ok(());
     }
 
-    if matches!(response.start.code, 408 | 481) {
+    if matches!(response.code(), 408 | 481) {
         dialog.terminate();
         dialog_manager.insert(dialog.clone());
         return Err(anyhow!(
             "Received {} for in-dialog {}",
-            response.start.code,
-            response.start.reason
+            response.code(),
+            response.reason()
         ));
     }
 
@@ -626,7 +651,7 @@ impl CallHandle {
     ///
     /// // Wait for provisional responses
     /// while let Some(response) = call.await_provisional().await {
-    ///     println!("Received {} from one endpoint", response.start.code);
+    ///     println!("Received {} from one endpoint", response.code());
     /// }
     ///
     /// // Check how many endpoints responded
@@ -832,7 +857,7 @@ impl IntegratedUAC {
             .or(self.public_addr)
             .unwrap_or(self.local_addr);
 
-        if let Some(via_value) = request.headers.get("Via") {
+        if let Some(via_value) = request.headers().get("Via") {
             // Extract branch parameter from placeholder
             let branch = if let Some(b) = via_value.split("branch=").nth(1) {
                 let candidate = b.split(';').next().unwrap_or("").trim();
@@ -851,7 +876,7 @@ impl IntegratedUAC {
                 "SIP/2.0/{} {};branch={};rport",
                 via_transport, via_addr, branch
             );
-            let _ = request.headers.set_or_push("Via", new_via);
+            let _ = request.headers_mut().set_or_push("Via", new_via);
         }
     }
 
@@ -870,10 +895,10 @@ impl IntegratedUAC {
             .unwrap_or(self.local_addr);
 
         let outbound_register =
-            self.config.enable_outbound && request.start.method == Method::Register;
+            self.config.enable_outbound && request.method() == &Method::Register;
         let mut needs_supported = false;
 
-        if let Some(contact_str) = request.headers.get("Contact") {
+        if let Some(contact_str) = request.headers().get("Contact") {
             // Extract URI from Contact and update host/port
             if let Some(start) = contact_str.find("sip:") {
                 let after_sip = &contact_str[start + 4..];
@@ -911,20 +936,20 @@ impl IntegratedUAC {
                 } else {
                     format!("{}{}", new_contact, extra_params)
                 };
-                let _ = request.headers.set_or_push("Contact", updated_contact);
+                let _ = request.headers_mut().set_or_push("Contact", updated_contact);
             }
         }
 
         if outbound_register && needs_supported {
-            if let Some(current) = request.headers.get("Supported") {
+            if let Some(current) = request.headers().get("Supported") {
                 let value = current.to_ascii_lowercase();
                 if !value.contains("outbound") {
                     let updated = format!("{}, outbound", current);
-                    let _ = request.headers.set_or_push("Supported", updated);
+                    let _ = request.headers_mut().set_or_push("Supported", updated);
                 }
             } else {
                 request
-                    .headers
+                    .headers_mut()
                     .push(SmolStr::new("Supported"), SmolStr::new("outbound"))
                     .unwrap();
             }
@@ -995,17 +1020,18 @@ impl IntegratedUAC {
 
         info!(
             "Started client transaction {} for {:?}",
-            key.branch, &request.start.method
+            key.branch,
+            request.method()
         );
 
         // Wait for final response or termination
         tokio::select! {
             Ok(response) = final_rx => {
                 // Check if we need to retry with auth
-                if (response.start.code == 401 || response.start.code == 407)
+                if (response.code() == 401 || response.code() == 407)
                     && self.config.auto_retry_auth
                 {
-                    warn!("Received {} challenge, retrying with authentication", response.start.code);
+                    warn!("Received {} challenge, retrying with authentication", response.code());
                     return self.retry_with_auth(request, response, dns_target).await;
                 }
 
@@ -1069,7 +1095,8 @@ impl IntegratedUAC {
 
         info!(
             "Started authenticated client transaction {} for {:?}",
-            key.branch, &auth_request.start.method
+            key.branch,
+            auth_request.method()
         );
 
         tokio::select! {
@@ -1179,12 +1206,12 @@ impl IntegratedUAC {
     ///
     /// // Wait for provisional responses
     /// while let Some(response) = call.await_provisional().await {
-    ///     println!("Call progress: {}", response.start.code);
+    ///     println!("Call progress: {}", response.code());
     /// }
     ///
     /// // Wait for final response
     /// let final_response = call.await_final().await?;
-    /// if final_response.start.code == 200 {
+    /// if final_response.code() == 200 {
     ///     println!("Call connected!");
     /// }
     /// # Ok(())
@@ -1287,7 +1314,7 @@ impl IntegratedUAC {
         let helper = self.helper.lock().await;
         let placeholder_dialog = Dialog {
             id: sip_dialog::DialogId {
-                call_id: request.headers.get_smol("Call-ID").unwrap().clone(),
+                call_id: request.headers().get_smol("Call-ID").unwrap().clone(),
                 local_tag: helper.local_tag.clone(),
                 remote_tag: SmolStr::new("pending"),
             },
@@ -1386,7 +1413,7 @@ impl IntegratedUAC {
             .await?;
 
         // If 200 OK, create subscription
-        let subscription = if response.start.code == 200 {
+        let subscription = if response.code() == 200 {
             let helper = self.helper.lock().await;
             helper.process_subscribe_response(&request, &response)
         } else {
@@ -1586,7 +1613,7 @@ impl IntegratedUAC {
             .await?;
 
         // If 202 Accepted, create implicit subscription to "refer" event
-        let subscription = if response.start.code == 202 {
+        let subscription = if response.code() == 202 {
             // Create subscription for NOTIFY tracking
             let helper = self.helper.lock().await;
             // REFER creates an implicit subscription with "refer" event
@@ -1719,7 +1746,7 @@ impl IntegratedUAC {
             .send_in_dialog_non_invite(dialog, request.clone())
             .await?;
 
-        let subscription = if response.start.code == 202 {
+        let subscription = if response.code() == 202 {
             let helper = self.helper.lock().await;
             helper.process_subscribe_response(&request, &response)
         } else {
@@ -1839,18 +1866,19 @@ mod tests {
             RequestLine::new(Method::Info, dialog.remote_target.clone()),
             Headers::new(),
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let target = prepare_in_dialog_request(&mut dialog, &mut request);
 
         assert_eq!(target, dialog.route_set[0]);
-        assert_eq!(request.start.uri, dialog.remote_target.clone().into());
+        assert_eq!(request.uri(), &dialog.remote_target.clone().into());
         assert_eq!(
-            request.headers.get("Route"),
+            request.headers().get("Route"),
             Some("<sip:proxy.example.com;lr>")
         );
         assert_eq!(dialog.local_cseq, 2);
-        assert_eq!(request.headers.get("CSeq"), Some("2 INFO"));
+        assert_eq!(request.headers().get("CSeq"), Some("2 INFO"));
     }
 
     #[test]
@@ -1865,13 +1893,14 @@ mod tests {
             RequestLine::new(Method::Update, dialog.remote_target.clone()),
             Headers::new(),
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let target = prepare_in_dialog_request(&mut dialog, &mut request);
-        let routes: Vec<&SmolStr> = request.headers.get_all_smol("Route").collect();
+        let routes: Vec<&SmolStr> = request.headers().get_all_smol("Route").collect();
 
         assert_eq!(target, dialog.route_set[0]);
-        assert_eq!(request.start.uri, dialog.route_set[0].clone().into());
+        assert_eq!(request.uri(), &dialog.route_set[0].clone().into());
         assert_eq!(routes.len(), 2);
         assert_eq!(routes[0].as_str(), "<sip:loose.example.com;lr>");
         assert_eq!(routes[1].as_str(), "<sip:remote@example.com>");
@@ -1889,10 +1918,11 @@ mod tests {
             )
             .unwrap();
         let response = Response::new(
-            StatusLine::new(200, SmolStr::new("OK")),
+            StatusLine::new(200, SmolStr::new("OK")).expect("valid status line"),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid response");
 
         apply_in_dialog_response(&manager, &mut dialog, &response).unwrap();
         assert_eq!(dialog.remote_target.as_str(), "sip:new-remote@example.com");
@@ -1904,10 +1934,11 @@ mod tests {
         let mut dialog = base_dialog();
         let manager = DialogManager::new();
         let response = Response::new(
-            StatusLine::new(481, SmolStr::new("Call/Transaction Does Not Exist")),
+            StatusLine::new(481, SmolStr::new("Call/Transaction Does Not Exist")).expect("valid status line"),
             Headers::new(),
             Bytes::new(),
-        );
+        )
+        .expect("valid response");
 
         let result = apply_in_dialog_response(&manager, &mut dialog, &response);
         assert!(result.is_err());
@@ -1933,7 +1964,7 @@ impl CallHandle {
     ///
     /// // Wait for ringing
     /// if let Some(response) = call.await_provisional().await {
-    ///     if response.start.code == 180 {
+    ///     if response.code() == 180 {
     ///         println!("Ringing...");
     ///     }
     /// }
@@ -1956,7 +1987,7 @@ impl CallHandle {
         let mut cancel_headers = sip_core::Headers::new();
 
         // Copy essential headers from INVITE
-        for header in self.invite_request.headers.iter() {
+        for header in self.invite_request.headers().iter() {
             match header.name() {
                 "Via" => {
                     // Generate new branch for CANCEL
@@ -2009,10 +2040,11 @@ impl CallHandle {
 
         // Create CANCEL request
         let cancel_request = Request::new(
-            RequestLine::new(Method::Cancel, self.invite_request.start.uri.clone()),
+            RequestLine::new(Method::Cancel, self.invite_request.uri().clone()),
             cancel_headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid CANCEL request");
 
         // Send CANCEL as a new non-INVITE transaction
         let (final_tx, final_rx) = oneshot::channel();
@@ -2064,11 +2096,11 @@ struct InviteTransactionUser {
 #[async_trait]
 impl ClientTransactionUser for InviteTransactionUser {
     async fn on_provisional(&self, _key: &TransactionKey, response: &Response) {
-        info!("Received provisional response: {}", response.start.code);
+        info!("Received provisional response: {}", response.code());
 
         // Create or update dialog from provisional (if it has To-tag)
         // RFC 3261 §13.2.2.1: Provisional responses with To-tags create early dialogs
-        if response.start.code > 100 {
+        if response.code() > 100 {
             let helper = self.helper.lock().await;
             if let Some(dialog) = helper.process_invite_response(&self.request, response) {
                 let to_tag = dialog.id.remote_tag.clone();
@@ -2079,12 +2111,12 @@ impl ClientTransactionUser for InviteTransactionUser {
                 if early_dialogs.contains_key(&to_tag) {
                     debug!(
                         "Updated existing early dialog from {}: to-tag={}",
-                        response.start.code, to_tag
+                        response.code(), to_tag
                     );
                 } else {
                     debug!(
                         "Created new early dialog from {}: to-tag={} (forking detected: {} endpoints)",
-                        response.start.code,
+                        response.code(),
                         to_tag,
                         early_dialogs.len() + 1
                     );
@@ -2099,15 +2131,15 @@ impl ClientTransactionUser for InviteTransactionUser {
     }
 
     async fn on_final(&self, _key: &TransactionKey, response: &Response) {
-        info!("Received final response: {}", response.start.code);
+        info!("Received final response: {}", response.code());
 
         // Create or confirm dialog from 2xx
-        if response.start.code >= 200 && response.start.code < 300 {
+        if response.code() >= 200 && response.code() < 300 {
             let helper = self.helper.lock().await;
             if let Some(dialog) = helper.process_invite_response(&self.request, response) {
                 info!(
                     "Confirmed dialog from {}: {}",
-                    response.start.code, dialog.id.call_id
+                    response.code(), dialog.id.call_id
                 );
             }
         }
@@ -2137,10 +2169,10 @@ impl ClientTransactionUser for InviteTransactionUser {
     ) {
         info!(
             "Sending ACK for {} response (is_2xx={})",
-            response.start.code, is_2xx
+            response.code(), is_2xx
         );
 
-        let original_via = self.request.headers.get("Via").map(|via| via.to_string());
+        let original_via = self.request.headers().get("Via").map(|via| via.to_string());
 
         let helper = self.helper.lock().await;
         let dialog = if is_2xx {
@@ -2155,8 +2187,8 @@ impl ClientTransactionUser for InviteTransactionUser {
         }
 
         // Determine if this is late offer (200 OK has SDP, INVITE didn't)
-        let invite_has_sdp = !self.request.body.is_empty();
-        let response_has_sdp = !response.body.is_empty();
+        let invite_has_sdp = !self.request.body().is_empty();
+        let response_has_sdp = !response.body().is_empty();
         let late_offer = is_2xx && !invite_has_sdp && response_has_sdp;
 
         // For late offer, generate SDP answer using configured generator
@@ -2166,7 +2198,7 @@ impl ClientTransactionUser for InviteTransactionUser {
                     debug!("Late offer detected - generating SDP answer via RFC 3264 negotiation");
 
                     // Extract and parse SDP offer from response body
-                    match std::str::from_utf8(&response.body) {
+                    match std::str::from_utf8(response.body()) {
                         Ok(sdp_offer_str) => {
                             // Parse SDP offer
                             match SessionDescription::parse(sdp_offer_str) {
@@ -2202,7 +2234,7 @@ impl ClientTransactionUser for InviteTransactionUser {
                 } else if let Some(builder) = &self.config.sdp_profile_builder {
                     debug!("Late offer detected - generating SDP answer via profile negotiation");
                     if let Ok(sdp_offer) = SessionDescription::parse(
-                        std::str::from_utf8(&response.body).unwrap_or_default(),
+                        std::str::from_utf8(response.body()).unwrap_or_default(),
                     ) {
                         let addr = self.public_addr.unwrap_or(self.local_addr);
                         let sdp_answer = profiles::negotiate_answer(
@@ -2237,9 +2269,9 @@ impl ClientTransactionUser for InviteTransactionUser {
                 apply_route_set_to_request(dialog, &mut ack);
             }
         } else {
-            ack.headers.remove("Route");
-            for route in self.request.headers.get_all_smol("Route") {
-                ack.headers
+            ack.headers_mut().remove("Route");
+            for route in self.request.headers().get_all_smol("Route") {
+                ack.headers_mut()
                     .push(SmolStr::new("Route"), route.clone())
                     .unwrap();
             }
@@ -2251,7 +2283,7 @@ impl ClientTransactionUser for InviteTransactionUser {
             } else {
                 via.to_string()
             }
-        } else if let Some(via) = ack.headers.get("Via") {
+        } else if let Some(via) = ack.headers().get("Via") {
             if is_2xx {
                 crate::replace_via_branch(via, &crate::generate_branch())
             } else {
@@ -2275,8 +2307,8 @@ impl ClientTransactionUser for InviteTransactionUser {
             )
         };
 
-        ack.headers.remove("Via");
-        ack.headers
+        ack.headers_mut().remove("Via");
+        ack.headers_mut()
             .push(SmolStr::new("Via"), SmolStr::new(via_value))
             .unwrap();
 
@@ -2298,7 +2330,7 @@ impl ClientTransactionUser for InviteTransactionUser {
     async fn send_prack(&self, _key: &TransactionKey, response: Response, ctx: &TransportContext) {
         info!(
             "Sending PRACK for reliable provisional {}",
-            response.start.code
+            response.code()
         );
 
         // Find dialog for this response
@@ -2352,11 +2384,11 @@ struct PrackTransactionUser;
 #[async_trait]
 impl ClientTransactionUser for PrackTransactionUser {
     async fn on_provisional(&self, _key: &TransactionKey, response: &Response) {
-        debug!("PRACK provisional: {}", response.start.code);
+        debug!("PRACK provisional: {}", response.code());
     }
 
     async fn on_final(&self, _key: &TransactionKey, response: &Response) {
-        info!("PRACK final response: {}", response.start.code);
+        info!("PRACK final response: {}", response.code());
     }
 
     async fn on_terminated(&self, _key: &TransactionKey, reason: &str) {
@@ -2396,11 +2428,11 @@ struct SimpleTransactionUser {
 #[async_trait]
 impl ClientTransactionUser for SimpleTransactionUser {
     async fn on_provisional(&self, _key: &TransactionKey, response: &Response) {
-        debug!("Received provisional response: {}", response.start.code);
+        debug!("Received provisional response: {}", response.code());
     }
 
     async fn on_final(&self, _key: &TransactionKey, response: &Response) {
-        info!("Received final response: {}", response.start.code);
+        info!("Received final response: {}", response.code());
 
         let mut tx = self.final_tx.lock().await;
         if let Some(tx) = tx.take() {

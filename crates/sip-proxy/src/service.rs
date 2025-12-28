@@ -9,7 +9,7 @@ use crate::{
     ProxyHelpers,
 };
 use anyhow::{anyhow, Result};
-use sip_core::{is_valid_branch, Method, Request, SipUri};
+use sip_core::{is_valid_branch, Method, Request, RequestLine, SipUri};
 use smol_str::SmolStr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -64,7 +64,7 @@ impl ProxyService {
         Vec<(SmolStr, Request)>,
     )> {
         let call_id = original
-            .headers
+            .headers()
             .get_smol("Call-ID")
             .cloned()
             .ok_or_else(|| anyhow!("Missing Call-ID header"))?;
@@ -130,7 +130,7 @@ impl ProxyService {
 
         // Build CANCELs for losing branches if we have a winning 2xx
         let cancels = if let Some(ref resp) = forward {
-            if resp.start.code >= 200 && resp.start.code < 300 {
+            if resp.code() >= 200 && resp.code() < 300 {
                 let cancel_template = build_cancel_template(
                     &context.original_request,
                     context.proxy_host.as_str(),
@@ -158,20 +158,24 @@ impl ProxyService {
 
 /// Build a CANCEL template from the original INVITE.
 fn build_cancel_template(original: &Request, proxy_host: &str, transport: &str) -> Request {
-    let mut cancel = original.clone();
-    cancel.start.method = Method::Cancel;
-    cancel.body = bytes::Bytes::new();
-    cancel.headers.remove("Content-Type");
-    cancel.headers.remove("Content-Length");
+    let mut headers = original.headers().clone();
+    headers.remove("Content-Type");
+    headers.remove("Content-Length");
+    let mut cancel = Request::new(
+        RequestLine::new(Method::Cancel, original.uri().clone()),
+        headers,
+        bytes::Bytes::new(),
+    )
+    .expect("valid CANCEL request");
 
     // Ensure the proxy is the top Via for downstream CANCELs.
     ProxyHelpers::add_via(&mut cancel, proxy_host, transport);
 
     // Update CSeq to CANCEL with same sequence number
-    if let Some(cseq_val) = cancel.headers.get("CSeq") {
+    if let Some(cseq_val) = cancel.headers().get("CSeq").map(|val| val.to_string()) {
         if let Some((num, _)) = cseq_val.split_once(' ') {
             let _ = cancel
-                .headers
+                .headers_mut()
                 .set_or_push("CSeq", format!("{} CANCEL", num));
         }
     }
@@ -181,7 +185,7 @@ fn build_cancel_template(original: &Request, proxy_host: &str, transport: &str) 
 
 fn extract_top_via_branch(request: &Request) -> Result<SmolStr> {
     let via = request
-        .headers
+        .headers()
         .iter()
         .find(|h| h.name().eq_ignore_ascii_case("Via"))
         .ok_or_else(|| anyhow!("Missing Via header"))?;

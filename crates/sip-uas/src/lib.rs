@@ -102,21 +102,21 @@ impl UserAgentServer {
         let mut headers = Headers::new();
 
         // Copy Via, From, Call-ID, CSeq from request
-        for via in request.headers.get_all_smol("Via") {
+        for via in request.headers().get_all_smol("Via") {
             headers.push(SmolStr::new("Via"), via).unwrap();
         }
-        if let Some(from) = request.headers.get("From") {
+        if let Some(from) = request.headers().get("From") {
             headers.push(SmolStr::new("From"), from).unwrap();
         }
-        if let Some(call_id) = request.headers.get("Call-ID") {
+        if let Some(call_id) = request.headers().get("Call-ID") {
             headers.push(SmolStr::new("Call-ID"), call_id).unwrap();
         }
-        if let Some(cseq) = request.headers.get("CSeq") {
+        if let Some(cseq) = request.headers().get("CSeq") {
             headers.push(SmolStr::new("CSeq"), cseq).unwrap();
         }
 
         // Add To header (without tag for now - will be added by specific methods)
-        if let Some(to) = request.headers.get("To") {
+        if let Some(to) = request.headers().get("To") {
             headers.push(SmolStr::new("To"), to).unwrap();
         }
 
@@ -126,10 +126,11 @@ impl UserAgentServer {
             .unwrap();
 
         Response::new(
-            StatusLine::new(code, SmolStr::new(reason)),
+            StatusLine::new(code, reason).expect("valid status line"),
             headers,
             Bytes::new(),
         )
+        .expect("valid response")
     }
 
     /// Creates a 100 Trying response.
@@ -157,7 +158,7 @@ impl UserAgentServer {
 
         // Add Contact header
         response
-            .headers
+            .headers_mut()
             .push(
                 SmolStr::new("Contact"),
                 SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
@@ -172,20 +173,22 @@ impl UserAgentServer {
             // Update Content-Length
             let content_length = body_content.len().to_string();
             response
-                .headers
+                .headers_mut()
                 .set_or_push("Content-Length", &content_length)
                 .expect("content-length should be valid");
 
             // Add Content-Type for SDP
             response
-                .headers
+                .headers_mut()
                 .push(
                     SmolStr::new("Content-Type"),
                     SmolStr::new("application/sdp"),
                 )
                 .unwrap();
 
-            response.body = Bytes::from(body_content.as_bytes().to_vec());
+            let (start, headers, _) = response.into_parts();
+            response = Response::new(start, headers, Bytes::from(body_content.as_bytes().to_vec()))
+                .expect("valid response");
         }
 
         response
@@ -204,7 +207,7 @@ impl UserAgentServer {
         let mut response = Self::create_response(request, 200, "OK");
         if let Some(etag) = sip_etag {
             response
-                .headers
+                .headers_mut()
                 .push(SmolStr::new("SIP-ETag"), SmolStr::new(etag))
                 .unwrap();
         }
@@ -252,11 +255,11 @@ impl UserAgentServer {
     /// Ensures the CSeq method is INVITE per RFC 3261.
     pub fn create_request_terminated_from_cancel(request: &Request) -> Response {
         let mut response = Self::create_request_terminated(request);
-        if let Some(cseq) = request.headers.get("CSeq") {
+        if let Some(cseq) = request.headers().get("CSeq") {
             let cseq_number = cseq.split_whitespace().next().unwrap_or("0");
             let cseq_value = format!("{} INVITE", cseq_number);
             response
-                .headers
+                .headers_mut()
                 .set_or_push("CSeq", &cseq_value)
                 .expect("cseq should be valid");
         }
@@ -280,7 +283,7 @@ impl UserAgentServer {
 
         // Add Min-SE header per RFC 4028
         response
-            .headers
+            .headers_mut()
             .push(SmolStr::new("Min-SE"), SmolStr::new(min_se.to_string()))
             .unwrap();
 
@@ -306,7 +309,7 @@ impl UserAgentServer {
         min_se: Option<Duration>,
     ) -> Result<(), Response> {
         // Extract Session-Expires header
-        if let Some(se_header) = header(&request.headers, "Session-Expires") {
+        if let Some(se_header) = header(request.headers(), "Session-Expires") {
             if let Some(session_expires) = parse_session_expires(se_header) {
                 let duration = Duration::from_secs(session_expires.delta_seconds as u64);
 
@@ -338,7 +341,7 @@ impl UserAgentServer {
         request: &Request,
         sdp_body: Option<&str>,
     ) -> Result<(Response, Dialog)> {
-        if request.start.method.as_str() != "INVITE" {
+        if request.method().as_str() != "INVITE" {
             return Err(anyhow!("Not an INVITE request"));
         }
 
@@ -348,7 +351,7 @@ impl UserAgentServer {
 
         // Verify authentication if configured
         if let Some(auth) = &self.authenticator {
-            if !auth.verify(request, &request.headers)? {
+            if !auth.verify(request, request.headers())? {
                 return Err(anyhow!(
                     "Authentication required - use create_unauthorized first"
                 ));
@@ -401,7 +404,7 @@ impl UserAgentServer {
     /// # Returns
     /// A 200 OK response
     pub fn handle_bye(&self, request: &Request, dialog: &Dialog) -> Result<Response> {
-        if request.start.method.as_str() != "BYE" {
+        if request.method().as_str() != "BYE" {
             return Err(anyhow!("Not a BYE request"));
         }
 
@@ -443,8 +446,8 @@ impl UserAgentServer {
     /// match uas.handle_info(&info_request, &dialog) {
     ///     Ok(response) => {
     ///         // Extract and process INFO payload
-    ///         let content_type = header(&info_request.headers, "Content-Type");
-    ///         let body = String::from_utf8_lossy(&info_request.body);
+    ///         let content_type = header(info_request.headers(), "Content-Type");
+    ///         let body = String::from_utf8_lossy(info_request.body());
     ///
     ///         if content_type == Some(&"application/dtmf-relay") {
     ///             // Process DTMF: body contains "Signal=1\r\nDuration=100\r\n"
@@ -458,7 +461,7 @@ impl UserAgentServer {
     /// }
     /// ```
     pub fn handle_info(&self, request: &Request, dialog: &Dialog) -> Result<Response> {
-        if request.start.method.as_str() != "INFO" {
+        if request.method().as_str() != "INFO" {
             return Err(anyhow!("Not an INFO request"));
         }
 
@@ -466,8 +469,8 @@ impl UserAgentServer {
 
         info!(
             call_id = %dialog.id.call_id,
-            content_type = ?header(&request.headers, "Content-Type"),
-            body_len = request.body.len(),
+            content_type = ?header(request.headers(), "Content-Type"),
+            body_len = request.body().len(),
             "UAS received INFO request"
         );
 
@@ -483,7 +486,7 @@ impl UserAgentServer {
     /// # Returns
     /// A 200 OK response for the CANCEL
     pub fn handle_cancel(&self, request: &Request) -> Result<Response> {
-        if request.start.method.as_str() != "CANCEL" {
+        if request.method().as_str() != "CANCEL" {
             return Err(anyhow!("Not a CANCEL request"));
         }
 
@@ -501,7 +504,7 @@ impl UserAgentServer {
     /// `true` if authenticated (or no auth configured), `false` otherwise
     pub fn verify_authentication(&self, request: &Request) -> Result<bool> {
         if let Some(auth) = &self.authenticator {
-            auth.verify(request, &request.headers)
+            auth.verify(request, request.headers())
         } else {
             // No auth configured, allow by default
             Ok(true)
@@ -521,13 +524,13 @@ impl UserAgentServer {
         request: &Request,
         expires: Option<u32>,
     ) -> Result<(Response, Subscription)> {
-        if request.start.method.as_str() != "SUBSCRIBE" {
+        if request.method().as_str() != "SUBSCRIBE" {
             return Err(anyhow!("Not a SUBSCRIBE request"));
         }
 
         // Verify authentication if configured
         if let Some(auth) = &self.authenticator {
-            if !auth.verify(request, &request.headers)? {
+            if !auth.verify(request, request.headers())? {
                 return Err(anyhow!(
                     "Authentication required - use create_unauthorized first"
                 ));
@@ -539,7 +542,7 @@ impl UserAgentServer {
 
         // Add Contact header
         response
-            .headers
+            .headers_mut()
             .push(
                 SmolStr::new("Contact"),
                 SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
@@ -549,13 +552,13 @@ impl UserAgentServer {
         // Add Expires header
         let expires_value = expires.unwrap_or_else(|| {
             request
-                .headers
+                .headers()
                 .get("Expires")
                 .and_then(|e| e.parse().ok())
                 .unwrap_or(3600)
         });
         response
-            .headers
+            .headers_mut()
             .push(
                 SmolStr::new("Expires"),
                 SmolStr::new(expires_value.to_string()),
@@ -712,6 +715,7 @@ impl UserAgentServer {
             headers,
             Bytes::from(sipfrag_body.as_bytes().to_vec()),
         )
+        .expect("valid request")
     }
 
     /// Handles a REFER request for call transfer (RFC 3515).
@@ -731,14 +735,14 @@ impl UserAgentServer {
     /// 3. Attempt the transfer (send INVITE to Refer-To target)
     /// 4. Send NOTIFY messages with sipfrag bodies reporting progress
     pub fn accept_refer(&self, request: &Request, dialog: &Dialog) -> Result<(Response, String)> {
-        if request.start.method.as_str() != "REFER" {
+        if request.method().as_str() != "REFER" {
             return Err(anyhow!("Not a REFER request"));
         }
 
         validate_dialog_request(request, dialog)?;
 
         // Extract Refer-To header
-        let refer_to = header(&request.headers, "Refer-To")
+        let refer_to = header(request.headers(), "Refer-To")
             .ok_or_else(|| anyhow!("Missing Refer-To header"))?
             .to_string();
 
@@ -747,7 +751,7 @@ impl UserAgentServer {
 
         // Add Contact header
         response
-            .headers
+            .headers_mut()
             .push(
                 SmolStr::new("Contact"),
                 SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
@@ -811,19 +815,19 @@ impl UserAgentServer {
         // Add RSeq header
         let rseq = self.rseq_manager.next_rseq(&dialog.id);
         response
-            .headers
+            .headers_mut()
             .push(SmolStr::new("RSeq"), SmolStr::new(rseq.to_string()))
             .unwrap();
 
         // Add Require: 100rel
         response
-            .headers
+            .headers_mut()
             .push(SmolStr::new("Require"), SmolStr::new("100rel"))
             .unwrap();
 
         // Add Contact header
         response
-            .headers
+            .headers_mut()
             .push(
                 SmolStr::new("Contact"),
                 SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
@@ -833,14 +837,14 @@ impl UserAgentServer {
         // Add tag to To header if not present
         self.ensure_to_tag(&mut response);
 
-        if let Some(cseq) = header(&request.headers, "CSeq") {
+        if let Some(cseq) = header(request.headers(), "CSeq") {
             if let Some(cseq_num) = cseq.split_whitespace().next() {
                 if let Ok(cseq_num) = cseq_num.parse::<u32>() {
                     self.prack_validator.register_reliable_provisional(
                         &dialog_id_key(&dialog.id),
                         rseq,
                         cseq_num,
-                        request.start.method.clone(),
+                        request.method().clone(),
                         code,
                     );
                 }
@@ -852,20 +856,22 @@ impl UserAgentServer {
             // Update Content-Length
             let content_length = body_content.len().to_string();
             response
-                .headers
+                .headers_mut()
                 .set_or_push("Content-Length", &content_length)
                 .expect("content-length should be valid");
 
             // Add Content-Type for SDP
             response
-                .headers
+                .headers_mut()
                 .push(
                     SmolStr::new("Content-Type"),
                     SmolStr::new("application/sdp"),
                 )
                 .unwrap();
 
-            response.body = Bytes::from(body_content.as_bytes().to_vec());
+            let (start, headers, _) = response.into_parts();
+            response = Response::new(start, headers, Bytes::from(body_content.as_bytes().to_vec()))
+                .expect("valid response");
         }
 
         response
@@ -880,7 +886,7 @@ impl UserAgentServer {
     /// # Returns
     /// A 200 OK response
     pub fn handle_prack(&self, request: &Request, dialog: &Dialog) -> Result<Response> {
-        if request.start.method.as_str() != "PRACK" {
+        if request.method().as_str() != "PRACK" {
             return Err(anyhow!("Not a PRACK request"));
         }
 
@@ -923,17 +929,17 @@ impl UserAgentServer {
     ///
     /// Returns a 400 Bad Request response if required headers are missing.
     pub fn validate_invite_headers(request: &Request) -> Result<(), Response> {
-        if request.start.method.as_str() != "INVITE" {
+        if request.method().as_str() != "INVITE" {
             return Ok(());
         }
 
         for required in ["Via", "From", "To", "Call-ID", "CSeq"] {
-            if request.headers.get(required).is_none() {
+            if request.headers().get(required).is_none() {
                 return Err(Self::create_bad_request(request, "Bad Request"));
             }
         }
 
-        let from_header = header(&request.headers, "From")
+        let from_header = header(request.headers(), "From")
             .ok_or_else(|| Self::create_bad_request(request, "Bad Request"))?;
         if extract_tag_param(from_header).is_none() {
             return Err(Self::create_bad_request(request, "Bad Request"));
@@ -1017,14 +1023,14 @@ fn dialog_id_key(id: &sip_dialog::DialogId) -> String {
 
 /// Validates that a request matches the dialog's Call-ID and tags.
 fn validate_dialog_request(request: &Request, dialog: &Dialog) -> Result<()> {
-    let call_id = header(&request.headers, "Call-ID").ok_or_else(|| anyhow!("Missing Call-ID"))?;
+    let call_id = header(request.headers(), "Call-ID").ok_or_else(|| anyhow!("Missing Call-ID"))?;
     if call_id != dialog.id.call_id.as_str() {
         return Err(anyhow!("Call-ID mismatch"));
     }
 
     let from_header =
-        header(&request.headers, "From").ok_or_else(|| anyhow!("Missing From header"))?;
-    let to_header = header(&request.headers, "To").ok_or_else(|| anyhow!("Missing To header"))?;
+        header(request.headers(), "From").ok_or_else(|| anyhow!("Missing From header"))?;
+    let to_header = header(request.headers(), "To").ok_or_else(|| anyhow!("Missing To header"))?;
 
     let from_tag = extract_tag_param(from_header).ok_or_else(|| anyhow!("Missing From tag"))?;
     let to_tag = extract_tag_param(to_header).ok_or_else(|| anyhow!("Missing To tag"))?;
@@ -1045,7 +1051,7 @@ fn ensure_to_tag_header(response: &mut Response) {
     let mut has_tag = false;
 
     // Find To header and check for tag
-    for header in response.headers.iter() {
+    for header in response.headers().iter() {
         if header.name() == "To" {
             to_value = Some(header.value_smol().clone());
             has_tag = header.value().contains(";tag=");
@@ -1061,7 +1067,7 @@ fn ensure_to_tag_header(response: &mut Response) {
 
             // Replace To header
             response
-                .headers
+                .headers_mut()
                 .set_or_push("To", &new_to)
                 .expect("to header should be valid");
         }
@@ -1071,7 +1077,7 @@ fn ensure_to_tag_header(response: &mut Response) {
 /// Extract From URI from request.
 fn extract_from_uri(request: &Request) -> Result<SipUri> {
     let from_header =
-        header(&request.headers, "From").ok_or_else(|| anyhow!("Missing From header"))?;
+        header(request.headers(), "From").ok_or_else(|| anyhow!("Missing From header"))?;
 
     // Simple extraction - look for URI between < >
     let uri_str = if let Some(start) = from_header.find('<') {
@@ -1103,10 +1109,10 @@ mod tests {
     impl TransactionUser for EchoUas {
         fn on_request(&self, request: &Request) -> Result<Response> {
             Ok(Response::new(
-                StatusLine::new(200, "OK".into()),
-                request.headers.clone(),
-                request.body.clone(),
-            ))
+                StatusLine::new(200, "OK")?,
+                request.headers().clone(),
+                request.body().clone(),
+            )?)
         }
     }
 
@@ -1116,10 +1122,11 @@ mod tests {
             RequestLine::new(Method::Options, SipUri::parse("sip:example.com").unwrap()),
             Headers::new(),
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
         let uas = EchoUas;
         let response = uas.on_request(&request).expect("response");
-        assert_eq!(response.start.code, 200);
+        assert_eq!(response.code(), 200);
     }
 
     #[test]
@@ -1154,17 +1161,18 @@ mod tests {
             ),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = UserAgentServer::create_trying(&request);
 
-        assert_eq!(response.start.code, 100);
-        assert_eq!(response.start.reason.as_str(), "Trying");
-        assert!(response.headers.get("Via").is_some());
-        assert!(response.headers.get("From").is_some());
-        assert!(response.headers.get("To").is_some());
-        assert!(response.headers.get("Call-ID").is_some());
-        assert!(response.headers.get("CSeq").is_some());
+        assert_eq!(response.code(), 100);
+        assert_eq!(response.reason(), "Trying");
+        assert!(response.headers().get("Via").is_some());
+        assert!(response.headers().get("From").is_some());
+        assert!(response.headers().get("To").is_some());
+        assert!(response.headers().get("Call-ID").is_some());
+        assert!(response.headers().get("CSeq").is_some());
     }
 
     #[test]
@@ -1204,15 +1212,16 @@ mod tests {
             ),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = uas.create_ringing(&request);
 
-        assert_eq!(response.start.code, 180);
-        assert_eq!(response.start.reason.as_str(), "Ringing");
+        assert_eq!(response.code(), 180);
+        assert_eq!(response.reason(), "Ringing");
 
         // Verify To tag was added
-        let to_header = response.headers.get("To").unwrap();
+        let to_header = response.headers().get("To").unwrap();
         assert!(to_header.contains(";tag="));
     }
 
@@ -1253,16 +1262,17 @@ mod tests {
             ),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = uas.create_ok(&request, None);
 
-        assert_eq!(response.start.code, 200);
-        assert_eq!(response.start.reason.as_str(), "OK");
-        assert!(response.headers.get("Contact").is_some());
+        assert_eq!(response.code(), 200);
+        assert_eq!(response.reason(), "OK");
+        assert!(response.headers().get("Contact").is_some());
 
         // Verify To tag was added
-        let to_header = response.headers.get("To").unwrap();
+        let to_header = response.headers().get("To").unwrap();
         assert!(to_header.contains(";tag="));
     }
 
@@ -1303,14 +1313,15 @@ mod tests {
             ),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let sdp = "v=0\r\no=- 123 456 IN IP4 192.168.1.100\r\n";
         let response = uas.create_ok(&request, Some(sdp));
 
-        assert_eq!(response.body.len(), sdp.len());
+        assert_eq!(response.body().len(), sdp.len());
         assert_eq!(
-            response.headers.get("Content-Type").unwrap(),
+            response.headers().get("Content-Type").unwrap(),
             "application/sdp"
         );
     }
@@ -1352,15 +1363,16 @@ mod tests {
             ),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = uas.create_busy(&request);
 
-        assert_eq!(response.start.code, 486);
-        assert_eq!(response.start.reason.as_str(), "Busy Here");
+        assert_eq!(response.code(), 486);
+        assert_eq!(response.reason(), "Busy Here");
 
         // Verify To tag was added
-        let to_header = response.headers.get("To").unwrap();
+        let to_header = response.headers().get("To").unwrap();
         assert!(to_header.contains(";tag="));
     }
 
@@ -1401,15 +1413,16 @@ mod tests {
             ),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = uas.create_decline(&request);
 
-        assert_eq!(response.start.code, 603);
-        assert_eq!(response.start.reason.as_str(), "Decline");
+        assert_eq!(response.code(), 603);
+        assert_eq!(response.reason(), "Decline");
 
         // Verify To tag was added
-        let to_header = response.headers.get("To").unwrap();
+        let to_header = response.headers().get("To").unwrap();
         assert!(to_header.contains(";tag="));
     }
 
@@ -1456,13 +1469,14 @@ mod tests {
             ),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let result = uas.accept_invite(&request, None);
         assert!(result.is_ok());
 
         let (response, dialog) = result.unwrap();
-        assert_eq!(response.start.code, 200);
+        assert_eq!(response.code(), 200);
         assert_eq!(dialog.id.call_id.as_str(), "test-call-id");
     }
 
@@ -1498,12 +1512,13 @@ mod tests {
             ),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = UserAgentServer::reject_invite(&request, 486, "Busy Here");
 
-        assert_eq!(response.start.code, 486);
-        assert_eq!(response.start.reason.as_str(), "Busy Here");
+        assert_eq!(response.code(), 486);
+        assert_eq!(response.reason(), "Busy Here");
     }
 
     #[test]
@@ -1543,13 +1558,14 @@ mod tests {
             ),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let result = uas.handle_cancel(&request);
         assert!(result.is_ok());
 
         let response = result.unwrap();
-        assert_eq!(response.start.code, 200);
+        assert_eq!(response.code(), 200);
     }
 
     #[test]
@@ -1569,7 +1585,8 @@ mod tests {
             ),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let uri = extract_from_uri(&request).unwrap();
         assert_eq!(uri.as_str(), "sip:alice@example.com");
@@ -1592,7 +1609,8 @@ mod tests {
             ),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let uri = extract_from_uri(&request).unwrap();
         assert_eq!(uri.as_str(), "sip:alice@example.com");
@@ -1654,7 +1672,8 @@ mod tests {
             ),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let result = uas.accept_subscribe(&request, None);
         assert!(result.is_ok());
@@ -1662,13 +1681,13 @@ mod tests {
         let (response, subscription) = result.unwrap();
 
         // Verify response
-        assert_eq!(response.start.code, 200);
-        assert_eq!(response.start.reason.as_str(), "OK");
-        assert!(response.headers.get("Contact").is_some());
-        assert!(response.headers.get("Expires").is_some());
+        assert_eq!(response.code(), 200);
+        assert_eq!(response.reason(), "OK");
+        assert!(response.headers().get("Contact").is_some());
+        assert!(response.headers().get("Expires").is_some());
 
         // Verify To tag was added
-        let to_header = response.headers.get("To").unwrap();
+        let to_header = response.headers().get("To").unwrap();
         assert!(to_header.contains(";tag="));
 
         // Verify subscription
@@ -1720,7 +1739,8 @@ mod tests {
             ),
             invite_headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let (_response, dialog) = uas.accept_invite(&invite_request, None).unwrap();
 
@@ -1764,7 +1784,8 @@ mod tests {
             RequestLine::new(Method::Refer, SipUri::parse("sip:bob@example.com").unwrap()),
             refer_headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let result = uas.accept_refer(&refer_request, &dialog);
         assert!(result.is_ok());
@@ -1772,9 +1793,9 @@ mod tests {
         let (response, refer_to) = result.unwrap();
 
         // Verify response
-        assert_eq!(response.start.code, 202);
-        assert_eq!(response.start.reason.as_str(), "Accepted");
-        assert!(response.headers.get("Contact").is_some());
+        assert_eq!(response.code(), 202);
+        assert_eq!(response.reason(), "Accepted");
+        assert!(response.headers().get("Contact").is_some());
 
         // Verify Refer-To was extracted
         assert_eq!(refer_to, "<sip:charlie@example.com>");
@@ -1811,43 +1832,43 @@ mod tests {
         // Test with 100 Trying (should be active)
         let notify_100 = uas.create_notify_sipfrag(&mut subscription, 100, "Trying");
 
-        assert_eq!(notify_100.start.method, Method::Notify);
-        assert!(notify_100.headers.get("Event").is_some());
-        assert_eq!(notify_100.headers.get("Event").unwrap(), "refer");
-        assert!(notify_100.headers.get("Subscription-State").is_some());
+        assert_eq!(notify_100.method(), &Method::Notify);
+        assert!(notify_100.headers().get("Event").is_some());
+        assert_eq!(notify_100.headers().get("Event").unwrap(), "refer");
+        assert!(notify_100.headers().get("Subscription-State").is_some());
         assert_eq!(
-            notify_100.headers.get("Subscription-State").unwrap(),
+            notify_100.headers().get("Subscription-State").unwrap(),
             "active"
         );
-        assert!(notify_100.headers.get("Content-Type").is_some());
+        assert!(notify_100.headers().get("Content-Type").is_some());
         assert_eq!(
-            notify_100.headers.get("Content-Type").unwrap(),
+            notify_100.headers().get("Content-Type").unwrap(),
             "message/sipfrag;version=2.0"
         );
 
-        let body = String::from_utf8(notify_100.body.to_vec()).unwrap();
+        let body = String::from_utf8(notify_100.body().to_vec()).unwrap();
         assert!(body.contains("SIP/2.0 100 Trying"));
 
         // Test with 200 OK (should be terminated with noresource)
         let notify_200 = uas.create_notify_sipfrag(&mut subscription, 200, "OK");
 
         assert_eq!(
-            notify_200.headers.get("Subscription-State").unwrap(),
+            notify_200.headers().get("Subscription-State").unwrap(),
             "terminated;reason=noresource"
         );
 
-        let body = String::from_utf8(notify_200.body.to_vec()).unwrap();
+        let body = String::from_utf8(notify_200.body().to_vec()).unwrap();
         assert!(body.contains("SIP/2.0 200 OK"));
 
         // Test with 603 Decline (should be terminated with rejected)
         let notify_603 = uas.create_notify_sipfrag(&mut subscription, 603, "Decline");
 
         assert_eq!(
-            notify_603.headers.get("Subscription-State").unwrap(),
+            notify_603.headers().get("Subscription-State").unwrap(),
             "terminated;reason=rejected"
         );
 
-        let body = String::from_utf8(notify_603.body.to_vec()).unwrap();
+        let body = String::from_utf8(notify_603.body().to_vec()).unwrap();
         assert!(body.contains("SIP/2.0 603 Decline"));
     }
 
@@ -1886,12 +1907,13 @@ mod tests {
             RequestLine::new(Method::Refer, SipUri::parse("sip:bob@example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = UserAgentServer::reject_refer(&request, 603, "Decline");
 
-        assert_eq!(response.start.code, 603);
-        assert_eq!(response.start.reason.as_str(), "Decline");
+        assert_eq!(response.code(), 603);
+        assert_eq!(response.reason(), "Decline");
     }
 
     #[test]
@@ -1942,7 +1964,8 @@ mod tests {
             ),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         // Mock dialog
         let remote_uri = SipUri::parse("sip:alice@example.com").unwrap();
@@ -1970,22 +1993,22 @@ mod tests {
         let response = uas.create_reliable_provisional(&request, &dialog, 180, "Ringing", None);
 
         // Verify response
-        assert_eq!(response.start.code, 180);
-        assert_eq!(response.start.reason.as_str(), "Ringing");
+        assert_eq!(response.code(), 180);
+        assert_eq!(response.reason(), "Ringing");
 
         // Verify RSeq header (should be 1 for first reliable provisional)
-        assert!(response.headers.get("RSeq").is_some());
-        assert_eq!(response.headers.get("RSeq").unwrap(), "1");
+        assert!(response.headers().get("RSeq").is_some());
+        assert_eq!(response.headers().get("RSeq").unwrap(), "1");
 
         // Verify Require: 100rel
-        assert_eq!(response.headers.get("Require").unwrap(), "100rel");
+        assert_eq!(response.headers().get("Require").unwrap(), "100rel");
 
         // Verify To tag was added
-        let to_header = response.headers.get("To").unwrap();
+        let to_header = response.headers().get("To").unwrap();
         assert!(to_header.contains(";tag="));
 
         // Verify Contact header
-        assert!(response.headers.get("Contact").is_some());
+        assert!(response.headers().get("Contact").is_some());
     }
 
     #[test]
@@ -2035,7 +2058,8 @@ mod tests {
             ),
             invite_headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         // Mock dialog
         let remote_uri = SipUri::parse("sip:alice@example.com").unwrap();
@@ -2096,7 +2120,8 @@ mod tests {
             RequestLine::new(Method::Prack, SipUri::parse("sip:bob@example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         // Handle PRACK
         let result = uas.handle_prack(&prack_request, &dialog);
@@ -2105,8 +2130,8 @@ mod tests {
         let response = result.unwrap();
 
         // Verify 200 OK response
-        assert_eq!(response.start.code, 200);
-        assert_eq!(response.start.reason.as_str(), "OK");
+        assert_eq!(response.code(), 200);
+        assert_eq!(response.reason(), "OK");
     }
 
     #[test]
@@ -2145,7 +2170,8 @@ mod tests {
             ),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         // Should succeed - 1800s is valid
         assert!(UserAgentServer::validate_session_timer(&request, None).is_ok());
@@ -2187,19 +2213,20 @@ mod tests {
             ),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         // Should fail - 60s is too small
         let result = UserAgentServer::validate_session_timer(&request, None);
         assert!(result.is_err());
 
         let response = result.unwrap_err();
-        assert_eq!(response.start.code, 422);
-        assert_eq!(response.start.reason.as_str(), "Session Interval Too Small");
+        assert_eq!(response.code(), 422);
+        assert_eq!(response.reason(), "Session Interval Too Small");
 
         // Verify Min-SE header is present
-        assert!(response.headers.get("Min-SE").is_some());
-        assert_eq!(response.headers.get("Min-SE").unwrap(), "90");
+        assert!(response.headers().get("Min-SE").is_some());
+        assert_eq!(response.headers().get("Min-SE").unwrap(), "90");
     }
 
     #[test]
@@ -2238,7 +2265,8 @@ mod tests {
             ),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         // Should fail - 100s < 120s
         let result =
@@ -2246,10 +2274,10 @@ mod tests {
         assert!(result.is_err());
 
         let response = result.unwrap_err();
-        assert_eq!(response.start.code, 422);
+        assert_eq!(response.code(), 422);
 
         // Verify Min-SE header shows 120s
-        assert_eq!(response.headers.get("Min-SE").unwrap(), "120");
+        assert_eq!(response.headers().get("Min-SE").unwrap(), "120");
     }
 
     #[test]
@@ -2285,7 +2313,8 @@ mod tests {
             ),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         // Should succeed - no Session-Expires means no validation needed
         assert!(UserAgentServer::validate_session_timer(&request, None).is_ok());
@@ -2323,20 +2352,21 @@ mod tests {
             ),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = UserAgentServer::create_session_interval_too_small(&request, 90);
 
-        assert_eq!(response.start.code, 422);
-        assert_eq!(response.start.reason.as_str(), "Session Interval Too Small");
-        assert_eq!(response.headers.get("Min-SE").unwrap(), "90");
+        assert_eq!(response.code(), 422);
+        assert_eq!(response.reason(), "Session Interval Too Small");
+        assert_eq!(response.headers().get("Min-SE").unwrap(), "90");
 
         // Verify standard headers are copied
-        assert!(response.headers.get("Via").is_some());
-        assert!(response.headers.get("From").is_some());
-        assert!(response.headers.get("To").is_some());
-        assert!(response.headers.get("Call-ID").is_some());
-        assert!(response.headers.get("CSeq").is_some());
+        assert!(response.headers().get("Via").is_some());
+        assert!(response.headers().get("From").is_some());
+        assert!(response.headers().get("To").is_some());
+        assert!(response.headers().get("Call-ID").is_some());
+        assert!(response.headers().get("CSeq").is_some());
     }
 
     #[test]
@@ -2411,7 +2441,8 @@ mod tests {
             RequestLine::new(Method::Info, SipUri::parse("sip:bob@example.com").unwrap()),
             headers,
             Bytes::from(dtmf_body),
-        );
+        )
+        .expect("valid request");
 
         // Handle INFO
         let result = uas.handle_info(&info_request, &dialog);
@@ -2420,15 +2451,15 @@ mod tests {
         let response = result.unwrap();
 
         // Verify 200 OK response
-        assert_eq!(response.start.code, 200);
-        assert_eq!(response.start.reason.as_str(), "OK");
+        assert_eq!(response.code(), 200);
+        assert_eq!(response.reason(), "OK");
 
         // Verify headers copied
-        assert!(response.headers.get("Via").is_some());
-        assert!(response.headers.get("From").is_some());
-        assert!(response.headers.get("To").is_some());
-        assert_eq!(response.headers.get("Call-ID").unwrap(), "test-call-id");
-        assert_eq!(response.headers.get("CSeq").unwrap(), "2 INFO");
+        assert!(response.headers().get("Via").is_some());
+        assert!(response.headers().get("From").is_some());
+        assert!(response.headers().get("To").is_some());
+        assert_eq!(response.headers().get("Call-ID").unwrap(), "test-call-id");
+        assert_eq!(response.headers().get("CSeq").unwrap(), "2 INFO");
     }
 
     #[test]
@@ -2507,7 +2538,8 @@ mod tests {
             RequestLine::new(Method::Info, SipUri::parse("sip:bob@example.com").unwrap()),
             headers,
             Bytes::from(json_body),
-        );
+        )
+        .expect("valid request");
 
         // Handle INFO
         let result = uas.handle_info(&info_request, &dialog);
@@ -2516,8 +2548,8 @@ mod tests {
         let response = result.unwrap();
 
         // Verify 200 OK response
-        assert_eq!(response.start.code, 200);
-        assert_eq!(response.start.reason.as_str(), "OK");
+        assert_eq!(response.code(), 200);
+        assert_eq!(response.reason(), "OK");
     }
 
     #[test]
@@ -2588,7 +2620,8 @@ mod tests {
             RequestLine::new(Method::Info, SipUri::parse("sip:bob@example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         // Handle INFO - should fail
         let result = uas.handle_info(&info_request, &dialog);
@@ -2661,7 +2694,8 @@ mod tests {
             RequestLine::new(Method::Bye, SipUri::parse("sip:bob@example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         // Try to handle as INFO - should fail
         let result = uas.handle_info(&bye_request, &dialog);

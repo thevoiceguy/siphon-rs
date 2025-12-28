@@ -550,7 +550,7 @@ pub struct DigestAuthenticator<S> {
 
 impl<S> DigestAuthenticator<S> {
     fn prepare_digest(&self, request: &Request, headers: &Headers) -> Result<Option<DigestParams>> {
-        if request.body.len() > MAX_BODY_SIZE {
+        if request.body().len() > MAX_BODY_SIZE {
             return Err(anyhow!("request body too large"));
         }
 
@@ -636,7 +636,7 @@ impl<S> DigestAuthenticator<S> {
             return Ok(None);
         }
 
-        if uri.as_str() != request.start.uri.as_str() {
+        if uri.as_str() != request.uri().as_str() {
             info!("digest uri mismatch");
             return Ok(None);
         }
@@ -681,9 +681,9 @@ impl<S> DigestAuthenticator<S> {
             if !self.nonce_manager.verify_with_nc(
                 nonce,
                 nc_value,
-                &request.start.method,
-                request.start.uri.as_str(),
-                &request.body,
+                request.method(),
+                request.uri().as_str(),
+                request.body(),
             ) {
                 info!("digest nonce invalid/expired, nc decreasing (replay), or request hash mismatch (different request with same nc)");
                 return Ok(None);
@@ -866,20 +866,20 @@ impl<S: CredentialStore> Authenticator for DigestAuthenticator<S> {
         let mut headers = self.build_challenge();
 
         // RFC 3261: Copy required headers from request to response
-        if let Some(via) = request.headers.get("Via") {
+        if let Some(via) = request.headers().get("Via") {
             headers.push(SmolStr::new("Via"), via).unwrap();
         }
-        if let Some(from) = request.headers.get("From") {
+        if let Some(from) = request.headers().get("From") {
             headers.push(SmolStr::new("From"), from).unwrap();
         }
         // RFC 3261 §8.2.6.2: UAS MUST add tag to To header if not present
-        if let Some(to) = request.headers.get("To") {
+        if let Some(to) = request.headers().get("To") {
             headers.push(SmolStr::new("To"), ensure_to_tag(to)).unwrap();
         }
-        if let Some(call_id) = request.headers.get("Call-ID") {
+        if let Some(call_id) = request.headers().get("Call-ID") {
             headers.push(SmolStr::new("Call-ID"), call_id).unwrap();
         }
-        if let Some(cseq) = request.headers.get("CSeq") {
+        if let Some(cseq) = request.headers().get("CSeq") {
             headers.push(SmolStr::new("CSeq"), cseq).unwrap();
         }
 
@@ -892,10 +892,10 @@ impl<S: CredentialStore> Authenticator for DigestAuthenticator<S> {
                 } else {
                     "Unauthorized"
                 }),
-            ),
+            )?,
             headers,
             Bytes::new(),
-        ))
+        )?)
     }
 
     fn verify(&self, request: &Request, headers: &Headers) -> Result<bool> {
@@ -912,13 +912,13 @@ impl<S: CredentialStore> Authenticator for DigestAuthenticator<S> {
         let response_calc = self.compute_response(
             params.username.as_str(),
             creds.password.as_str(),
-            &request.start.method,
+            request.method(),
             params.uri.as_str(),
             params.nonce.as_str(),
             params.nc_raw.as_deref(),
             params.cnonce.as_deref(),
             params.qop,
-            request.body.as_ref(),
+            request.body().as_ref(),
         );
 
         Ok(constant_time_eq(
@@ -949,13 +949,13 @@ impl<S: AsyncCredentialStore> DigestAuthenticator<S> {
         let response_calc = self.compute_response(
             params.username.as_str(),
             creds.password.as_str(),
-            &request.start.method,
+            request.method(),
             params.uri.as_str(),
             params.nonce.as_str(),
             params.nc_raw.as_deref(),
             params.cnonce.as_deref(),
             params.qop,
-            request.body.as_ref(),
+            request.body().as_ref(),
         );
 
         Ok(constant_time_eq(
@@ -1177,11 +1177,12 @@ mod tests {
             ),
             Headers::new(),
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = auth.challenge(&request).expect("challenge");
-        assert_eq!(response.start.code, 401);
-        assert!(response.headers.get("WWW-Authenticate").is_some());
+        assert_eq!(response.code(), 401);
+        assert!(response.headers().get("WWW-Authenticate").is_some());
     }
 
     #[test]
@@ -1196,11 +1197,12 @@ mod tests {
             ),
             Headers::new(),
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = auth.challenge(&request).expect("challenge");
-        assert_eq!(response.start.code, 407);
-        assert!(response.headers.get("Proxy-Authenticate").is_some());
+        assert_eq!(response.code(), 407);
+        assert!(response.headers().get("Proxy-Authenticate").is_some());
     }
 
     #[test]
@@ -1245,9 +1247,10 @@ mod tests {
             RequestLine::new(method, SipUri::parse(uri).unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
-        assert!(auth.verify(&request, &request.headers).unwrap());
+        assert!(auth.verify(&request, request.headers()).unwrap());
     }
 
     #[test]
@@ -1292,9 +1295,10 @@ mod tests {
             RequestLine::new(method, SipUri::parse(uri).unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
-        assert!(auth.verify(&request, &request.headers).unwrap());
+        assert!(auth.verify(&request, request.headers()).unwrap());
     }
 
     #[test]
@@ -1339,9 +1343,10 @@ mod tests {
             RequestLine::new(method, SipUri::parse(uri).unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
-        assert!(auth.verify(&request, &request.headers).unwrap());
+        assert!(auth.verify(&request, request.headers()).unwrap());
     }
 
     #[test]
@@ -1370,9 +1375,10 @@ mod tests {
             ),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
-        assert!(!auth.verify(&request, &request.headers).unwrap());
+        assert!(!auth.verify(&request, request.headers()).unwrap());
     }
 
     #[test]
@@ -1403,9 +1409,10 @@ mod tests {
             ),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
-        assert!(!auth.verify(&request, &request.headers).unwrap());
+        assert!(!auth.verify(&request, request.headers()).unwrap());
     }
 
     #[test]
@@ -1451,9 +1458,10 @@ mod tests {
             RequestLine::new(method, SipUri::parse(request_uri).unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
-        assert!(!auth.verify(&request, &request.headers).unwrap());
+        assert!(!auth.verify(&request, request.headers()).unwrap());
     }
 
     #[test]
@@ -1496,9 +1504,10 @@ mod tests {
             RequestLine::new(method, SipUri::parse(uri).unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
-        assert!(!auth.verify(&request, &request.headers).unwrap());
+        assert!(!auth.verify(&request, request.headers()).unwrap());
     }
 
     #[test]
@@ -1595,10 +1604,11 @@ mod tests {
             RequestLine::new(Method::Invite, SipUri::parse(uri).unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         // Server verifies
-        assert!(server_auth.verify(&request, &request.headers).unwrap());
+        assert!(server_auth.verify(&request, request.headers()).unwrap());
     }
 
     #[test]
@@ -1645,9 +1655,10 @@ mod tests {
             RequestLine::new(method, SipUri::parse(uri).unwrap()),
             headers,
             Bytes::from_static(body),
-        );
+        )
+        .expect("valid request");
 
-        assert!(auth.verify(&request, &request.headers).unwrap());
+        assert!(auth.verify(&request, request.headers()).unwrap());
     }
 
     #[test]
@@ -1693,19 +1704,21 @@ mod tests {
             RequestLine::new(method.clone(), SipUri::parse(uri).unwrap()),
             headers.clone(),
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
-        assert!(auth.verify(&request, &request.headers).unwrap());
+        assert!(auth.verify(&request, request.headers()).unwrap());
 
         // Retransmission with same nc=00000001 should be accepted (legitimate retransmit over UDP)
         let retransmit = Request::new(
             RequestLine::new(method.clone(), SipUri::parse(uri).unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         assert!(
-            auth.verify(&retransmit, &retransmit.headers).unwrap(),
+            auth.verify(&retransmit, retransmit.headers()).unwrap(),
             "Retransmission with same nc should be accepted"
         );
     }
@@ -1754,10 +1767,11 @@ mod tests {
             RequestLine::new(method.clone(), SipUri::parse(uri).unwrap()),
             headers2,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         assert!(
-            auth.verify(&request2, &request2.headers).unwrap(),
+            auth.verify(&request2, request2.headers()).unwrap(),
             "Request with nc=2 should succeed"
         );
 
@@ -1788,11 +1802,12 @@ mod tests {
             RequestLine::new(method, SipUri::parse(uri).unwrap()),
             headers1,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         assert!(
             !auth
-                .verify(&replay_request, &replay_request.headers)
+                .verify(&replay_request, replay_request.headers())
                 .unwrap(),
             "Replay attack with decreasing nc should be rejected"
         );
@@ -1842,10 +1857,11 @@ mod tests {
             RequestLine::new(method.clone(), SipUri::parse(uri1).unwrap()),
             headers1,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         assert!(
-            auth.verify(&request1, &request1.headers).unwrap(),
+            auth.verify(&request1, request1.headers()).unwrap(),
             "First request should succeed"
         );
 
@@ -1875,10 +1891,11 @@ mod tests {
             RequestLine::new(method, SipUri::parse(uri2).unwrap()),
             headers2,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         assert!(
-            !auth.verify(&request2, &request2.headers).unwrap(),
+            !auth.verify(&request2, request2.headers()).unwrap(),
             "Different request with same nc should be rejected (request hash mismatch)"
         );
     }
@@ -1928,10 +1945,11 @@ mod tests {
             RequestLine::new(method.clone(), SipUri::parse(uri).unwrap()),
             headers1,
             Bytes::from_static(body1),
-        );
+        )
+        .expect("valid request");
 
         assert!(
-            auth.verify(&request1, &request1.headers).unwrap(),
+            auth.verify(&request1, request1.headers()).unwrap(),
             "First request should succeed"
         );
 
@@ -1961,10 +1979,11 @@ mod tests {
             RequestLine::new(method, SipUri::parse(uri).unwrap()),
             headers2,
             Bytes::from_static(body2),
-        );
+        )
+        .expect("valid request");
 
         assert!(
-            !auth.verify(&request2, &request2.headers).unwrap(),
+            !auth.verify(&request2, request2.headers()).unwrap(),
             "Different body with same nc should be rejected (request hash mismatch)"
         );
     }
@@ -2012,9 +2031,10 @@ mod tests {
             RequestLine::new(method.clone(), SipUri::parse(uri).unwrap()),
             headers1,
             Bytes::from_static(body1),
-        );
+        )
+        .expect("valid request");
         assert!(
-            auth.verify(&request1, &request1.headers).unwrap(),
+            auth.verify(&request1, request1.headers()).unwrap(),
             "First request should succeed"
         );
 
@@ -2025,9 +2045,10 @@ mod tests {
             RequestLine::new(method.clone(), SipUri::parse(uri).unwrap()),
             headers2,
             Bytes::from_static(body2),
-        );
+        )
+        .expect("valid request");
         assert!(
-            !auth.verify(&request2, &request2.headers).unwrap(),
+            !auth.verify(&request2, request2.headers()).unwrap(),
             "Different body of same length with same nc should be rejected"
         );
     }
@@ -2075,9 +2096,10 @@ mod tests {
             RequestLine::new(method, SipUri::parse(uri).unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
-        assert!(!auth.verify(&request, &request.headers).unwrap());
+        assert!(!auth.verify(&request, request.headers()).unwrap());
     }
 
     #[test]
@@ -2123,9 +2145,10 @@ mod tests {
             RequestLine::new(method, SipUri::parse(uri).unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
-        assert!(!auth.verify(&request, &request.headers).unwrap());
+        assert!(!auth.verify(&request, request.headers()).unwrap());
     }
 
     #[test]
@@ -2147,9 +2170,10 @@ mod tests {
             RequestLine::new(Method::Invite, SipUri::parse("sip:test").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
-        assert!(auth.verify(&request, &request.headers).is_err());
+        assert!(auth.verify(&request, request.headers()).is_err());
     }
 
     #[test]
@@ -2176,9 +2200,10 @@ mod tests {
             RequestLine::new(Method::Invite, SipUri::parse("sip:test").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
-        assert!(!auth.verify(&request, &request.headers).unwrap());
+        assert!(!auth.verify(&request, request.headers()).unwrap());
     }
 
     #[test]
@@ -2187,13 +2212,23 @@ mod tests {
         let auth = DigestAuthenticator::new("example.com", store);
 
         let large_body = vec![0u8; 11 * 1024 * 1024];
-        let request = Request::new(
+        let request_result = Request::new(
             RequestLine::new(Method::Invite, SipUri::parse("sip:test").unwrap()),
             Headers::new(),
             Bytes::from(large_body),
         );
 
-        assert!(auth.verify(&request, &request.headers).is_err());
+        // Request creation should fail due to oversized body
+        // OR if it succeeds, auth verification should fail
+        match request_result {
+            Err(_) => {
+                // Expected: Request::new rejects oversized body
+            }
+            Ok(request) => {
+                // Fallback: auth verification should reject it
+                assert!(auth.verify(&request, request.headers()).is_err());
+            }
+        }
     }
 
     #[test]
@@ -2235,9 +2270,10 @@ mod tests {
             RequestLine::new(method.clone(), SipUri::parse(uri).unwrap()),
             headers1,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
-        assert!(auth.verify(&request1, &request1.headers).unwrap());
+        assert!(auth.verify(&request1, request1.headers()).unwrap());
 
         let response2 = auth.compute_response(
             creds.username.as_str(),
@@ -2264,9 +2300,10 @@ mod tests {
             RequestLine::new(method, SipUri::parse(uri).unwrap()),
             headers2,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
-        assert!(!auth.verify(&request2, &request2.headers).unwrap());
+        assert!(!auth.verify(&request2, request2.headers()).unwrap());
     }
 
     #[test]

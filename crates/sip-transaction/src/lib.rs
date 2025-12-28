@@ -84,7 +84,7 @@ pub fn routes<'a>(headers: &'a Headers) -> HeaderValues<'a> {
 
 /// Convenience helper that extracts the incoming Via headers from a `Request`.
 pub fn request_vias<'a>(req: &'a Request) -> HeaderValues<'a> {
-    vias(&req.headers)
+    vias(req.headers())
 }
 
 /// Returns the top-most Via header value, if present.
@@ -228,7 +228,7 @@ impl TransactionKey {
         let branch = request_branch_id(req)?;
         Some(Self {
             branch,
-            method: req.start.method.clone(),
+            method: req.method().clone(),
             is_server,
         })
     }
@@ -299,6 +299,7 @@ mod tests {
             hdrs,
             Bytes::new(),
         )
+        .expect("valid request")
     }
 
     #[test]

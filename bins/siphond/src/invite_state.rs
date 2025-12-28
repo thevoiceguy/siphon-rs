@@ -52,17 +52,17 @@ impl InviteStateManager {
     /// Per RFC 3261 §9.2, CANCEL matches INVITE via Call-ID, CSeq number, and From tag.
     /// Note: Via branch is different for CANCEL/INVITE as they are separate transactions.
     pub fn key_from_request(request: &Request) -> Option<String> {
-        let call_id = header(&request.headers, "Call-ID")?;
-        let cseq = header(&request.headers, "CSeq")?;
+        let call_id = header(request.headers(), "Call-ID")?;
+        let cseq = header(request.headers(), "CSeq")?;
         let cseq_num = cseq.split_whitespace().next()?;
-        let from = header(&request.headers, "From")?;
+        let from = header(request.headers(), "From")?;
 
         // Extract From tag (format: <sip:user@host>;tag=value or sip:user@host;tag=value)
         let from_tag = from.as_str().split(";tag=").nth(1)?.split(';').next()?;
 
         let key = format!("{}:{}:{}", call_id, cseq_num, from_tag);
         tracing::debug!(
-            method = %request.start.method.as_str(),
+            method = %request.method().as_str(),
             key = %key,
             call_id = %call_id,
             cseq_num = %cseq_num,
@@ -91,11 +91,11 @@ impl InviteStateManager {
         request: &Request,
     ) -> Option<(String, PendingInvite)> {
         let key = Self::key_from_request(request)?;
-        let via = header(&request.headers, "Via")?.clone();
-        let from = header(&request.headers, "From")?.clone();
-        let to = header(&request.headers, "To")?.clone();
-        let call_id = header(&request.headers, "Call-ID")?.clone();
-        let cseq = header(&request.headers, "CSeq")?.clone();
+        let via = header(request.headers(), "Via")?.clone();
+        let from = header(request.headers(), "From")?.clone();
+        let to = header(request.headers(), "To")?.clone();
+        let call_id = header(request.headers(), "Call-ID")?.clone();
+        let cseq = header(request.headers(), "CSeq")?.clone();
 
         Some((
             key,

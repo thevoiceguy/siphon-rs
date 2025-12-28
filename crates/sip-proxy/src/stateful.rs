@@ -204,10 +204,10 @@ impl ProxyContext {
         let mut branches = self.branches.write().await;
         let branch = branches.get_mut(branch_id)?;
 
-        let is_final = response.start.code >= 200;
+        let is_final = response.code() >= 200;
 
         // Update branch state
-        if response.start.code >= 100 && response.start.code < 200 {
+        if response.code() >= 100 && response.code() < 200 {
             branch.state = BranchState::Proceeding;
         } else if is_final {
             branch.state = BranchState::Completed;
@@ -226,7 +226,7 @@ impl ProxyContext {
         if !is_final {
             debug!(
                 "Forwarding provisional {} response from branch {}",
-                response.start.code, branch_id
+                response.code(), branch_id
             );
             return Some(response);
         }
@@ -238,12 +238,12 @@ impl ProxyContext {
         if should_forward {
             info!(
                 "Selected {} as best response (branch {})",
-                response.start.code, branch_id
+                response.code(), branch_id
             );
             *best_final = Some(response.clone());
 
             // If we got a 2xx and have other branches, send CANCEL to them
-            if response.start.code >= 200 && response.start.code < 300 {
+            if response.code() >= 200 && response.code() < 300 {
                 self.cancel_other_branches(branch_id).await;
             }
 
@@ -257,7 +257,7 @@ impl ProxyContext {
             if let Some(best) = best_final.clone() {
                 info!(
                     "All branches complete - forwarding best response {}",
-                    best.start.code
+                    best.code()
                 );
                 return Some(best);
             }
@@ -323,7 +323,7 @@ impl ProxyContext {
     pub async fn best_response_is_2xx(&self) -> Option<bool> {
         let best = self.best_final.read().await;
         best.as_ref()
-            .map(|resp| resp.start.code >= 200 && resp.start.code < 300)
+            .map(|resp| resp.code() >= 200 && resp.code() < 300)
     }
 
     /// Prepare an ACK for forwarding using transaction context to decide ACK type.
@@ -353,8 +353,8 @@ fn select_best_response(current_best: Option<&Response>, new_response: &Response
         return true;
     };
 
-    let current_code = current.start.code;
-    let new_code = new_response.start.code;
+    let current_code = current.code();
+    let new_code = new_response.code();
 
     // Response selection rules per RFC 3261 §16.7:
     // 1. 6xx beats everything else
@@ -522,7 +522,7 @@ pub mod forwarding {
         let mut forwarded = response.clone();
 
         // Remove top Via header
-        ProxyHelpers::remove_top_via(&mut forwarded.headers);
+        ProxyHelpers::remove_top_via(forwarded.headers_mut());
 
         forwarded
     }
@@ -550,6 +550,7 @@ mod tests {
             headers,
             Bytes::new(),
         )
+        .expect("valid request")
     }
 
     fn make_response(code: u16) -> Response {
@@ -562,7 +563,12 @@ mod tests {
             .push("Via", "SIP/2.0/UDP client;branch=z9hG4bKclient")
             .unwrap();
 
-        Response::new(StatusLine::new(code, "OK".into()), headers, Bytes::new())
+        Response::new(
+            StatusLine::new(code, "OK").expect("valid status line"),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid response")
     }
 
     #[tokio::test]
@@ -679,14 +685,15 @@ mod tests {
                 headers,
                 Bytes::new(),
             )
+            .expect("valid request")
         };
 
         let forwarded = context.prepare_ack_forward(&ack).await.unwrap();
 
         // Route header consumed and Request-URI updated
-        assert!(forwarded.headers.iter().all(|h| h.name() != "Route"));
+        assert!(forwarded.headers().iter().all(|h| h.name() != "Route"));
         assert_eq!(
-            forwarded.start.uri.as_sip().unwrap().as_str(),
+            forwarded.uri().as_sip().unwrap().as_str(),
             "sip:proxy.example.com"
         );
     }
@@ -714,6 +721,7 @@ mod tests {
                 headers,
                 Bytes::new(),
             )
+            .expect("valid request")
         };
 
         let (context, _) = proxy.start_context(
@@ -755,6 +763,7 @@ mod tests {
                 headers,
                 Bytes::new(),
             )
+            .expect("valid request")
         };
 
         let cancels = context.build_cancel_requests(&cancel_template).await;
@@ -762,10 +771,10 @@ mod tests {
         let cancel = &cancels[0];
 
         // Branch rewritten
-        let via = cancel.headers.get("Via").unwrap();
+        let via = cancel.headers().get("Via").unwrap();
         assert!(via.contains("z9hG4bKbranch1"));
 
         // Request-URI targets branch destination
-        assert_eq!(cancel.start.uri.as_sip().unwrap().as_str(), target.as_str());
+        assert_eq!(cancel.uri().as_sip().unwrap().as_str(), target.as_str());
     }
 }

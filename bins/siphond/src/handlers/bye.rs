@@ -61,7 +61,9 @@ impl ByeHandler {
                 // Create BYE for caller
                 // Extract caller's contact from original INVITE
                 let caller_contact =
-                    if let Some(contact_header) = header(&leg.caller_request.headers, "Contact") {
+                    if let Some(contact_header) =
+                        header(leg.caller_request.headers(), "Contact")
+                    {
                         // Parse contact URI from Contact header (may have angle brackets)
                         let contact_str = contact_header;
                         if let Some(start) = contact_str.find('<') {
@@ -118,7 +120,7 @@ impl ByeHandler {
                 // From - use To from caller's INVITE + callee's to-tag (established dialog)
                 // This is the remote side from Bob's perspective
                 if let Some(to_tag) = &leg.callee_to_tag {
-                    if let Some(to) = leg.caller_request.headers.get("To") {
+                    if let Some(to) = leg.caller_request.headers().get("To") {
                         let from_with_tag = format!("{};tag={}", to.trim_end_matches(';'), to_tag);
                         let _ = bye_headers_base
                             .push(SmolStr::new("From"), SmolStr::new(from_with_tag));
@@ -128,14 +130,14 @@ impl ByeHandler {
                         call_id,
                         "B2BUA: No callee to-tag stored, BYE may be rejected"
                     );
-                    if let Some(to) = leg.caller_request.headers.get("To") {
+                    if let Some(to) = leg.caller_request.headers().get("To") {
                         let _ = bye_headers_base.push(SmolStr::new("From"), to);
                     }
                 }
 
                 // To - use From from caller's INVITE (this is Bob with his tag)
                 // This is Bob's local side
-                if let Some(from) = leg.caller_request.headers.get("From") {
+                if let Some(from) = leg.caller_request.headers().get("From") {
                     let _ = bye_headers_base.push(SmolStr::new("To"), from);
                 }
 
@@ -144,7 +146,7 @@ impl ByeHandler {
                     .push(SmolStr::new("Call-ID"), SmolStr::new(&leg.incoming_call_id));
 
                 // CSeq - increment from caller's INVITE CSeq
-                if let Some(cseq) = leg.caller_request.headers.get("CSeq") {
+                if let Some(cseq) = leg.caller_request.headers().get("CSeq") {
                     if let Some((num, _)) = cseq.split_once(' ') {
                         if let Ok(cseq_num) = num.parse::<u32>() {
                             let _ = bye_headers_base.push(
@@ -196,7 +198,8 @@ impl ByeHandler {
                         RequestLine::new(Method::Bye, caller_sip_uri.clone()),
                         bye_headers_udp,
                         bytes::Bytes::new(),
-                    );
+                    )
+                    .expect("valid BYE request");
                     let payload = sip_parse::serialize_request(&bye_request_udp);
 
                     info!(
@@ -240,7 +243,8 @@ impl ByeHandler {
                                     RequestLine::new(Method::Bye, caller_sip_uri.clone()),
                                     bye_headers_tcp,
                                     bytes::Bytes::new(),
-                                );
+                                )
+                                .expect("valid BYE request");
                                 let payload_tcp = sip_parse::serialize_request(&bye_request_tcp);
 
                                 if let Err(e) = sip_transport::send_tcp(&addr, &payload_tcp).await {
@@ -291,7 +295,8 @@ impl ByeHandler {
                                 RequestLine::new(Method::Bye, caller_sip_uri.clone()),
                                 bye_headers_tcp,
                                 bytes::Bytes::new(),
-                            );
+                            )
+                            .expect("valid BYE request");
                             let payload_tcp = sip_parse::serialize_request(&bye_request_tcp);
 
                             if let Err(e) = sip_transport::send_tcp(&addr, &payload_tcp).await {
@@ -322,10 +327,12 @@ impl ByeHandler {
             let mut headers = sip_core::Headers::new();
             copy_headers(request, &mut headers);
             let response = sip_core::Response::new(
-                sip_core::StatusLine::new(481, "Call/Transaction Does Not Exist".into()),
+                sip_core::StatusLine::new(481, "Call/Transaction Does Not Exist")
+                    .expect("valid status line"),
                 headers,
                 bytes::Bytes::new(),
-            );
+            )
+            .expect("valid response");
             handle.send_final(response).await;
             return Ok(());
         }
@@ -353,13 +360,13 @@ impl ByeHandler {
         );
 
         // From - same as our outgoing INVITE
-        if let Some(from) = call_leg.outgoing_invite.headers.get("From") {
+        if let Some(from) = call_leg.outgoing_invite.headers().get("From") {
             let _ = bye_headers.push(SmolStr::new("From"), from);
         }
 
         // To - with callee's tag
         if let Some(to_tag) = &call_leg.callee_to_tag {
-            if let Some(to) = call_leg.outgoing_invite.headers.get("To") {
+            if let Some(to) = call_leg.outgoing_invite.headers().get("To") {
                 let to_with_tag = format!("{};tag={}", to, to_tag);
                 let _ = bye_headers.push(SmolStr::new("To"), SmolStr::new(to_with_tag));
             }
@@ -372,7 +379,7 @@ impl ByeHandler {
         );
 
         // CSeq - increment from INVITE CSeq
-        if let Some(cseq) = call_leg.outgoing_invite.headers.get("CSeq") {
+        if let Some(cseq) = call_leg.outgoing_invite.headers().get("CSeq") {
             if let Some((num, _)) = cseq.split_once(' ') {
                 if let Ok(cseq_num) = num.parse::<u32>() {
                     let _ = bye_headers.push(
@@ -394,7 +401,8 @@ impl ByeHandler {
             RequestLine::new(Method::Bye, call_leg.callee_contact.clone()),
             bye_headers,
             bytes::Bytes::new(),
-        );
+        )
+        .expect("valid BYE request");
 
         // Send BYE to callee
         let callee_addr = format!(
@@ -438,7 +446,7 @@ impl RequestHandler for ByeHandler {
         ctx: &TransportContext,
         services: &ServiceRegistry,
     ) -> Result<()> {
-        let call_id = header(&request.headers, "Call-ID")
+        let call_id = header(request.headers(), "Call-ID")
             .map(|s| s.as_str())
             .unwrap_or("unknown");
 
@@ -496,10 +504,12 @@ impl RequestHandler for ByeHandler {
                 copy_headers(request, &mut headers);
 
                 let response = sip_core::Response::new(
-                    sip_core::StatusLine::new(481, "Call/Transaction Does Not Exist".into()),
+                    sip_core::StatusLine::new(481, "Call/Transaction Does Not Exist")
+                        .expect("valid status line"),
                     headers,
                     bytes::Bytes::new(),
-                );
+                )
+                .expect("valid response");
 
                 handle.send_final(response).await;
             }
@@ -515,19 +525,19 @@ impl RequestHandler for ByeHandler {
 
 /// Copy essential headers from request to response
 fn copy_headers(request: &Request, headers: &mut sip_core::Headers) {
-    if let Some(via) = header(&request.headers, "Via") {
+    if let Some(via) = header(request.headers(), "Via") {
         let _ = headers.push("Via", via.clone());
     }
-    if let Some(from) = header(&request.headers, "From") {
+    if let Some(from) = header(request.headers(), "From") {
         let _ = headers.push("From", from.clone());
     }
-    if let Some(to) = header(&request.headers, "To") {
+    if let Some(to) = header(request.headers(), "To") {
         let _ = headers.push("To", to.clone());
     }
-    if let Some(call_id) = header(&request.headers, "Call-ID") {
+    if let Some(call_id) = header(request.headers(), "Call-ID") {
         let _ = headers.push("Call-ID", call_id.clone());
     }
-    if let Some(cseq) = header(&request.headers, "CSeq") {
+    if let Some(cseq) = header(request.headers(), "CSeq") {
         let _ = headers.push("CSeq", cseq.clone());
     }
 }

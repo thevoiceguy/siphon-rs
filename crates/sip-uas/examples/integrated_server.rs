@@ -25,7 +25,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use sip_core::Request;
+use sip_core::{Request, Response};
 use sip_dialog::Dialog;
 use sip_transaction::{ServerTransactionHandle, TransportContext};
 use sip_uas::integrated::UasRequestHandler;
@@ -66,7 +66,7 @@ impl UasRequestHandler for AutoAnswerServer {
         _ctx: &TransportContext,
         dialog: Option<&Dialog>,
     ) -> Result<()> {
-        if let Some(from) = request.headers.get("From") {
+        if let Some(from) = request.headers().get("From") {
             if dialog.is_some() {
                 println!("📞 Received re-INVITE from {}", from);
             } else {
@@ -87,10 +87,10 @@ impl UasRequestHandler for AutoAnswerServer {
             let mut ok_response = UserAgentServer::create_response(request, 200, "OK");
 
             // Add SDP answer if request had SDP offer
-            if !request.body.is_empty() {
+            if !request.body().is_empty() {
                 println!(
                     "   INVITE contains SDP offer ({} bytes)",
-                    request.body.len()
+                    request.body().len()
                 );
 
                 // Generate simple SDP answer
@@ -109,18 +109,23 @@ impl UasRequestHandler for AutoAnswerServer {
                         .as_secs()
                 );
 
-                ok_response.body = sdp_answer.as_bytes().to_vec().into();
-                let _ = ok_response.headers.push("Content-Type", "application/sdp");
+                let content_length = sdp_answer.len().to_string();
                 let _ = ok_response
-                    .headers
-                    .push("Content-Length", sdp_answer.len().to_string());
+                    .headers_mut()
+                    .set_or_push("Content-Type", "application/sdp");
+                let _ = ok_response
+                    .headers_mut()
+                    .set_or_push("Content-Length", &content_length);
+                let (start, headers, _) = ok_response.into_parts();
+                ok_response = Response::new(start, headers, sdp_answer.as_bytes().to_vec().into())
+                    .expect("valid response");
 
                 println!("   Generated SDP answer ({} bytes)", sdp_answer.len());
             }
 
             // Add Contact header
             let _ = ok_response
-                .headers
+                .headers_mut()
                 .push("Contact", format!("<{}>", self.local_uri));
 
             // Send 200 OK
@@ -129,7 +134,7 @@ impl UasRequestHandler for AutoAnswerServer {
 
             // Store dialog if this is a new call
             if dialog.is_none() {
-                if let Some(call_id) = request.headers.get("Call-ID") {
+                if let Some(call_id) = request.headers().get("Call-ID") {
                     // In real implementation, we'd create the dialog properly
                     // For this example, just note that we'd track it
                     println!("   ✓ Dialog created: Call-ID={}", call_id);
@@ -150,8 +155,11 @@ impl UasRequestHandler for AutoAnswerServer {
         println!("✓ Received ACK for dialog: {}", dialog.id.call_id);
 
         // Check if ACK contains SDP (late offer scenario)
-        if !request.body.is_empty() {
-            println!("   ACK contains SDP answer ({} bytes)", request.body.len());
+        if !request.body().is_empty() {
+            println!(
+                "   ACK contains SDP answer ({} bytes)",
+                request.body().len()
+            );
             println!("   Processing media session...");
         }
 
@@ -184,32 +192,32 @@ impl UasRequestHandler for AutoAnswerServer {
 
     /// Handle incoming REGISTER requests
     async fn on_register(&self, request: &Request, handle: ServerTransactionHandle) -> Result<()> {
-        if let Some(from) = request.headers.get("From") {
+        if let Some(from) = request.headers().get("From") {
             println!("📝 Received REGISTER from {}", from);
         }
 
         // Extract Contact and Expires
-        if let Some(contact) = request.headers.get("Contact") {
+        if let Some(contact) = request.headers().get("Contact") {
             println!("   Contact: {}", contact);
         }
 
-        let expires = request.headers.get("Expires").map(|e| e).unwrap_or("3600");
+        let expires = request.headers().get("Expires").map(|e| e).unwrap_or("3600");
         println!("   Expires: {} seconds", expires);
 
         // Accept registration
         let mut response = UserAgentServer::create_response(request, 200, "OK");
 
         // Echo back Contact with expires parameter
-        if let Some(contact) = request.headers.get("Contact") {
+        if let Some(contact) = request.headers().get("Contact") {
             let contact_with_expires = if contact.contains("expires=") {
                 contact.to_string()
             } else {
                 format!("{};expires={}", contact, expires)
             };
-            let _ = response.headers.push("Contact", contact_with_expires);
+            let _ = response.headers_mut().push("Contact", contact_with_expires);
         }
 
-        response.headers.push("Expires", expires).unwrap();
+        response.headers_mut().push("Expires", expires).unwrap();
 
         handle.send_final(response).await;
         println!("   → 200 OK (registered)");
@@ -225,19 +233,19 @@ impl UasRequestHandler for AutoAnswerServer {
         let mut response = UserAgentServer::create_response(request, 200, "OK");
 
         // Add Allow header with supported methods
-        response.headers.push(
+        response.headers_mut().push(
             "Allow",
             "INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, SUBSCRIBE, NOTIFY, REFER, UPDATE, PRACK, INFO",
         ).unwrap();
 
         // Add Accept header
         let _ = response
-            .headers
+            .headers_mut()
             .push("Accept", "application/sdp, message/sipfrag");
 
         // Add Supported header
         let _ = response
-            .headers
+            .headers_mut()
             .push("Supported", "replaces, timer, 100rel");
 
         handle.send_final(response).await;
@@ -256,7 +264,7 @@ impl UasRequestHandler for AutoAnswerServer {
         println!("🔀 Received REFER in dialog: {}", dialog.id.call_id);
 
         // Extract Refer-To header
-        if let Some(refer_to) = request.headers.get("Refer-To") {
+        if let Some(refer_to) = request.headers().get("Refer-To") {
             println!("   Refer-To: {}", refer_to);
 
             // Check for Replaces (attended transfer)
@@ -285,21 +293,26 @@ impl UasRequestHandler for AutoAnswerServer {
     ) -> Result<()> {
         println!("🔄 Received UPDATE in dialog: {}", dialog.id.call_id);
 
-        if !request.body.is_empty() {
-            println!("   UPDATE contains SDP ({} bytes)", request.body.len());
+        if !request.body().is_empty() {
+            println!("   UPDATE contains SDP ({} bytes)", request.body().len());
         }
 
         // Accept the UPDATE
         let mut response = UserAgentServer::create_response(request, 200, "OK");
 
         // If request had SDP, include SDP in response
-        if !request.body.is_empty() {
+        if !request.body().is_empty() {
             let sdp_answer = "v=0\r\no=- 0 0 IN IP4 192.168.1.1\r\ns=-\r\nc=IN IP4 192.168.1.1\r\nt=0 0\r\nm=audio 9000 RTP/AVP 0\r\n";
-            response.body = sdp_answer.as_bytes().to_vec().into();
-            let _ = response.headers.push("Content-Type", "application/sdp");
+            let content_length = sdp_answer.len().to_string();
             let _ = response
-                .headers
-                .push("Content-Length", sdp_answer.len().to_string());
+                .headers_mut()
+                .set_or_push("Content-Type", "application/sdp");
+            let _ = response
+                .headers_mut()
+                .set_or_push("Content-Length", &content_length);
+            let (start, headers, _) = response.into_parts();
+            response = Response::new(start, headers, sdp_answer.as_bytes().to_vec().into())
+                .expect("valid response");
         }
 
         handle.send_final(response).await;

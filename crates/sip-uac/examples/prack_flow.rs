@@ -44,7 +44,7 @@ fn main() {
     );
 
     println!("INVITE sip:bob@example.com SIP/2.0");
-    println!("From: {}", invite_request.headers.get("From").unwrap());
+    println!("From: {}", invite_request.headers().get("From").unwrap());
     println!("To: <sip:bob@example.com>");
     println!("Supported: 100rel");
     println!("Content-Type: application/sdp");
@@ -84,7 +84,7 @@ fn main() {
     ringing_headers
         .push(
             SmolStr::new("From"),
-            invite_request.headers.get("From").unwrap(),
+            invite_request.headers().get("From").unwrap(),
         )
         .unwrap();
     ringing_headers
@@ -96,7 +96,7 @@ fn main() {
     ringing_headers
         .push(
             SmolStr::new("Call-ID"),
-            invite_request.headers.get("Call-ID").unwrap(),
+            invite_request.headers().get("Call-ID").unwrap(),
         )
         .unwrap();
     ringing_headers
@@ -116,10 +116,11 @@ fn main() {
         .unwrap();
 
     let ringing_response = Response::new(
-        StatusLine::new(180, SmolStr::new("Ringing")),
+        StatusLine::new(180, "Ringing").expect("valid status line"),
         ringing_headers,
         Bytes::new(),
-    );
+    )
+    .expect("valid response");
 
     // Alice creates early dialog from 180 response
     let early_dialog = alice_uac
@@ -137,11 +138,11 @@ fn main() {
         .expect("PRACK request");
 
     println!("PRACK sip:bob@192.168.1.200:5060 SIP/2.0");
-    println!("From: {}", prack_request.headers.get("From").unwrap());
-    println!("To: {}", prack_request.headers.get("To").unwrap());
-    println!("Call-ID: {}", prack_request.headers.get("Call-ID").unwrap());
-    println!("CSeq: {}", prack_request.headers.get("CSeq").unwrap());
-    println!("RAck: {}", prack_request.headers.get("RAck").unwrap());
+    println!("From: {}", prack_request.headers().get("From").unwrap());
+    println!("To: {}", prack_request.headers().get("To").unwrap());
+    println!("Call-ID: {}", prack_request.headers().get("Call-ID").unwrap());
+    println!("CSeq: {}", prack_request.headers().get("CSeq").unwrap());
+    println!("RAck: {}", prack_request.headers().get("RAck").unwrap());
     println!();
     println!("RAck header breakdown: RSeq CSeq-number Method");
     println!("  RSeq: 1 (from 180 response)");

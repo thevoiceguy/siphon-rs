@@ -33,7 +33,7 @@ impl RequestHandler for UpdateHandler {
         ctx: &TransportContext,
         services: &ServiceRegistry,
     ) -> Result<()> {
-        let call_id = header(&request.headers, "Call-ID")
+        let call_id = header(request.headers(), "Call-ID")
             .map(|s| s.as_str())
             .unwrap_or("unknown");
 
@@ -73,8 +73,8 @@ impl RequestHandler for UpdateHandler {
             return Ok(());
         }
 
-        let sdp_body = if !request.body.is_empty() {
-            match std::str::from_utf8(&request.body) {
+        let sdp_body = if !request.body().is_empty() {
+            match std::str::from_utf8(request.body()) {
                 Ok(offer_str) => {
                     match sdp_utils::generate_sdp_answer(&services.config, offer_str) {
                         Ok(answer) => Some(answer),

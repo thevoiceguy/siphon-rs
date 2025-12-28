@@ -33,7 +33,7 @@ impl RequestHandler for PrackHandler {
         ctx: &TransportContext,
         services: &ServiceRegistry,
     ) -> Result<()> {
-        let call_id = header(&request.headers, "Call-ID")
+        let call_id = header(request.headers(), "Call-ID")
             .map(|s| s.as_str())
             .unwrap_or("unknown");
 

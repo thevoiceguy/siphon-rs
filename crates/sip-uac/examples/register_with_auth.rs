@@ -28,15 +28,15 @@ fn main() {
     let register_request = uac.create_register(&registrar_uri, 3600);
 
     println!("\n--- Initial REGISTER Request ---");
-    println!("Method: {:?}", register_request.start.method);
-    println!("Request-URI: {}", register_request.start.uri.as_str());
-    println!("From: {}", register_request.headers.get("From").unwrap());
-    println!("To: {}", register_request.headers.get("To").unwrap());
+    println!("Method: {:?}", register_request.method());
+    println!("Request-URI: {}", register_request.uri().as_str());
+    println!("From: {}", register_request.headers().get("From").unwrap());
+    println!("To: {}", register_request.headers().get("To").unwrap());
     println!(
         "Contact: {}",
-        register_request.headers.get("Contact").unwrap()
+        register_request.headers().get("Contact").unwrap()
     );
-    println!("CSeq: {}", register_request.headers.get("CSeq").unwrap());
+    println!("CSeq: {}", register_request.headers().get("CSeq").unwrap());
 
     // Step 3: Simulate receiving 401 Unauthorized response
     println!("\n--- Simulating 401 Unauthorized Response ---");

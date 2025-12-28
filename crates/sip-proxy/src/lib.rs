@@ -12,7 +12,7 @@
 //! use sip_proxy::ProxyHelpers;
 //! # use sip_core::{Request, Headers, RequestLine, Method, SipUri};
 //! # use bytes::Bytes;
-//! # let mut req = Request::new(RequestLine::new(Method::Invite, SipUri::parse("sip:bob@example.com").unwrap()), Headers::new(), Bytes::new());
+//! # let mut req = Request::new(RequestLine::new(Method::Invite, SipUri::parse("sip:bob@example.com").unwrap()), Headers::new(), Bytes::new()).unwrap();
 //! let branch = ProxyHelpers::add_via(&mut req, "proxy.example.com", "UDP".into());
 //! let proxy_uri = SipUri::parse("sip:proxy.example.com;lr").unwrap();
 //! ProxyHelpers::add_record_route(&mut req, &proxy_uri);
@@ -23,7 +23,7 @@ pub mod service;
 pub mod stateful;
 
 use anyhow::{anyhow, Result};
-use sip_core::{decrement_max_forwards, Header, Headers, Request, SipUri};
+use sip_core::{decrement_max_forwards, Header, Headers, Request, RequestLine, SipUri};
 use sip_transaction::generate_branch_id;
 
 /// Stateless proxy helpers for RFC 3261 proxy operations.
@@ -56,8 +56,8 @@ impl ProxyHelpers {
         // Prepend to existing Via headers
         let mut new_headers = Vec::new();
         new_headers.push(Header::new("Via", via_value).expect("via header should be valid"));
-        new_headers.extend(request.headers.clone());
-        request.headers =
+        new_headers.extend(request.headers().clone());
+        *request.headers_mut() =
             Headers::from_vec(new_headers).expect("via header list should be within limits");
 
         branch.to_string()
@@ -73,7 +73,7 @@ impl ProxyHelpers {
     /// * `proxy_uri` - The proxy's SIP URI (will be in Route headers of future requests)
     pub fn add_record_route(request: &mut Request, proxy_uri: &SipUri) {
         let rr_value = format!("<{}>", proxy_uri.as_str());
-        request.headers.push("Record-Route", rr_value).unwrap();
+        request.headers_mut().push("Record-Route", rr_value).unwrap();
     }
 
     /// Decrements Max-Forwards header and checks for loop.
@@ -89,7 +89,7 @@ impl ProxyHelpers {
     /// * `Ok(())` - Max-Forwards was decremented successfully
     /// * `Err(_)` - Max-Forwards exhausted (respond with 483)
     pub fn check_max_forwards(request: &mut Request) -> Result<()> {
-        decrement_max_forwards(&mut request.headers)
+        decrement_max_forwards(request.headers_mut())
             .map(|_| ())
             .map_err(|_| anyhow!("Max-Forwards exhausted - respond with 483 Too Many Hops"))
     }
@@ -132,7 +132,12 @@ impl ProxyHelpers {
     /// * `request` - The request to modify
     /// * `target_uri` - The URI to forward to (usually from location service)
     pub fn set_request_uri(request: &mut Request, target_uri: SipUri) {
-        request.start.uri = target_uri.into();
+        let method = request.method().clone();
+        let headers = request.headers().clone();
+        let body = request.body().clone();
+        *request =
+            Request::new(RequestLine::new(method, target_uri), headers, body)
+                .expect("valid request");
     }
 }
 
@@ -157,12 +162,13 @@ mod tests {
             ),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let branch = ProxyHelpers::add_via(&mut req, "proxy.example.com", "UDP".into());
 
         // Via should be prepended
-        let vias: Vec<_> = req.headers.iter().filter(|h| h.name() == "Via").collect();
+        let vias: Vec<_> = req.headers().iter().filter(|h| h.name() == "Via").collect();
         assert_eq!(vias.len(), 2);
         assert!(vias[0].value().contains("proxy.example.com"));
         assert!(vias[0].value().contains(&branch));
@@ -179,12 +185,13 @@ mod tests {
             ),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let proxy_uri = SipUri::parse("sip:proxy.example.com").unwrap();
         ProxyHelpers::add_record_route(&mut req, &proxy_uri);
 
-        let rr = req.headers.get("Record-Route").unwrap();
+        let rr = req.headers().get("Record-Route").unwrap();
         assert!(rr.contains("sip:proxy.example.com"));
     }
 
@@ -200,10 +207,11 @@ mod tests {
             ),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         assert!(ProxyHelpers::check_max_forwards(&mut req).is_ok());
-        assert_eq!(req.headers.get("Max-Forwards").unwrap(), "69");
+        assert_eq!(req.headers().get("Max-Forwards").unwrap(), "69");
     }
 
     #[test]
@@ -218,7 +226,8 @@ mod tests {
             ),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         assert!(ProxyHelpers::check_max_forwards(&mut req).is_err());
     }
@@ -251,11 +260,12 @@ mod tests {
             ),
             Headers::new(),
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let target = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
         ProxyHelpers::set_request_uri(&mut req, target.clone());
 
-        assert_eq!(req.start.uri.as_sip().unwrap().as_str(), target.as_str());
+        assert_eq!(req.uri().as_sip().unwrap().as_str(), target.as_str());
     }
 }

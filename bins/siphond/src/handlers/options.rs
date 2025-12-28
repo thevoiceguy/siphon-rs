@@ -87,15 +87,15 @@ impl RequestHandler for OptionsHandler {
         services: &ServiceRegistry,
     ) -> Result<()> {
         // Extract required headers from request
-        let via = header(&request.headers, "Via").cloned().unwrap_or_default();
-        let from = header(&request.headers, "From")
+        let via = header(request.headers(), "Via").cloned().unwrap_or_default();
+        let from = header(request.headers(), "From")
             .cloned()
             .unwrap_or_default();
-        let mut to = header(&request.headers, "To").cloned().unwrap_or_default();
-        let call_id = header(&request.headers, "Call-ID")
+        let mut to = header(request.headers(), "To").cloned().unwrap_or_default();
+        let call_id = header(request.headers(), "Call-ID")
             .cloned()
             .unwrap_or_default();
-        let cseq = header(&request.headers, "CSeq")
+        let cseq = header(request.headers(), "CSeq")
             .cloned()
             .unwrap_or_default();
 
@@ -128,7 +128,12 @@ impl RequestHandler for OptionsHandler {
             SmolStr::new(services.config.user_agent.clone()),
         );
 
-        let response = Response::new(StatusLine::new(200, "OK".into()), headers, Bytes::new());
+        let response = Response::new(
+            StatusLine::new(200, "OK").expect("valid status line"),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid response");
 
         info!(
             call_id = %call_id_log,

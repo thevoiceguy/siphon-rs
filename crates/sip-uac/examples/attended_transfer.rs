@@ -122,13 +122,13 @@ fn main() {
     let refer_request = bob_uac.create_refer_with_replaces(&dialog_a, &charlie_uri, &dialog_b);
 
     println!("REFER sip:alice@192.168.1.100:5060 SIP/2.0");
-    println!("From: {}", refer_request.headers.get("From").unwrap());
-    println!("To: {}", refer_request.headers.get("To").unwrap());
-    println!("Call-ID: {}", refer_request.headers.get("Call-ID").unwrap());
-    println!("CSeq: {}", refer_request.headers.get("CSeq").unwrap());
+    println!("From: {}", refer_request.headers().get("From").unwrap());
+    println!("To: {}", refer_request.headers().get("To").unwrap());
+    println!("Call-ID: {}", refer_request.headers().get("Call-ID").unwrap());
+    println!("CSeq: {}", refer_request.headers().get("CSeq").unwrap());
     println!(
         "Refer-To: {}",
-        refer_request.headers.get("Refer-To").unwrap()
+        refer_request.headers().get("Refer-To").unwrap()
     );
     println!();
     println!("Refer-To breakdown:");

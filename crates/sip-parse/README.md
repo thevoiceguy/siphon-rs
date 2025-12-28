@@ -19,14 +19,14 @@ use bytes::Bytes;
 // Parse SIP request
 let data = Bytes::from("INVITE sip:bob@example.com SIP/2.0\r\n...");
 if let Some(request) = parse_request(&data) {
-    println!("Method: {:?}", request.start.method);
-    println!("Request-URI: {}", request.start.uri);
+    println!("Method: {:?}", request.method());
+    println!("Request-URI: {}", request.uri());
 }
 
 // Parse SIP response
 let data = Bytes::from("SIP/2.0 200 OK\r\n...");
 if let Some(response) = parse_response(&data) {
-    println!("Status: {}", response.start.code);
+    println!("Status: {}", response.code());
 }
 ```
 
@@ -212,8 +212,8 @@ fn handle_message(data: &Bytes) {
     match parse_request(data) {
         Some(req) => {
             // Check body size
-            if req.body.len() > 1_000_000 {
-                log::warn!("Large message body: {} bytes", req.body.len());
+            if req.body().len() > 1_000_000 {
+                log::warn!("Large message body: {} bytes", req.body().len());
             }
             // Process request...
         }

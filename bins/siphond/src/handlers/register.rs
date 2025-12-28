@@ -36,7 +36,7 @@ impl RequestHandler for RegisterHandler {
         _ctx: &TransportContext,
         services: &ServiceRegistry,
     ) -> Result<()> {
-        let call_id = header(&request.headers, "Call-ID")
+        let call_id = header(request.headers(), "Call-ID")
             .map(|s| s.as_str())
             .unwrap_or("unknown");
 
@@ -48,10 +48,12 @@ impl RequestHandler for RegisterHandler {
                 let mut headers = sip_core::Headers::new();
                 copy_headers(request, &mut headers);
                 let response = sip_core::Response::new(
-                    sip_core::StatusLine::new(501, "Not Implemented".into()),
+                    sip_core::StatusLine::new(501, "Not Implemented")
+                        .expect("valid status line"),
                     headers,
                     bytes::Bytes::new(),
-                );
+                )
+                .expect("valid response");
                 handle.send_final(response).await;
                 return Ok(());
             }
@@ -63,12 +65,12 @@ impl RequestHandler for RegisterHandler {
         let response = registrar.as_ref().handle_register(request)?;
 
         // Log the outcome
-        match response.start.code {
+        match response.code() {
             200 => {
-                let to = header(&request.headers, "To")
+                let to = header(request.headers(), "To")
                     .map(|s| s.as_str())
                     .unwrap_or("unknown");
-                let contact = header(&request.headers, "Contact")
+                let contact = header(request.headers(), "Contact")
                     .map(|s| s.as_str())
                     .unwrap_or("none");
 
@@ -76,7 +78,7 @@ impl RequestHandler for RegisterHandler {
                     call_id,
                     aor = to,
                     contact,
-                    code = response.start.code,
+                    code = response.code(),
                     "Registration successful"
                 );
             }
@@ -84,7 +86,7 @@ impl RequestHandler for RegisterHandler {
                 info!(call_id, "Authentication challenge sent");
             }
             code => {
-                warn!(call_id, code, reason = %response.start.reason, "Registration failed");
+                warn!(call_id, code, reason = %response.reason(), "Registration failed");
             }
         }
 
@@ -99,19 +101,19 @@ impl RequestHandler for RegisterHandler {
 
 /// Copy essential headers from request to response
 fn copy_headers(request: &Request, headers: &mut sip_core::Headers) {
-    if let Some(via) = header(&request.headers, "Via") {
+    if let Some(via) = header(request.headers(), "Via") {
         let _ = headers.push("Via", via.clone());
     }
-    if let Some(from) = header(&request.headers, "From") {
+    if let Some(from) = header(request.headers(), "From") {
         let _ = headers.push("From", from.clone());
     }
-    if let Some(to) = header(&request.headers, "To") {
+    if let Some(to) = header(request.headers(), "To") {
         let _ = headers.push("To", to.clone());
     }
-    if let Some(call_id) = header(&request.headers, "Call-ID") {
+    if let Some(call_id) = header(request.headers(), "Call-ID") {
         let _ = headers.push("Call-ID", call_id.clone());
     }
-    if let Some(cseq) = header(&request.headers, "CSeq") {
+    if let Some(cseq) = header(request.headers(), "CSeq") {
         let _ = headers.push("CSeq", cseq.clone());
     }
 }

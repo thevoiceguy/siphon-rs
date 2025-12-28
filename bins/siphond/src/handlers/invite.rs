@@ -113,8 +113,8 @@ impl InviteHandler {
             .is_some();
 
         // Extract SDP from re-INVITE to detect hold/resume
-        let sdp_str = if !request.body.is_empty() {
-            std::str::from_utf8(&request.body).ok()
+        let sdp_str = if !request.body().is_empty() {
+            std::str::from_utf8(request.body()).ok()
         } else {
             None
         };
@@ -214,19 +214,19 @@ impl InviteHandler {
         let mut response_headers = sip_core::Headers::new();
 
         // Copy essential headers
-        if let Some(via) = header(&request.headers, "Via") {
+        if let Some(via) = header(request.headers(), "Via") {
             let _ = response_headers.push("Via", via.clone());
         }
-        if let Some(from) = header(&request.headers, "From") {
+        if let Some(from) = header(request.headers(), "From") {
             let _ = response_headers.push("From", from.clone());
         }
-        if let Some(to) = header(&request.headers, "To") {
+        if let Some(to) = header(request.headers(), "To") {
             let _ = response_headers.push("To", to.clone());
         }
-        if let Some(call_id_hdr) = header(&request.headers, "Call-ID") {
+        if let Some(call_id_hdr) = header(request.headers(), "Call-ID") {
             let _ = response_headers.push("Call-ID", call_id_hdr.clone());
         }
-        if let Some(cseq) = header(&request.headers, "CSeq") {
+        if let Some(cseq) = header(request.headers(), "CSeq") {
             let _ = response_headers.push("CSeq", cseq.clone());
         }
 
@@ -234,20 +234,21 @@ impl InviteHandler {
         let _ = response_headers.push("Contact", format!("<{}>", services.config.local_uri));
 
         // Echo back the SDP from the original request
-        if !request.body.is_empty() {
-            if let Some(content_type) = header(&request.headers, "Content-Type") {
+        if !request.body().is_empty() {
+            if let Some(content_type) = header(request.headers(), "Content-Type") {
                 let _ = response_headers.push("Content-Type", content_type.clone());
             }
-            let _ = response_headers.push("Content-Length", request.body.len().to_string());
+            let _ = response_headers.push("Content-Length", request.body().len().to_string());
         } else {
             let _ = response_headers.push("Content-Length", "0");
         }
 
         let response = sip_core::Response::new(
-            sip_core::StatusLine::new(200, "OK".into()),
+            sip_core::StatusLine::new(200, "OK").expect("valid status line"),
             response_headers,
-            request.body.clone(), // Echo back the SDP
-        );
+            request.body().clone(), // Echo back the SDP
+        )
+        .expect("valid response");
 
         handle.send_final(response).await;
 
@@ -285,8 +286,7 @@ impl InviteHandler {
 
         // Extract target URI from Request-URI
         let target_uri = request
-            .start
-            .uri
+            .uri()
             .as_sip()
             .ok_or_else(|| anyhow!("Request-URI must be SIP URI for B2BUA"))?;
 
@@ -350,10 +350,11 @@ impl InviteHandler {
         if bindings.is_empty() {
             warn!(call_id, target = %target_uri.as_str(), "Callee not found");
             let response = sip_core::Response::new(
-                sip_core::StatusLine::new(404, "Not Found".into()),
-                request.headers.clone(),
+                sip_core::StatusLine::new(404, "Not Found").expect("valid status line"),
+                request.headers().clone(),
                 bytes::Bytes::new(),
-            );
+            )
+            .expect("valid response");
             handle.send_final(response).await;
             return Ok(());
         }
@@ -367,7 +368,7 @@ impl InviteHandler {
 
         // Extract the From URI from Bob's original request to preserve caller ID
         let from_header =
-            header(&request.headers, "From").ok_or_else(|| anyhow!("Missing From header"))?;
+            header(request.headers(), "From").ok_or_else(|| anyhow!("Missing From header"))?;
 
         // Parse the From URI (format: "Display Name" <sip:user@host>;tag=xxx or sip:user@host;tag=xxx)
         let from_uri = if let Some(start) = from_header.find('<') {
@@ -398,8 +399,8 @@ impl InviteHandler {
         );
 
         // Extract SDP from incoming INVITE (if present)
-        let sdp = if !request.body.is_empty() {
-            Some(std::str::from_utf8(&request.body)?)
+        let sdp = if !request.body().is_empty() {
+            Some(std::str::from_utf8(request.body())?)
         } else {
             None
         };
@@ -409,7 +410,7 @@ impl InviteHandler {
 
         // Extract outgoing Call-ID for tracking
         let outgoing_call_id = outgoing_invite
-            .headers
+            .headers()
             .get("Call-ID")
             .ok_or_else(|| anyhow!("Missing Call-ID in outgoing INVITE"))?
             .to_string();
@@ -445,7 +446,7 @@ impl InviteHandler {
         let outgoing_call_id_clone = outgoing_call_id.clone();
         tokio::spawn(async move {
             while let Some(callee_response) = response_rx.recv().await {
-                let status_code = callee_response.start.code;
+                let status_code = callee_response.code();
 
                 // Transform callee's response to match caller's call leg
                 let transformed = Self::transform_response_for_caller(
@@ -456,10 +457,10 @@ impl InviteHandler {
                 .await;
 
                 if let Some(caller_response) = transformed {
-                    if caller_response.start.code >= 100 && caller_response.start.code < 200 {
+                    if caller_response.code() >= 100 && caller_response.code() < 200 {
                         // Provisional response (1xx)
                         handle.send_provisional(caller_response).await;
-                    } else if caller_response.start.code >= 200 && caller_response.start.code < 300
+                    } else if caller_response.code() >= 200 && caller_response.code() < 300
                     {
                         // 2xx response - call established
                         handle.send_final(caller_response).await;
@@ -544,15 +545,15 @@ impl InviteHandler {
         tracing::info!(
             outgoing_call_id,
             incoming_call_id = %call_leg.incoming_call_id,
-            status_code = callee_response.start.code,
+            status_code = callee_response.code(),
             "Transforming response from callee to caller"
         );
 
         // Extract headers from caller's original request
-        let caller_call_id = header(&call_leg.caller_request.headers, "Call-ID")?;
-        let caller_from = header(&call_leg.caller_request.headers, "From")?;
-        let caller_to = header(&call_leg.caller_request.headers, "To")?;
-        let caller_cseq = header(&call_leg.caller_request.headers, "CSeq")?;
+        let caller_call_id = header(call_leg.caller_request.headers(), "Call-ID")?;
+        let caller_from = header(call_leg.caller_request.headers(), "From")?;
+        let caller_to = header(call_leg.caller_request.headers(), "To")?;
+        let caller_cseq = header(call_leg.caller_request.headers(), "CSeq")?;
 
         // Build transformed response headers
         let mut new_headers = sip_core::Headers::new();
@@ -560,7 +561,7 @@ impl InviteHandler {
         // Copy all Via headers from caller's original request (critical for routing)
         for via in call_leg
             .caller_request
-            .headers
+            .headers()
             .iter()
             .filter(|h| h.name().eq_ignore_ascii_case("Via"))
         {
@@ -573,7 +574,7 @@ impl InviteHandler {
         let _ = new_headers.push("CSeq", caller_cseq.clone());
 
         // Handle To header - add callee's To-tag if present (from 200 OK)
-        if let Some(callee_to_tag) = header(&callee_response.headers, "To").and_then(|to_hdr| {
+        if let Some(callee_to_tag) = header(callee_response.headers(), "To").and_then(|to_hdr| {
             // Extract tag parameter from To header
             to_hdr
                 .split(';')
@@ -591,7 +592,7 @@ impl InviteHandler {
             let _ = new_headers.push("To", to_with_tag);
 
             // Store the callee's To-tag for future ACK/BYE (only for 2xx responses)
-            if callee_response.start.code >= 200 && callee_response.start.code < 300 {
+            if callee_response.code() >= 200 && callee_response.code() < 300 {
                 tracing::info!(
                     outgoing_call_id,
                     callee_to_tag = %callee_to_tag,
@@ -604,7 +605,7 @@ impl InviteHandler {
                 // Create UAC dialog (B2BUA → Alice) for handling re-INVITEs
                 // Extract local URI from the From header of outgoing INVITE (B2BUA's URI)
                 let local_uri =
-                    if let Some(from_hdr) = header(&call_leg.outgoing_invite.headers, "From") {
+                    if let Some(from_hdr) = header(call_leg.outgoing_invite.headers(), "From") {
                         let from_uri = if let Some(start) = from_hdr.find('<') {
                             let end = from_hdr.find('>').unwrap_or(from_hdr.len());
                             &from_hdr[start + 1..end]
@@ -621,7 +622,7 @@ impl InviteHandler {
                     };
 
                 // Extract remote URI from Alice's Contact header in the 200 OK
-                let remote_uri = if let Some(contact) = header(&callee_response.headers, "Contact")
+                let remote_uri = if let Some(contact) = header(callee_response.headers(), "Contact")
                 {
                     // Extract URI from Contact header
                     let contact_uri = if let Some(start) = contact.find('<') {
@@ -669,10 +670,11 @@ impl InviteHandler {
                 // Also create UAS dialog (Bob → B2BUA) for handling re-INVITEs from Bob
                 // We need to create a response that matches the transformed one we're sending
                 let uas_response = sip_core::Response::new(
-                    sip_core::StatusLine::new(200, "OK".into()),
+                    sip_core::StatusLine::new(200, "OK").expect("valid status line"),
                     new_headers.clone(),
-                    callee_response.body.clone(),
-                );
+                    callee_response.body().clone(),
+                )
+                .expect("valid response");
 
                 // Extract local and remote URIs for UAS dialog (from Bob's perspective)
                 let caller_uri_str = if let Some(start) = caller_from.find('<') {
@@ -727,11 +729,11 @@ impl InviteHandler {
         let _ = new_headers.push("Contact", b2bua_contact);
 
         // Copy Content-Type and Content-Length if body is present
-        if !callee_response.body.is_empty() {
-            if let Some(content_type) = header(&callee_response.headers, "Content-Type") {
+        if !callee_response.body().is_empty() {
+            if let Some(content_type) = header(callee_response.headers(), "Content-Type") {
                 let _ = new_headers.push("Content-Type", content_type.clone());
             }
-            let content_length = callee_response.body.len().to_string();
+            let content_length = callee_response.body().len().to_string();
             let _ = new_headers.push("Content-Length", content_length);
         } else {
             let _ = new_headers.push("Content-Length", "0");
@@ -746,21 +748,22 @@ impl InviteHandler {
             "RSeq",
             "Require",
         ] {
-            if let Some(value) = header(&callee_response.headers, header_name) {
+            if let Some(value) = header(callee_response.headers(), header_name) {
                 let _ = new_headers.push(*header_name, value.clone());
             }
         }
 
         // Create transformed response
         let transformed = sip_core::Response::new(
-            callee_response.start.clone(),
+            callee_response.start_line().clone(),
             new_headers,
-            callee_response.body.clone(), // Preserve SDP from callee
-        );
+            callee_response.body().clone(), // Preserve SDP from callee
+        )
+        .expect("valid response");
 
         tracing::debug!(
             outgoing_call_id,
-            status_code = callee_response.start.code,
+            status_code = callee_response.code(),
             "Response transformation complete"
         );
 
@@ -811,10 +814,11 @@ impl InviteHandler {
         if let Err(e) = ProxyHelpers::check_max_forwards(&mut proxied_req) {
             warn!(call_id, error = %e, "Max-Forwards exhausted");
             let response = sip_core::Response::new(
-                sip_core::StatusLine::new(483, "Too Many Hops".into()),
-                request.headers.clone(),
+                sip_core::StatusLine::new(483, "Too Many Hops").expect("valid status line"),
+                request.headers().clone(),
                 bytes::Bytes::new(),
-            );
+            )
+            .expect("valid response");
             handle.send_final(response).await;
             return Ok(());
         }
@@ -857,8 +861,7 @@ impl InviteHandler {
 
         // Step 4: Location service lookup
         let target_uri = proxied_req
-            .start
-            .uri
+            .uri()
             .as_sip()
             .ok_or_else(|| anyhow!("Request-URI must be SIP URI for proxy"))?;
 
@@ -911,10 +914,11 @@ impl InviteHandler {
         if bindings.is_empty() {
             warn!(call_id, target = %target_uri.as_str(), "User not found in location service");
             let response = sip_core::Response::new(
-                sip_core::StatusLine::new(404, "Not Found".into()),
-                request.headers.clone(),
+                sip_core::StatusLine::new(404, "Not Found").expect("valid status line"),
+                request.headers().clone(),
                 bytes::Bytes::new(),
-            );
+            )
+            .expect("valid response");
             handle.send_final(response).await;
             return Ok(());
         }
@@ -1030,7 +1034,7 @@ impl RequestHandler for InviteHandler {
         ctx: &TransportContext,
         services: &ServiceRegistry,
     ) -> Result<()> {
-        let call_id = header(&request.headers, "Call-ID")
+        let call_id = header(request.headers(), "Call-ID")
             .map(|s| s.as_str())
             .unwrap_or("unknown");
 
@@ -1080,8 +1084,8 @@ impl RequestHandler for InviteHandler {
                 return Ok(());
             }
 
-            let sdp_body = if !request.body.is_empty() {
-                match std::str::from_utf8(&request.body) {
+            let sdp_body = if !request.body().is_empty() {
+                match std::str::from_utf8(request.body()) {
                     Ok(offer_str) => {
                         match sdp_utils::generate_sdp_answer(&services.config, offer_str) {
                             Ok(answer) => Some(answer),
@@ -1203,17 +1207,19 @@ impl RequestHandler for InviteHandler {
 
         // Validate SDP early (if present) before sending 180 Ringing
         // RFC 3261 §21.4.13: Send 488 Not Acceptable Here for malformed/unsupported SDP
-        if !request.body.is_empty() {
-            if let Ok(offer_str) = std::str::from_utf8(&request.body) {
+        if !request.body().is_empty() {
+            if let Ok(offer_str) = std::str::from_utf8(request.body()) {
                 if let Err(e) = sdp_utils::generate_sdp_answer(&services.config, offer_str) {
                     warn!(call_id, error = %e, "SDP validation failed, rejecting with 488");
                     let mut headers = sip_core::Headers::new();
                     copy_dialog_headers(request, &mut headers);
                     let response = sip_core::Response::new(
-                        sip_core::StatusLine::new(488, "Not Acceptable Here".into()),
+                        sip_core::StatusLine::new(488, "Not Acceptable Here")
+                            .expect("valid status line"),
                         headers,
                         bytes::Bytes::new(),
-                    );
+                    )
+                    .expect("valid response");
                     handle.send_final(response).await;
                     if let Some(key) = pending_key.as_deref() {
                         services.invite_state.remove_pending_invite(key);
@@ -1228,7 +1234,7 @@ impl RequestHandler for InviteHandler {
         // Send 180 Ringing (with optional reliable provisional)
         if services.config.features.enable_prack
             && request
-                .headers
+                .headers()
                 .get("Supported")
                 .map(|s| s.contains("100rel"))
                 .unwrap_or(false)
@@ -1236,7 +1242,7 @@ impl RequestHandler for InviteHandler {
             let mut ringing = uas.create_ringing(request);
             let mut reliable_info: Option<(String, u32)> = None;
 
-            let remote_uri = header(&request.headers, "From")
+            let remote_uri = header(request.headers(), "From")
                 .and_then(|from| sdp_utils::parse_name_addr_uri(from.as_str()));
 
             if let Some(remote_uri) = remote_uri {
@@ -1247,13 +1253,13 @@ impl RequestHandler for InviteHandler {
 
                     let rseq = services.rseq_mgr.next_rseq(&early_dialog.id);
                     reliable_info = Some((Self::dialog_id_key(&early_dialog.id), rseq));
-                    let _ = ringing.headers.push("RSeq", rseq.to_string());
-                    let _ = ringing.headers.push("Require", "100rel");
+                    let _ = ringing.headers_mut().push("RSeq", rseq.to_string());
+                    let _ = ringing.headers_mut().push("Require", "100rel");
                     let _ = ringing
-                        .headers
+                        .headers_mut()
                         .push("Contact", format!("<{}>", services.config.local_uri));
 
-                    if let Some(cseq) = header(&request.headers, "CSeq")
+                    if let Some(cseq) = header(request.headers(), "CSeq")
                         .and_then(|value| value.split_whitespace().next())
                         .and_then(|value| value.parse::<u32>().ok())
                     {
@@ -1261,7 +1267,7 @@ impl RequestHandler for InviteHandler {
                             &Self::dialog_id_key(&early_dialog.id),
                             rseq,
                             cseq,
-                            request.start.method.clone(),
+                            request.method().clone(),
                             180,
                         );
                     }
@@ -1269,7 +1275,8 @@ impl RequestHandler for InviteHandler {
             }
 
             let ringing_for_retransmit = ringing.clone();
-            if let (Some(key), Some(to)) = (pending_key.as_deref(), header(&ringing.headers, "To"))
+            if let (Some(key), Some(to)) =
+                (pending_key.as_deref(), header(ringing.headers(), "To"))
             {
                 services.invite_state.update_to_header(key, to.clone());
             }
@@ -1286,7 +1293,8 @@ impl RequestHandler for InviteHandler {
             }
         } else {
             let ringing = uas.create_ringing(request);
-            if let (Some(key), Some(to)) = (pending_key.as_deref(), header(&ringing.headers, "To"))
+            if let (Some(key), Some(to)) =
+                (pending_key.as_deref(), header(ringing.headers(), "To"))
             {
                 services.invite_state.update_to_header(key, to.clone());
             }
@@ -1302,8 +1310,8 @@ impl RequestHandler for InviteHandler {
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Generate SDP answer (already validated earlier, so this should succeed)
-        let sdp_answer = if !request.body.is_empty() {
-            match std::str::from_utf8(&request.body) {
+        let sdp_answer = if !request.body().is_empty() {
+            match std::str::from_utf8(request.body()) {
                 Ok(offer_str) => {
                     // SDP was already validated earlier, so this should not fail
                     sdp_utils::generate_sdp_answer(&services.config, offer_str).ok()
@@ -1326,10 +1334,12 @@ impl RequestHandler for InviteHandler {
                     let mut headers = sip_core::Headers::new();
                     copy_dialog_headers(request, &mut headers);
                     let response = sip_core::Response::new(
-                        sip_core::StatusLine::new(488, "Not Acceptable Here".into()),
+                        sip_core::StatusLine::new(488, "Not Acceptable Here")
+                            .expect("valid status line"),
                         headers,
                         bytes::Bytes::new(),
-                    );
+                    )
+                    .expect("valid response");
                     handle.send_final(response).await;
                     if let Some(key) = pending_key.as_deref() {
                         services.invite_state.remove_pending_invite(key);
@@ -1345,16 +1355,16 @@ impl RequestHandler for InviteHandler {
         match result {
             Ok((mut response, mut dialog)) => {
                 if services.config.features.enable_session_timers {
-                    let has_se = response.headers.get("Session-Expires").is_some();
+                    let has_se = response.headers().get("Session-Expires").is_some();
                     if !has_se {
-                        let _ = response.headers.push(
+                        let _ = response.headers_mut().push(
                             "Session-Expires",
                             sip_dialog::session_timer_manager::DEFAULT_SESSION_EXPIRES
                                 .as_secs()
                                 .to_string(),
                         );
-                        let _ = response.headers.push("Supported", "timer");
-                        let _ = response.headers.push("Min-SE", "90");
+                        let _ = response.headers_mut().push("Supported", "timer");
+                        let _ = response.headers_mut().push("Min-SE", "90");
                     }
 
                     dialog.update_from_response(&response);
@@ -1411,19 +1421,19 @@ impl RequestHandler for InviteHandler {
 
 /// Copy dialog-forming headers from request to response headers
 fn copy_dialog_headers(request: &Request, headers: &mut sip_core::Headers) {
-    if let Some(via) = header(&request.headers, "Via") {
+    if let Some(via) = header(request.headers(), "Via") {
         let _ = headers.push("Via", via.clone());
     }
-    if let Some(from) = header(&request.headers, "From") {
+    if let Some(from) = header(request.headers(), "From") {
         let _ = headers.push("From", from.clone());
     }
-    if let Some(to) = header(&request.headers, "To") {
+    if let Some(to) = header(request.headers(), "To") {
         let _ = headers.push("To", to.clone());
     }
-    if let Some(call_id) = header(&request.headers, "Call-ID") {
+    if let Some(call_id) = header(request.headers(), "Call-ID") {
         let _ = headers.push("Call-ID", call_id.clone());
     }
-    if let Some(cseq) = header(&request.headers, "CSeq") {
+    if let Some(cseq) = header(request.headers(), "CSeq") {
         let _ = headers.push("CSeq", cseq.clone());
     }
 }

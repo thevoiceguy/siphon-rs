@@ -29,7 +29,7 @@ use crate::{Headers, Method, RequestLine, Response, StatusLine, Uri};
 /// assert_eq!(frag.to_string(), "SIP/2.0 200 OK\r\n");
 ///
 /// // Complete response fragment
-/// let status = StatusLine::new(603, SmolStr::new("Declined".to_owned()));
+/// let status = StatusLine::new(603, SmolStr::new("Declined".to_owned())).unwrap();
 /// let frag = SipFrag::response(status);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,7 +74,9 @@ impl SipFrag {
     /// ```
     pub fn status_only(code: u16, reason: SmolStr) -> Self {
         Self {
-            start_line: Some(StartLine::Response(StatusLine::new(code, reason))),
+            start_line: Some(StartLine::Response(
+                StatusLine::new(code, reason).expect("valid status line"),
+            )),
             headers: Headers::new(),
             body: Bytes::new(),
         }
@@ -85,10 +87,11 @@ impl SipFrag {
     /// This is useful for creating detailed NOTIFY bodies that include
     /// headers from the referenced request.
     pub fn from_response(response: Response) -> Self {
+        let (status, headers, body) = response.into_parts();
         Self {
-            start_line: Some(StartLine::Response(response.start)),
-            headers: response.headers,
-            body: response.body,
+            start_line: Some(StartLine::Response(status)),
+            headers,
+            body,
         }
     }
 
@@ -151,7 +154,7 @@ impl SipFrag {
     /// Returns the status code if this is a response fragment.
     pub fn status_code(&self) -> Option<u16> {
         match &self.start_line {
-            Some(StartLine::Response(status)) => Some(status.code),
+            Some(StartLine::Response(status)) => Some(status.code()),
             _ => None,
         }
     }
@@ -159,7 +162,7 @@ impl SipFrag {
     /// Returns the method if this is a request fragment.
     pub fn method(&self) -> Option<&Method> {
         match &self.start_line {
-            Some(StartLine::Request(req)) => Some(&req.method),
+            Some(StartLine::Request(req)) => Some(req.method()),
             _ => None,
         }
     }
@@ -167,7 +170,7 @@ impl SipFrag {
     /// Returns the request URI if this is a request fragment.
     pub fn request_uri(&self) -> Option<&Uri> {
         match &self.start_line {
-            Some(StartLine::Request(req)) => Some(&req.uri),
+            Some(StartLine::Request(req)) => Some(req.uri()),
             _ => None,
         }
     }
@@ -182,13 +185,21 @@ impl fmt::Display for SipFrag {
         if let Some(start_line) = &self.start_line {
             match start_line {
                 StartLine::Request(req) => {
-                    write!(f, "{} {} {}\r\n", req.method.as_str(), req.uri, req.version)?;
+                    write!(
+                        f,
+                        "{} {} {}\r\n",
+                        req.method().as_str(),
+                        req.uri(),
+                        req.version()
+                    )?;
                 }
                 StartLine::Response(status) => {
                     write!(
                         f,
                         "{} {} {}\r\n",
-                        status.version, status.code, status.reason
+                        status.version(),
+                        status.code(),
+                        status.reason()
                     )?;
                 }
             }
@@ -307,10 +318,11 @@ mod tests {
     #[test]
     fn sipfrag_from_response() {
         let response = Response::new(
-            StatusLine::new(603, SmolStr::new("Declined".to_owned())),
+            StatusLine::new(603, SmolStr::new("Declined".to_owned())).expect("valid status line"),
             Headers::new(),
             Bytes::new(),
-        );
+        )
+        .expect("valid response");
 
         let frag = SipFrag::from_response(response);
         assert!(frag.is_response());

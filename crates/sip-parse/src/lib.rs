@@ -17,9 +17,7 @@
 //! ```
 
 use bytes::{Bytes, BytesMut};
-use sip_core::{
-    is_valid_branch, Headers, Method, Request, RequestLine, Response, SipVersion, StatusLine, Uri,
-};
+use sip_core::{is_valid_branch, Headers, Method, Request, RequestLine, Response, StatusLine, Uri};
 use smol_str::SmolStr;
 
 mod header_values;
@@ -81,15 +79,7 @@ pub fn parse_request_with_limit(datagram: &Bytes, max_size: usize) -> Option<Req
         return None;
     }
 
-    Some(Request::new(
-        RequestLine {
-            method,
-            uri,
-            version: SipVersion::V2,
-        },
-        headers,
-        body,
-    ))
+    Request::new(RequestLine::new(method, uri), headers, body).ok()
 }
 
 /// Parses a SIP request with strict Content-Length handling and explicit size checks.
@@ -133,15 +123,7 @@ pub fn parse_request_with_limit_strict(datagram: &Bytes, max_size: usize) -> Opt
         return None;
     }
 
-    Some(Request::new(
-        RequestLine {
-            method,
-            uri,
-            version: SipVersion::V2,
-        },
-        headers,
-        body,
-    ))
+    Request::new(RequestLine::new(method, uri), headers, body).ok()
 }
 
 /// Parses a SIP response from raw network bytes.
@@ -160,7 +142,7 @@ pub fn parse_response(datagram: &Bytes) -> Option<Response> {
     let headers = parse_headers(lines)?;
     let body = extract_body(body_bytes, &headers)?;
 
-    Some(Response::new(status, headers, body))
+    Response::new(status, headers, body).ok()
 }
 
 /// Parses a SIP response in strict mode, rejecting invalid or ambiguous framing.
@@ -189,7 +171,7 @@ pub fn parse_response_strict(datagram: &Bytes) -> Option<Response> {
     };
     let body = extract_body_strict(body_bytes, declared)?;
 
-    Some(Response::new(status, headers, body))
+    Response::new(status, headers, body).ok()
 }
 
 /// Serializes a SIP request while normalising the `Content-Length` header.
@@ -200,13 +182,13 @@ pub fn serialize_request(req: &Request) -> Bytes {
     let _ = write!(
         buf,
         "{} {} {}\r\n",
-        req.start.method.as_str(),
-        req.start.uri.as_str(),
-        req.start.version.as_str()
+        req.method().as_str(),
+        req.uri().as_str(),
+        req.version().as_str()
     );
 
     let mut has_max_forwards = false;
-    for header in req.headers.iter() {
+    for header in req.headers().iter() {
         // Skip Content-Length (and compact form "l")
         if header.name().eq_ignore_ascii_case("Content-Length")
             || header.name().eq_ignore_ascii_case("l")
@@ -225,13 +207,13 @@ pub fn serialize_request(req: &Request) -> Bytes {
         let _ = write!(buf, "Max-Forwards: 70\r\n");
     }
 
-    let _ = write!(buf, "Content-Length: {}\r\n", req.body.len());
+    let _ = write!(buf, "Content-Length: {}\r\n", req.body().len());
 
     buf.push_str("\r\n");
 
-    let mut out = BytesMut::with_capacity(buf.len() + req.body.len());
+    let mut out = BytesMut::with_capacity(buf.len() + req.body().len());
     out.extend_from_slice(buf.as_bytes());
-    out.extend_from_slice(req.body.as_ref());
+    out.extend_from_slice(req.body().as_ref());
     out.freeze()
 }
 
@@ -243,12 +225,12 @@ pub fn serialize_response(res: &sip_core::Response) -> Bytes {
     let _ = write!(
         buf,
         "{} {} {}\r\n",
-        res.start.version.as_str(),
-        res.start.code,
-        res.start.reason
+        res.version().as_str(),
+        res.code(),
+        res.reason()
     );
 
-    for header in res.headers.iter() {
+    for header in res.headers().iter() {
         // Skip Content-Length (and compact form "l")
         if header.name().eq_ignore_ascii_case("Content-Length")
             || header.name().eq_ignore_ascii_case("l")
@@ -258,13 +240,13 @@ pub fn serialize_response(res: &sip_core::Response) -> Bytes {
         let _ = write!(buf, "{}: {}\r\n", header.name(), header.value());
     }
 
-    let _ = write!(buf, "Content-Length: {}\r\n", res.body.len());
+    let _ = write!(buf, "Content-Length: {}\r\n", res.body().len());
 
     buf.push_str("\r\n");
 
-    let mut out = BytesMut::with_capacity(buf.len() + res.body.len());
+    let mut out = BytesMut::with_capacity(buf.len() + res.body().len());
     out.extend_from_slice(buf.as_bytes());
-    out.extend_from_slice(res.body.as_ref());
+    out.extend_from_slice(res.body().as_ref());
     out.freeze()
 }
 
@@ -312,11 +294,7 @@ fn parse_status_line(line: &str) -> Option<StatusLine> {
     ));
     let (_, (_, _, code, _, reason)) = parser(line.trim()).ok()?;
 
-    Some(StatusLine {
-        version: SipVersion::V2,
-        code,
-        reason: SmolStr::new(reason.trim()),
-    })
+    StatusLine::new(code, reason.trim()).ok()
 }
 
 /// Maps a method token to the [`Method`] enum, including extension methods.
@@ -673,23 +651,23 @@ t=0 0",
     #[test]
     fn parses_basic_request() {
         let req = parse_request(&sample_request_bytes()).expect("parse");
-        assert_eq!(req.start.method.as_str(), "OPTIONS");
-        assert_eq!(req.start.uri.as_str(), "sip:example.com");
+        assert_eq!(req.method().as_str(), "OPTIONS");
+        assert_eq!(req.uri().as_str(), "sip:example.com");
         assert_eq!(
-            header(&req.headers, "via").unwrap().as_str(),
+            header(req.headers(), "via").unwrap().as_str(),
             "SIP/2.0/UDP host;branch=z9hG4bKx"
         );
         assert_eq!(
-            header(&req.headers, "to").unwrap().as_str(),
+            header(req.headers(), "to").unwrap().as_str(),
             "<sip:bob@example.com>"
         );
         assert_eq!(
-            header(&req.headers, "from").unwrap().as_str(),
+            header(req.headers(), "from").unwrap().as_str(),
             "<sip:alice@example.com>;tag=123"
         );
-        assert_eq!(header(&req.headers, "call-id").unwrap().as_str(), "abc123");
-        assert_eq!(header(&req.headers, "cseq").unwrap().as_str(), "1 OPTIONS");
-        assert_eq!(header(&req.headers, "max-forwards").unwrap().as_str(), "70");
+        assert_eq!(header(req.headers(), "call-id").unwrap().as_str(), "abc123");
+        assert_eq!(header(req.headers(), "cseq").unwrap().as_str(), "1 OPTIONS");
+        assert_eq!(header(req.headers(), "max-forwards").unwrap().as_str(), "70");
     }
 
     #[test]
@@ -700,8 +678,8 @@ t=0 0",
 
         for name in ["Via", "To", "From", "Call-ID", "CSeq", "Max-Forwards"] {
             assert_eq!(
-                header(&req.headers, name).map(|h| h.as_str()),
-                header(&reparsed.headers, name).map(|h| h.as_str()),
+                header(req.headers(), name).map(|h| h.as_str()),
+                header(reparsed.headers(), name).map(|h| h.as_str()),
                 "header {name} mismatch"
             );
         }
@@ -715,8 +693,8 @@ t=0 0",
 
         for name in ["Via", "To", "From", "Call-ID", "CSeq", "Contact"] {
             assert_eq!(
-                header(&resp.headers, name).map(|h| h.as_str()),
-                header(&reparsed.headers, name).map(|h| h.as_str()),
+                header(resp.headers(), name).map(|h| h.as_str()),
+                header(reparsed.headers(), name).map(|h| h.as_str()),
                 "header {name} mismatch"
             );
         }
@@ -753,9 +731,9 @@ Content-Length: 0\r\n\r\n",
 
         let req = parse_request(&raw).expect("parse");
         let routes: Vec<&str> = req
-            .headers
+            .headers()
             .get_all_smol("record-route")
-            .map(|v| v.as_str())
+            .map(|v: &SmolStr| v.as_str())
             .collect();
         assert_eq!(routes.len(), 2);
         assert_eq!(
@@ -772,7 +750,7 @@ Content-Length: 4\r\n\r\n\
 bodyEXTRA",
         );
         let req = parse_request(&raw).expect("parse");
-        assert_eq!(req.body.as_ref(), b"body");
+        assert_eq!(req.body().as_ref(), b"body");
     }
 
     #[test]
@@ -845,7 +823,7 @@ Content-Length: 4\r\n\r\n\
 body",
         );
         let req = parse_request_strict(&raw).expect("parse strict");
-        assert_eq!(req.body.as_ref(), b"body");
+        assert_eq!(req.body().as_ref(), b"body");
     }
 
     #[test]
@@ -856,7 +834,7 @@ CSeq: 1 FOO\r\n\
 Content-Length: 0\r\n\r\n",
         );
         let req = parse_request(&raw).expect("parse");
-        assert_eq!(req.start.method.as_str(), "FOO");
+        assert_eq!(req.method().as_str(), "FOO");
     }
 
     #[test]
@@ -888,7 +866,7 @@ Geolocation: <https://example.com/loc>;purpose=emergency\r\n\
 Content-Length: 0\r\n\r\n",
         );
         let req = parse_request(&raw).expect("parse");
-        let geo = parse_geolocation_header(&req.headers).expect("geolocation");
+        let geo = parse_geolocation_header(req.headers()).expect("geolocation");
         assert_eq!(geo.len(), 1);
         assert_eq!(
             geo.first().unwrap().uri().as_absolute(),
@@ -907,17 +885,17 @@ k: 100rel, timer\r\n\
 l: 0\r\n\r\n",
         );
         let req = parse_request(&raw).expect("parse");
-        assert!(req.headers.iter().any(|h| h.name() == "From"));
-        assert!(req.headers.iter().any(|h| h.name() == "To"));
-        assert!(req.headers.iter().any(|h| h.name() == "Contact"));
+        assert!(req.headers().iter().any(|h| h.name() == "From"));
+        assert!(req.headers().iter().any(|h| h.name() == "To"));
+        assert!(req.headers().iter().any(|h| h.name() == "Contact"));
 
-        let from = parse_from_header(header(&req.headers, "From").unwrap()).expect("from");
+        let from = parse_from_header(header(req.headers(), "From").unwrap()).expect("from");
         assert!(from.tag().is_some());
         let contact =
-            parse_contact_header(header(&req.headers, "Contact").unwrap()).expect("contact");
+            parse_contact_header(header(req.headers(), "Contact").unwrap()).expect("contact");
         assert_eq!(contact.uri().as_str(), "sip:alice@example.com");
 
-        let supported = parse_supported_header(header(&req.headers, "Supported").unwrap());
+        let supported = parse_supported_header(header(req.headers(), "Supported").unwrap());
         assert_eq!(supported.tokens().len(), 2);
 
         let allow = parse_allow_header(&SmolStr::new("INVITE, ACK, CANCEL"));
@@ -941,12 +919,12 @@ l: 0\r\n\r\n",
     #[test]
     fn parses_contact_route_and_via_headers() {
         let resp = parse_response(&sample_response_bytes()).expect("parse");
-        let via = parse_via_header(header(&resp.headers, "Via").unwrap()).expect("via");
+        let via = parse_via_header(header(resp.headers(), "Via").unwrap()).expect("via");
         assert_eq!(via.transport(), "TCP");
         assert_eq!(via.sent_by.as_str(), "host");
 
         let contact =
-            parse_contact_header(header(&resp.headers, "Contact").unwrap()).expect("contact");
+            parse_contact_header(header(resp.headers(), "Contact").unwrap()).expect("contact");
         assert_eq!(
             contact.inner().display_name().map(|s| s.as_str()),
             Some("Alice"),
@@ -958,95 +936,95 @@ l: 0\r\n\r\n",
             Some(&Some(SmolStr::new("60".to_owned())))
         );
 
-        let routes = parse_route_headers(&resp.headers, "Record-Route");
+        let routes = parse_route_headers(resp.headers(), "Record-Route");
         assert_eq!(routes.len(), 1);
         assert_eq!(routes[0].uri().as_str(), "sip:proxy1.example.com;lr");
         assert!(routes[0].inner().params_map().is_empty());
 
-        let rack = parse_rack_header(header(&resp.headers, "RAck").unwrap()).expect("rack");
+        let rack = parse_rack_header(header(resp.headers(), "RAck").unwrap()).expect("rack");
         assert_eq!(rack.rseq, 2000);
-        let rseq = parse_rseq_header(header(&resp.headers, "RSeq").unwrap()).expect("rseq");
+        let rseq = parse_rseq_header(header(resp.headers(), "RSeq").unwrap()).expect("rseq");
         assert_eq!(rseq.sequence, 2000);
 
         let session_expires =
-            parse_session_expires(header(&resp.headers, "Session-Expires").unwrap()).expect("se");
+            parse_session_expires(header(resp.headers(), "Session-Expires").unwrap()).expect("se");
         assert_eq!(session_expires.delta_seconds, 90);
         assert!(matches!(
             session_expires.refresher,
             Some(RefresherRole::Uac)
         ));
 
-        let min_se = parse_min_se(header(&resp.headers, "Min-SE").unwrap()).expect("min-se");
+        let min_se = parse_min_se(header(resp.headers(), "Min-SE").unwrap()).expect("min-se");
         assert_eq!(min_se.delta_seconds, 60);
 
-        let rp = parse_resource_priority(header(&resp.headers, "Resource-Priority").unwrap());
+        let rp = parse_resource_priority(header(resp.headers(), "Resource-Priority").unwrap());
         assert_eq!(rp.values.len(), 2);
 
-        let event = parse_event_header(header(&resp.headers, "Event").unwrap()).expect("event");
+        let event = parse_event_header(header(resp.headers(), "Event").unwrap()).expect("event");
         assert_eq!(event.package(), "dialog");
         assert_eq!(event.id(), Some("123"));
 
         let sub_state =
-            parse_subscription_state(header(&resp.headers, "Subscription-State").unwrap())
+            parse_subscription_state(header(resp.headers(), "Subscription-State").unwrap())
                 .expect("subscription-state");
         assert!(matches!(sub_state.state(), SubscriptionState::Active));
 
-        let service_route = parse_service_route(&resp.headers);
+        let service_route = parse_service_route(resp.headers());
         assert_eq!(service_route.routes.len(), 1);
         assert_eq!(
             service_route.routes[0].uri().as_str(),
             "sip:service.example.com"
         );
 
-        let path = parse_path(&resp.headers);
+        let path = parse_path(resp.headers());
         assert_eq!(path.routes.len(), 1);
         assert_eq!(path.routes[0].uri().as_str(), "sip:path.example.com");
 
-        let history = parse_history_info(&resp.headers);
+        let history = parse_history_info(resp.headers());
         assert_eq!(history.len(), 1);
         assert_eq!(
             history.get(0).unwrap().uri().as_str(),
             "sip:callee@example.com"
         );
 
-        let reason = parse_reason_header(header(&resp.headers, "Reason").unwrap());
+        let reason = parse_reason_header(header(resp.headers(), "Reason").unwrap());
         assert_eq!(reason.protocol.as_str(), "Q.850");
         assert_eq!(
             reason.params.get("cause"),
             Some(&Some(SmolStr::new("16".to_owned())))
         );
 
-        let etag = parse_sip_etag(header(&resp.headers, "SIP-ETag").unwrap());
+        let etag = parse_sip_etag(header(resp.headers(), "SIP-ETag").unwrap());
         assert_eq!(etag.value.as_str(), "abc123");
 
-        let geo = parse_geolocation_header(&resp.headers).expect("geolocation");
+        let geo = parse_geolocation_header(resp.headers()).expect("geolocation");
         assert_eq!(geo.len(), 1);
         assert_eq!(geo.first().unwrap().uri().as_str(), "sip:geo@example.com");
 
         let geo_error =
-            parse_geolocation_error(header(&resp.headers, "Geolocation-Error").unwrap())
+            parse_geolocation_error(header(resp.headers(), "Geolocation-Error").unwrap())
                 .expect("geolocation-error");
         assert_eq!(geo_error.code(), Some("100"));
         assert_eq!(geo_error.description(), Some("Failure"));
 
         let geo_routing =
-            parse_geolocation_routing(header(&resp.headers, "Geolocation-Routing").unwrap())
+            parse_geolocation_routing(header(resp.headers(), "Geolocation-Routing").unwrap())
                 .expect("geolocation-routing");
         assert!(geo_routing.get_param("yes").is_some());
 
         let pani =
-            parse_p_access_network_info(header(&resp.headers, "P-Access-Network-Info").unwrap())
+            parse_p_access_network_info(header(resp.headers(), "P-Access-Network-Info").unwrap())
                 .expect("pani");
         assert_eq!(pani.access_type.as_str(), "3GPP-E-UTRAN-FDD");
 
         let visited =
-            parse_p_visited_network_id(header(&resp.headers, "P-Visited-Network-ID").unwrap());
+            parse_p_visited_network_id(header(resp.headers(), "P-Visited-Network-ID").unwrap());
         assert_eq!(visited.values.len(), 2);
 
-        let asserted = parse_p_asserted_identity(&resp.headers);
+        let asserted = parse_p_asserted_identity(resp.headers());
         assert_eq!(asserted.identities.len(), 1);
 
-        let preferred = parse_p_preferred_identity(&resp.headers);
+        let preferred = parse_p_preferred_identity(resp.headers());
         assert_eq!(preferred.identities.len(), 1);
     }
 
@@ -1087,11 +1065,11 @@ l: 0\r\n\r\n",
     #[test]
     fn parses_mime_type_and_sdp_payload() {
         let resp = parse_response(&sample_response_bytes()).expect("parse");
-        let mime = parse_mime_type(header(&resp.headers, "Content-Type").unwrap()).expect("mime");
+        let mime = parse_mime_type(header(resp.headers(), "Content-Type").unwrap()).expect("mime");
         assert_eq!(mime.as_str(), "application/sdp");
         assert_eq!(mime.param("charset"), Some("utf-8"));
 
-        let sdp = parse_sdp(&resp.body).expect("sdp");
+        let sdp = parse_sdp(resp.body()).expect("sdp");
         assert_eq!(sdp.version, 0);
         assert_eq!(sdp.session_name, "call");
     }
@@ -1104,7 +1082,7 @@ Route: <sip:proxy.example.com;lr>;foo=bar\r\n\
 Content-Length: 0\r\n\r\n",
         );
         let req = parse_request(&raw).expect("parse");
-        let routes = parse_route_headers(&req.headers, "Route");
+        let routes = parse_route_headers(req.headers(), "Route");
         assert_eq!(routes.len(), 1);
         assert!(routes[0].inner().params_map().contains_key("foo"));
     }
@@ -1144,15 +1122,15 @@ Record-Route: <sip:proxy2>\r\n\
 Content-Length: 5\r\n\r\nhello",
         );
         let res = parse_response(&raw).expect("parse");
-        assert_eq!(res.start.code, 200);
-        assert_eq!(res.start.reason.as_str(), "OK");
+        assert_eq!(res.code(), 200);
+        assert_eq!(res.reason(), "OK");
         let rr: Vec<&str> = res
-            .headers
+            .headers()
             .get_all_smol("record-route")
             .map(|v| v.as_str())
             .collect();
         assert_eq!(rr, vec!["<sip:proxy1>", "<sip:proxy2>"]);
-        assert_eq!(res.body.as_ref(), b"hello");
+        assert_eq!(res.body().as_ref(), b"hello");
     }
 
     #[test]
@@ -1171,7 +1149,8 @@ Content-Length: 5\r\n\r\nhello",
             RequestLine::new(Method::Options, uri),
             headers,
             body.clone(),
-        );
+        )
+        .expect("valid request");
 
         let serialized = serialize_request(&req);
         let text = std::str::from_utf8(&serialized).unwrap();
@@ -1180,12 +1159,12 @@ Content-Length: 5\r\n\r\nhello",
 
         let reparsed = parse_request(&serialized).expect("reparse");
         assert_eq!(
-            header(&reparsed.headers, "Content-Length")
+            header(reparsed.headers(), "Content-Length")
                 .expect("content-length")
                 .as_str(),
             "5"
         );
-        assert_eq!(reparsed.body.len(), body.len());
+        assert_eq!(reparsed.body().len(), body.len());
     }
 
     #[test]
@@ -1200,10 +1179,11 @@ Content-Length: 5\r\n\r\nhello",
 
         let body = Bytes::from_static(b"hi");
         let response = Response::new(
-            StatusLine::new(200, SmolStr::new("OK")),
+            StatusLine::new(200, "OK").expect("valid status line"),
             headers,
             body.clone(),
-        );
+        )
+        .expect("valid response");
 
         let serialized = serialize_response(&response);
         let text = std::str::from_utf8(&serialized).unwrap();
@@ -1238,7 +1218,8 @@ Content-Length: 0\r\n\r\n",
             RequestLine::new(Method::Options, uri),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
         let serialized = serialize_request(&req);
         let text = std::str::from_utf8(&serialized).unwrap();
         assert!(text.contains("Max-Forwards: 70"));
@@ -1393,11 +1374,16 @@ body",
             headers.push(SmolStr::new("Call-ID"), SmolStr::new("abc@host".to_owned())).unwrap();
             headers.push(SmolStr::new("CSeq"), SmolStr::new(format!("1 {method}"))).unwrap();
 
-            let req = Request::new(RequestLine::new(detect_method(method).unwrap(), uri), headers, Bytes::from(body.clone()));
+            let req = Request::new(
+                RequestLine::new(detect_method(method).unwrap(), uri),
+                headers,
+                Bytes::from(body.clone()),
+            )
+            .expect("valid request");
             let bytes = serialize_request(&req);
             let reparsed = parse_request(&bytes).expect("parse");
-            assert_eq!(reparsed.start.method.as_str(), method);
-            assert_eq!(reparsed.body.as_ref(), body.as_bytes());
+            assert_eq!(reparsed.method().as_str(), method);
+            assert_eq!(reparsed.body().as_ref(), body.as_bytes());
         }
     }
 
@@ -1424,20 +1410,21 @@ body",
                 RequestLine::new(Method::Options, uri),
                 headers,
                 Bytes::new(),
-            );
+            )
+            .expect("valid request");
 
             let bytes = serialize_request(&req);
             let reparsed = parse_request(&bytes).expect("parse");
 
             let upper = name.to_ascii_uppercase();
             prop_assert_eq!(
-                header(&reparsed.headers, &upper).map(|h| h.as_str()),
+                header(reparsed.headers(), &upper).map(|h| h.as_str()),
                 Some(value.as_str())
             );
 
             let lower = name.to_ascii_lowercase();
             prop_assert_eq!(
-                header(&reparsed.headers, &lower).map(|h| h.as_str()),
+                header(reparsed.headers(), &lower).map(|h| h.as_str()),
                 Some(value.as_str())
             );
         }

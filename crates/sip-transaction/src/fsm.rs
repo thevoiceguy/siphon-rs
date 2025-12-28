@@ -57,7 +57,7 @@
 //! # fn create_request() -> Request {
 //! #     let uri = SipUri::parse("sip:user@example.com").unwrap();
 //! #     let line = RequestLine::new(Method::Options, uri);
-//! #     Request::new(line, Headers::new(), Bytes::new())
+//! #     Request::new(line, Headers::new(), Bytes::new()).expect("valid request")
 //! # }
 //! // Create FSM with TCP timers (zero retransmissions)
 //! let timers = TransportAwareTimers::new(Transport::Tcp);
@@ -92,10 +92,10 @@
 //! # fn create_request() -> Request {
 //! #     let uri = SipUri::parse("sip:user@example.com").unwrap();
 //! #     let line = RequestLine::new(Method::Invite, uri);
-//! #     Request::new(line, Headers::new(), Bytes::new())
+//! #     Request::new(line, Headers::new(), Bytes::new()).expect("valid request")
 //! # }
 //! # fn create_200_ok() -> Response {
-//! #     Response::new(StatusLine::new(200, "OK".into()), Headers::new(), Bytes::new())
+//! #     Response::new(StatusLine::new(200, "OK").expect("valid status"), Headers::new(), Bytes::new()).expect("valid response")
 //! # }
 //! // Create FSM with UDP timers (full retransmissions)
 //! let timers = TransportAwareTimers::new(Transport::Udp);
@@ -408,18 +408,18 @@ pub enum ServerInviteAction {
 }
 
 fn response_requires_prack(response: &Response) -> bool {
-    let has_rseq = response.headers.get("RSeq").is_some();
+    let has_rseq = response.headers().get("RSeq").is_some();
     if !has_rseq {
         return false;
     }
-    let has_require = response.headers.get("Require").is_some();
+    let has_require = response.headers().get("Require").is_some();
     let has_require_100rel = response
-        .headers
+        .headers()
         .get_all_smol("Require")
         .flat_map(|value| value.split(','))
         .any(|token| token.trim().eq_ignore_ascii_case("100rel"));
     let has_supported_100rel = response
-        .headers
+        .headers()
         .get_all_smol("Supported")
         .flat_map(|value| value.split(','))
         .any(|token| token.trim().eq_ignore_ascii_case("100rel"));
@@ -483,7 +483,7 @@ impl ClientInviteFsm {
                 ClientInviteEvent::ReceiveFinal(response),
             ) => self.handle_final(*state, response),
             (Terminated, ClientInviteEvent::ReceiveFinal(response)) => {
-                if (200..=299).contains(&response.start.code) {
+                if (200..=299).contains(&response.code()) {
                     self.handle_final_2xx(response)
                 } else {
                     Vec::new()
@@ -539,7 +539,7 @@ impl ClientInviteFsm {
         current_state: crate::ClientInviteState,
         response: Response,
     ) -> Vec<ClientInviteAction> {
-        let code = response.start.code;
+        let code = response.code();
         if (200..=299).contains(&code) {
             self.handle_final_2xx(response)
         } else {
@@ -1015,7 +1015,7 @@ impl ServerInviteFsm {
     }
 
     fn send_final(&mut self, response: Response) -> Vec<ServerInviteAction> {
-        let code = response.start.code;
+        let code = response.code();
         let bytes = serialize_response(&response);
         self.last_response = Some(bytes.clone());
         if (200..=299).contains(&code) {
@@ -1132,23 +1132,25 @@ mod tests {
             Headers::new(),
             Bytes::new(),
         )
+        .expect("valid request")
     }
 
     fn sample_response(code: u16) -> Response {
         Response::new(
-            StatusLine::new(code, SmolStr::new("OK")),
+            StatusLine::new(code, SmolStr::new("OK")).expect("valid status line"),
             Headers::new(),
             Bytes::new(),
         )
+        .expect("valid response")
     }
 
     fn reliable_provisional(code: u16) -> Response {
         let mut response = sample_response(code);
         let _ = response
-            .headers
+            .headers_mut()
             .push(SmolStr::new("Require"), SmolStr::new("100rel"));
         let _ = response
-            .headers
+            .headers_mut()
             .push(SmolStr::new("RSeq"), SmolStr::new("1"));
         response
     }
@@ -1159,6 +1161,7 @@ mod tests {
             Headers::new(),
             Bytes::new(),
         )
+        .expect("valid request")
     }
 
     #[test]

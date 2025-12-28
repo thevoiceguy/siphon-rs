@@ -80,11 +80,11 @@ fn select_transport(uri: &SipUri) -> TransportKind {
 }
 
 pub fn next_hop_from_request(request: &Request, local_uri: &SipUri) -> (SipUri, bool) {
-    if let Some(route_value) = extract_first_route(&request.headers) {
+    if let Some(route_value) = extract_first_route(request.headers()) {
         if let Some(route_uri) = parse_route_uri(&route_value) {
             if is_route_local(&route_uri, local_uri) {
                 return (
-                    request.start.uri.as_sip().cloned().unwrap_or(route_uri),
+                    request.uri().as_sip().cloned().unwrap_or(route_uri),
                     true,
                 );
             }
@@ -94,8 +94,7 @@ pub fn next_hop_from_request(request: &Request, local_uri: &SipUri) -> (SipUri, 
 
     (
         request
-            .start
-            .uri
+            .uri()
             .as_sip()
             .cloned()
             .unwrap_or_else(|| local_uri.clone()),
@@ -154,7 +153,7 @@ pub async fn forward_request(
 
     let (target_uri, remove_route) = next_hop_from_request(&proxied_req, &local_uri);
     if remove_route {
-        remove_top_route(&mut proxied_req.headers);
+        remove_top_route(proxied_req.headers_mut());
     }
 
     if options.rewrite_request_uri {

@@ -36,11 +36,11 @@ fn main() {
 
     println!("\n--- Step 1: INVITE without SDP (Late Offer) ---");
     println!("UAC -> UAS: INVITE");
-    println!("Method: {:?}", invite_request.start.method);
-    println!("Request-URI: {}", invite_request.start.uri.as_str());
-    println!("From: {}", invite_request.headers.get("From").unwrap());
-    println!("To: {}", invite_request.headers.get("To").unwrap());
-    println!("Content-Length: {}", invite_request.body.len());
+    println!("Method: {:?}", invite_request.method());
+    println!("Request-URI: {}", invite_request.uri().as_str());
+    println!("From: {}", invite_request.headers().get("From").unwrap());
+    println!("To: {}", invite_request.headers().get("To").unwrap());
+    println!("Content-Length: {}", invite_request.body().len());
     println!("Content-Type: <not present>");
     println!();
     println!("Note: No SDP body in INVITE - this signals late offer");

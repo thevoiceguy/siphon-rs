@@ -17,7 +17,7 @@
 //! let store = MemoryLocationStore::new();
 //! let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
 //!     BasicRegistrar::new(store, None);
-//! # let req = Request::new(RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()), Headers::new(), Bytes::new());
+//! # let req = Request::new(RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()), Headers::new(), Bytes::new()).unwrap();
 //! let response = registrar.handle_register_async(&req).await?;
 //! # Ok(())
 //! # }
@@ -651,7 +651,7 @@ impl<S, A> BasicRegistrar<S, A> {
             Err(ContactParamError::Invalid) => return Err(ExpiresError::Invalid),
         };
 
-        let header_expires = match request.headers.get("Expires") {
+        let header_expires = match request.headers().get("Expires") {
             Some(value) => Some(value.parse::<u64>().map_err(|_| ExpiresError::Invalid)?),
             None => None,
         };
@@ -780,15 +780,16 @@ impl<S, A> BasicRegistrar<S, A> {
             ("CSeq", "Bad Request - Missing CSeq header"),
         ];
         for (name, reason) in required {
-            if request.headers.get(name).is_none() {
+            if request.headers().get(name).is_none() {
                 return Err(self
                     .build_error_response(request, 400, reason)
                     .unwrap_or_else(|_| {
                         Response::new(
-                            StatusLine::new(400, SmolStr::new(reason)),
+                            StatusLine::new(400, reason).expect("valid status line"),
                             Headers::new(),
                             Bytes::new(),
                         )
+                        .expect("valid response")
                     }));
             }
         }
@@ -796,17 +797,19 @@ impl<S, A> BasicRegistrar<S, A> {
     }
 
     fn parse_cseq_number(&self, request: &Request) -> Result<u32, Response> {
-        let cseq = match header(&request.headers, "CSeq") {
+        let cseq = match header(&request.headers(), "CSeq") {
             Some(value) => value,
             None => {
                 return Err(self
                     .build_error_response(request, 400, "Bad Request - Missing CSeq header")
                     .unwrap_or_else(|_| {
                         Response::new(
-                            StatusLine::new(400, SmolStr::new("Bad Request - Missing CSeq")),
+                            StatusLine::new(400, "Bad Request - Missing CSeq")
+                                .expect("valid status line"),
                             Headers::new(),
                             Bytes::new(),
                         )
+                        .expect("valid response")
                     }))
             }
         };
@@ -819,10 +822,12 @@ impl<S, A> BasicRegistrar<S, A> {
                     .build_error_response(request, 400, "Bad Request - Invalid CSeq")
                     .unwrap_or_else(|_| {
                         Response::new(
-                            StatusLine::new(400, SmolStr::new("Bad Request - Invalid CSeq")),
+                            StatusLine::new(400, "Bad Request - Invalid CSeq")
+                                .expect("valid status line"),
                             Headers::new(),
                             Bytes::new(),
                         )
+                        .expect("valid response")
                     }))
             }
         };
@@ -832,10 +837,12 @@ impl<S, A> BasicRegistrar<S, A> {
                 .build_error_response(request, 400, "Bad Request - Invalid CSeq")
                 .unwrap_or_else(|_| {
                     Response::new(
-                        StatusLine::new(400, SmolStr::new("Bad Request - Invalid CSeq")),
+                        StatusLine::new(400, "Bad Request - Invalid CSeq")
+                            .expect("valid status line"),
                         Headers::new(),
                         Bytes::new(),
                     )
+                    .expect("valid response")
                 }));
         }
         Ok(number)
@@ -846,20 +853,20 @@ impl<S, A> BasicRegistrar<S, A> {
         let mut headers = Headers::new();
 
         // RFC 3261: Copy required headers from request to response
-        if let Some(via) = request.headers.get("Via") {
+        if let Some(via) = request.headers().get("Via") {
             headers.push(SmolStr::new("Via"), via).unwrap();
         }
-        if let Some(from) = request.headers.get("From") {
+        if let Some(from) = request.headers().get("From") {
             headers.push(SmolStr::new("From"), from).unwrap();
         }
         // RFC 3261 §8.2.6.2: UAS MUST add tag to To header if not present
-        if let Some(to) = request.headers.get("To") {
+        if let Some(to) = request.headers().get("To") {
             headers.push(SmolStr::new("To"), ensure_to_tag(to)).unwrap();
         }
-        if let Some(call_id) = request.headers.get("Call-ID") {
+        if let Some(call_id) = request.headers().get("Call-ID") {
             headers.push(SmolStr::new("Call-ID"), call_id).unwrap();
         }
-        if let Some(cseq) = request.headers.get("CSeq") {
+        if let Some(cseq) = request.headers().get("CSeq") {
             headers.push(SmolStr::new("CSeq"), cseq).unwrap();
         }
 
@@ -868,16 +875,16 @@ impl<S, A> BasicRegistrar<S, A> {
             .unwrap();
 
         Ok(Response::new(
-            StatusLine::new(code, SmolStr::new(reason)),
+            StatusLine::new(code, reason)?,
             headers,
             Bytes::new(),
-        ))
+        )?)
     }
 
     fn build_interval_too_brief(&self, request: &Request, min_expires: u64) -> Result<Response> {
         let mut response = self.build_error_response(request, 423, "Interval Too Brief")?;
         response
-            .headers
+            .headers_mut()
             .push(
                 SmolStr::new("Min-Expires"),
                 SmolStr::new(min_expires.to_string()),
@@ -942,10 +949,13 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
                 if let Some(key) = key_fn(request) {
                     if !limiter.check_rate_limit(key.as_str()) {
                         warn!(key = %key, "REGISTER rate limit exceeded");
-                        return self.build_error_response(
-                            request,
-                            503,
-                            "Service Unavailable - Rate Limit Exceeded",
+                        return Ok(
+                            self.build_error_response(
+                                request,
+                                503,
+                                "Service Unavailable - Rate Limit Exceeded",
+                            )
+                            .expect("valid request"),
                         );
                     }
                 }
@@ -956,7 +966,7 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
 
         // Authentication (sync authenticator)
         if let Some(auth) = &self.authenticator {
-            match auth.verify(request, &request.headers) {
+            match auth.verify(request, &request.headers()) {
                 Ok(true) => {}
                 Ok(false) => {
                     info!("REGISTER authentication failed, issuing challenge");
@@ -969,7 +979,7 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
             }
         }
 
-        let to_uri = match header(&request.headers, "To") {
+        let to_uri = match header(&request.headers(), "To") {
             Some(h) => h,
             None => {
                 warn!("REGISTER missing To header");
@@ -996,7 +1006,7 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
             }
         };
 
-        let call_id = header(&request.headers, "Call-ID")
+        let call_id = header(&request.headers(), "Call-ID")
             .cloned()
             .unwrap_or_else(|| SmolStr::new(""));
 
@@ -1005,7 +1015,7 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
             Err(response) => return Ok(response),
         };
 
-        let contacts = contact_headers(&request.headers);
+        let contacts = contact_headers(&request.headers());
         if contacts.is_empty() {
             warn!("REGISTER missing Contact header");
             return self.build_error_response(request, 400, "Bad Request - Missing Contact header");
@@ -1020,7 +1030,7 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
         }
 
         if contacts.len() == 1 && contacts[0].trim() == "*" {
-            let expires = match header(&request.headers, "Expires") {
+            let expires = match header(&request.headers(), "Expires") {
                 Some(value) => match value.parse::<u64>() {
                     Ok(value) => value,
                     Err(_) => {
@@ -1045,19 +1055,19 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
 
             let mut headers = Headers::new();
 
-            if let Some(via) = request.headers.get("Via") {
+            if let Some(via) = request.headers().get("Via") {
                 headers.push(SmolStr::new("Via"), via).unwrap();
             }
-            if let Some(from) = request.headers.get("From") {
+            if let Some(from) = request.headers().get("From") {
                 headers.push(SmolStr::new("From"), from).unwrap();
             }
-            if let Some(to) = request.headers.get("To") {
+            if let Some(to) = request.headers().get("To") {
                 headers.push(SmolStr::new("To"), ensure_to_tag(to)).unwrap();
             }
-            if let Some(call_id) = request.headers.get("Call-ID") {
+            if let Some(call_id) = request.headers().get("Call-ID") {
                 headers.push(SmolStr::new("Call-ID"), call_id).unwrap();
             }
-            if let Some(cseq) = request.headers.get("CSeq") {
+            if let Some(cseq) = request.headers().get("CSeq") {
                 headers.push(SmolStr::new("CSeq"), cseq).unwrap();
             }
 
@@ -1072,10 +1082,10 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
                 .unwrap();
 
             return Ok(Response::new(
-                StatusLine::new(200, SmolStr::new("OK")),
+                StatusLine::new(200, "OK")?,
                 headers,
                 Bytes::new(),
-            ));
+            )?);
         }
 
         let existing = self.store.lookup(&aor).await?;
@@ -1162,19 +1172,19 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
 
         let mut headers = Headers::new();
 
-        if let Some(via) = request.headers.get("Via") {
+        if let Some(via) = request.headers().get("Via") {
             headers.push(SmolStr::new("Via"), via).unwrap();
         }
-        if let Some(from) = request.headers.get("From") {
+        if let Some(from) = request.headers().get("From") {
             headers.push(SmolStr::new("From"), from).unwrap();
         }
-        if let Some(to) = request.headers.get("To") {
+        if let Some(to) = request.headers().get("To") {
             headers.push(SmolStr::new("To"), ensure_to_tag(to)).unwrap();
         }
-        if let Some(call_id) = request.headers.get("Call-ID") {
+        if let Some(call_id) = request.headers().get("Call-ID") {
             headers.push(SmolStr::new("Call-ID"), call_id).unwrap();
         }
-        if let Some(cseq) = request.headers.get("CSeq") {
+        if let Some(cseq) = request.headers().get("CSeq") {
             headers.push(SmolStr::new("CSeq"), cseq).unwrap();
         }
 
@@ -1196,10 +1206,10 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
             .unwrap();
 
         Ok(Response::new(
-            StatusLine::new(200, SmolStr::new("OK")),
+            StatusLine::new(200, "OK")?,
             headers,
             Bytes::new(),
-        ))
+        )?)
     }
 }
 
@@ -1229,7 +1239,7 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
 
         // Authenticate if authenticator is configured
         if let Some(auth) = &self.authenticator {
-            match auth.verify(request, &request.headers) {
+            match auth.verify(request, &request.headers()) {
                 Ok(true) => {
                     // Authentication succeeded, continue processing
                 }
@@ -1248,7 +1258,7 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
         }
 
         // Extract AOR from To header
-        let to_uri = match header(&request.headers, "To") {
+        let to_uri = match header(&request.headers(), "To") {
             Some(h) => h,
             None => {
                 warn!("REGISTER missing To header");
@@ -1276,7 +1286,7 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
         };
 
         // Extract Call-ID and CSeq
-        let call_id = header(&request.headers, "Call-ID")
+        let call_id = header(&request.headers(), "Call-ID")
             .cloned()
             .unwrap_or_else(|| SmolStr::new(""));
 
@@ -1286,7 +1296,7 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
         };
 
         // Get all Contact headers
-        let contacts = contact_headers(&request.headers);
+        let contacts = contact_headers(&request.headers());
         if contacts.is_empty() {
             warn!("REGISTER missing Contact header");
             return self.build_error_response(request, 400, "Bad Request - Missing Contact header");
@@ -1302,7 +1312,7 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
 
         // Check for wildcard Contact (*)
         if contacts.len() == 1 && contacts[0].trim() == "*" {
-            let expires = match header(&request.headers, "Expires") {
+            let expires = match header(&request.headers(), "Expires") {
                 Some(value) => match value.parse::<u64>() {
                     Ok(value) => value,
                     Err(_) => {
@@ -1329,20 +1339,20 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
             let mut headers = Headers::new();
 
             // RFC 3261: Copy required headers from request to response
-            if let Some(via) = request.headers.get("Via") {
+            if let Some(via) = request.headers().get("Via") {
                 headers.push(SmolStr::new("Via"), via).unwrap();
             }
-            if let Some(from) = request.headers.get("From") {
+            if let Some(from) = request.headers().get("From") {
                 headers.push(SmolStr::new("From"), from).unwrap();
             }
             // RFC 3261 §8.2.6.2: UAS MUST add tag to To header if not present
-            if let Some(to) = request.headers.get("To") {
+            if let Some(to) = request.headers().get("To") {
                 headers.push(SmolStr::new("To"), ensure_to_tag(to)).unwrap();
             }
-            if let Some(call_id) = request.headers.get("Call-ID") {
+            if let Some(call_id) = request.headers().get("Call-ID") {
                 headers.push(SmolStr::new("Call-ID"), call_id).unwrap();
             }
-            if let Some(cseq) = request.headers.get("CSeq") {
+            if let Some(cseq) = request.headers().get("CSeq") {
                 headers.push(SmolStr::new("CSeq"), cseq).unwrap();
             }
 
@@ -1357,10 +1367,10 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
                 .unwrap();
 
             return Ok(Response::new(
-                StatusLine::new(200, SmolStr::new("OK")),
+                StatusLine::new(200, "OK")?,
                 headers,
                 Bytes::new(),
-            ));
+            )?);
         }
 
         // Process each contact
@@ -1452,20 +1462,20 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
         let mut headers = Headers::new();
 
         // RFC 3261: Copy required headers from request to response
-        if let Some(via) = request.headers.get("Via") {
+        if let Some(via) = request.headers().get("Via") {
             headers.push(SmolStr::new("Via"), via).unwrap();
         }
-        if let Some(from) = request.headers.get("From") {
+        if let Some(from) = request.headers().get("From") {
             headers.push(SmolStr::new("From"), from).unwrap();
         }
         // RFC 3261 §8.2.6.2: UAS MUST add tag to To header if not present
-        if let Some(to) = request.headers.get("To") {
+        if let Some(to) = request.headers().get("To") {
             headers.push(SmolStr::new("To"), ensure_to_tag(to)).unwrap();
         }
-        if let Some(call_id) = request.headers.get("Call-ID") {
+        if let Some(call_id) = request.headers().get("Call-ID") {
             headers.push(SmolStr::new("Call-ID"), call_id).unwrap();
         }
-        if let Some(cseq) = request.headers.get("CSeq") {
+        if let Some(cseq) = request.headers().get("CSeq") {
             headers.push(SmolStr::new("CSeq"), cseq).unwrap();
         }
 
@@ -1487,10 +1497,10 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
             .unwrap();
 
         Ok(Response::new(
-            StatusLine::new(200, SmolStr::new("OK")),
+            StatusLine::new(200, "OK")?,
             headers,
             Bytes::new(),
-        ))
+        )?)
     }
 }
 
@@ -1761,10 +1771,11 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar.handle_register(&request).expect("response");
-        assert_eq!(response.start.code, 200);
+        assert_eq!(response.code(), 200);
 
         let bindings = store.lookup("sip:alice@example.com").unwrap();
         assert_eq!(bindings.len(), 1);
@@ -1794,10 +1805,11 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar.handle_register(&request).expect("response");
-        assert_eq!(response.start.code, 200);
+        assert_eq!(response.code(), 200);
 
         let bindings = store.lookup("sip:alice@example.com").unwrap();
         assert_eq!(bindings.len(), 2);
@@ -1822,7 +1834,8 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         registrar.handle_register(&request).expect("response");
         assert_eq!(store.lookup("sip:alice@example.com").unwrap().len(), 1);
@@ -1840,10 +1853,11 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar.handle_register(&request).expect("response");
-        assert_eq!(response.start.code, 200);
+        assert_eq!(response.code(), 200);
         assert!(store.lookup("sip:alice@example.com").unwrap().is_empty());
     }
 
@@ -1869,7 +1883,8 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         registrar.handle_register(&request).expect("response");
         assert_eq!(store.lookup("sip:alice@example.com").unwrap().len(), 2);
@@ -1886,10 +1901,11 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar.handle_register(&request).expect("response");
-        assert_eq!(response.start.code, 200);
+        assert_eq!(response.code(), 200);
         assert!(store.lookup("sip:alice@example.com").unwrap().is_empty());
     }
 
@@ -1911,7 +1927,8 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         registrar.handle_register(&request).expect("response");
 
@@ -1938,11 +1955,12 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar.handle_register(&request).expect("response");
-        assert_eq!(response.start.code, 423);
-        assert_eq!(response.headers.get("Min-Expires"), Some("100"));
+        assert_eq!(response.code(), 423);
+        assert_eq!(response.headers().get("Min-Expires"), Some("100"));
     }
 
     #[test]
@@ -1963,10 +1981,11 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar.handle_register(&request).expect("response");
-        assert_eq!(response.start.code, 400);
+        assert_eq!(response.code(), 400);
         assert!(store.lookup("sip:alice@example.com").unwrap().is_empty());
     }
 
@@ -2001,29 +2020,30 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar.handle_register(&request).expect("response");
-        assert_eq!(response.start.code, 401);
+        assert_eq!(response.code(), 401);
 
         // Verify WWW-Authenticate header is present
-        assert!(response.headers.get("WWW-Authenticate").is_some());
+        assert!(response.headers().get("WWW-Authenticate").is_some());
 
         // RFC 3261: Verify required headers are copied from request
         assert_eq!(
-            response.headers.get("Via"),
+            response.headers().get("Via"),
             Some("SIP/2.0/UDP client.example.com;branch=z9hG4bKnashds8")
         );
         assert_eq!(
-            response.headers.get("From"),
+            response.headers().get("From"),
             Some("<sip:alice@example.com>;tag=1234")
         );
         // RFC 3261 §8.2.6.2: Verify To header has tag added
-        let to_header = response.headers.get("To").unwrap();
+        let to_header = response.headers().get("To").unwrap();
         assert!(to_header.starts_with("<sip:alice@example.com>"));
         assert!(to_header.contains(";tag=")); // Tag should be added
-        assert_eq!(response.headers.get("Call-ID"), Some("call123"));
-        assert_eq!(response.headers.get("CSeq"), Some("1 REGISTER"));
+        assert_eq!(response.headers().get("Call-ID"), Some("call123"));
+        assert_eq!(response.headers().get("CSeq"), Some("1 REGISTER"));
     }
 
     #[test]
@@ -2115,17 +2135,18 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         // Should return 401 challenge, not 500 error
         let response = registrar
             .handle_register(&request)
             .expect("should return response");
         assert_eq!(
-            response.start.code, 401,
+            response.code(), 401,
             "Unknown user should return 401, not 500"
         );
-        assert!(response.headers.get("WWW-Authenticate").is_some());
+        assert!(response.headers().get("WWW-Authenticate").is_some());
     }
 
     #[test]
@@ -2163,17 +2184,18 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         // Should return 401 challenge, not 500 error
         let response = registrar
             .handle_register(&request)
             .expect("should return response");
         assert_eq!(
-            response.start.code, 401,
+            response.code(), 401,
             "Malformed auth should return 401, not 500"
         );
-        assert!(response.headers.get("WWW-Authenticate").is_some());
+        assert!(response.headers().get("WWW-Authenticate").is_some());
     }
 
     #[test]
@@ -2222,17 +2244,18 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         // Should return 401 challenge, not 500 error
         let response = registrar
             .handle_register(&request)
             .expect("should return response");
         assert_eq!(
-            response.start.code, 401,
+            response.code(), 401,
             "Invalid nc format should return 401, not 500"
         );
-        assert!(response.headers.get("WWW-Authenticate").is_some());
+        assert!(response.headers().get("WWW-Authenticate").is_some());
     }
 
     #[test]
@@ -2260,16 +2283,17 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar
             .handle_register(&request)
             .expect("should return response");
         assert_eq!(
-            response.start.code, 400,
+            response.code(), 400,
             "Missing To header should return 400"
         );
-        assert!(response.start.reason.contains("To"));
+        assert!(response.reason().contains("To"));
     }
 
     #[test]
@@ -2297,16 +2321,17 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar
             .handle_register(&request)
             .expect("should return response");
         assert_eq!(
-            response.start.code, 400,
+            response.code(), 400,
             "Invalid To header should return 400"
         );
-        assert!(response.start.reason.contains("To"));
+        assert!(response.reason().contains("To"));
     }
 
     #[test]
@@ -2334,16 +2359,17 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar
             .handle_register(&request)
             .expect("should return response");
         assert_eq!(
-            response.start.code, 400,
+            response.code(), 400,
             "Missing Contact header should return 400"
         );
-        assert!(response.start.reason.contains("Contact"));
+        assert!(response.reason().contains("Contact"));
     }
 
     #[test]
@@ -2365,13 +2391,14 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar
             .handle_register(&request)
             .expect("should return response");
-        assert_eq!(response.start.code, 400);
-        assert!(response.start.reason.contains("Via"));
+        assert_eq!(response.code(), 400);
+        assert!(response.reason().contains("Via"));
     }
 
     #[test]
@@ -2396,13 +2423,14 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar
             .handle_register(&request)
             .expect("should return response");
-        assert_eq!(response.start.code, 400);
-        assert!(response.start.reason.contains("From"));
+        assert_eq!(response.code(), 400);
+        assert!(response.reason().contains("From"));
     }
 
     #[test]
@@ -2420,13 +2448,14 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar
             .handle_register(&request)
             .expect("should return response");
-        assert_eq!(response.start.code, 400);
-        assert!(response.start.reason.contains("Call-ID"));
+        assert_eq!(response.code(), 400);
+        assert!(response.reason().contains("Call-ID"));
     }
 
     #[test]
@@ -2444,13 +2473,14 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar
             .handle_register(&request)
             .expect("should return response");
-        assert_eq!(response.start.code, 400);
-        assert!(response.start.reason.contains("CSeq"));
+        assert_eq!(response.code(), 400);
+        assert!(response.reason().contains("CSeq"));
     }
 
     #[test]
@@ -2469,13 +2499,14 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar
             .handle_register(&request)
             .expect("should return response");
-        assert_eq!(response.start.code, 400);
-        assert!(response.start.reason.contains("CSeq"));
+        assert_eq!(response.code(), 400);
+        assert!(response.reason().contains("CSeq"));
     }
 
     #[test]
@@ -2496,13 +2527,14 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar
             .handle_register(&request)
             .expect("should return response");
-        assert_eq!(response.start.code, 400);
-        assert!(response.start.reason.contains("Expires"));
+        assert_eq!(response.code(), 400);
+        assert!(response.reason().contains("Expires"));
     }
 
     #[test]
@@ -2523,13 +2555,14 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar
             .handle_register(&request)
             .expect("should return response");
-        assert_eq!(response.start.code, 400);
-        assert!(response.start.reason.contains("q"));
+        assert_eq!(response.code(), 400);
+        assert!(response.reason().contains("q"));
     }
 
     #[test]
@@ -2550,13 +2583,14 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar
             .handle_register(&request)
             .expect("should return response");
-        assert_eq!(response.start.code, 400);
-        assert!(response.start.reason.contains("Contact"));
+        assert_eq!(response.code(), 400);
+        assert!(response.reason().contains("Contact"));
     }
 
     #[test]
@@ -2581,28 +2615,29 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar
             .handle_register(&request)
             .expect("should return response");
-        assert_eq!(response.start.code, 400);
+        assert_eq!(response.code(), 400);
 
         // Verify RFC 3261 required headers are present
         assert_eq!(
-            response.headers.get("Via"),
+            response.headers().get("Via"),
             Some("SIP/2.0/UDP client.example.com;branch=z9hG4bKtest")
         );
         assert_eq!(
-            response.headers.get("From"),
+            response.headers().get("From"),
             Some("<sip:alice@example.com>;tag=from123")
         );
-        assert_eq!(response.headers.get("Call-ID"), Some("callid-test-123"));
-        assert_eq!(response.headers.get("CSeq"), Some("42 REGISTER"));
+        assert_eq!(response.headers().get("Call-ID"), Some("callid-test-123"));
+        assert_eq!(response.headers().get("CSeq"), Some("42 REGISTER"));
 
         // Verify To header has tag added
         let to = response
-            .headers
+            .headers()
             .get("To")
             .expect("To header should be present");
         assert!(to.contains(";tag="), "To header should have tag added");
@@ -2675,10 +2710,11 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar.handle_register(&request).expect("response");
-        assert_eq!(response.start.code, 200);
+        assert_eq!(response.code(), 200);
 
         // Verify binding was stored with normalized tel URI
         let bindings = store.lookup("tel:+15551234567").unwrap();
@@ -2707,10 +2743,11 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar.handle_register(&request).expect("response");
-        assert_eq!(response.start.code, 200);
+        assert_eq!(response.code(), 200);
 
         // Verify binding with phone-context
         let bindings = store
@@ -2739,7 +2776,8 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         registrar.handle_register(&request).expect("response");
         assert_eq!(store.lookup("tel:+15551234567").unwrap().len(), 1);
@@ -2757,10 +2795,11 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar.handle_register(&request).expect("response");
-        assert_eq!(response.start.code, 200);
+        assert_eq!(response.code(), 200);
 
         // Should be removed (normalization makes them equivalent)
         assert!(store.lookup("tel:+15551234567").unwrap().is_empty());
@@ -2787,10 +2826,11 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar.handle_register(&request).expect("response");
-        assert_eq!(response.start.code, 200);
+        assert_eq!(response.code(), 200);
 
         let bindings = store.lookup("tel:+15551234567").unwrap();
         assert_eq!(bindings.len(), 2);
@@ -2822,7 +2862,8 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         registrar.handle_register(&request).expect("response");
         assert_eq!(store.lookup("tel:+15551234567").unwrap().len(), 2);
@@ -2839,10 +2880,11 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar.handle_register(&request).expect("response");
-        assert_eq!(response.start.code, 200);
+        assert_eq!(response.code(), 200);
         assert!(store.lookup("tel:+15551234567").unwrap().is_empty());
     }
 
@@ -2864,11 +2906,12 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar.handle_register(&request).expect("response");
-        assert_eq!(response.start.code, 400);
-        assert!(response.start.reason.contains("Unsupported"));
+        assert_eq!(response.code(), 400);
+        assert!(response.reason().contains("Unsupported"));
     }
 
     #[test]
@@ -2921,10 +2964,11 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar.handle_register(&request).expect("response");
-        assert_eq!(response.start.code, 200);
+        assert_eq!(response.code(), 200);
 
         // Should have 2 bindings (empty entries ignored)
         let bindings = store.lookup("sip:alice@example.com").unwrap();
@@ -2950,10 +2994,11 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar.handle_register(&request).expect("response");
-        assert_eq!(response.start.code, 200);
+        assert_eq!(response.code(), 200);
 
         let bindings = store.lookup("sip:alice@example.com").unwrap();
         assert_eq!(bindings.len(), 1);
@@ -2976,11 +3021,12 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar.handle_register(&request).expect("response");
-        assert_eq!(response.start.code, 400);
-        assert!(response.start.reason.contains("Contact"));
+        assert_eq!(response.code(), 400);
+        assert!(response.reason().contains("Contact"));
     }
 
     #[test]
@@ -2999,11 +3045,12 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar.handle_register(&request).expect("response");
-        assert_eq!(response.start.code, 400);
-        assert!(response.start.reason.contains("Contact"));
+        assert_eq!(response.code(), 400);
+        assert!(response.reason().contains("Contact"));
     }
 
     #[test]
@@ -3024,11 +3071,12 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar.handle_register(&request).expect("response");
-        assert_eq!(response.start.code, 400);
-        assert!(response.start.reason.contains("Wildcard"));
+        assert_eq!(response.code(), 400);
+        assert!(response.reason().contains("Wildcard"));
     }
 
     #[test]
@@ -3048,11 +3096,12 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar.handle_register(&request).expect("response");
-        assert_eq!(response.start.code, 400);
-        assert!(response.start.reason.contains("Expires: 0"));
+        assert_eq!(response.code(), 400);
+        assert!(response.reason().contains("Expires: 0"));
     }
 
     #[test]
@@ -3072,7 +3121,8 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         registrar.handle_register(&request).expect("response");
 
@@ -3100,11 +3150,12 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar.handle_register(&request).expect("response");
-        assert_eq!(response.start.code, 400);
-        assert!(response.start.reason.contains("Expires"));
+        assert_eq!(response.code(), 400);
+        assert!(response.reason().contains("Expires"));
     }
 
     #[test]
@@ -3125,11 +3176,12 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar.handle_register(&request).expect("response");
-        assert_eq!(response.start.code, 400);
-        assert!(response.start.reason.contains("Expires"));
+        assert_eq!(response.code(), 400);
+        assert!(response.reason().contains("Expires"));
     }
 
     #[test]
@@ -3150,11 +3202,12 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar.handle_register(&request).expect("response");
-        assert_eq!(response.start.code, 400);
-        assert!(response.start.reason.contains("q value"));
+        assert_eq!(response.code(), 400);
+        assert!(response.reason().contains("q value"));
     }
 
     #[test]
@@ -3175,11 +3228,12 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar.handle_register(&request).expect("response");
-        assert_eq!(response.start.code, 400);
-        assert!(response.start.reason.contains("q value"));
+        assert_eq!(response.code(), 400);
+        assert!(response.reason().contains("q value"));
     }
 
     #[test]
@@ -3198,10 +3252,11 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar.handle_register(&request).expect("response");
-        assert_eq!(response.start.code, 200);
+        assert_eq!(response.code(), 200);
 
         let bindings = store.lookup("sip:alice@example.com").unwrap();
         assert_eq!(bindings.len(), 1);
@@ -3223,11 +3278,12 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar.handle_register(&request).expect("response");
-        assert_eq!(response.start.code, 400);
-        assert!(response.start.reason.contains("CSeq"));
+        assert_eq!(response.code(), 400);
+        assert!(response.reason().contains("CSeq"));
     }
 
     #[test]
@@ -3246,11 +3302,12 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar.handle_register(&request).expect("response");
-        assert_eq!(response.start.code, 400);
-        assert!(response.start.reason.contains("CSeq"));
+        assert_eq!(response.code(), 400);
+        assert!(response.reason().contains("CSeq"));
     }
 
     #[test]
@@ -3269,11 +3326,12 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar.handle_register(&request).expect("response");
-        assert_eq!(response.start.code, 400);
-        assert!(response.start.reason.contains("Unsupported Contact URI"));
+        assert_eq!(response.code(), 400);
+        assert!(response.reason().contains("Unsupported Contact URI"));
     }
 
     #[test]
@@ -3294,10 +3352,11 @@ mod tests {
             RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid request");
 
         let response = registrar.handle_register(&request).expect("response");
-        assert_eq!(response.start.code, 200);
+        assert_eq!(response.code(), 200);
 
         let bindings = store.lookup("sip:alice@example.com").unwrap();
         assert_eq!(bindings.len(), 1);

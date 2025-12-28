@@ -42,10 +42,11 @@ impl CancelHandler {
         let _ = headers.push("Content-Length", "0");
 
         Response::new(
-            StatusLine::new(487, "Request Terminated".into()),
+            StatusLine::new(487, "Request Terminated").expect("valid status line"),
             headers,
             bytes::Bytes::new(),
         )
+        .expect("valid response")
     }
 
     /// Create a 487 Request Terminated response for the INVITE (from Request - B2BUA mode)
@@ -55,29 +56,30 @@ impl CancelHandler {
         let mut headers = Headers::new();
 
         // Copy essential headers from INVITE
-        if let Some(via) = header(&invite_request.headers, "Via") {
+        if let Some(via) = header(invite_request.headers(), "Via") {
             let _ = headers.push("Via", via.clone());
         }
-        if let Some(from) = header(&invite_request.headers, "From") {
+        if let Some(from) = header(invite_request.headers(), "From") {
             let _ = headers.push("From", from.clone());
         }
-        if let Some(to) = header(&invite_request.headers, "To") {
+        if let Some(to) = header(invite_request.headers(), "To") {
             let _ = headers.push("To", to.clone());
         }
-        if let Some(call_id) = header(&invite_request.headers, "Call-ID") {
+        if let Some(call_id) = header(invite_request.headers(), "Call-ID") {
             let _ = headers.push("Call-ID", call_id.clone());
         }
-        if let Some(cseq) = header(&invite_request.headers, "CSeq") {
+        if let Some(cseq) = header(invite_request.headers(), "CSeq") {
             let _ = headers.push("CSeq", cseq.clone());
         }
 
         let _ = headers.push("Content-Length", "0");
 
         Response::new(
-            StatusLine::new(487, "Request Terminated".into()),
+            StatusLine::new(487, "Request Terminated").expect("valid status line"),
             headers,
             bytes::Bytes::new(),
         )
+        .expect("valid response")
     }
 
     /// Forward CANCEL to callee in B2BUA mode
@@ -108,38 +110,36 @@ impl CancelHandler {
 
         // Create CANCEL request matching the outgoing INVITE
         // CANCEL must have same Request-URI, To, From, Call-ID, and CSeq number (but method=CANCEL)
-        let mut cancel_req = call_leg.outgoing_invite.clone();
-        cancel_req.start.method = sip_core::Method::Cancel;
+        let mut headers = call_leg.outgoing_invite.headers().clone();
 
         // Update CSeq header to CANCEL (keep same number)
-        if let Some(cseq_value) = header(&cancel_req.headers, "CSeq") {
+        if let Some(cseq_value) = header(call_leg.outgoing_invite.headers(), "CSeq") {
             // Extract CSeq number: "1 INVITE" -> "1 CANCEL"
             if let Some(cseq_num) = cseq_value.split_whitespace().next() {
                 let new_cseq = format!("{} CANCEL", cseq_num);
-                // Remove old CSeq and add new one
-                let mut new_headers = sip_core::Headers::new();
-                for h in cancel_req.headers.iter() {
-                    if !h.name().eq_ignore_ascii_case("CSeq") {
-                        let _ = new_headers.push(h.name(), h.value());
-                    }
-                }
-                let _ = new_headers.push("CSeq", new_cseq);
-                cancel_req.headers = new_headers;
+                let _ = headers.set_or_push("CSeq", new_cseq);
             }
         }
 
-        // Clear body (CANCEL has no body)
-        cancel_req.body = bytes::Bytes::new();
+        let mut cancel_req = sip_core::Request::new(
+            sip_core::RequestLine::new(
+                sip_core::Method::Cancel,
+                call_leg.outgoing_invite.uri().clone(),
+            ),
+            headers,
+            bytes::Bytes::new(),
+        )
+        .expect("valid CANCEL request");
 
         // Update Content-Length
         let mut new_headers = sip_core::Headers::new();
-        for h in cancel_req.headers.iter() {
+        for h in cancel_req.headers().iter() {
             if !h.name().eq_ignore_ascii_case("Content-Length") {
                 let _ = new_headers.push(h.name(), h.value());
             }
         }
         let _ = new_headers.push("Content-Length", "0");
-        cancel_req.headers = new_headers;
+        *cancel_req.headers_mut() = new_headers;
 
         // Send CANCEL via TCP to callee
         let callee_addr = format!(
@@ -171,7 +171,7 @@ impl RequestHandler for CancelHandler {
         _ctx: &TransportContext,
         services: &ServiceRegistry,
     ) -> Result<()> {
-        let call_id = header(&request.headers, "Call-ID")
+        let call_id = header(request.headers(), "Call-ID")
             .map(|s| s.as_str())
             .unwrap_or("unknown");
 

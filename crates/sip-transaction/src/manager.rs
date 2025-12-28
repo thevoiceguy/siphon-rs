@@ -537,11 +537,11 @@ impl TransactionManager {
         let branch = request_branch_id(&request).unwrap_or_else(crate::generate_branch_id);
         let key = TransactionKey {
             branch,
-            method: request.start.method.clone(),
+            method: request.method().clone(),
             is_server: true,
         };
 
-        if request.start.method == Method::Ack {
+        if request.method() == &Method::Ack {
             let invite_key = TransactionKey {
                 branch: key.branch.clone(),
                 method: Method::Invite,
@@ -574,7 +574,7 @@ impl TransactionManager {
         }
 
         // If a CANCEL arrives, notify the matching INVITE transaction (if any).
-        if request.start.method.as_str() == "CANCEL" {
+        if request.method().as_str() == "CANCEL" {
             let invite_key = TransactionKey {
                 branch: key.branch.clone(),
                 method: Method::Invite,
@@ -593,7 +593,7 @@ impl TransactionManager {
         let transport = transport_kind_to_transport(ctx.transport);
         let timers = TransportAwareTimers::with_defaults(transport, self.inner.timer_defaults);
 
-        let method = request.start.method.clone();
+        let method = request.method().clone();
         let transport_type = TransportType::from(transport);
         self.inner.metrics.record_start(
             transport_type,
@@ -642,7 +642,7 @@ impl TransactionManager {
     ) -> Result<TransactionKey> {
         let branch = request_branch_id(&request)
             .ok_or_else(|| anyhow!("missing Via branch for client transaction"))?;
-        let method = request.start.method.clone();
+        let method = request.method().clone();
         let key = TransactionKey {
             branch: branch.clone(),
             method: method.clone(),
@@ -653,7 +653,7 @@ impl TransactionManager {
         debug!(
             branch = %key.branch,
             method = ?key.method,
-            call_id = ?request.headers.get("Call-ID"),
+            call_id = ?request.headers().get("Call-ID"),
             "Starting client transaction"
         );
 
@@ -703,7 +703,7 @@ impl TransactionManager {
     /// Feeds a network response into the appropriate client transaction.
     pub async fn receive_response(&self, response: Response) {
         // Extract branch from Via header
-        let branch = match Self::extract_branch(&response.headers) {
+        let branch = match Self::extract_branch(&response.headers()) {
             Some(b) => b,
             None => {
                 debug!("Response has no branch in Via header");
@@ -712,7 +712,7 @@ impl TransactionManager {
         };
 
         // Extract method from CSeq header
-        let method = match Self::extract_cseq_method(&response.headers) {
+        let method = match Self::extract_cseq_method(&response.headers()) {
             Some(m) => m,
             None => {
                 debug!("Response has no method in CSeq header");
@@ -734,7 +734,7 @@ impl TransactionManager {
             method = ?key.method,
             has_transaction = has_transaction,
             total_client_transactions = self.inner.client.len(),
-            status = response.start.code,
+            status = response.code(),
             "Attempting to match response to client transaction"
         );
 
@@ -743,7 +743,7 @@ impl TransactionManager {
             warn!(
                 branch = %key.branch,
                 method = ?key.method,
-                status = response.start.code,
+                status = response.code(),
                 "No matching client transaction for response"
             );
 
@@ -970,7 +970,7 @@ impl TransactionManager {
                     if let Some(entry) = self.inner.client.get(key) {
                         let tu = entry.tu.clone();
                         drop(entry);
-                        if response.start.code < 200 {
+                        if response.code() < 200 {
                             tu.on_provisional(key, &response).await;
                         } else {
                             tu.on_final(key, &response).await;
@@ -1043,7 +1043,7 @@ impl TransactionManager {
                     if let Some(entry) = self.inner.client.get(key) {
                         let tu = entry.tu.clone();
                         drop(entry);
-                        if response.start.code < 200 {
+                        if response.code() < 200 {
                             tu.on_provisional(key, &response).await;
                         } else {
                             tu.on_final(key, &response).await;
@@ -1218,7 +1218,7 @@ impl TransactionManager {
 
     async fn dispatch_response(&self, key: &TransactionKey, response: Response) {
         if let Some(mut entry) = self.inner.client.get_mut(key) {
-            let is_provisional = response.start.code < 200;
+            let is_provisional = response.code() < 200;
             let actions = match (is_provisional, response) {
                 (true, response) => match &mut entry.kind {
                     ClientKind::Invite(fsm) => ClientRuntimeActions::Invite(
@@ -1307,12 +1307,12 @@ mod tests {
     impl ClientTransactionUser for TestClientTu {
         async fn on_provisional(&self, _key: &TransactionKey, response: &Response) {
             let mut guard = self.provisional.lock().await;
-            guard.push(response.start.code);
+            guard.push(response.code());
         }
 
         async fn on_final(&self, _key: &TransactionKey, response: &Response) {
             let mut guard = self.finals.lock().await;
-            guard.push(response.start.code);
+            guard.push(response.code());
         }
 
         async fn on_terminated(&self, _key: &TransactionKey, reason: &str) {
@@ -1328,7 +1328,7 @@ mod tests {
             is_2xx: bool,
         ) {
             let mut guard = self.sent_acks.lock().await;
-            guard.push((is_2xx, response.start.code));
+            guard.push((is_2xx, response.code()));
         }
 
         async fn send_prack(
@@ -1338,7 +1338,7 @@ mod tests {
             _ctx: &TransportContext,
         ) {
             let mut guard = self.sent_pracks.lock().await;
-            guard.push(response.start.code);
+            guard.push(response.code());
         }
 
         async fn on_transport_error(&self, _key: &TransactionKey) {
@@ -1353,14 +1353,16 @@ mod tests {
             Headers::new(),
             Bytes::new(),
         )
+        .expect("valid request")
     }
 
     fn build_response(code: u16) -> Response {
         Response::new(
-            StatusLine::new(code, SmolStr::new("OK")),
+            StatusLine::new(code, SmolStr::new("OK")).expect("valid status line"),
             Headers::new(),
             Bytes::new(),
         )
+        .expect("valid response")
     }
 
     fn build_client_request(method: Method, branch: &str) -> Request {
@@ -1374,6 +1376,7 @@ mod tests {
             headers,
             Bytes::new(),
         )
+        .expect("valid request")
     }
 
     fn build_response_with_branch(code: u16, branch: &str, method: Method) -> Response {
@@ -1388,19 +1391,20 @@ mod tests {
             .push(SmolStr::new("CSeq"), SmolStr::new(cseq))
             .unwrap();
         Response::new(
-            StatusLine::new(code, SmolStr::new("OK")),
+            StatusLine::new(code, SmolStr::new("OK")).expect("valid status line"),
             headers,
             Bytes::new(),
         )
+        .expect("valid response")
     }
 
     fn build_response_with_branch_reliable(code: u16, branch: &str, method: Method) -> Response {
         let mut response = build_response_with_branch(code, branch, method);
         let _ = response
-            .headers
+            .headers_mut()
             .push(SmolStr::new("Require"), SmolStr::new("100rel"));
         let _ = response
-            .headers
+            .headers_mut()
             .push(SmolStr::new("RSeq"), SmolStr::new("1"));
         response
     }
@@ -1612,7 +1616,7 @@ mod tests {
             TransportContext::new(TransportKind::Udp, "127.0.0.1:5090".parse().unwrap(), None);
         let mut request = build_request(Method::Invite);
         request
-            .headers
+            .headers_mut()
             .push(
                 SmolStr::new("Via"),
                 SmolStr::new("SIP/2.0/UDP host;branch=z9hG4bKretrans".to_owned()),
@@ -1651,7 +1655,7 @@ mod tests {
         for i in 0..5 {
             let mut request = build_request(Method::Invite);
             request
-                .headers
+                .headers_mut()
                 .push(
                     SmolStr::new("Via"),
                     SmolStr::new(format!("SIP/2.0/UDP host;branch=z9hG4bKtest{}", i)),
@@ -1666,7 +1670,7 @@ mod tests {
         // Add one more transaction - should trigger eviction
         let mut request = build_request(Method::Invite);
         request
-            .headers
+            .headers_mut()
             .push(
                 SmolStr::new("Via"),
                 SmolStr::new("SIP/2.0/UDP host;branch=z9hG4bKtest_overflow".to_owned()),
@@ -1698,7 +1702,7 @@ mod tests {
         for i in 0..3 {
             let mut request = build_request(Method::Invite);
             request
-                .headers
+                .headers_mut()
                 .push(
                     SmolStr::new("Via"),
                     SmolStr::new(format!("SIP/2.0/UDP host;branch=z9hG4bKclient{}", i)),
@@ -1715,7 +1719,7 @@ mod tests {
         // Add one more transaction - should trigger eviction
         let mut request = build_request(Method::Invite);
         request
-            .headers
+            .headers_mut()
             .push(
                 SmolStr::new("Via"),
                 SmolStr::new("SIP/2.0/UDP host;branch=z9hG4bKclient_overflow".to_owned()),
@@ -1747,7 +1751,7 @@ mod tests {
         for i in 0..3 {
             let mut request = build_request(Method::Options);
             request
-                .headers
+                .headers_mut()
                 .push(
                     SmolStr::new("Via"),
                     SmolStr::new(format!("SIP/2.0/UDP host;branch=z9hG4bKorder{}", i)),
@@ -1768,7 +1772,7 @@ mod tests {
         // Add one more - should evict the oldest (first one)
         let mut request = build_request(Method::Options);
         request
-            .headers
+            .headers_mut()
             .push(
                 SmolStr::new("Via"),
                 SmolStr::new("SIP/2.0/UDP host;branch=z9hG4bKorder3".to_owned()),
@@ -1800,7 +1804,7 @@ mod tests {
         for i in 0..100 {
             let mut request = build_request(Method::Options);
             request
-                .headers
+                .headers_mut()
                 .push(
                     SmolStr::new("Via"),
                     SmolStr::new(format!("SIP/2.0/UDP host;branch=z9hG4bKunlim{}", i)),

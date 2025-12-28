@@ -40,20 +40,20 @@ a=rtpmap:8 PCMA/8000
     let invite_request = uac.create_invite(&target_uri, Some(sdp_offer));
 
     println!("\n--- INVITE Request ---");
-    println!("Method: {:?}", invite_request.start.method);
-    println!("Request-URI: {}", invite_request.start.uri.as_str());
-    println!("From: {}", invite_request.headers.get("From").unwrap());
-    println!("To: {}", invite_request.headers.get("To").unwrap());
+    println!("Method: {:?}", invite_request.method());
+    println!("Request-URI: {}", invite_request.uri().as_str());
+    println!("From: {}", invite_request.headers().get("From").unwrap());
+    println!("To: {}", invite_request.headers().get("To").unwrap());
     println!(
         "Contact: {}",
-        invite_request.headers.get("Contact").unwrap()
+        invite_request.headers().get("Contact").unwrap()
     );
-    println!("CSeq: {}", invite_request.headers.get("CSeq").unwrap());
+    println!("CSeq: {}", invite_request.headers().get("CSeq").unwrap());
     println!(
         "Content-Type: {}",
-        invite_request.headers.get("Content-Type").unwrap()
+        invite_request.headers().get("Content-Type").unwrap()
     );
-    println!("Content-Length: {}", invite_request.body.len());
+    println!("Content-Length: {}", invite_request.body().len());
 
     // Step 3: Simulate call flow
     println!("\n--- Call Flow ---");

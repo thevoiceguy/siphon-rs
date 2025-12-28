@@ -171,6 +171,7 @@ fn build_request(
     };
 
     Request::new(RequestLine::new(method, uri), hdrs, request_body)
+        .expect("valid scenario request")
 }
 
 pub async fn run_scenario(path: &Path, services: &ServiceRegistry) -> Result<()> {

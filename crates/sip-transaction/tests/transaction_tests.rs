@@ -21,6 +21,7 @@ fn sample_request() -> Request {
         Headers::new(),
         Bytes::new(),
     )
+    .expect("valid request")
 }
 
 fn sample_invite() -> Request {
@@ -29,14 +30,16 @@ fn sample_invite() -> Request {
         Headers::new(),
         Bytes::new(),
     )
+    .expect("valid request")
 }
 
 fn sample_response(code: u16) -> Response {
     Response::new(
-        StatusLine::new(code, SmolStr::new("OK")),
+        StatusLine::new(code, SmolStr::new("OK")).expect("valid status line"),
         Headers::new(),
         Bytes::new(),
     )
+    .expect("valid response")
 }
 
 // ==========================
@@ -236,7 +239,7 @@ fn client_invite_provisional_with_rseq() {
         .push(SmolStr::new("Require"), SmolStr::new("100rel"))
         .unwrap();
     let mut resp = sample_response(183);
-    resp.headers = headers;
+    *resp.headers_mut() = headers;
 
     let actions = fsm.on_event(ClientInviteEvent::ReceiveProvisional(resp.clone()));
     assert!(matches!(

@@ -33,7 +33,7 @@ impl RequestHandler for InfoHandler {
         ctx: &TransportContext,
         services: &ServiceRegistry,
     ) -> Result<()> {
-        let call_id = header(&request.headers, "Call-ID")
+        let call_id = header(request.headers(), "Call-ID")
             .map(|s| s.as_str())
             .unwrap_or("unknown");
 
@@ -61,7 +61,7 @@ impl RequestHandler for InfoHandler {
             return Ok(());
         }
 
-        info!(call_id, len = request.body.len(), "INFO received");
+        info!(call_id, len = request.body().len(), "INFO received");
         let response = UserAgentServer::create_response(request, 200, "OK");
         handle.send_final(response).await;
         Ok(())

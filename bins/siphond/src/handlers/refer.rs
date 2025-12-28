@@ -114,12 +114,12 @@ impl ReferTransferTransactionUser {
 #[async_trait]
 impl ClientTransactionUser for ReferTransferTransactionUser {
     async fn on_provisional(&self, _key: &TransactionKey, response: &Response) {
-        self.send_notify(response.start.code, response.start.reason.as_str())
+        self.send_notify(response.code(), response.reason())
             .await;
     }
 
     async fn on_final(&self, _key: &TransactionKey, response: &Response) {
-        self.send_notify(response.start.code, response.start.reason.as_str())
+        self.send_notify(response.code(), response.reason())
             .await;
     }
 
@@ -138,12 +138,12 @@ impl ClientTransactionUser for ReferTransferTransactionUser {
             return;
         }
 
-        let invite_has_sdp = !self.invite.body.is_empty();
-        let response_has_sdp = !response.body.is_empty();
+        let invite_has_sdp = !self.invite.body().is_empty();
+        let response_has_sdp = !response.body().is_empty();
         let late_offer = !invite_has_sdp && response_has_sdp;
 
         let sdp_body = if late_offer {
-            match std::str::from_utf8(&response.body) {
+            match std::str::from_utf8(response.body()) {
                 Ok(offer_str) => match sdp_utils::generate_sdp_answer(&self.config, offer_str) {
                     Ok(answer) => Some(answer),
                     Err(e) => {
@@ -244,7 +244,7 @@ impl ReferHandler {
 
     /// Extract Refer-To URI from header
     fn extract_refer_to(request: &Request) -> Option<String> {
-        let refer_to = header(&request.headers, "Refer-To")?;
+        let refer_to = header(request.headers(), "Refer-To")?;
         Some(refer_to.to_string())
     }
 
@@ -276,11 +276,11 @@ impl ReferHandler {
         response: &Response,
         local_uri: SipUri,
     ) -> Result<Subscription> {
-        let call_id = header(&request.headers, "Call-ID")
+        let call_id = header(request.headers(), "Call-ID")
             .ok_or_else(|| anyhow!("Missing Call-ID"))?
             .clone();
-        let from = header(&request.headers, "From").ok_or_else(|| anyhow!("Missing From"))?;
-        let to = header(&response.headers, "To").ok_or_else(|| anyhow!("Missing To"))?;
+        let from = header(request.headers(), "From").ok_or_else(|| anyhow!("Missing From"))?;
+        let to = header(response.headers(), "To").ok_or_else(|| anyhow!("Missing To"))?;
         let from_tag =
             Self::extract_tag(from.as_str()).ok_or_else(|| anyhow!("Missing From tag"))?;
         let to_tag = Self::extract_tag(to).ok_or_else(|| anyhow!("Missing To tag"))?;
@@ -288,11 +288,11 @@ impl ReferHandler {
         let remote_uri = sdp_utils::parse_name_addr_uri(from.as_str())
             .ok_or_else(|| anyhow!("Invalid From URI"))?;
 
-        let contact = header(&request.headers, "Contact")
+        let contact = header(request.headers(), "Contact")
             .and_then(|contact| sdp_utils::parse_name_addr_uri(contact.as_str()))
             .unwrap_or_else(|| remote_uri.clone());
 
-        let local_cseq = header(&request.headers, "CSeq")
+        let local_cseq = header(request.headers(), "CSeq")
             .and_then(|cseq| cseq.split_whitespace().next())
             .and_then(|cseq| cseq.parse::<u32>().ok())
             .unwrap_or(1);
@@ -341,7 +341,7 @@ impl RequestHandler for ReferHandler {
         _ctx: &TransportContext,
         services: &ServiceRegistry,
     ) -> Result<()> {
-        let call_id = header(&request.headers, "Call-ID")
+        let call_id = header(request.headers(), "Call-ID")
             .map(|s| s.as_str())
             .unwrap_or("unknown");
 
@@ -351,10 +351,11 @@ impl RequestHandler for ReferHandler {
             let mut headers = sip_core::Headers::new();
             copy_headers(request, &mut headers);
             let response = sip_core::Response::new(
-                sip_core::StatusLine::new(501, "Not Implemented".into()),
+                sip_core::StatusLine::new(501, "Not Implemented").expect("valid status line"),
                 headers,
                 bytes::Bytes::new(),
-            );
+            )
+            .expect("valid response");
             handle.send_final(response).await;
             return Ok(());
         }
@@ -390,10 +391,11 @@ impl RequestHandler for ReferHandler {
             let mut headers = sip_core::Headers::new();
             copy_headers(request, &mut headers);
             let response = sip_core::Response::new(
-                sip_core::StatusLine::new(481, "Call/Transaction Does Not Exist".into()),
+                sip_core::StatusLine::new(481, "Call/Transaction Does Not Exist").expect("valid status line"),
                 headers,
                 bytes::Bytes::new(),
-            );
+            )
+            .expect("valid response");
             handle.send_final(response).await;
             return Ok(());
         }
@@ -521,7 +523,7 @@ impl RequestHandler for ReferHandler {
                 let mut invite = uac.create_invite(&refer_uri, sdp_offer.as_deref());
 
                 if let Some(replaces) = Self::extract_replaces(&refer_to_target) {
-                    let _ = invite.headers.push("Replaces", replaces);
+                    let _ = invite.headers_mut().push("Replaces", replaces);
                 }
 
                 let transport_name = match transport {
@@ -537,7 +539,7 @@ impl RequestHandler for ReferHandler {
                 // Find and replace the Via header
                 let mut new_headers = Headers::new();
                 let mut via_replaced = false;
-                for header in invite.headers.iter() {
+                for header in invite.headers().iter() {
                     if !via_replaced && header.name().eq_ignore_ascii_case("Via") {
                         let branch = sip_transaction::branch_from_via(header.value())
                             .filter(|value| !value.is_empty())
@@ -551,7 +553,7 @@ impl RequestHandler for ReferHandler {
                         new_headers.push(header.name(), header.value()).unwrap();
                     }
                 }
-                invite.headers = new_headers;
+                *invite.headers_mut() = new_headers;
 
                 let ctx = TransportContext::new(transport, target_addr, None)
                     .with_ws_uri(ws_uri)
@@ -606,19 +608,19 @@ impl RequestHandler for ReferHandler {
 
 /// Copy essential headers from request to response
 fn copy_headers(request: &Request, headers: &mut sip_core::Headers) {
-    if let Some(via) = header(&request.headers, "Via") {
+    if let Some(via) = header(request.headers(), "Via") {
         let _ = headers.push("Via", via.clone());
     }
-    if let Some(from) = header(&request.headers, "From") {
+    if let Some(from) = header(request.headers(), "From") {
         let _ = headers.push("From", from.clone());
     }
-    if let Some(to) = header(&request.headers, "To") {
+    if let Some(to) = header(request.headers(), "To") {
         let _ = headers.push("To", to.clone());
     }
-    if let Some(call_id) = header(&request.headers, "Call-ID") {
+    if let Some(call_id) = header(request.headers(), "Call-ID") {
         let _ = headers.push("Call-ID", call_id.clone());
     }
-    if let Some(cseq) = header(&request.headers, "CSeq") {
+    if let Some(cseq) = header(request.headers(), "CSeq") {
         let _ = headers.push("CSeq", cseq.clone());
     }
 }

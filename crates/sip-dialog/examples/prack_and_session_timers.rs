@@ -100,7 +100,8 @@ async fn demonstrate_prack_flow() {
         ),
         prack_headers,
         Bytes::new(),
-    );
+    )
+    .expect("valid prack");
 
     // Step 3: UAS validates PRACK
     println!("┌─ Step 3: UAS validates PRACK ────────────────────────────┐");
@@ -158,20 +159,23 @@ async fn demonstrate_prack_flow() {
         .push(SmolStr::new("RSeq"), SmolStr::new("1".to_owned()))
         .unwrap();
     let response_180 = Response::new(
-        StatusLine::new(180, SmolStr::new("Ringing")),
+        StatusLine::new(180, SmolStr::new("Ringing")).expect("valid status line"),
         reliable_headers.clone(),
         Bytes::new(),
-    );
+    )
+    .expect("valid response");
     let response_100 = Response::new(
-        StatusLine::new(100, SmolStr::new("Trying")),
+        StatusLine::new(100, SmolStr::new("Trying")).expect("valid status line"),
         reliable_headers.clone(),
         Bytes::new(),
-    );
+    )
+    .expect("valid response");
     let response_200 = Response::new(
-        StatusLine::new(200, SmolStr::new("OK")),
+        StatusLine::new(200, SmolStr::new("OK")).expect("valid status line"),
         reliable_headers,
         Bytes::new(),
-    );
+    )
+    .expect("valid response");
 
     println!(
         "│ 180 Ringing with RSeq: {}                              │",

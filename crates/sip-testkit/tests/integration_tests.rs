@@ -28,15 +28,15 @@ fn options_request_roundtrip() {
     let parsed = parse_request(&bytes).expect("Should parse OPTIONS request");
 
     // Verify method
-    assert_eq!(parsed.start.method.as_str(), Method::Options.as_str());
-    assert_eq!(parsed.start.uri.as_str(), "sip:example.com");
+    assert_eq!(parsed.method().as_str(), Method::Options.as_str());
+    assert_eq!(parsed.uri().as_str(), "sip:example.com");
 
     // Verify essential headers are present
-    assert!(parsed.headers.get("Via").is_some());
-    assert!(parsed.headers.get("From").is_some());
-    assert!(parsed.headers.get("To").is_some());
-    assert!(parsed.headers.get("Call-ID").is_some());
-    assert!(parsed.headers.get("CSeq").is_some());
+    assert!(parsed.headers().get("Via").is_some());
+    assert!(parsed.headers().get("From").is_some());
+    assert!(parsed.headers().get("To").is_some());
+    assert!(parsed.headers().get("Call-ID").is_some());
+    assert!(parsed.headers().get("CSeq").is_some());
 }
 
 /// Test that INVITE requests can be built and parsed correctly.
@@ -51,12 +51,12 @@ fn invite_request_creation_and_parsing() {
     let bytes = serialize_request(&original);
     let parsed = parse_request(&bytes).expect("Should parse INVITE request");
 
-    assert_eq!(parsed.start.method.as_str(), Method::Invite.as_str());
-    assert_eq!(parsed.start.uri.as_str(), "sip:bob@example.com");
+    assert_eq!(parsed.method().as_str(), Method::Invite.as_str());
+    assert_eq!(parsed.uri().as_str(), "sip:bob@example.com");
 
     // Verify INVITE-specific headers
-    assert!(parsed.headers.get("Contact").is_some());
-    let via = parsed.headers.get("Via").expect("Via header required");
+    assert!(parsed.headers().get("Contact").is_some());
+    let via = parsed.headers().get("Via").expect("Via header required");
     assert!(
         via.contains("z9hG4bKinvite1"),
         "Branch parameter should be present"
@@ -74,14 +74,14 @@ fn register_request_structure() {
     let bytes = serialize_request(&original);
     let parsed = parse_request(&bytes).expect("Should parse REGISTER request");
 
-    assert_eq!(parsed.start.method.as_str(), Method::Register.as_str());
+    assert_eq!(parsed.method().as_str(), Method::Register.as_str());
 
     // Verify REGISTER-specific headers
-    assert!(parsed.headers.get("Contact").is_some());
-    assert!(parsed.headers.get("Expires").is_some());
+    assert!(parsed.headers().get("Contact").is_some());
+    assert!(parsed.headers().get("Expires").is_some());
 
     let contact = parsed
-        .headers
+        .headers()
         .get("Contact")
         .expect("REGISTER must have Contact");
     assert!(contact.contains("alice@client.example.com"));
@@ -95,13 +95,13 @@ fn response_roundtrip() {
     let bytes = sip_testkit::response_as_bytes(&original);
     let parsed = parse_response(&bytes).expect("Should parse response");
 
-    assert_eq!(parsed.start.code, 200);
-    assert_eq!(parsed.start.reason.as_str(), "OK");
+    assert_eq!(parsed.code(), 200);
+    assert_eq!(parsed.reason(), "OK");
 
     // Verify headers
-    assert!(parsed.headers.get("Via").is_some());
-    assert!(parsed.headers.get("From").is_some());
-    assert!(parsed.headers.get("To").is_some());
+    assert!(parsed.headers().get("Via").is_some());
+    assert!(parsed.headers().get("From").is_some());
+    assert!(parsed.headers().get("To").is_some());
 }
 
 /// Test various response codes.
@@ -121,8 +121,8 @@ fn response_status_codes() {
         let bytes = serialize_response(&response);
         let parsed = parse_response(&bytes).expect("Should parse response");
 
-        assert_eq!(parsed.start.code, code);
-        assert_eq!(parsed.start.reason.as_str(), reason);
+        assert_eq!(parsed.code(), code);
+        assert_eq!(parsed.reason(), reason);
     }
 }
 
@@ -134,7 +134,7 @@ fn via_branch_preservation() {
     let bytes = serialize_request(&request);
     let parsed = parse_request(&bytes).expect("Should parse");
 
-    let via = parsed.headers.get("Via").expect("Via required");
+    let via = parsed.headers().get("Via").expect("Via required");
     assert!(
         via.contains("branch=z9hG4bKunique123"),
         "Branch parameter must be preserved"
@@ -150,7 +150,7 @@ fn call_id_preservation() {
     let bytes = serialize_request(&request);
     let parsed = parse_request(&bytes).expect("Should parse");
 
-    let parsed_call_id = parsed.headers.get("Call-ID").expect("Call-ID required");
+    let parsed_call_id = parsed.headers().get("Call-ID").expect("Call-ID required");
     assert_eq!(parsed_call_id, call_id);
 }
 
@@ -162,10 +162,10 @@ fn from_to_tag_preservation() {
     let bytes = serialize_request(&request);
     let parsed = parse_request(&bytes).expect("Should parse");
 
-    let from = parsed.headers.get("From").expect("From required");
+    let from = parsed.headers().get("From").expect("From required");
     assert!(from.contains("tag=1234"), "From tag should be preserved");
 
-    let to = parsed.headers.get("To").expect("To required");
+    let to = parsed.headers().get("To").expect("To required");
     // To tag is typically added by UAS, so not checking for tag here
     assert!(to.contains("bob@example.com"));
 }
@@ -178,7 +178,7 @@ fn cseq_structure() {
     let bytes = serialize_request(&request);
     let parsed = parse_request(&bytes).expect("Should parse");
 
-    let cseq = parsed.headers.get("CSeq").expect("CSeq required");
+    let cseq = parsed.headers().get("CSeq").expect("CSeq required");
     assert!(cseq.contains("1"), "CSeq should contain sequence number");
     assert!(cseq.contains("OPTIONS"), "CSeq should contain method");
 }
@@ -192,7 +192,7 @@ fn max_forwards_present() {
     let parsed = parse_request(&bytes).expect("Should parse");
 
     let max_forwards = parsed
-        .headers
+        .headers()
         .get("Max-Forwards")
         .expect("Max-Forwards required");
     assert_eq!(max_forwards, "70");
@@ -213,10 +213,10 @@ fn multiple_distinct_requests() {
     let parsed1 = parse_request(&bytes1).expect("Should parse req1");
     let parsed2 = parse_request(&bytes2).expect("Should parse req2");
 
-    assert_ne!(parsed1.start.uri.as_str(), parsed2.start.uri.as_str());
+    assert_ne!(parsed1.uri().as_str(), parsed2.uri().as_str());
     assert_ne!(
-        parsed1.headers.get("Via").unwrap(),
-        parsed2.headers.get("Via").unwrap()
+        parsed1.headers().get("Via").unwrap(),
+        parsed2.headers().get("Via").unwrap()
     );
 }
 
@@ -226,17 +226,17 @@ fn prack_roundtrip() {
     let (invite, provisional, prack) = scenario_invite_prack("sip:bob@example.com");
     let invite_bytes = serialize_request(&invite);
     let parsed_invite = parse_request(&invite_bytes).expect("invite parse");
-    assert_eq!(parsed_invite.start.method.as_str(), Method::Invite.as_str());
+    assert_eq!(parsed_invite.method().as_str(), Method::Invite.as_str());
 
     let prov_bytes = serialize_response(&provisional);
     let parsed_prov = parse_response(&prov_bytes).expect("prov parse");
-    assert_eq!(parsed_prov.start.code, 180);
-    assert!(parsed_prov.headers.get("RSeq").is_some());
+    assert_eq!(parsed_prov.code(), 180);
+    assert!(parsed_prov.headers().get("RSeq").is_some());
 
     let prack_bytes = serialize_request(&prack);
     let parsed_prack = parse_request(&prack_bytes).expect("prack parse");
-    assert_eq!(parsed_prack.start.method.as_str(), Method::Prack.as_str());
-    assert!(parsed_prack.headers.get("RAck").is_some());
+    assert_eq!(parsed_prack.method().as_str(), Method::Prack.as_str());
+    assert!(parsed_prack.headers().get("RAck").is_some());
 }
 
 /// Test REFER builder.
@@ -249,8 +249,8 @@ fn refer_contains_refer_to() {
         4,
     );
     let parsed = parse_request(&serialize_request(&refer)).expect("refer parse");
-    assert_eq!(parsed.start.method.as_str(), Method::Refer.as_str());
-    assert!(parsed.headers.get("Refer-To").is_some());
+    assert_eq!(parsed.method().as_str(), Method::Refer.as_str());
+    assert!(parsed.headers().get("Refer-To").is_some());
 }
 
 /// Test provisional response helper includes RSeq/Require headers.
@@ -259,12 +259,12 @@ fn provisional_with_rseq_has_headers() {
     let resp = build_provisional_with_rseq(183, "Session Progress", 10);
     let bytes = serialize_response(&resp);
     let parsed = parse_response(&bytes).expect("resp parse");
-    assert_eq!(parsed.start.code, 183);
+    assert_eq!(parsed.code(), 183);
     assert_eq!(
-        parsed.headers.get("Require").unwrap().to_ascii_lowercase(),
+        parsed.headers().get("Require").unwrap().to_ascii_lowercase(),
         "100rel"
     );
-    assert_eq!(parsed.headers.get("RSeq").unwrap(), "10");
+    assert_eq!(parsed.headers().get("RSeq").unwrap(), "10");
 }
 
 /// REFER with NOTIFY scenario helper.
@@ -275,22 +275,20 @@ fn refer_notify_scenario() {
     assert_eq!(
         parse_request(&serialize_request(&refer))
             .unwrap()
-            .start
-            .method
+            .method()
             .as_str(),
         Method::Refer.as_str()
     );
     assert_eq!(
         parse_response(&serialize_response(&accepted))
             .unwrap()
-            .start
-            .code,
+            .code(),
         202
     );
     let parsed_notify = parse_request(&serialize_request(&notify)).unwrap();
-    assert_eq!(parsed_notify.start.method.as_str(), Method::Notify.as_str());
+    assert_eq!(parsed_notify.method().as_str(), Method::Notify.as_str());
     assert!(parsed_notify
-        .headers
+        .headers()
         .get("Subscription-State")
         .unwrap()
         .contains("active"));
@@ -307,19 +305,18 @@ fn register_auth_scenario() {
     assert_eq!(
         parse_request(&serialize_request(&first))
             .unwrap()
-            .start
-            .method
+            .method()
             .as_str(),
         Method::Register.as_str()
     );
     let parsed_chal = parse_response(&serialize_response(&challenge)).unwrap();
-    assert_eq!(parsed_chal.start.code, 401);
+    assert_eq!(parsed_chal.code(), 401);
     let parsed_retry = parse_request(&serialize_request(&retry)).unwrap();
     assert_eq!(
-        parsed_retry.start.method.as_str(),
+        parsed_retry.method().as_str(),
         Method::Register.as_str()
     );
-    assert!(parsed_retry.headers.get("Authorization").is_some());
+    assert!(parsed_retry.headers().get("Authorization").is_some());
 }
 
 /// Test parsing a raw SIP OPTIONS request.
@@ -337,8 +334,8 @@ Content-Length: 0\r\n\
 
     let parsed = parse_request(&Bytes::from_static(raw)).expect("Should parse raw OPTIONS");
 
-    assert_eq!(parsed.start.method.as_str(), Method::Options.as_str());
-    assert_eq!(parsed.start.uri.as_str(), "sip:example.com");
+    assert_eq!(parsed.method().as_str(), Method::Options.as_str());
+    assert_eq!(parsed.uri().as_str(), "sip:example.com");
 }
 
 /// Test parsing a raw SIP response.
@@ -355,22 +352,22 @@ Content-Length: 0\r\n\
 
     let parsed = parse_response(&Bytes::from_static(raw)).expect("Should parse raw response");
 
-    assert_eq!(parsed.start.code, 200);
-    assert_eq!(parsed.start.reason.as_str(), "OK");
+    assert_eq!(parsed.code(), 200);
+    assert_eq!(parsed.reason(), "OK");
 }
 
 /// Test that empty body is handled correctly.
 #[test]
 fn empty_body_handling() {
     let request = build_options("sip:example.com");
-    assert!(request.body.is_empty());
+    assert!(request.body().is_empty());
 
     let bytes = serialize_request(&request);
     let parsed = parse_request(&bytes).expect("Should parse");
 
-    assert!(parsed.body.is_empty());
+    assert!(parsed.body().is_empty());
     let content_length = parsed
-        .headers
+        .headers()
         .get("Content-Length")
         .expect("Content-Length required");
     assert_eq!(content_length, "0");
@@ -382,8 +379,8 @@ proptest! {
     fn branch_and_callid_roundtrip(branch in "\\PC{1,32}", callid in "\\PC{1,32}") {
         let invite = build_invite("sip:test.com", &branch, &callid);
         let parsed = parse_request(&serialize_request(&invite)).unwrap();
-        let via = parsed.headers.get("Via").unwrap();
-        let parsed_call_id = parsed.headers.get("Call-ID").unwrap();
+        let via = parsed.headers().get("Via").unwrap();
+        let parsed_call_id = parsed.headers().get("Call-ID").unwrap();
         prop_assert!(via.contains(&branch));
         prop_assert_eq!(parsed_call_id, callid);
     }
@@ -392,7 +389,7 @@ proptest! {
     fn prack_rack_includes_sequence(rack in "\\PC{1,16}") {
         let prack = build_prack("sip:bob@example.com", &rack, "call@example.com", 2);
         let parsed = parse_request(&serialize_request(&prack)).unwrap();
-        let rack_header = parsed.headers.get("RAck").unwrap();
+        let rack_header = parsed.headers().get("RAck").unwrap();
         prop_assert_eq!(rack_header, rack);
     }
 }

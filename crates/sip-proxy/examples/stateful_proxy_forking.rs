@@ -82,9 +82,10 @@ fn make_invite(target_user: &str) -> Request {
         ),
         headers,
         Bytes::from(sdp),
-    );
-    let _ = req.headers.push("Content-Type", "application/sdp");
-    let _ = req.headers.push("Content-Length", sdp.len().to_string());
+    )
+    .expect("valid request");
+    let _ = req.headers_mut().push("Content-Type", "application/sdp");
+    let _ = req.headers_mut().push("Content-Length", sdp.len().to_string());
 
     req
 }
@@ -112,7 +113,12 @@ fn make_response(code: u16, to_tag: &str) -> Response {
         .push("Contact", "<sip:bob@192.168.1.100:5060>")
         .unwrap();
 
-    Response::new(StatusLine::new(code, "OK".into()), headers, Bytes::new())
+    Response::new(
+        StatusLine::new(code, "OK").expect("valid status line"),
+        headers,
+        Bytes::new(),
+    )
+    .expect("valid response")
 }
 
 #[tokio::main]
@@ -377,10 +383,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut routed_req = make_invite("bob");
     let _ = routed_req
-        .headers
+        .headers_mut()
         .push("Route", "<sip:proxy1.example.com;lr>");
     let _ = routed_req
-        .headers
+        .headers_mut()
         .push("Route", "<sip:proxy2.example.com;lr>");
 
     println!("  Request-URI: sip:bob@example.com");

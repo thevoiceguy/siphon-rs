@@ -11,7 +11,7 @@
 //! ```
 //! use sip_testkit::build_options;
 //! let req = build_options("sip:test@example.com");
-//! assert_eq!(req.start.method.as_str(), "OPTIONS");
+//! assert_eq!(req.method().as_str(), "OPTIONS");
 //! ```
 
 use bytes::Bytes;
@@ -58,6 +58,7 @@ pub fn build_options(uri: &str) -> Request {
         headers,
         Bytes::new(),
     )
+    .expect("valid request")
 }
 
 /// Constructs a minimal INVITE request for the provided URI string.
@@ -105,6 +106,7 @@ pub fn build_invite(uri: &str, branch: &str, call_id: &str) -> Request {
         headers,
         Bytes::new(),
     )
+    .expect("valid request")
 }
 
 /// Constructs a PRACK request for the provided URI and RAck header value.
@@ -155,6 +157,7 @@ pub fn build_prack(uri: &str, rack: &str, call_id: &str, cseq: u32) -> Request {
         headers,
         Bytes::new(),
     )
+    .expect("valid request")
 }
 
 /// Constructs a REFER request for transfer scenarios.
@@ -205,15 +208,16 @@ pub fn build_refer(uri: &str, refer_to: &str, call_id: &str, cseq: u32) -> Reque
         headers,
         Bytes::new(),
     )
+    .expect("valid request")
 }
 
 /// Builds a reliable provisional response carrying RSeq for PRACK scenarios.
 pub fn build_provisional_with_rseq(code: u16, reason: &str, rack_cseq: u32) -> Response {
     let mut resp = build_response(code, reason);
-    resp.headers
+    resp.headers_mut()
         .push(SmolStr::new("Require"), SmolStr::new("100rel"))
         .unwrap();
-    resp.headers
+    resp.headers_mut()
         .push(SmolStr::new("RSeq"), SmolStr::new(rack_cseq.to_string()))
         .unwrap();
     resp
@@ -264,6 +268,7 @@ pub fn build_register(uri: &str, contact: &str) -> Request {
         headers,
         Bytes::new(),
     )
+    .expect("valid request")
 }
 
 /// Constructs a minimal response with the given status code.
@@ -298,10 +303,11 @@ pub fn build_response(code: u16, reason: &str) -> Response {
         .unwrap();
 
     Response::new(
-        StatusLine::new(code, SmolStr::new(reason)),
+        StatusLine::new(code, SmolStr::new(reason)).expect("valid status line"),
         headers,
         Bytes::new(),
     )
+    .expect("valid response")
 }
 
 /// Serializes a request to bytes for transport-layer testing.
@@ -392,6 +398,7 @@ pub fn build_notify_for_refer(
         headers,
         Bytes::new(),
     )
+    .expect("valid request")
 }
 
 /// REFER scenario with 202 Accepted and an initial NOTIFY.
@@ -411,7 +418,7 @@ pub fn scenario_register_with_auth(
     let first = build_register(uri, contact);
     let mut challenge = build_response(401, "Unauthorized");
     challenge
-        .headers
+        .headers_mut()
         .push(
             SmolStr::new("WWW-Authenticate"),
             SmolStr::new(format!("Digest realm=\"{}\", nonce=\"abc123\"", realm)),
@@ -419,9 +426,12 @@ pub fn scenario_register_with_auth(
         .unwrap();
 
     let mut retry = build_register(uri, contact);
-    retry.headers.push(
-        SmolStr::new("Authorization"),
-        SmolStr::new("Digest username=\"alice\", realm=\"example.com\", nonce=\"abc123\", uri=\"sip:registrar.example.com\", response=\"deadbeef\""),
-    ).unwrap();
+    retry
+        .headers_mut()
+        .push(
+            SmolStr::new("Authorization"),
+            SmolStr::new("Digest username=\"alice\", realm=\"example.com\", nonce=\"abc123\", uri=\"sip:registrar.example.com\", response=\"deadbeef\""),
+        )
+        .unwrap();
     (first, challenge, retry)
 }

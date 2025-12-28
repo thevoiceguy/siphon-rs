@@ -20,10 +20,10 @@ fn request_with_tel_uri_in_request_line() {
 
     let request_line = RequestLine::new(Method::Invite, uri);
 
-    assert!(request_line.uri.is_tel());
-    assert_eq!(request_line.uri.as_str(), "tel:+1-555-123-4567");
+    assert!(request_line.uri().is_tel());
+    assert_eq!(request_line.uri().as_str(), "tel:+1-555-123-4567");
 
-    let tel = request_line.uri.as_tel().unwrap();
+    let tel = request_line.uri().as_tel().unwrap();
     assert!(tel.is_global);
     assert_eq!(tel.number.as_str(), "+15551234567");
 }
@@ -35,10 +35,10 @@ fn request_with_sip_uri_still_works() {
 
     let request_line = RequestLine::new(Method::Invite, sip_uri.clone());
 
-    assert!(request_line.uri.is_sip());
-    assert_eq!(request_line.uri.as_str(), "sip:bob@example.com");
+    assert!(request_line.uri().is_sip());
+    assert_eq!(request_line.uri().as_str(), "sip:bob@example.com");
 
-    let sip = request_line.uri.as_sip().unwrap();
+    let sip = request_line.uri().as_sip().unwrap();
     assert_eq!(sip.host.as_str(), "example.com");
     assert_eq!(sip.user.as_ref().unwrap().as_str(), "bob");
 }
@@ -69,13 +69,13 @@ fn request_with_mixed_uri_types() {
         .push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"))
         .unwrap();
 
-    let request = Request::new(request_line, headers, Bytes::new());
+    let request = Request::new(request_line, headers, Bytes::new()).expect("valid request");
 
     // Request-URI is SIP
-    assert!(request.start.uri.is_sip());
+    assert!(request.uri().is_sip());
 
     // To header contains tel URI (as string)
-    let to_header = request.headers.get("To").unwrap();
+    let to_header = request.headers().get("To").unwrap();
     assert!(to_header.contains("tel:+1-555-123-4567"));
 }
 

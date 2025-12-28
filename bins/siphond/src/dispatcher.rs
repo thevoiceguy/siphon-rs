@@ -82,11 +82,11 @@ impl RequestDispatcher {
 
         // RFC 3261 §8.1.1.3: Check Max-Forwards
         // If Max-Forwards is 0, respond with 483 Too Many Hops
-        if let Some(max_forwards) = header(&request.headers, "Max-Forwards") {
+        if let Some(max_forwards) = header(request.headers(), "Max-Forwards") {
             if let Ok(value) = max_forwards.parse::<u32>() {
                 if value == 0 {
                     warn!(
-                        method = ?request.start.method,
+                        method = ?request.method(),
                         "Max-Forwards is 0, rejecting with 483"
                     );
                     self.send_too_many_hops(request, handle).await;
@@ -95,7 +95,7 @@ impl RequestDispatcher {
             }
         }
 
-        let method = &request.start.method;
+        let method = request.method();
 
         match self.handlers.get(method) {
             Some(handler) => {
@@ -122,27 +122,28 @@ impl RequestDispatcher {
 
         let mut headers = Headers::new();
 
-        if let Some(via) = header(&request.headers, "Via") {
+        if let Some(via) = header(request.headers(), "Via") {
             let _ = headers.push("Via", via);
         }
-        if let Some(from) = header(&request.headers, "From") {
+        if let Some(from) = header(request.headers(), "From") {
             let _ = headers.push("From", from);
         }
-        if let Some(to) = header(&request.headers, "To") {
+        if let Some(to) = header(request.headers(), "To") {
             let _ = headers.push("To", to);
         }
-        if let Some(call_id) = header(&request.headers, "Call-ID") {
+        if let Some(call_id) = header(request.headers(), "Call-ID") {
             let _ = headers.push("Call-ID", call_id);
         }
-        if let Some(cseq) = header(&request.headers, "CSeq") {
+        if let Some(cseq) = header(request.headers(), "CSeq") {
             let _ = headers.push("CSeq", cseq);
         }
 
         let response = Response::new(
-            StatusLine::new(483, "Too Many Hops".into()),
+            StatusLine::new(483, "Too Many Hops").expect("valid status line"),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid response");
 
         handle.send_final(response).await;
     }
@@ -155,27 +156,28 @@ impl RequestDispatcher {
 
         let mut headers = Headers::new();
 
-        if let Some(via) = header(&request.headers, "Via") {
+        if let Some(via) = header(request.headers(), "Via") {
             let _ = headers.push("Via", via);
         }
-        if let Some(from) = header(&request.headers, "From") {
+        if let Some(from) = header(request.headers(), "From") {
             let _ = headers.push("From", from);
         }
-        if let Some(to) = header(&request.headers, "To") {
+        if let Some(to) = header(request.headers(), "To") {
             let _ = headers.push("To", to);
         }
-        if let Some(call_id) = header(&request.headers, "Call-ID") {
+        if let Some(call_id) = header(request.headers(), "Call-ID") {
             let _ = headers.push("Call-ID", call_id);
         }
-        if let Some(cseq) = header(&request.headers, "CSeq") {
+        if let Some(cseq) = header(request.headers(), "CSeq") {
             let _ = headers.push("CSeq", cseq);
         }
 
         let response = Response::new(
-            StatusLine::new(501, "Not Implemented".into()),
+            StatusLine::new(501, "Not Implemented").expect("valid status line"),
             headers,
             Bytes::new(),
-        );
+        )
+        .expect("valid response");
 
         handle.send_final(response).await;
     }

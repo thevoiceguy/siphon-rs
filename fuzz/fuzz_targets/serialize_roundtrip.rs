@@ -25,13 +25,13 @@ fuzz_target!(|data: &[u8]| {
         // If re-parsing succeeds, key fields should match
         if let Ok(reparsed) = parse_request(&serialized) {
             // Method should be preserved
-            assert_eq!(request.start.method, reparsed.start.method);
+            assert_eq!(request.method(), reparsed.method());
 
             // URI should be preserved
-            assert_eq!(request.start.uri.as_str(), reparsed.start.uri.as_str());
+            assert_eq!(request.uri().as_str(), reparsed.uri().as_str());
 
             // Body length should match
-            assert_eq!(request.body.len(), reparsed.body.len());
+            assert_eq!(request.body().len(), reparsed.body().len());
         }
     }
 });

@@ -30,7 +30,7 @@ impl CancelForwarder {
     /// Returns the CSeq number of the INVITE being cancelled
     pub fn extract_invite_cseq(cancel: &Request) -> Result<u32> {
         let cseq_header = cancel
-            .headers
+            .headers()
             .get("CSeq")
             .ok_or_else(|| anyhow!("CANCEL missing CSeq header"))?;
 
@@ -66,7 +66,7 @@ impl CancelForwarder {
             "Preparing CANCEL with branch {} for forwarding",
             target_branch
         );
-        if let Some(via_value) = cancel.headers.get("Via") {
+        if let Some(via_value) = cancel.headers().get("Via") {
             let mut parts: Vec<String> =
                 via_value.split(';').map(|s| s.trim().to_string()).collect();
 
@@ -83,7 +83,7 @@ impl CancelForwarder {
                 parts.push(format!("branch={}", target_branch));
             }
 
-            let _ = cancel.headers.set_or_push("Via", parts.join(";"));
+            let _ = cancel.headers_mut().set_or_push("Via", parts.join(";"));
         }
 
         Ok(cancel)
@@ -137,7 +137,7 @@ impl AckForwarder {
         // Heuristic: ACKs that carry Route headers are usually 2xx ACKs
         // traveling on the dialog route set (new transaction).
         if ack
-            .headers
+            .headers()
             .iter()
             .any(|h| h.name().eq_ignore_ascii_case("Route"))
         {
@@ -166,7 +166,7 @@ impl AckForwarder {
             let mut new_headers = Vec::new();
             let mut used_route = false;
 
-            for header in ack.headers.clone().into_iter() {
+            for header in ack.headers().clone().into_iter() {
                 if header.name().eq_ignore_ascii_case("Route") && !used_route {
                     let uri_str = header.value().trim_matches(|c| c == '<' || c == '>');
 
@@ -181,7 +181,7 @@ impl AckForwarder {
                 new_headers.push(header);
             }
 
-            ack.headers = sip_core::Headers::from_vec(new_headers)
+            *ack.headers_mut() = sip_core::Headers::from_vec(new_headers)
                 .expect("validated headers should remain within limits");
         }
 
@@ -199,9 +199,9 @@ impl AckForwarder {
     ///
     /// Proxies should forward this ACK with the SDP body intact
     pub fn has_sdp(ack: &Request) -> bool {
-        !ack.body.is_empty()
+        !ack.body().is_empty()
             && ack
-                .headers
+                .headers()
                 .get("Content-Type")
                 .map(|ct| ct.contains("application/sdp"))
                 .unwrap_or(false)
@@ -236,8 +236,7 @@ impl RouteProcessor {
     ) -> Result<Option<SipUri>> {
         // Check if Request-URI is one of our Record-Route URIs
         let request_uri = request
-            .start
-            .uri
+            .uri()
             .as_sip()
             .ok_or_else(|| anyhow!("Request-URI is not a SIP URI"))?;
 
@@ -250,7 +249,7 @@ impl RouteProcessor {
 
             // Get the last Route header value
             let route_values: Vec<_> = request
-                .headers
+                .headers()
                 .iter()
                 .filter(|h| h.name().eq_ignore_ascii_case("Route"))
                 .map(|h| h.value_smol().clone())
@@ -269,7 +268,7 @@ impl RouteProcessor {
                     // Remove the last Route header
                     let mut filtered = Vec::new();
                     let mut removed = false;
-                    for header in request.headers.clone().into_iter().rev() {
+                    for header in request.headers().clone().into_iter().rev() {
                         if header.name().eq_ignore_ascii_case("Route") && !removed {
                             removed = true;
                             continue;
@@ -277,7 +276,7 @@ impl RouteProcessor {
                         filtered.push(header);
                     }
                     filtered.reverse();
-                    request.headers = sip_core::Headers::from_vec(filtered)
+                    *request.headers_mut() = sip_core::Headers::from_vec(filtered)
                         .expect("route header list should be within limits");
 
                     return Ok(Some(route_uri));
@@ -293,15 +292,14 @@ impl RouteProcessor {
     /// Returns the destination to forward the request to
     pub fn get_next_hop(request: &Request) -> Result<SipUri> {
         // Check for Route headers
-        if let Some(route) = request.headers.get("Route") {
+        if let Some(route) = request.headers().get("Route") {
             // Extract URI from Route header
             let uri_str = route.trim_matches(|c| c == '<' || c == '>');
             SipUri::parse(uri_str).ok_or_else(|| anyhow!("Invalid Route header URI"))
         } else {
             // Use Request-URI
             request
-                .start
-                .uri
+                .uri()
                 .as_sip()
                 .cloned()
                 .ok_or_else(|| anyhow!("Request-URI is not a SIP URI"))
@@ -335,6 +333,7 @@ mod tests {
             headers,
             Bytes::new(),
         )
+        .expect("valid request")
     }
 
     fn make_ack() -> Request {
@@ -351,6 +350,7 @@ mod tests {
             headers,
             Bytes::new(),
         )
+        .expect("valid request")
     }
 
     #[test]
@@ -371,7 +371,7 @@ mod tests {
     fn prepares_cancel_with_branch_update() {
         let cancel = make_cancel();
         let prepared = CancelForwarder::prepare_cancel(&cancel, "z9hG4bKbranch1").unwrap();
-        let via = prepared.headers.get("Via").unwrap();
+        let via = prepared.headers().get("Via").unwrap();
         assert!(via.contains("z9hG4bKbranch1"));
     }
 
@@ -390,8 +390,14 @@ mod tests {
     #[test]
     fn detects_ack_with_sdp() {
         let mut ack = make_ack();
-        let _ = ack.headers.push("Content-Type", "application/sdp");
-        ack.body = Bytes::from("v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\n");
+        let _ = ack.headers_mut().push("Content-Type", "application/sdp");
+        let (start, headers, _) = ack.into_parts();
+        ack = Request::new(
+            start,
+            headers,
+            Bytes::from("v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\n"),
+        )
+        .expect("valid request");
 
         assert!(AckForwarder::has_sdp(&ack));
     }

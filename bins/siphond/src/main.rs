@@ -372,20 +372,20 @@ async fn create_b2bua_ack(
     );
 
     // From - same as our outgoing INVITE
-    if let Some(from) = call_leg.outgoing_invite.headers.get("From") {
+    if let Some(from) = call_leg.outgoing_invite.headers().get("From") {
         let _ = headers.push(SmolStr::new("From"), from);
     }
 
     // To - with callee's tag from 200 OK
     if let Some(to_tag) = &call_leg.callee_to_tag {
         // Extract To header from outgoing INVITE and add tag
-        if let Some(to) = call_leg.outgoing_invite.headers.get("To") {
+        if let Some(to) = call_leg.outgoing_invite.headers().get("To") {
             let to_with_tag = format!("{};tag={}", to, to_tag);
             let _ = headers.push(SmolStr::new("To"), SmolStr::new(to_with_tag));
         }
     } else {
         // Shouldn't happen - we should have callee_to_tag after 200 OK
-        if let Some(to) = call_leg.outgoing_invite.headers.get("To") {
+        if let Some(to) = call_leg.outgoing_invite.headers().get("To") {
             let _ = headers.push(SmolStr::new("To"), to);
         }
     }
@@ -397,7 +397,7 @@ async fn create_b2bua_ack(
     );
 
     // CSeq - same number as INVITE, but ACK method
-    if let Some(cseq) = call_leg.outgoing_invite.headers.get("CSeq") {
+    if let Some(cseq) = call_leg.outgoing_invite.headers().get("CSeq") {
         if let Some((num, _)) = cseq.split_once(' ') {
             let _ = headers.push(SmolStr::new("CSeq"), SmolStr::new(format!("{} ACK", num)));
         }
@@ -407,13 +407,13 @@ async fn create_b2bua_ack(
     let _ = headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
 
     // Copy SDP body from caller's ACK if present (late offer scenario)
-    let body = if !caller_ack.body.is_empty() {
-        if let Some(content_type) = caller_ack.headers.get("Content-Type") {
+    let body = if !caller_ack.body().is_empty() {
+        if let Some(content_type) = caller_ack.headers().get("Content-Type") {
             let _ = headers.push(SmolStr::new("Content-Type"), content_type);
         }
-        let content_length = caller_ack.body.len().to_string();
+        let content_length = caller_ack.body().len().to_string();
         let _ = headers.push(SmolStr::new("Content-Length"), SmolStr::new(content_length));
-        caller_ack.body.clone()
+        caller_ack.body().clone()
     } else {
         let _ = headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
         bytes::Bytes::new()
@@ -426,6 +426,7 @@ async fn create_b2bua_ack(
         headers,
         body,
     )
+    .expect("valid ACK request")
 }
 
 /// Handle an incoming packet from the transport layer
@@ -446,7 +447,7 @@ async fn handle_packet(
             packet.transport,
             sip_transport::TransportKind::Ws | sip_transport::TransportKind::Wss
         ) {
-            header(&req.headers, "Route").and_then(|route| {
+            header(req.headers(), "Route").and_then(|route| {
                 let raw = route.trim_matches('<').trim_matches('>');
                 SipUri::parse(raw).map(|uri| {
                     let scheme = if matches!(packet.transport, sip_transport::TransportKind::Wss) {
@@ -471,9 +472,9 @@ async fn handle_packet(
         .with_udp_socket(services.udp_socket.get().cloned());
 
         // Special handling for ACK (doesn't create a transaction)
-        if req.start.method == Method::Ack {
+        if req.method() == &Method::Ack {
             if services.config.enable_proxy() {
-                let call_id = header(&req.headers, "Call-ID")
+                let call_id = header(req.headers(), "Call-ID")
                     .map(|s| s.as_str())
                     .unwrap_or("unknown");
                 if let Err(e) = proxy_utils::forward_request(
@@ -494,7 +495,7 @@ async fn handle_packet(
 
             // B2BUA MODE: Bridge ACK from caller to callee
             if services.config.enable_b2bua() {
-                if let Some(call_id_header) = req.headers.get("Call-ID") {
+                if let Some(call_id_header) = req.headers().get("Call-ID") {
                     let incoming_call_id = call_id_header.to_string();
 
                     // Look up call leg by incoming Call-ID (caller's Call-ID)
@@ -570,7 +571,7 @@ async fn handle_packet(
     if let Some(response) = parse_response(&packet.payload) {
         // Check if this response belongs to a B2BUA call leg
         if services.config.enable_b2bua() {
-            if let Some(call_id_header) = response.headers.get("Call-ID") {
+            if let Some(call_id_header) = response.headers().get("Call-ID") {
                 let call_id = call_id_header.to_string();
 
                 // Look up B2BUA call leg by outgoing Call-ID
@@ -578,7 +579,7 @@ async fn handle_packet(
                     tracing::info!(
                         outgoing_call_id = %call_id,
                         incoming_call_id = %leg_pair.incoming_call_id,
-                        status_code = response.start.code,
+                        status_code = response.code(),
                         "B2BUA: Relaying response from callee to caller"
                     );
 
@@ -591,7 +592,7 @@ async fn handle_packet(
                         );
                     } else {
                         tracing::debug!(
-                            status_code = response.start.code,
+                            status_code = response.code(),
                             "B2BUA: Response queued for relay to caller"
                         );
                     }
@@ -607,11 +608,11 @@ async fn handle_packet(
         }
 
         if services.config.enable_proxy() {
-            if let Some(via) = header(&response.headers, "Via") {
+            if let Some(via) = header(response.headers(), "Via") {
                 if let Some(branch) = branch_from_via(via.as_str()) {
                     if let Some(tx) = services.proxy_state.find_transaction(branch) {
                         let mut forwarded = response.clone();
-                        sip_proxy::ProxyHelpers::remove_top_via(&mut forwarded.headers);
+                        sip_proxy::ProxyHelpers::remove_top_via(forwarded.headers_mut());
 
                         let payload = sip_parse::serialize_response(&forwarded);
 
@@ -705,7 +706,7 @@ async fn handle_packet(
                             }
                         }
 
-                        if response.start.code >= 200 {
+                        if response.code() >= 200 {
                             services.proxy_state.remove_transaction(branch);
                         }
 
