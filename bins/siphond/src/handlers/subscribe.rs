@@ -120,11 +120,11 @@ impl SubscribeHandler {
         );
 
         if let Some(content_type) = content_type {
-            notify.headers.push("Content-Type".into(), content_type.into());
+            notify.headers.push("Content-Type", content_type);
             if let Some(body) = body.as_ref() {
                 notify
                     .headers
-                    .push("Content-Length".into(), body.len().to_string().into());
+                    .push("Content-Length", body.len().to_string());
             }
         }
 
@@ -322,18 +322,18 @@ impl RequestHandler for SubscribeHandler {
 /// Copy essential headers from request to response
 fn copy_headers(request: &Request, headers: &mut sip_core::Headers) {
     if let Some(via) = header(&request.headers, "Via") {
-        headers.push("Via".into(), via.clone());
+        let _ = headers.push("Via", via.clone());
     }
     if let Some(from) = header(&request.headers, "From") {
-        headers.push("From".into(), from.clone());
+        let _ = headers.push("From", from.clone());
     }
     if let Some(to) = header(&request.headers, "To") {
-        headers.push("To".into(), to.clone());
+        let _ = headers.push("To", to.clone());
     }
     if let Some(call_id) = header(&request.headers, "Call-ID") {
-        headers.push("Call-ID".into(), call_id.clone());
+        let _ = headers.push("Call-ID", call_id.clone());
     }
     if let Some(cseq) = header(&request.headers, "CSeq") {
-        headers.push("CSeq".into(), cseq.clone());
+        let _ = headers.push("CSeq", cseq.clone());
     }
 }

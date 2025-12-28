@@ -61,7 +61,7 @@ pub fn parse_contact_header(value: &SmolStr) -> Option<ContactHeader> {
 
 pub fn parse_route_headers(headers: &Headers, name: &str) -> Vec<RouteHeader> {
     headers
-        .get_all(name)
+        .get_all_smol(name)
         .filter_map(parse_route_header)
         .collect()
 }
@@ -84,14 +84,14 @@ pub fn parse_call_info_header(value: &SmolStr) -> Option<NameAddrHeader> {
 
 pub fn parse_call_info_headers(headers: &Headers) -> Vec<NameAddrHeader> {
     headers
-        .get_all("Call-Info")
+        .get_all_smol("Call-Info")
         .filter_map(parse_call_info_header)
         .collect()
 }
 
 pub fn parse_service_route(headers: &Headers) -> ServiceRouteHeader {
     let mut routes = Vec::new();
-    for value in headers.get_all("Service-Route") {
+    for value in headers.get_all_smol("Service-Route") {
         for part in split_quoted_commas(value.as_str()) {
             if let Some(name_addr) = parse_name_addr(&SmolStr::new(part.trim())) {
                 routes.push(name_addr);
@@ -103,7 +103,7 @@ pub fn parse_service_route(headers: &Headers) -> ServiceRouteHeader {
 
 pub fn parse_path(headers: &Headers) -> PathHeader {
     let mut routes = Vec::new();
-    for value in headers.get_all("Path") {
+    for value in headers.get_all_smol("Path") {
         for part in split_quoted_commas(value.as_str()) {
             if let Some(name_addr) = parse_name_addr(&SmolStr::new(part.trim())) {
                 routes.push(name_addr);
@@ -295,7 +295,7 @@ pub fn parse_subscription_state(value: &SmolStr) -> Option<SubscriptionStateHead
 
 pub fn parse_history_info(headers: &Headers) -> HistoryInfoHeader {
     let mut entries = Vec::new();
-    for value in headers.get_all("History-Info") {
+    for value in headers.get_all_smol("History-Info") {
         for part in split_quoted_commas(value.as_str()) {
             let part = part.trim();
             if part.is_empty() {
@@ -343,7 +343,7 @@ pub fn parse_geolocation_header(
     headers: &Headers,
 ) -> Result<GeolocationHeader, GeolocationError> {
     let mut values = Vec::new();
-    for header in headers.get_all("Geolocation") {
+    for header in headers.get_all_smol("Geolocation") {
         for part in split_quoted_commas(header.as_str()) {
             let part = part.trim();
             if part.is_empty() {
@@ -456,12 +456,12 @@ fn parse_name_addr_list<'a>(header_values: impl Iterator<Item = &'a SmolStr>) ->
 }
 
 pub fn parse_p_asserted_identity(headers: &Headers) -> PAssertedIdentityHeader {
-    let identities = parse_p_identity_list(headers.get_all("P-Asserted-Identity"));
+    let identities = parse_p_identity_list(headers.get_all_smol("P-Asserted-Identity"));
     PAssertedIdentityHeader { identities }
 }
 
 pub fn parse_p_preferred_identity(headers: &Headers) -> PPreferredIdentityHeader {
-    let identities = parse_p_identity_list(headers.get_all("P-Preferred-Identity"));
+    let identities = parse_p_identity_list(headers.get_all_smol("P-Preferred-Identity"));
     PPreferredIdentityHeader { identities }
 }
 

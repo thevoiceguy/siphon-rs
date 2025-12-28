@@ -208,14 +208,14 @@ pub fn serialize_request(req: &Request) -> Bytes {
     let mut has_max_forwards = false;
     for header in req.headers.iter() {
         // Skip Content-Length (and compact form "l")
-        if header.name.eq_ignore_ascii_case("Content-Length") || header.name.eq_ignore_ascii_case("l") {
+        if header.name().eq_ignore_ascii_case("Content-Length") || header.name().eq_ignore_ascii_case("l") {
             continue;
         }
-        if header.name.eq_ignore_ascii_case("Max-Forwards") {
+        if header.name().eq_ignore_ascii_case("Max-Forwards") {
             has_max_forwards = true;
         }
-        let name = canonical_name(&header.name);
-        let value = header.value.trim();
+        let name = canonical_name(header.name_smol());
+        let value = header.value().trim();
         let _ = write!(buf, "{}: {}\r\n", name, value);
     }
 
@@ -248,10 +248,10 @@ pub fn serialize_response(res: &sip_core::Response) -> Bytes {
 
     for header in res.headers.iter() {
         // Skip Content-Length (and compact form "l")
-        if header.name.eq_ignore_ascii_case("Content-Length") || header.name.eq_ignore_ascii_case("l") {
+        if header.name().eq_ignore_ascii_case("Content-Length") || header.name().eq_ignore_ascii_case("l") {
             continue;
         }
-        let _ = write!(buf, "{}: {}\r\n", header.name, header.value);
+        let _ = write!(buf, "{}: {}\r\n", header.name(), header.value());
     }
 
     let _ = write!(buf, "Content-Length: {}\r\n", res.body.len());
@@ -324,8 +324,8 @@ pub(crate) fn detect_method(token: &str) -> Option<Method> {
 pub fn header<'a>(headers: &'a Headers, name: &str) -> Option<&'a SmolStr> {
     let canonical = canonical_header_name(name);
     headers
-        .get(name)
-        .or_else(|| headers.get(canonical.as_str()))
+        .get_smol(name)
+        .or_else(|| headers.get_smol(canonical.as_str()))
 }
 
 /// Splits raw bytes into header text and body slice using the `\r\n\r\n` separator.
@@ -360,10 +360,10 @@ where
         }
 
         if let Some((name, value)) = line.split_once(':') {
-            headers.push(
-                canonical_header_name(name.trim()),
-                SmolStr::new(value.trim()),
-            );
+            let name = canonical_header_name(name.trim());
+            if headers.push(name.as_str(), value.trim()).is_err() {
+                return None;
+            }
         } else {
             return None;
         }
@@ -406,7 +406,7 @@ fn canonical_header_name(name: &str) -> SmolStr {
 /// - Missing Content-Length → use body_bytes.len()
 fn extract_body(body_bytes: &[u8], headers: &Headers) -> Option<Bytes> {
     // Check for multiple mismatched Content-Length headers (reject even in non-strict mode)
-    let values: Vec<_> = headers.get_all("Content-Length").collect();
+    let values: Vec<_> = headers.get_all_smol("Content-Length").collect();
 
     let declared = if values.is_empty() {
         // No Content-Length header
@@ -501,7 +501,7 @@ fn parse_content_length_detailed(value: &SmolStr) -> Result<usize, ContentLength
 
 fn strict_content_length(headers: &Headers) -> Result<Option<usize>, ()> {
     let mut length: Option<usize> = None;
-    for value in headers.get_all("Content-Length") {
+    for value in headers.get_all_smol("Content-Length") {
         let parsed = parse_content_length_value(value).ok_or(())?;
         if let Some(existing) = length {
             if existing != parsed {
@@ -570,7 +570,8 @@ mod tests {
     use super::*;
     use proptest::{prelude::*, string::string_regex};
     use sip_core::{
-        Headers, PriorityValue, RefresherRole, Response, SipUri, StatusLine, SubscriptionState,
+        Header, Headers, PriorityValue, RefresherRole, Response, SipUri, StatusLine,
+        SubscriptionState,
     };
     use smol_str::SmolStr;
 
@@ -583,7 +584,7 @@ mod tests {
 
     /// Test helper to extract and validate Content-Length from headers
     fn content_length(headers: &Headers) -> Option<usize> {
-        let values: Vec<_> = headers.get_all("Content-Length").collect();
+        let values: Vec<_> = headers.get_all_smol("Content-Length").collect();
 
         if values.is_empty() {
             return None;
@@ -749,7 +750,7 @@ Content-Length: 0\r\n\r\n",
         let req = parse_request(&raw).expect("parse");
         let routes: Vec<&str> = req
             .headers
-            .get_all("record-route")
+            .get_all_smol("record-route")
             .map(|v| v.as_str())
             .collect();
         assert_eq!(routes.len(), 2);
@@ -902,9 +903,9 @@ k: 100rel, timer\r\n\
 l: 0\r\n\r\n",
         );
         let req = parse_request(&raw).expect("parse");
-        assert!(req.headers.iter().any(|h| h.name == "From"));
-        assert!(req.headers.iter().any(|h| h.name == "To"));
-        assert!(req.headers.iter().any(|h| h.name == "Contact"));
+        assert!(req.headers.iter().any(|h| h.name() == "From"));
+        assert!(req.headers.iter().any(|h| h.name() == "To"));
+        assert!(req.headers.iter().any(|h| h.name() == "Contact"));
 
         let from = parse_from_header(header(&req.headers, "From").unwrap()).expect("from");
         assert!(from.tag().is_some());
@@ -923,7 +924,7 @@ l: 0\r\n\r\n",
         assert_eq!(call_info.inner().uri().as_str(), "sip:info@example.com");
 
         let mut call_info_headers = Headers::new();
-        call_info_headers.push(
+        call_info_headers.push_unchecked(
             SmolStr::new("Call-Info"),
             SmolStr::new("<sip:info@example.com>"),
         );
@@ -1051,7 +1052,7 @@ l: 0\r\n\r\n",
         assert_eq!(contact.uri().as_str(), "sip:alice@example.com");
 
         let mut headers = Headers::new();
-        headers.push(
+        headers.push_unchecked(
             SmolStr::new("P-Asserted-Identity"),
             SmolStr::new("\"Bob <Ops>\" <sip:bob@example.com>".to_owned()),
         );
@@ -1140,7 +1141,7 @@ Content-Length: 5\r\n\r\nhello",
         assert_eq!(res.start.reason.as_str(), "OK");
         let rr: Vec<&str> = res
             .headers
-            .get_all("record-route")
+            .get_all_smol("record-route")
             .map(|v| v.as_str())
             .collect();
         assert_eq!(rr, vec!["<sip:proxy1>", "<sip:proxy2>"]);
@@ -1151,8 +1152,8 @@ Content-Length: 5\r\n\r\nhello",
     fn serialize_request_recomputes_content_length() {
         let uri = SipUri::parse("sip:example.com").unwrap();
         let mut headers = Headers::new();
-        headers.push(SmolStr::new("Via"), SmolStr::new("SIP/2.0/UDP host"));
-        headers.push(SmolStr::new("Content-Length"), SmolStr::new("999"));
+        headers.push_unchecked(SmolStr::new("Via"), SmolStr::new("SIP/2.0/UDP host"));
+        headers.push_unchecked(SmolStr::new("Content-Length"), SmolStr::new("999"));
 
         let body = Bytes::from_static(b"hello");
         let req = Request::new(
@@ -1179,8 +1180,8 @@ Content-Length: 5\r\n\r\nhello",
     #[test]
     fn serialize_response_sets_content_length() {
         let mut headers = Headers::new();
-        headers.push(SmolStr::new("Server"), SmolStr::new("siphon"));
-        headers.push(SmolStr::new("Content-Length"), SmolStr::new("123"));
+        headers.push_unchecked(SmolStr::new("Server"), SmolStr::new("siphon"));
+        headers.push_unchecked(SmolStr::new("Content-Length"), SmolStr::new("123"));
 
         let body = Bytes::from_static(b"hi");
         let response = Response::new(
@@ -1211,7 +1212,7 @@ Content-Length: 0\r\n\r\n",
     fn serializer_inserts_max_forwards() {
         let uri = SipUri::parse("sip:example.com").unwrap();
         let mut headers = Headers::new();
-        headers.push(
+        headers.push_unchecked(
             SmolStr::new("Via"),
             SmolStr::new("SIP/2.0/UDP host".to_owned()),
         );
@@ -1230,7 +1231,7 @@ Content-Length: 0\r\n\r\n",
     fn content_length_rejects_overflow_values() {
         // Test extremely large value that would cause integer overflow
         let mut headers = Headers::new();
-        headers.push(
+        headers.push_unchecked(
             SmolStr::new("Content-Length"),
             SmolStr::new("99999999999999999999"),
         );
@@ -1242,7 +1243,7 @@ Content-Length: 0\r\n\r\n",
         // Test value exceeding MAX_CONTENT_LENGTH (64 MB)
         let mut headers = Headers::new();
         let too_large = (MAX_CONTENT_LENGTH + 1).to_string();
-        headers.push(SmolStr::new("Content-Length"), SmolStr::new(too_large));
+        headers.push_unchecked(SmolStr::new("Content-Length"), SmolStr::new(too_large));
         assert_eq!(content_length(&headers), None);
     }
 
@@ -1250,7 +1251,7 @@ Content-Length: 0\r\n\r\n",
     fn content_length_accepts_max_value() {
         // Test MAX_CONTENT_LENGTH is accepted
         let mut headers = Headers::new();
-        headers.push(
+        headers.push_unchecked(
             SmolStr::new("Content-Length"),
             SmolStr::new(MAX_CONTENT_LENGTH.to_string()),
         );
@@ -1270,7 +1271,7 @@ Content-Length: 0\r\n\r\n",
 
         for (input, expected) in test_cases {
             let mut headers = Headers::new();
-            headers.push(SmolStr::new("Content-Length"), SmolStr::new(input));
+            headers.push_unchecked(SmolStr::new("Content-Length"), SmolStr::new(input));
             assert_eq!(
                 content_length(&headers),
                 expected,
@@ -1295,7 +1296,7 @@ Content-Length: 0\r\n\r\n",
 
         for input in invalid_cases {
             let mut headers = Headers::new();
-            headers.push(SmolStr::new("Content-Length"), SmolStr::new(input));
+            headers.push_unchecked(SmolStr::new("Content-Length"), SmolStr::new(input));
             assert_eq!(content_length(&headers), None, "Should reject: {}", input);
         }
     }
@@ -1304,14 +1305,14 @@ Content-Length: 0\r\n\r\n",
     fn content_length_handles_whitespace() {
         // Test whitespace handling
         let mut headers = Headers::new();
-        headers.push(SmolStr::new("Content-Length"), SmolStr::new("  1234  "));
+        headers.push_unchecked(SmolStr::new("Content-Length"), SmolStr::new("  1234  "));
         assert_eq!(content_length(&headers), Some(1234));
     }
 
     #[test]
     fn extract_body_rejects_oversized_content_length() {
         let mut headers = Headers::new();
-        headers.push(
+        headers.push_unchecked(
             SmolStr::new("Content-Length"),
             SmolStr::new("999999999999"), // Exceeds MAX_CONTENT_LENGTH
         );
@@ -1357,9 +1358,9 @@ body",
             let method = methods[method_idx % methods.len()];
             let uri = SipUri::parse(&format!("sip:{host}.example.com")).unwrap();
             let mut headers = Headers::new();
-            headers.push(SmolStr::new("Via"), SmolStr::new("SIP/2.0/UDP host".to_owned()));
-            headers.push(SmolStr::new("Call-ID"), SmolStr::new("abc@host".to_owned()));
-            headers.push(SmolStr::new("CSeq"), SmolStr::new(format!("1 {method}")));
+            headers.push_unchecked(SmolStr::new("Via"), SmolStr::new("SIP/2.0/UDP host".to_owned()));
+            headers.push_unchecked(SmolStr::new("Call-ID"), SmolStr::new("abc@host".to_owned()));
+            headers.push_unchecked(SmolStr::new("CSeq"), SmolStr::new(format!("1 {method}")));
 
             let req = Request::new(RequestLine::new(detect_method(method).unwrap(), uri), headers, Bytes::from(body.clone()));
             let bytes = serialize_request(&req);
@@ -1377,16 +1378,16 @@ body",
         ) {
             prop_assume!(!name.is_empty());
             prop_assume!(value.trim() == value);
+            prop_assume!(!value.contains('\0'));
             // Exclude Content-Length and its compact form "l" (specially handled by serializer)
             prop_assume!(!name.eq_ignore_ascii_case("Content-Length"));
             prop_assume!(!name.eq_ignore_ascii_case("l"));
 
             let uri = SipUri::parse("sip:example.com").unwrap();
             let mut headers = Headers::new();
-            headers.push(
-                SmolStr::new(name.clone()),
-                SmolStr::new(value.clone()),
-            );
+            let parsed_header = Header::new(&name, &value);
+            prop_assume!(parsed_header.is_ok());
+            headers.push_header(parsed_header.unwrap()).unwrap();
 
             let req = Request::new(
                 RequestLine::new(Method::Options, uri),
@@ -1400,13 +1401,13 @@ body",
             let upper = name.to_ascii_uppercase();
             prop_assert_eq!(
                 header(&reparsed.headers, &upper).map(|h| h.as_str()),
-                Some(value.as_str()),
+                Some(value.as_str())
             );
 
             let lower = name.to_ascii_lowercase();
             prop_assert_eq!(
                 header(&reparsed.headers, &lower).map(|h| h.as_str()),
-                Some(value.as_str()),
+                Some(value.as_str())
             );
         }
 
@@ -1457,7 +1458,7 @@ body",
                 .collect::<Vec<_>>()
                 .join(", ");
             let mut headers = Headers::new();
-            headers.push(SmolStr::new("History-Info"), SmolStr::new(header_value));
+            headers.push_unchecked(SmolStr::new("History-Info"), SmolStr::new(header_value));
             let parsed = parse_history_info(&headers);
             prop_assert_eq!(parsed.entries.len(), entries.len());
             for (entry, (user, index)) in parsed.entries.iter().zip(entries.iter()) {

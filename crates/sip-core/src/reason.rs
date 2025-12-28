@@ -415,7 +415,7 @@ fn sip_response_text(code: u16) -> &'static str {
 /// Helper function to parse Reason header from headers.
 pub fn parse_reason_header(headers: &crate::Headers) -> Option<ReasonHeader> {
     let header_value = headers.get("Reason")?;
-    Some(parse_reason_from_string(header_value.as_str()))
+    Some(parse_reason_from_string(header_value))
 }
 
 /// Parses a Reason header value string.

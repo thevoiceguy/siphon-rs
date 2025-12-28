@@ -317,7 +317,7 @@ impl fmt::Display for PPreferredIdentityHeader {
 /// Helper function to parse P-Asserted-Identity from headers.
 pub fn parse_p_asserted_identity(headers: &crate::Headers) -> Option<PAssertedIdentityHeader> {
     let identities: Vec<PIdentity> = headers
-        .get_all("P-Asserted-Identity")
+        .get_all_smol("P-Asserted-Identity")
         .filter_map(|value| parse_p_identity(value.as_str()))
         .collect();
 
@@ -331,7 +331,7 @@ pub fn parse_p_asserted_identity(headers: &crate::Headers) -> Option<PAssertedId
 /// Helper function to parse P-Preferred-Identity from headers.
 pub fn parse_p_preferred_identity(headers: &crate::Headers) -> Option<PPreferredIdentityHeader> {
     let identities: Vec<PIdentity> = headers
-        .get_all("P-Preferred-Identity")
+        .get_all_smol("P-Preferred-Identity")
         .filter_map(|value| parse_p_identity(value.as_str()))
         .collect();
 

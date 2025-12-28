@@ -15,25 +15,23 @@ pub enum MaxForwardsError {
 
 /// Decrements Max-Forwards per RFC 3261 §8.1.1.6, inserting a default when missing.
 pub fn decrement_max_forwards(headers: &mut Headers) -> Result<u32, MaxForwardsError> {
-    for header in headers.iter_mut() {
-        if header.name.eq_ignore_ascii_case("Max-Forwards") {
-            let value = header
-                .value
-                .as_str()
-                .trim()
-                .parse::<u32>()
-                .map_err(|_| MaxForwardsError::Invalid)?;
-            if value == 0 {
-                return Err(MaxForwardsError::Exhausted);
-            }
-            let decremented = value.saturating_sub(1);
-            header.value = SmolStr::new(decremented.to_string());
-            return Ok(decremented);
+    if let Some(value) = headers.get("Max-Forwards") {
+        let value = value
+            .trim()
+            .parse::<u32>()
+            .map_err(|_| MaxForwardsError::Invalid)?;
+        if value == 0 {
+            return Err(MaxForwardsError::Exhausted);
         }
+        let decremented = value.saturating_sub(1);
+        headers
+            .set_or_push("Max-Forwards", decremented.to_string())
+            .map_err(|_| MaxForwardsError::Invalid)?;
+        return Ok(decremented);
     }
 
     // Insert default 70 -> 69 when missing.
-    headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("69"));
+    headers.push_unchecked(SmolStr::new("Max-Forwards"), SmolStr::new("69"));
     Ok(69)
 }
 
@@ -51,7 +49,7 @@ mod tests {
     #[test]
     fn decrements_existing_header() {
         let mut headers = Headers::new();
-        headers.push("Max-Forwards".into(), "5".into());
+        headers.push_unchecked("Max-Forwards", "5");
         let remaining = decrement_max_forwards(&mut headers).unwrap();
         assert_eq!(remaining, 4);
     }
@@ -67,7 +65,7 @@ mod tests {
     #[test]
     fn returns_error_when_exhausted() {
         let mut headers = Headers::new();
-        headers.push("Max-Forwards".into(), "0".into());
+        headers.push_unchecked("Max-Forwards", "0");
         assert_eq!(
             decrement_max_forwards(&mut headers),
             Err(MaxForwardsError::Exhausted)
@@ -77,7 +75,7 @@ mod tests {
     #[test]
     fn returns_error_when_invalid() {
         let mut headers = Headers::new();
-        headers.push("Max-Forwards".into(), "bogus".into());
+        headers.push_unchecked("Max-Forwards", "bogus");
         assert_eq!(
             decrement_max_forwards(&mut headers),
             Err(MaxForwardsError::Invalid)

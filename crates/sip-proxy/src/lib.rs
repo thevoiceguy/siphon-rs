@@ -13,7 +13,7 @@
 //! # use sip_core::{Request, Headers, RequestLine, Method, SipUri};
 //! # use bytes::Bytes;
 //! # let mut req = Request::new(RequestLine::new(Method::Invite, SipUri::parse("sip:bob@example.com").unwrap()), Headers::new(), Bytes::new());
-//! let branch = ProxyHelpers::add_via(&mut req, "proxy.example.com", "UDP");
+//! let branch = ProxyHelpers::add_via(&mut req, "proxy.example.com", "UDP".into());
 //! let proxy_uri = SipUri::parse("sip:proxy.example.com;lr").unwrap();
 //! ProxyHelpers::add_record_route(&mut req, &proxy_uri);
 //! ```
@@ -55,12 +55,10 @@ impl ProxyHelpers {
 
         // Prepend to existing Via headers
         let mut new_headers = Vec::new();
-        new_headers.push(Header {
-            name: "Via".into(),
-            value: via_value.into(),
-        });
+        new_headers.push(Header::new("Via", via_value).expect("via header should be valid"));
         new_headers.extend(request.headers.clone());
-        request.headers = Headers::from_vec(new_headers);
+        request.headers = Headers::from_vec(new_headers)
+            .expect("via header list should be within limits");
 
         branch.to_string()
     }
@@ -75,7 +73,7 @@ impl ProxyHelpers {
     /// * `proxy_uri` - The proxy's SIP URI (will be in Route headers of future requests)
     pub fn add_record_route(request: &mut Request, proxy_uri: &SipUri) {
         let rr_value = format!("<{}>", proxy_uri.as_str());
-        request.headers.push("Record-Route".into(), rr_value.into());
+        request.headers.push_unchecked("Record-Route", rr_value);
     }
 
     /// Decrements Max-Forwards header and checks for loop.
@@ -107,7 +105,7 @@ impl ProxyHelpers {
         // Find and remove the first Via header
         let mut found_index = None;
         for (i, header) in headers.iter().enumerate() {
-            if header.name.as_str().eq_ignore_ascii_case("Via") {
+            if header.name().eq_ignore_ascii_case("Via") {
                 found_index = Some(i);
                 break;
             }
@@ -120,7 +118,8 @@ impl ProxyHelpers {
                     new_headers.push(header);
                 }
             }
-            *headers = Headers::from_vec(new_headers);
+            *headers = Headers::from_vec(new_headers)
+                .expect("via header list should be within limits");
         }
     }
 
@@ -146,8 +145,8 @@ mod tests {
     #[test]
     fn adds_via_header() {
         let mut headers = Headers::new();
-        headers.push("Via".into(), "SIP/2.0/UDP old;branch=z9hG4bK123".into());
-        headers.push("Max-Forwards".into(), "70".into());
+        headers.push_unchecked("Via", "SIP/2.0/UDP old;branch=z9hG4bK123");
+        headers.push_unchecked("Max-Forwards", "70");
 
         let mut req = Request::new(
             RequestLine::new(
@@ -158,14 +157,14 @@ mod tests {
             Bytes::new(),
         );
 
-        let branch = ProxyHelpers::add_via(&mut req, "proxy.example.com", "UDP");
+        let branch = ProxyHelpers::add_via(&mut req, "proxy.example.com", "UDP".into());
 
         // Via should be prepended
-        let vias: Vec<_> = req.headers.iter().filter(|h| h.name == "Via").collect();
+        let vias: Vec<_> = req.headers.iter().filter(|h| h.name() == "Via").collect();
         assert_eq!(vias.len(), 2);
-        assert!(vias[0].value.contains("proxy.example.com"));
-        assert!(vias[0].value.contains(&branch));
-        assert!(vias[1].value.contains("old"));
+        assert!(vias[0].value().contains("proxy.example.com"));
+        assert!(vias[0].value().contains(&branch));
+        assert!(vias[1].value().contains("old"));
     }
 
     #[test]
@@ -190,7 +189,7 @@ mod tests {
     #[test]
     fn decrements_max_forwards() {
         let mut headers = Headers::new();
-        headers.push("Max-Forwards".into(), "70".into());
+        headers.push_unchecked("Max-Forwards", "70");
 
         let mut req = Request::new(
             RequestLine::new(
@@ -208,7 +207,7 @@ mod tests {
     #[test]
     fn rejects_zero_max_forwards() {
         let mut headers = Headers::new();
-        headers.push("Max-Forwards".into(), "0".into());
+        headers.push_unchecked("Max-Forwards", "0");
 
         let mut req = Request::new(
             RequestLine::new(
@@ -225,16 +224,16 @@ mod tests {
     #[test]
     fn removes_top_via() {
         let mut headers = Headers::new();
-        headers.push("Via".into(), "SIP/2.0/UDP proxy;branch=z9hG4bK456".into());
-        headers.push("Via".into(), "SIP/2.0/UDP client;branch=z9hG4bK123".into());
-        headers.push("From".into(), "<sip:alice@example.com>".into());
+        headers.push_unchecked("Via", "SIP/2.0/UDP proxy;branch=z9hG4bK456");
+        headers.push_unchecked("Via", "SIP/2.0/UDP client;branch=z9hG4bK123");
+        headers.push_unchecked("From", "<sip:alice@example.com>");
 
         ProxyHelpers::remove_top_via(&mut headers);
 
-        let vias: Vec<_> = headers.iter().filter(|h| h.name == "Via").collect();
+        let vias: Vec<_> = headers.iter().filter(|h| h.name() == "Via").collect();
         assert_eq!(vias.len(), 1);
-        assert!(vias[0].value.contains("client"));
-        assert!(!vias[0].value.contains("proxy"));
+        assert!(vias[0].value().contains("client"));
+        assert!(!vias[0].value().contains("proxy"));
     }
 
     #[test]

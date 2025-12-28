@@ -123,19 +123,19 @@ impl RequestDispatcher {
         let mut headers = Headers::new();
 
         if let Some(via) = header(&request.headers, "Via") {
-            headers.push("Via".into(), via.clone());
+            let _ = headers.push("Via", via);
         }
         if let Some(from) = header(&request.headers, "From") {
-            headers.push("From".into(), from.clone());
+            let _ = headers.push("From", from);
         }
         if let Some(to) = header(&request.headers, "To") {
-            headers.push("To".into(), to.clone());
+            let _ = headers.push("To", to);
         }
         if let Some(call_id) = header(&request.headers, "Call-ID") {
-            headers.push("Call-ID".into(), call_id.clone());
+            let _ = headers.push("Call-ID", call_id);
         }
         if let Some(cseq) = header(&request.headers, "CSeq") {
-            headers.push("CSeq".into(), cseq.clone());
+            let _ = headers.push("CSeq", cseq);
         }
 
         let response = Response::new(
@@ -156,19 +156,19 @@ impl RequestDispatcher {
         let mut headers = Headers::new();
 
         if let Some(via) = header(&request.headers, "Via") {
-            headers.push("Via".into(), via.clone());
+            let _ = headers.push("Via", via);
         }
         if let Some(from) = header(&request.headers, "From") {
-            headers.push("From".into(), from.clone());
+            let _ = headers.push("From", from);
         }
         if let Some(to) = header(&request.headers, "To") {
-            headers.push("To".into(), to.clone());
+            let _ = headers.push("To", to);
         }
         if let Some(call_id) = header(&request.headers, "Call-ID") {
-            headers.push("Call-ID".into(), call_id.clone());
+            let _ = headers.push("Call-ID", call_id);
         }
         if let Some(cseq) = header(&request.headers, "CSeq") {
-            headers.push("CSeq".into(), cseq.clone());
+            let _ = headers.push("CSeq", cseq);
         }
 
         let response = Response::new(

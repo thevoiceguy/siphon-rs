@@ -64,21 +64,21 @@ impl<'a> IntoIterator for HeaderValues<'a> {
 /// Returns all `Via` header values in the order received.
 pub fn vias<'a>(headers: &'a Headers) -> HeaderValues<'a> {
     HeaderValues {
-        inner: headers.get_all("Via").collect(),
+        inner: headers.get_all_smol("Via").collect(),
     }
 }
 
 /// Returns all `Record-Route` header values in their original order.
 pub fn record_routes<'a>(headers: &'a Headers) -> HeaderValues<'a> {
     HeaderValues {
-        inner: headers.get_all("Record-Route").collect(),
+        inner: headers.get_all_smol("Record-Route").collect(),
     }
 }
 
 /// Returns all `Route` header values in their original order.
 pub fn routes<'a>(headers: &'a Headers) -> HeaderValues<'a> {
     HeaderValues {
-        inner: headers.get_all("Route").collect(),
+        inner: headers.get_all_smol("Route").collect(),
     }
 }
 
@@ -291,7 +291,7 @@ mod tests {
     fn build_request(headers: Vec<(&str, &str)>) -> Request {
         let mut hdrs = Headers::new();
         for (name, value) in headers {
-            hdrs.push(name.into(), value.into());
+            hdrs.push_unchecked(name, value);
         }
 
         Request::new(
@@ -319,8 +319,8 @@ mod tests {
     fn record_routes_preserve_order() {
         let headers = {
             let mut h = Headers::new();
-            h.push("Record-Route".into(), "<sip:proxy1>".into());
-            h.push("Record-Route".into(), "<sip:proxy2>".into());
+            h.push_unchecked("Record-Route", "<sip:proxy1>");
+            h.push_unchecked("Record-Route", "<sip:proxy2>");
             h
         };
 

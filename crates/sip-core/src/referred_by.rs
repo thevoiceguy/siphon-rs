@@ -367,7 +367,7 @@ mod tests {
 
         assert!(referred_by.has_signature());
         assert_eq!(referred_by.get_cid(), Some("signature123@example.com"));
-        assert_eq!(referred_by.cid, Some("signature123@example.com".into()));
+        assert_eq!(referred_by.cid, Some(SmolStr::new("signature123@example.com")));
     }
 
     #[test]

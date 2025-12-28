@@ -130,38 +130,38 @@ fn build_request(
     cseq: u32,
 ) -> Request {
     let mut hdrs = Headers::new();
-    hdrs.push(
+    let _ = hdrs.push(
         SmolStr::new("Via"),
         SmolStr::new("SIP/2.0/UDP scenario;branch=z9hG4bKscenario"),
     );
-    hdrs.push(
+    let _ = hdrs.push(
         SmolStr::new("From"),
         SmolStr::new(format!("<{}>;tag=scenario", local_uri.as_str())),
     );
-    hdrs.push(
+    let _ = hdrs.push(
         SmolStr::new("To"),
         SmolStr::new(format!("<{}>", uri.as_str())),
     );
-    hdrs.push(SmolStr::new("Call-ID"), SmolStr::new("scenario-call"));
-    hdrs.push(
+    let _ = hdrs.push(SmolStr::new("Call-ID"), SmolStr::new("scenario-call"));
+    let _ = hdrs.push(
         SmolStr::new("CSeq"),
         SmolStr::new(format!("{} {}", cseq, method.as_str())),
     );
-    hdrs.push(
+    let _ = hdrs.push(
         SmolStr::new("Contact"),
         SmolStr::new(format!("<{}>", contact_uri.as_str())),
     );
-    hdrs.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
+    let _ = hdrs.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
 
     for header in headers {
-        hdrs.push(header.name.clone().into(), header.value.clone().into());
+        let _ = hdrs.push(&header.name, &header.value);
     }
 
     let request_body = if let Some(content) = body {
-        hdrs.push(SmolStr::new("Content-Length"), SmolStr::new(content.len().to_string()));
+        let _ = hdrs.push(SmolStr::new("Content-Length"), SmolStr::new(content.len().to_string()));
         bytes::Bytes::from(content.as_bytes().to_vec())
     } else {
-        hdrs.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
+        let _ = hdrs.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
         bytes::Bytes::new()
     };
 

@@ -32,26 +32,26 @@ impl OptionsHandler {
         let mut methods = vec!["OPTIONS", "ACK", "CANCEL"];
 
         if services.config.enable_calls() {
-            methods.push("INVITE");
-            methods.push("BYE");
-            methods.push("UPDATE");
+            let _ = methods.push("INVITE");
+            let _ = methods.push("BYE");
+            let _ = methods.push("UPDATE");
         }
 
         if services.config.enable_registrar() {
-            methods.push("REGISTER");
+            let _ = methods.push("REGISTER");
         }
 
         if services.config.enable_subscriptions() {
-            methods.push("SUBSCRIBE");
-            methods.push("NOTIFY");
+            let _ = methods.push("SUBSCRIBE");
+            let _ = methods.push("NOTIFY");
         }
 
         if services.config.features.enable_refer {
-            methods.push("REFER");
+            let _ = methods.push("REFER");
         }
 
         if services.config.features.enable_prack {
-            methods.push("PRACK");
+            let _ = methods.push("PRACK");
         }
 
         SmolStr::new(methods.join(", "))
@@ -62,15 +62,15 @@ impl OptionsHandler {
         let mut extensions = vec!["path"];
 
         if services.config.features.enable_prack {
-            extensions.push("100rel");
+            let _ = extensions.push("100rel");
         }
 
         if services.config.features.enable_session_timers {
-            extensions.push("timer");
+            let _ = extensions.push("timer");
         }
 
         if services.config.features.enable_refer {
-            extensions.push("replaces");
+            let _ = extensions.push("replaces");
         }
 
         SmolStr::new(extensions.join(", "))
@@ -110,21 +110,19 @@ impl RequestHandler for OptionsHandler {
 
         // Build response headers
         let mut headers = Headers::new();
-        headers.push("Via".into(), via);
-        headers.push("From".into(), from);
-        headers.push("To".into(), to);
-        headers.push("Call-ID".into(), call_id);
-        headers.push("CSeq".into(), cseq);
+        let _ = headers.push("Via", via);
+        let _ = headers.push("From", from);
+        let _ = headers.push("To", to);
+        let _ = headers.push("Call-ID", call_id);
+        let _ = headers.push("CSeq", cseq);
 
         // Add capability headers
-        headers.push("Allow".into(), Self::build_allow_header(services));
-        headers.push("Supported".into(), Self::build_supported_header(services));
-        headers.push(
-            "Accept".into(),
+        let _ = headers.push("Allow", Self::build_allow_header(services));
+        let _ = headers.push("Supported", Self::build_supported_header(services));
+        let _ = headers.push("Accept",
             SmolStr::new("application/sdp, application/sdp-answer"),
         );
-        headers.push(
-            "User-Agent".into(),
+        let _ = headers.push("User-Agent",
             SmolStr::new(services.config.user_agent.clone()),
         );
 

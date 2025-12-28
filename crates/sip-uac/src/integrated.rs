@@ -285,7 +285,7 @@ fn prepare_in_dialog_request(dialog: &mut Dialog, request: &mut Request) -> SipU
     // Increment local CSeq and overwrite header with the new value
     let cseq = dialog.next_local_cseq();
     request.headers.remove("CSeq");
-    request.headers.push(
+    request.headers.push_unchecked(
         SmolStr::new("CSeq"),
         SmolStr::new(format!("{} {}", cseq, request.start.method.as_str())),
     );
@@ -305,7 +305,7 @@ fn prepare_in_dialog_request(dialog: &mut Dialog, request: &mut Request) -> SipU
         for route in dialog.route_set.iter() {
             request
                 .headers
-                .push(SmolStr::new("Route"), SmolStr::new(format!("<{}>", route.as_str())));
+                .push_unchecked(SmolStr::new("Route"), SmolStr::new(format!("<{}>", route.as_str())));
         }
     } else {
         // Strict routing: first route becomes Request-URI, remote target appended to Route
@@ -313,9 +313,9 @@ fn prepare_in_dialog_request(dialog: &mut Dialog, request: &mut Request) -> SipU
         for route in dialog.route_set.iter().skip(1) {
             request
                 .headers
-                .push(SmolStr::new("Route"), SmolStr::new(format!("<{}>", route.as_str())));
+                .push_unchecked(SmolStr::new("Route"), SmolStr::new(format!("<{}>", route.as_str())));
         }
-        request.headers.push(
+        request.headers.push_unchecked(
             SmolStr::new("Route"),
             SmolStr::new(format!("<{}>", dialog.remote_target.as_str())),
         );
@@ -340,16 +340,16 @@ fn apply_route_set_to_request(dialog: &Dialog, request: &mut Request) {
         for route in dialog.route_set.iter() {
             request
                 .headers
-                .push(SmolStr::new("Route"), SmolStr::new(format!("<{}>", route.as_str())));
+                .push_unchecked(SmolStr::new("Route"), SmolStr::new(format!("<{}>", route.as_str())));
         }
     } else {
         request.start.uri = first_route.clone().into();
         for route in dialog.route_set.iter().skip(1) {
             request
                 .headers
-                .push(SmolStr::new("Route"), SmolStr::new(format!("<{}>", route.as_str())));
+                .push_unchecked(SmolStr::new("Route"), SmolStr::new(format!("<{}>", route.as_str())));
         }
-        request.headers.push(
+        request.headers.push_unchecked(
             SmolStr::new("Route"),
             SmolStr::new(format!("<{}>", dialog.remote_target.as_str())),
         );
@@ -807,24 +807,18 @@ impl IntegratedUAC {
             .or(self.public_addr)
             .unwrap_or(self.local_addr);
 
-        // Find and replace placeholder Via
-        for header in request.headers.iter_mut() {
-            if header.name.as_str() == "Via" {
-                // Extract branch parameter from placeholder
-                let branch = if let Some(b) = header.value.split("branch=").nth(1) {
-                    b.split(';').next().unwrap_or("z9hG4bK").to_string()
-                } else {
-                    crate::generate_branch()
-                };
+        if let Some(via_value) = request.headers.get("Via") {
+            // Extract branch parameter from placeholder
+            let branch = if let Some(b) = via_value.split("branch=").nth(1) {
+                b.split(';').next().unwrap_or("z9hG4bK").to_string()
+            } else {
+                crate::generate_branch()
+            };
 
-                // Replace with actual Via using selected transport
-                let via_transport = transport.map(|t| t.as_via_str()).unwrap_or("UDP");
-                header.value = SmolStr::new(format!(
-                    "SIP/2.0/{} {};branch={};rport",
-                    via_transport, via_addr, branch
-                ));
-                break;
-            }
+            // Replace with actual Via using selected transport
+            let via_transport = transport.map(|t| t.as_via_str()).unwrap_or("UDP");
+            let new_via = format!("SIP/2.0/{} {};branch={};rport", via_transport, via_addr, branch);
+            let _ = request.headers.set_or_push("Via", new_via);
         }
     }
 
@@ -846,70 +840,60 @@ impl IntegratedUAC {
             self.config.enable_outbound && request.start.method == Method::Register;
         let mut needs_supported = false;
 
-        for header in request.headers.iter_mut() {
-            if header.name.as_str() == "Contact" {
-                // Extract URI from Contact and update host/port
-                let contact_str = header.value.as_str();
+        if let Some(contact_str) = request.headers.get("Contact") {
+            // Extract URI from Contact and update host/port
+            if let Some(start) = contact_str.find("sip:") {
+                let after_sip = &contact_str[start + 4..];
+                let user_part = if let Some(at_pos) = after_sip.find('@') {
+                    &after_sip[..at_pos]
+                } else {
+                    ""
+                };
 
-                // Simple replacement - extract user part if present
-                if let Some(start) = contact_str.find("sip:") {
-                    let after_sip = &contact_str[start + 4..];
-                    let user_part = if let Some(at_pos) = after_sip.find('@') {
-                        &after_sip[..at_pos]
-                    } else {
-                        ""
-                    };
+                // Reconstruct Contact with actual address
+                let new_contact = if user_part.is_empty() {
+                    format!("<sip:{}>", contact_addr)
+                } else {
+                    format!("<sip:{}@{}>", user_part, contact_addr)
+                };
 
-                    // Reconstruct Contact with actual address
-                    let new_contact = if user_part.is_empty() {
-                        format!("<sip:{}>", contact_addr)
-                    } else {
-                        format!("<sip:{}@{}>", user_part, contact_addr)
-                    };
-
-                    let mut extra_params = String::new();
-                    if outbound_register {
-                        extra_params.push_str(";ob");
-                        extra_params.push_str(&format!(";reg-id={}", self.config.outbound_reg_id));
-                        if let Some(instance_id) = &self.config.instance_id {
-                            extra_params
-                                .push_str(&format!(";+sip.instance=\"{}\"", instance_id));
-                        }
-                        needs_supported = true;
+                let mut extra_params = String::new();
+                if outbound_register {
+                    extra_params.push_str(";ob");
+                    extra_params.push_str(&format!(";reg-id={}", self.config.outbound_reg_id));
+                    if let Some(instance_id) = &self.config.instance_id {
+                        extra_params
+                            .push_str(&format!(";+sip.instance=\"{}\"", instance_id));
                     }
-
-                    // Preserve parameters (like expires)
-                    if let Some(param_start) = contact_str.find(">;") {
-                        header.value = SmolStr::new(format!(
-                            "{}{}{}",
-                            new_contact,
-                            extra_params,
-                            &contact_str[param_start + 1..]
-                        ));
-                    } else {
-                        header.value = SmolStr::new(format!("{}{}", new_contact, extra_params));
-                    }
+                    needs_supported = true;
                 }
-                break;
+
+                // Preserve parameters (like expires)
+                let updated_contact = if let Some(param_start) = contact_str.find(">;") {
+                    format!(
+                        "{}{}{}",
+                        new_contact,
+                        extra_params,
+                        &contact_str[param_start + 1..]
+                    )
+                } else {
+                    format!("{}{}", new_contact, extra_params)
+                };
+                let _ = request.headers.set_or_push("Contact", updated_contact);
             }
         }
 
         if outbound_register && needs_supported {
-            let mut supported_found = false;
-            for header in request.headers.iter_mut() {
-                if header.name.eq_ignore_ascii_case("Supported") {
-                    supported_found = true;
-                    let value = header.value.to_ascii_lowercase();
-                    if !value.contains("outbound") {
-                        header.value = SmolStr::new(format!("{}, outbound", header.value));
-                    }
-                    break;
+            if let Some(current) = request.headers.get("Supported") {
+                let value = current.to_ascii_lowercase();
+                if !value.contains("outbound") {
+                    let updated = format!("{}, outbound", current);
+                    let _ = request.headers.set_or_push("Supported", updated);
                 }
-            }
-            if !supported_found {
+            } else {
                 request
                     .headers
-                    .push(SmolStr::new("Supported"), SmolStr::new("outbound"));
+                    .push_unchecked(SmolStr::new("Supported"), SmolStr::new("outbound"));
             }
         }
     }
@@ -1272,7 +1256,7 @@ impl IntegratedUAC {
         let helper = self.helper.lock().await;
         let placeholder_dialog = Dialog {
             id: sip_dialog::DialogId {
-                call_id: request.headers.get("Call-ID").unwrap().clone(),
+                call_id: request.headers.get_smol("Call-ID").unwrap().clone(),
                 local_tag: helper.local_tag.clone(),
                 remote_tag: SmolStr::new("pending"),
             },
@@ -1826,12 +1810,12 @@ mod tests {
         assert_eq!(target, dialog.route_set[0]);
         assert_eq!(request.start.uri, dialog.remote_target.clone().into());
         assert_eq!(
-            request.headers.get("Route").map(|v| v.as_str()),
+            request.headers.get("Route"),
             Some("<sip:proxy.example.com;lr>")
         );
         assert_eq!(dialog.local_cseq, 2);
         assert_eq!(
-            request.headers.get("CSeq").map(|v| v.as_str()),
+            request.headers.get("CSeq"),
             Some("2 INFO")
         );
     }
@@ -1851,7 +1835,7 @@ mod tests {
         );
 
         let target = prepare_in_dialog_request(&mut dialog, &mut request);
-        let routes: Vec<&SmolStr> = request.headers.get_all("Route").collect();
+        let routes: Vec<&SmolStr> = request.headers.get_all_smol("Route").collect();
 
         assert_eq!(target, dialog.route_set[0]);
         assert_eq!(request.start.uri, dialog.route_set[0].clone().into());
@@ -1865,7 +1849,7 @@ mod tests {
         let mut dialog = base_dialog();
         let manager = DialogManager::new();
         let mut headers = Headers::new();
-        headers.push(
+        headers.push_unchecked(
             SmolStr::new("Contact"),
             SmolStr::new("<sip:new-remote@example.com>"),
         );
@@ -1938,26 +1922,26 @@ impl CallHandle {
 
         // Copy essential headers from INVITE
         for header in self.invite_request.headers.iter() {
-            match header.name.as_str() {
+            match header.name() {
                 "Via" => {
                     // Generate new branch for CANCEL
                     let new_branch = crate::generate_branch();
-                    cancel_headers.push(
+                    cancel_headers.push_unchecked(
                         SmolStr::new("Via"),
                         SmolStr::new(crate::replace_via_branch(
-                            header.value.as_str(),
+                            header.value(),
                             &new_branch,
                         )),
                     );
                 }
                 "From" | "To" | "Call-ID" => {
                     // Copy unchanged
-                    cancel_headers.push(header.name.clone(), header.value.clone());
+                    cancel_headers.push_unchecked(header.name_smol().clone(), header.value_smol().clone());
                 }
                 "CSeq" => {
                     // Same number, but CANCEL method
-                    if let Some((num, _)) = header.value.split_once(' ') {
-                        cancel_headers.push(
+                    if let Some((num, _)) = header.value().split_once(' ') {
+                        cancel_headers.push_unchecked(
                             SmolStr::new("CSeq"),
                             SmolStr::new(format!("{} CANCEL", num)),
                         );
@@ -1965,7 +1949,7 @@ impl CallHandle {
                 }
                 "Route" => {
                     // Copy Route headers
-                    cancel_headers.push(header.name.clone(), header.value.clone());
+                    cancel_headers.push_unchecked(header.name_smol().clone(), header.value_smol().clone());
                 }
                 _ => {
                     // Skip other headers
@@ -1974,10 +1958,10 @@ impl CallHandle {
         }
 
         // Add Max-Forwards
-        cancel_headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
+        cancel_headers.push_unchecked(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
 
         // Add Content-Length
-        cancel_headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
+        cancel_headers.push_unchecked(SmolStr::new("Content-Length"), SmolStr::new("0"));
 
         // Create CANCEL request
         let cancel_request = Request::new(
@@ -2116,7 +2100,7 @@ impl ClientTransactionUser for InviteTransactionUser {
             .request
             .headers
             .get("Via")
-            .map(|via| via.as_str().to_string());
+            .map(|via| via.to_string());
 
         let helper = self.helper.lock().await;
         let dialog = if is_2xx {
@@ -2214,8 +2198,8 @@ impl ClientTransactionUser for InviteTransactionUser {
             }
         } else {
             ack.headers.remove("Route");
-            for route in self.request.headers.get_all("Route") {
-                ack.headers.push(SmolStr::new("Route"), route.clone());
+            for route in self.request.headers.get_all_smol("Route") {
+                ack.headers.push_unchecked(SmolStr::new("Route"), route.clone());
             }
         }
 
@@ -2227,7 +2211,7 @@ impl ClientTransactionUser for InviteTransactionUser {
             }
         } else if let Some(via) = ack.headers.get("Via") {
             if is_2xx {
-                crate::replace_via_branch(via.as_str(), &crate::generate_branch())
+                crate::replace_via_branch(via, &crate::generate_branch())
             } else {
                 via.to_string()
             }
@@ -2250,7 +2234,7 @@ impl ClientTransactionUser for InviteTransactionUser {
         };
 
         ack.headers.remove("Via");
-        ack.headers.push(SmolStr::new("Via"), SmolStr::new(via_value));
+        ack.headers.push_unchecked(SmolStr::new("Via"), SmolStr::new(via_value));
 
         // Serialize ACK
         let ack_bytes = serialize_request(&ack);

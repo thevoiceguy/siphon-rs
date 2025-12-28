@@ -10,7 +10,7 @@ pub fn extract_realm(response: &Response) -> Option<String> {
         .headers
         .get("WWW-Authenticate")
         .or_else(|| response.headers.get("Proxy-Authenticate"))?;
-    let header = header_val.as_str().trim();
+    let header = header_val.trim();
     let header_lower = header.to_ascii_lowercase();
     let digest_pos = header_lower.find("digest")?;
     let params = header[digest_pos + "Digest".len()..].trim_start();

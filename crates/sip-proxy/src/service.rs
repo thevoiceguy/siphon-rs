@@ -65,7 +65,7 @@ impl ProxyService {
     )> {
         let call_id = original
             .headers
-            .get("Call-ID")
+            .get_smol("Call-ID")
             .cloned()
             .ok_or_else(|| anyhow!("Missing Call-ID header"))?;
         let client_branch = extract_top_via_branch(&original)?;
@@ -166,14 +166,11 @@ fn build_cancel_template(original: &Request, proxy_host: &str, transport: &str) 
     ProxyHelpers::add_via(&mut cancel, proxy_host, transport);
 
     // Update CSeq to CANCEL with same sequence number
-    if let Some(cseq_val) = cancel.headers.get("CSeq").cloned() {
+    if let Some(cseq_val) = cancel.headers.get("CSeq") {
         if let Some((num, _)) = cseq_val.split_once(' ') {
-            for header in cancel.headers.iter_mut() {
-                if header.name.as_str().eq_ignore_ascii_case("CSeq") {
-                    header.value = format!("{} CANCEL", num).into();
-                    break;
-                }
-            }
+            let _ = cancel
+                .headers
+                .set_or_push("CSeq", format!("{} CANCEL", num));
         }
     }
 
@@ -184,10 +181,10 @@ fn extract_top_via_branch(request: &Request) -> Result<SmolStr> {
     let via = request
         .headers
         .iter()
-        .find(|h| h.name.as_str().eq_ignore_ascii_case("Via"))
+        .find(|h| h.name().eq_ignore_ascii_case("Via"))
         .ok_or_else(|| anyhow!("Missing Via header"))?;
 
-    for part in via.value.split(';') {
+    for part in via.value().split(';') {
         let trimmed = part.trim();
         if trimmed.len() >= 7 && trimmed[..7].eq_ignore_ascii_case("branch=") {
             let branch = &trimmed[7..];

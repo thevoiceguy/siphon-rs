@@ -213,8 +213,8 @@ fn multiple_distinct_requests() {
 
     assert_ne!(parsed1.start.uri.as_str(), parsed2.start.uri.as_str());
     assert_ne!(
-        parsed1.headers.get("Via").unwrap().as_str(),
-        parsed2.headers.get("Via").unwrap().as_str()
+        parsed1.headers.get("Via").unwrap(),
+        parsed2.headers.get("Via").unwrap()
     );
 }
 
@@ -259,10 +259,10 @@ fn provisional_with_rseq_has_headers() {
     let parsed = parse_response(&bytes).expect("resp parse");
     assert_eq!(parsed.start.code, 183);
     assert_eq!(
-        parsed.headers.get("Require").unwrap().as_str().to_ascii_lowercase(),
+        parsed.headers.get("Require").unwrap().to_ascii_lowercase(),
         "100rel"
     );
-    assert_eq!(parsed.headers.get("RSeq").unwrap().as_str(), "10");
+    assert_eq!(parsed.headers.get("RSeq").unwrap(), "10");
 }
 
 /// REFER with NOTIFY scenario helper.

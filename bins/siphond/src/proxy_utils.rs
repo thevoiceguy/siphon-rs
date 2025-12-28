@@ -32,17 +32,17 @@ fn remove_top_route(headers: &mut Headers) {
     let mut new_headers = Headers::new();
     let mut removed = false;
     for header in headers.iter() {
-        if !removed && header.name.as_str().eq_ignore_ascii_case("Route") {
-            let value = header.value.as_str();
+        if !removed && header.name().eq_ignore_ascii_case("Route") {
+            let value = header.value();
             let rest = value.split(',').skip(1).collect::<Vec<_>>().join(",");
             let rest_trimmed = rest.trim();
             if !rest_trimmed.is_empty() {
-                new_headers.push(header.name.clone(), rest_trimmed.into());
+                let _ = new_headers.push(header.name(), rest_trimmed);
             }
             removed = true;
             continue;
         }
-        new_headers.push(header.name.clone(), header.value.clone());
+        let _ = new_headers.push(header.name(), header.value());
     }
     *headers = new_headers;
 }

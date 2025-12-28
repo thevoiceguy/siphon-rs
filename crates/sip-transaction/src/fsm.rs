@@ -95,7 +95,7 @@
 //! #     Request::new(line, Headers::new(), Bytes::new())
 //! # }
 //! # fn create_200_ok() -> Response {
-//! #     Response::new(StatusLine::new(200, "OK".into()), Headers::new(), Bytes::new())
+//! #     Response::new(StatusLine::new(200, "OK"), Headers::new(), Bytes::new())
 //! # }
 //! // Create FSM with UDP timers (full retransmissions)
 //! let timers = TransportAwareTimers::new(Transport::Udp);
@@ -415,12 +415,12 @@ fn response_requires_prack(response: &Response) -> bool {
     let has_require = response.headers.get("Require").is_some();
     let has_require_100rel = response
         .headers
-        .get_all("Require")
+        .get_all_smol("Require")
         .flat_map(|value| value.split(','))
         .any(|token| token.trim().eq_ignore_ascii_case("100rel"));
     let has_supported_100rel = response
         .headers
-        .get_all("Supported")
+        .get_all_smol("Supported")
         .flat_map(|value| value.split(','))
         .any(|token| token.trim().eq_ignore_ascii_case("100rel"));
     has_require_100rel || has_supported_100rel || !has_require

@@ -22,22 +22,22 @@ use smol_str::SmolStr;
 /// Constructs a minimal OPTIONS request for the provided URI string.
 pub fn build_options(uri: &str) -> Request {
     let mut headers = Headers::new();
-    headers.push(
+    headers.push_unchecked(
         SmolStr::new("Via"),
         SmolStr::new("SIP/2.0/UDP client.example.com:5060;branch=z9hG4bKtest"),
     );
-    headers.push(
+    headers.push_unchecked(
         SmolStr::new("From"),
         SmolStr::new("<sip:alice@example.com>;tag=1234"),
     );
-    headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"));
-    headers.push(
+    headers.push_unchecked(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"));
+    headers.push_unchecked(
         SmolStr::new("Call-ID"),
         SmolStr::new("test-callid@example.com"),
     );
-    headers.push(SmolStr::new("CSeq"), SmolStr::new("1 OPTIONS"));
-    headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
-    headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
+    headers.push_unchecked(SmolStr::new("CSeq"), SmolStr::new("1 OPTIONS"));
+    headers.push_unchecked(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
+    headers.push_unchecked(SmolStr::new("Content-Length"), SmolStr::new("0"));
 
     Request::new(
         RequestLine::new(Method::Options, SipUri::parse(uri).unwrap()),
@@ -49,26 +49,26 @@ pub fn build_options(uri: &str) -> Request {
 /// Constructs a minimal INVITE request for the provided URI string.
 pub fn build_invite(uri: &str, branch: &str, call_id: &str) -> Request {
     let mut headers = Headers::new();
-    headers.push(
+    headers.push_unchecked(
         SmolStr::new("Via"),
         SmolStr::new(format!(
             "SIP/2.0/UDP client.example.com:5060;branch={}",
             branch
         )),
     );
-    headers.push(
+    headers.push_unchecked(
         SmolStr::new("From"),
         SmolStr::new("<sip:alice@example.com>;tag=1234"),
     );
-    headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"));
-    headers.push(SmolStr::new("Call-ID"), SmolStr::new(call_id));
-    headers.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"));
-    headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
-    headers.push(
+    headers.push_unchecked(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"));
+    headers.push_unchecked(SmolStr::new("Call-ID"), SmolStr::new(call_id));
+    headers.push_unchecked(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"));
+    headers.push_unchecked(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
+    headers.push_unchecked(
         SmolStr::new("Contact"),
         SmolStr::new("<sip:alice@client.example.com:5060>"),
     );
-    headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
+    headers.push_unchecked(SmolStr::new("Content-Length"), SmolStr::new("0"));
 
     Request::new(
         RequestLine::new(Method::Invite, SipUri::parse(uri).unwrap()),
@@ -80,24 +80,24 @@ pub fn build_invite(uri: &str, branch: &str, call_id: &str) -> Request {
 /// Constructs a PRACK request for the provided URI and RAck header value.
 pub fn build_prack(uri: &str, rack: &str, call_id: &str, cseq: u32) -> Request {
     let mut headers = Headers::new();
-    headers.push(
+    headers.push_unchecked(
         SmolStr::new("Via"),
         SmolStr::new("SIP/2.0/UDP client.example.com:5060;branch=z9hG4bKprack"),
     );
-    headers.push(
+    headers.push_unchecked(
         SmolStr::new("From"),
         SmolStr::new("<sip:alice@example.com>;tag=1234"),
     );
-    headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"));
-    headers.push(SmolStr::new("Call-ID"), SmolStr::new(call_id));
-    headers.push(SmolStr::new("CSeq"), SmolStr::new(format!("{} PRACK", cseq)));
-    headers.push(SmolStr::new("RAck"), SmolStr::new(rack));
-    headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
-    headers.push(
+    headers.push_unchecked(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"));
+    headers.push_unchecked(SmolStr::new("Call-ID"), SmolStr::new(call_id));
+    headers.push_unchecked(SmolStr::new("CSeq"), SmolStr::new(format!("{} PRACK", cseq)));
+    headers.push_unchecked(SmolStr::new("RAck"), SmolStr::new(rack));
+    headers.push_unchecked(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
+    headers.push_unchecked(
         SmolStr::new("Contact"),
         SmolStr::new("<sip:alice@client.example.com:5060>"),
     );
-    headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
+    headers.push_unchecked(SmolStr::new("Content-Length"), SmolStr::new("0"));
 
     Request::new(
         RequestLine::new(Method::Prack, SipUri::parse(uri).unwrap()),
@@ -109,24 +109,24 @@ pub fn build_prack(uri: &str, rack: &str, call_id: &str, cseq: u32) -> Request {
 /// Constructs a REFER request for transfer scenarios.
 pub fn build_refer(uri: &str, refer_to: &str, call_id: &str, cseq: u32) -> Request {
     let mut headers = Headers::new();
-    headers.push(
+    headers.push_unchecked(
         SmolStr::new("Via"),
         SmolStr::new("SIP/2.0/UDP client.example.com:5060;branch=z9hG4bKrefer"),
     );
-    headers.push(
+    headers.push_unchecked(
         SmolStr::new("From"),
         SmolStr::new("<sip:alice@example.com>;tag=1234"),
     );
-    headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"));
-    headers.push(SmolStr::new("Call-ID"), SmolStr::new(call_id));
-    headers.push(SmolStr::new("CSeq"), SmolStr::new(format!("{} REFER", cseq)));
-    headers.push(
+    headers.push_unchecked(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"));
+    headers.push_unchecked(SmolStr::new("Call-ID"), SmolStr::new(call_id));
+    headers.push_unchecked(SmolStr::new("CSeq"), SmolStr::new(format!("{} REFER", cseq)));
+    headers.push_unchecked(
         SmolStr::new("Contact"),
         SmolStr::new("<sip:alice@client.example.com:5060>"),
     );
-    headers.push(SmolStr::new("Refer-To"), SmolStr::new(refer_to));
-    headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
-    headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
+    headers.push_unchecked(SmolStr::new("Refer-To"), SmolStr::new(refer_to));
+    headers.push_unchecked(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
+    headers.push_unchecked(SmolStr::new("Content-Length"), SmolStr::new("0"));
 
     Request::new(
         RequestLine::new(Method::Refer, SipUri::parse(uri).unwrap()),
@@ -138,33 +138,33 @@ pub fn build_refer(uri: &str, refer_to: &str, call_id: &str, cseq: u32) -> Reque
 /// Builds a reliable provisional response carrying RSeq for PRACK scenarios.
 pub fn build_provisional_with_rseq(code: u16, reason: &str, rack_cseq: u32) -> Response {
     let mut resp = build_response(code, reason);
-    resp.headers.push(SmolStr::new("Require"), SmolStr::new("100rel"));
+    resp.headers.push_unchecked(SmolStr::new("Require"), SmolStr::new("100rel"));
     resp.headers
-        .push(SmolStr::new("RSeq"), SmolStr::new(rack_cseq.to_string()));
+        .push_unchecked(SmolStr::new("RSeq"), SmolStr::new(rack_cseq.to_string()));
     resp
 }
 
 /// Constructs a minimal REGISTER request.
 pub fn build_register(uri: &str, contact: &str) -> Request {
     let mut headers = Headers::new();
-    headers.push(
+    headers.push_unchecked(
         SmolStr::new("Via"),
         SmolStr::new("SIP/2.0/UDP client.example.com:5060;branch=z9hG4bKreg123"),
     );
-    headers.push(
+    headers.push_unchecked(
         SmolStr::new("From"),
         SmolStr::new("<sip:alice@example.com>;tag=reg1"),
     );
-    headers.push(SmolStr::new("To"), SmolStr::new("<sip:alice@example.com>"));
-    headers.push(
+    headers.push_unchecked(SmolStr::new("To"), SmolStr::new("<sip:alice@example.com>"));
+    headers.push_unchecked(
         SmolStr::new("Call-ID"),
         SmolStr::new("register-callid@example.com"),
     );
-    headers.push(SmolStr::new("CSeq"), SmolStr::new("1 REGISTER"));
-    headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
-    headers.push(SmolStr::new("Contact"), SmolStr::new(contact));
-    headers.push(SmolStr::new("Expires"), SmolStr::new("3600"));
-    headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
+    headers.push_unchecked(SmolStr::new("CSeq"), SmolStr::new("1 REGISTER"));
+    headers.push_unchecked(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
+    headers.push_unchecked(SmolStr::new("Contact"), SmolStr::new(contact));
+    headers.push_unchecked(SmolStr::new("Expires"), SmolStr::new("3600"));
+    headers.push_unchecked(SmolStr::new("Content-Length"), SmolStr::new("0"));
 
     Request::new(
         RequestLine::new(Method::Register, SipUri::parse(uri).unwrap()),
@@ -176,21 +176,21 @@ pub fn build_register(uri: &str, contact: &str) -> Request {
 /// Constructs a minimal response with the given status code.
 pub fn build_response(code: u16, reason: &str) -> Response {
     let mut headers = Headers::new();
-    headers.push(
+    headers.push_unchecked(
         SmolStr::new("Via"),
         SmolStr::new("SIP/2.0/UDP server.example.com:5060;branch=z9hG4bKtest"),
     );
-    headers.push(
+    headers.push_unchecked(
         SmolStr::new("From"),
         SmolStr::new("<sip:alice@example.com>;tag=1234"),
     );
-    headers.push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"));
-    headers.push(
+    headers.push_unchecked(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"));
+    headers.push_unchecked(
         SmolStr::new("Call-ID"),
         SmolStr::new("test-callid@example.com"),
     );
-    headers.push(SmolStr::new("CSeq"), SmolStr::new("1 OPTIONS"));
-    headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
+    headers.push_unchecked(SmolStr::new("CSeq"), SmolStr::new("1 OPTIONS"));
+    headers.push_unchecked(SmolStr::new("Content-Length"), SmolStr::new("0"));
 
     Response::new(
         StatusLine::new(code, SmolStr::new(reason)),
@@ -230,35 +230,35 @@ pub fn build_notify_for_refer(
 ) -> Request {
     let refer_uri = refer_to.trim_matches('<').trim_matches('>');
     let mut headers = Headers::new();
-    headers.push(
+    headers.push_unchecked(
         SmolStr::new("Via"),
         SmolStr::new("SIP/2.0/UDP notifier.example.com:5060;branch=z9hG4bKnotify"),
     );
-    headers.push(
+    headers.push_unchecked(
         SmolStr::new("From"),
         SmolStr::new("<sip:notifier@example.com>;tag=refnot"),
     );
-    headers.push(
+    headers.push_unchecked(
         SmolStr::new("To"),
         SmolStr::new(format!("<{}>;tag=subscriber", refer_to)),
     );
-    headers.push(
+    headers.push_unchecked(
         SmolStr::new("Call-ID"),
         SmolStr::new(refer_sub_call_id),
     );
-    headers.push(SmolStr::new("CSeq"), SmolStr::new("1 NOTIFY"));
-    headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
-    headers.push(
+    headers.push_unchecked(SmolStr::new("CSeq"), SmolStr::new("1 NOTIFY"));
+    headers.push_unchecked(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
+    headers.push_unchecked(
         SmolStr::new("Contact"),
         SmolStr::new("<sip:notifier@notifier.example.com:5060>"),
     );
-    headers.push(SmolStr::new("Event"), SmolStr::new("refer"));
-    headers.push(
+    headers.push_unchecked(SmolStr::new("Event"), SmolStr::new("refer"));
+    headers.push_unchecked(
         SmolStr::new("Subscription-State"),
         SmolStr::new(format!("{};expires=300", notify_state)),
     );
-    headers.push(SmolStr::new("Content-Type"), SmolStr::new("message/sipfrag"));
-    headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
+    headers.push_unchecked(SmolStr::new("Content-Type"), SmolStr::new("message/sipfrag"));
+    headers.push_unchecked(SmolStr::new("Content-Length"), SmolStr::new("0"));
 
     Request::new(
         RequestLine::new(Method::Notify, SipUri::parse(refer_uri).unwrap()),
@@ -282,13 +282,13 @@ pub fn scenario_refer_with_notify(
 pub fn scenario_register_with_auth(uri: &str, contact: &str, realm: &str) -> (Request, Response, Request) {
     let first = build_register(uri, contact);
     let mut challenge = build_response(401, "Unauthorized");
-    challenge.headers.push(
+    challenge.headers.push_unchecked(
         SmolStr::new("WWW-Authenticate"),
         SmolStr::new(format!("Digest realm=\"{}\", nonce=\"abc123\"", realm)),
     );
 
     let mut retry = build_register(uri, contact);
-    retry.headers.push(
+    retry.headers.push_unchecked(
         SmolStr::new("Authorization"),
         SmolStr::new("Digest username=\"alice\", realm=\"example.com\", nonce=\"abc123\", uri=\"sip:registrar.example.com\", response=\"deadbeef\""),
     );

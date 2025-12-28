@@ -75,29 +75,29 @@ fn main() {
     use smol_str::SmolStr;
 
     let mut ringing_headers = Headers::new();
-    ringing_headers.push(
+    ringing_headers.push_unchecked(
         SmolStr::new("Via"),
         SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
     );
-    ringing_headers.push(
+    ringing_headers.push_unchecked(
         SmolStr::new("From"),
         invite_request.headers.get("From").unwrap().clone(),
     );
-    ringing_headers.push(
+    ringing_headers.push_unchecked(
         SmolStr::new("To"),
         SmolStr::new("<sip:bob@example.com>;tag=bob-tag-123"),
     );
-    ringing_headers.push(
+    ringing_headers.push_unchecked(
         SmolStr::new("Call-ID"),
         invite_request.headers.get("Call-ID").unwrap().clone(),
     );
-    ringing_headers.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"));
-    ringing_headers.push(SmolStr::new("RSeq"), SmolStr::new("1"));
-    ringing_headers.push(
+    ringing_headers.push_unchecked(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"));
+    ringing_headers.push_unchecked(SmolStr::new("RSeq"), SmolStr::new("1"));
+    ringing_headers.push_unchecked(
         SmolStr::new("Contact"),
         SmolStr::new("<sip:bob@192.168.1.200:5060>"),
     );
-    ringing_headers.push(SmolStr::new("Require"), SmolStr::new("100rel"));
+    ringing_headers.push_unchecked(SmolStr::new("Require"), SmolStr::new("100rel"));
 
     let ringing_response = Response::new(
         StatusLine::new(180, SmolStr::new("Ringing")),

@@ -33,13 +33,13 @@ impl CancelHandler {
         let mut headers = Headers::new();
 
         // Copy essential headers from INVITE (including To-tag if known)
-        headers.push("Via".into(), pending.via.clone());
-        headers.push("From".into(), pending.from.clone());
-        headers.push("To".into(), pending.to.clone());
-        headers.push("Call-ID".into(), pending.call_id.clone());
-        headers.push("CSeq".into(), pending.cseq.clone());
+        let _ = headers.push("Via", pending.via.clone());
+        let _ = headers.push("From", pending.from.clone());
+        let _ = headers.push("To", pending.to.clone());
+        let _ = headers.push("Call-ID", pending.call_id.clone());
+        let _ = headers.push("CSeq", pending.cseq.clone());
 
-        headers.push("Content-Length".into(), "0".into());
+        let _ = headers.push("Content-Length", "0");
 
         Response::new(
             StatusLine::new(487, "Request Terminated".into()),
@@ -56,22 +56,22 @@ impl CancelHandler {
 
         // Copy essential headers from INVITE
         if let Some(via) = header(&invite_request.headers, "Via") {
-            headers.push("Via".into(), via.clone());
+            let _ = headers.push("Via", via.clone());
         }
         if let Some(from) = header(&invite_request.headers, "From") {
-            headers.push("From".into(), from.clone());
+            let _ = headers.push("From", from.clone());
         }
         if let Some(to) = header(&invite_request.headers, "To") {
-            headers.push("To".into(), to.clone());
+            let _ = headers.push("To", to.clone());
         }
         if let Some(call_id) = header(&invite_request.headers, "Call-ID") {
-            headers.push("Call-ID".into(), call_id.clone());
+            let _ = headers.push("Call-ID", call_id.clone());
         }
         if let Some(cseq) = header(&invite_request.headers, "CSeq") {
-            headers.push("CSeq".into(), cseq.clone());
+            let _ = headers.push("CSeq", cseq.clone());
         }
 
-        headers.push("Content-Length".into(), "0".into());
+        let _ = headers.push("Content-Length", "0");
 
         Response::new(
             StatusLine::new(487, "Request Terminated".into()),
@@ -116,11 +116,11 @@ impl CancelHandler {
                 // Remove old CSeq and add new one
                 let mut new_headers = sip_core::Headers::new();
                 for h in cancel_req.headers.iter() {
-                    if !h.name.as_str().eq_ignore_ascii_case("CSeq") {
-                        new_headers.push(h.name.clone(), h.value.clone());
+                    if !h.name().eq_ignore_ascii_case("CSeq") {
+                        let _ = new_headers.push(h.name(), h.value());
                     }
                 }
-                new_headers.push("CSeq".into(), new_cseq.into());
+                let _ = new_headers.push("CSeq", new_cseq);
                 cancel_req.headers = new_headers;
             }
         }
@@ -131,11 +131,11 @@ impl CancelHandler {
         // Update Content-Length
         let mut new_headers = sip_core::Headers::new();
         for h in cancel_req.headers.iter() {
-            if !h.name.as_str().eq_ignore_ascii_case("Content-Length") {
-                new_headers.push(h.name.clone(), h.value.clone());
+            if !h.name().eq_ignore_ascii_case("Content-Length") {
+                let _ = new_headers.push(h.name(), h.value());
             }
         }
-        new_headers.push("Content-Length".into(), "0".into());
+        let _ = new_headers.push("Content-Length", "0");
         cancel_req.headers = new_headers;
 
         // Send CANCEL via TCP to callee

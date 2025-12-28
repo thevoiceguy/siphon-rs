@@ -72,7 +72,7 @@ fn method_not_allowed_response(request: &Request) -> Response {
     let mut response = UserAgentServer::create_response(request, 405, "Method Not Allowed");
     response
         .headers
-        .push(SmolStr::new("Allow"), SmolStr::new(ALLOW_HEADER_VALUE));
+        .push_unchecked(SmolStr::new("Allow"), SmolStr::new(ALLOW_HEADER_VALUE));
     response
 }
 
@@ -492,12 +492,12 @@ impl IntegratedUAS {
 
             response
                 .headers
-                .push(SmolStr::new("Contact"), SmolStr::new(&contact_value));
+                .push_unchecked(SmolStr::new("Contact"), SmolStr::new(&contact_value));
         }
 
         // Add User-Agent if not present
         if response.headers.get("User-Agent").is_none() {
-            response.headers.push(
+            response.headers.push_unchecked(
                 SmolStr::new("User-Agent"),
                 SmolStr::new(&self.config.user_agent),
             );

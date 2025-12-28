@@ -57,22 +57,22 @@ fn location_service_lookup(username: &str) -> Vec<ProxyTarget> {
 
 fn make_invite(target_user: &str) -> Request {
     let mut headers = Headers::new();
-    headers.push("Call-ID".into(), "call-12345".into());
-    headers.push("CSeq".into(), "1 INVITE".into());
-    headers.push(
-        "From".into(),
-        "<sip:alice@example.com>;tag=alice-tag".into(),
+    headers.push_unchecked("Call-ID", "call-12345");
+    headers.push_unchecked("CSeq", "1 INVITE");
+    headers.push_unchecked(
+        "From",
+        "<sip:alice@example.com>;tag=alice-tag",
     );
-    headers.push(
-        "To".into(),
+    headers.push_unchecked(
+        "To",
         format!("<sip:{}@example.com>", target_user).into(),
     );
-    headers.push(
-        "Via".into(),
-        "SIP/2.0/UDP alice-client:5060;branch=z9hG4bKclient123".into(),
+    headers.push_unchecked(
+        "Via",
+        "SIP/2.0/UDP alice-client:5060;branch=z9hG4bKclient123",
     );
-    headers.push("Max-Forwards".into(), "70".into());
-    headers.push("Contact".into(), "<sip:alice@192.168.1.50:5060>".into());
+    headers.push_unchecked("Max-Forwards", "70");
+    headers.push_unchecked("Contact", "<sip:alice@192.168.1.50:5060>");
 
     // SDP offer
     let sdp = "v=0\r\no=alice 100 0 IN IP4 192.168.1.50\r\ns=Call\r\nc=IN IP4 192.168.1.50\r\nt=0 0\r\nm=audio 8000 RTP/AVP 0 8\r\n";
@@ -85,36 +85,36 @@ fn make_invite(target_user: &str) -> Request {
         Bytes::from(sdp),
     );
     req.headers
-        .push("Content-Type".into(), "application/sdp".into());
+        .push("Content-Type", "application/sdp");
     req.headers
-        .push("Content-Length".into(), sdp.len().to_string().into());
+        .push("Content-Length", sdp.len().to_string().into());
 
     req
 }
 
 fn make_response(code: u16, to_tag: &str) -> Response {
     let mut headers = Headers::new();
-    headers.push("Call-ID".into(), "call-12345".into());
-    headers.push("CSeq".into(), "1 INVITE".into());
-    headers.push(
-        "From".into(),
-        "<sip:alice@example.com>;tag=alice-tag".into(),
+    headers.push_unchecked("Call-ID", "call-12345");
+    headers.push_unchecked("CSeq", "1 INVITE");
+    headers.push_unchecked(
+        "From",
+        "<sip:alice@example.com>;tag=alice-tag",
     );
-    headers.push(
-        "To".into(),
+    headers.push_unchecked(
+        "To",
         format!("<sip:bob@example.com>;tag={}", to_tag).into(),
     );
-    headers.push(
-        "Via".into(),
-        "SIP/2.0/UDP proxy:5060;branch=z9hG4bKproxy456".into(),
+    headers.push_unchecked(
+        "Via",
+        "SIP/2.0/UDP proxy:5060;branch=z9hG4bKproxy456",
     );
-    headers.push(
-        "Via".into(),
-        "SIP/2.0/UDP alice-client:5060;branch=z9hG4bKclient123".into(),
+    headers.push_unchecked(
+        "Via",
+        "SIP/2.0/UDP alice-client:5060;branch=z9hG4bKclient123",
     );
-    headers.push("Contact".into(), "<sip:bob@192.168.1.100:5060>".into());
+    headers.push_unchecked("Contact", "<sip:bob@192.168.1.100:5060>");
 
-    Response::new(StatusLine::new(code, "OK".into()), headers, Bytes::new())
+    Response::new(StatusLine::new(code, "OK"), headers, Bytes::new())
 }
 
 #[tokio::main]
@@ -158,10 +158,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Step 3: Creating proxy context (Parallel fork mode)");
     let (context, mut response_rx) = proxy.start_context(
         invite.clone(),
-        "call-12345".into(),
-        "z9hG4bKclient123".into(),
-        "proxy.example.com".into(),
-        "UDP".into(),
+        "call-12345",
+        "z9hG4bKclient123",
+        "proxy.example.com",
+        "UDP",
         ForkMode::Parallel,
     );
     println!(
@@ -364,10 +364,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut routed_req = make_invite("bob");
     routed_req
         .headers
-        .push("Route".into(), "<sip:proxy1.example.com;lr>".into());
+        .push("Route", "<sip:proxy1.example.com;lr>");
     routed_req
         .headers
-        .push("Route".into(), "<sip:proxy2.example.com;lr>".into());
+        .push("Route", "<sip:proxy2.example.com;lr>");
 
     println!("  Request-URI: sip:bob@example.com");
     println!("  Route: <sip:proxy1.example.com;lr>");

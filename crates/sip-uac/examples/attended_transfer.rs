@@ -54,9 +54,9 @@ fn main() {
     // Mock Call A dialog from Bob's perspective
     let dialog_a = Dialog {
         id: DialogId {
-            call_id: "call-alice-bob-123".into(),
-            local_tag: "bob-tag-222".into(),
-            remote_tag: "alice-tag-111".into(),
+            call_id: "call-alice-bob-123",
+            local_tag: "bob-tag-222",
+            remote_tag: "alice-tag-111",
         },
         state: DialogStateType::Confirmed,
         local_uri: bob_uri.clone(),
@@ -95,9 +95,9 @@ fn main() {
     // Mock Call B dialog from Bob's perspective
     let dialog_b = Dialog {
         id: DialogId {
-            call_id: "call-bob-charlie-456".into(),
-            local_tag: "bob-tag-333".into(),
-            remote_tag: "charlie-tag-444".into(),
+            call_id: "call-bob-charlie-456",
+            local_tag: "bob-tag-333",
+            remote_tag: "charlie-tag-444",
         },
         state: DialogStateType::Confirmed,
         local_uri: bob_uri.clone(),
@@ -178,10 +178,10 @@ fn main() {
     // Mock subscription from REFER
     let subscription = Subscription {
         id: SubscriptionId {
-            call_id: "call-alice-bob-123".into(),
-            from_tag: "bob-tag-222".into(),
-            to_tag: "alice-tag-111".into(),
-            event: "refer".into(),
+            call_id: "call-alice-bob-123",
+            from_tag: "bob-tag-222",
+            to_tag: "alice-tag-111",
+            event: "refer",
         },
         state: SubscriptionState::Active,
         local_uri: alice_uri.clone(),

@@ -121,7 +121,9 @@ impl SipFrag {
 
     /// Adds a header field to the fragment.
     pub fn with_header(mut self, name: impl Into<SmolStr>, value: impl Into<SmolStr>) -> Self {
-        self.headers.push(name.into(), value.into());
+        let name_str = name.into();
+        let value_str = value.into();
+        self.headers.push_unchecked(name_str.as_str(), value_str.as_str());
         self
     }
 
@@ -192,7 +194,7 @@ impl fmt::Display for SipFrag {
 
         // Headers
         for header in self.headers.iter() {
-            write!(f, "{}: {}\r\n", header.name, header.value)?;
+            write!(f, "{}: {}\r\n", header.name(), header.value())?;
         }
 
         // Body (if present, must include blank line separator)
@@ -254,11 +256,11 @@ mod tests {
     #[test]
     fn sipfrag_headers_only() {
         let mut headers = Headers::new();
-        headers.push(
+        headers.push_unchecked(
             SmolStr::new("From".to_owned()),
             SmolStr::new("sip:alice@example.com".to_owned()),
         );
-        headers.push(
+        headers.push_unchecked(
             SmolStr::new("To".to_owned()),
             SmolStr::new("sip:bob@example.com".to_owned()),
         );

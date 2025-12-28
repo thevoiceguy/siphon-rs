@@ -361,32 +361,32 @@ async fn create_b2bua_ack(
 
     // Via - new branch for this ACK
     let branch = generate_branch_id();
-    headers.push(
+    let _ = headers.push(
         SmolStr::new("Via"),
         SmolStr::new(format!("SIP/2.0/TCP placeholder;branch={}", branch)),
     );
 
     // From - same as our outgoing INVITE
     if let Some(from) = call_leg.outgoing_invite.headers.get("From") {
-        headers.push(SmolStr::new("From"), from.clone());
+        let _ = headers.push(SmolStr::new("From"), from);
     }
 
     // To - with callee's tag from 200 OK
     if let Some(to_tag) = &call_leg.callee_to_tag {
         // Extract To header from outgoing INVITE and add tag
         if let Some(to) = call_leg.outgoing_invite.headers.get("To") {
-            let to_with_tag = format!("{};tag={}", to.as_str(), to_tag);
-            headers.push(SmolStr::new("To"), SmolStr::new(to_with_tag));
+            let to_with_tag = format!("{};tag={}", to, to_tag);
+            let _ = headers.push(SmolStr::new("To"), SmolStr::new(to_with_tag));
         }
     } else {
         // Shouldn't happen - we should have callee_to_tag after 200 OK
         if let Some(to) = call_leg.outgoing_invite.headers.get("To") {
-            headers.push(SmolStr::new("To"), to.clone());
+            let _ = headers.push(SmolStr::new("To"), to);
         }
     }
 
     // Call-ID - same as our outgoing INVITE
-    headers.push(
+    let _ = headers.push(
         SmolStr::new("Call-ID"),
         SmolStr::new(&call_leg.outgoing_call_id),
     );
@@ -394,23 +394,23 @@ async fn create_b2bua_ack(
     // CSeq - same number as INVITE, but ACK method
     if let Some(cseq) = call_leg.outgoing_invite.headers.get("CSeq") {
         if let Some((num, _)) = cseq.split_once(' ') {
-            headers.push(SmolStr::new("CSeq"), SmolStr::new(format!("{} ACK", num)));
+            let _ = headers.push(SmolStr::new("CSeq"), SmolStr::new(format!("{} ACK", num)));
         }
     }
 
     // Max-Forwards
-    headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
+    let _ = headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
 
     // Copy SDP body from caller's ACK if present (late offer scenario)
     let body = if !caller_ack.body.is_empty() {
         if let Some(content_type) = caller_ack.headers.get("Content-Type") {
-            headers.push(SmolStr::new("Content-Type"), content_type.clone());
+            let _ = headers.push(SmolStr::new("Content-Type"), content_type);
         }
         let content_length = caller_ack.body.len().to_string();
-        headers.push(SmolStr::new("Content-Length"), SmolStr::new(content_length));
+        let _ = headers.push(SmolStr::new("Content-Length"), SmolStr::new(content_length));
         caller_ack.body.clone()
     } else {
-        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
+        let _ = headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
         bytes::Bytes::new()
     };
 

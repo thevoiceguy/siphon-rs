@@ -63,7 +63,7 @@ impl ByeHandler {
                 let caller_contact =
                     if let Some(contact_header) = header(&leg.caller_request.headers, "Contact") {
                         // Parse contact URI from Contact header (may have angle brackets)
-                        let contact_str = contact_header.as_str();
+                        let contact_str = contact_header;
                         if let Some(start) = contact_str.find('<') {
                             if let Some(end) = contact_str.find('>') {
                                 &contact_str[start + 1..end]
@@ -120,8 +120,8 @@ impl ByeHandler {
                 if let Some(to_tag) = &leg.callee_to_tag {
                     if let Some(to) = leg.caller_request.headers.get("To") {
                         let from_with_tag =
-                            format!("{};tag={}", to.as_str().trim_end_matches(';'), to_tag);
-                        bye_headers_base.push(SmolStr::new("From"), SmolStr::new(from_with_tag));
+                            format!("{};tag={}", to.trim_end_matches(';'), to_tag);
+                        let _ = bye_headers_base.push(SmolStr::new("From"), SmolStr::new(from_with_tag));
                     }
                 } else {
                     warn!(
@@ -129,24 +129,24 @@ impl ByeHandler {
                         "B2BUA: No callee to-tag stored, BYE may be rejected"
                     );
                     if let Some(to) = leg.caller_request.headers.get("To") {
-                        bye_headers_base.push(SmolStr::new("From"), to.clone());
+                        let _ = bye_headers_base.push(SmolStr::new("From"), to);
                     }
                 }
 
                 // To - use From from caller's INVITE (this is Bob with his tag)
                 // This is Bob's local side
                 if let Some(from) = leg.caller_request.headers.get("From") {
-                    bye_headers_base.push(SmolStr::new("To"), from.clone());
+                    let _ = bye_headers_base.push(SmolStr::new("To"), from);
                 }
 
                 // Call-ID - incoming call leg
-                bye_headers_base.push(SmolStr::new("Call-ID"), SmolStr::new(&leg.incoming_call_id));
+                let _ = bye_headers_base.push(SmolStr::new("Call-ID"), SmolStr::new(&leg.incoming_call_id));
 
                 // CSeq - increment from caller's INVITE CSeq
                 if let Some(cseq) = leg.caller_request.headers.get("CSeq") {
                     if let Some((num, _)) = cseq.split_once(' ') {
                         if let Ok(cseq_num) = num.parse::<u32>() {
-                            bye_headers_base.push(
+                            let _ = bye_headers_base.push(
                                 SmolStr::new("CSeq"),
                                 SmolStr::new(format!("{} BYE", cseq_num + 1)),
                             );
@@ -155,10 +155,10 @@ impl ByeHandler {
                 }
 
                 // Max-Forwards
-                bye_headers_base.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
+                let _ = bye_headers_base.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
 
                 // Content-Length
-                bye_headers_base.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
+                let _ = bye_headers_base.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
 
                 // Send BYE to caller
                 let caller_addr = format!(
@@ -183,11 +183,11 @@ impl ByeHandler {
                         branch
                     );
                     let mut bye_headers_udp = Headers::new();
-                    bye_headers_udp.push(SmolStr::new("Via"), SmolStr::new(via_udp));
+                    let _ = bye_headers_udp.push(SmolStr::new("Via"), SmolStr::new(via_udp));
 
                     // Copy base headers
                     for header in bye_headers_base.iter() {
-                        bye_headers_udp.push(header.name.clone(), header.value.clone());
+                        bye_headers_udp.push_unchecked(header.name(), header.value());
                     }
 
                     // Now serialize the request with correct Via
@@ -227,11 +227,11 @@ impl ByeHandler {
                                     generate_branch_id()
                                 );
                                 let mut bye_headers_tcp = Headers::new();
-                                bye_headers_tcp.push(SmolStr::new("Via"), SmolStr::new(via_tcp));
+                                let _ = bye_headers_tcp.push(SmolStr::new("Via"), SmolStr::new(via_tcp));
 
                                 // Copy base headers
                                 for header in bye_headers_base.iter() {
-                                    bye_headers_tcp.push(header.name.clone(), header.value.clone());
+                                    bye_headers_tcp.push_unchecked(header.name(), header.value());
                                 }
 
                                 let bye_request_tcp = sip_core::Request::new(
@@ -277,11 +277,11 @@ impl ByeHandler {
                                 generate_branch_id()
                             );
                             let mut bye_headers_tcp = Headers::new();
-                            bye_headers_tcp.push(SmolStr::new("Via"), SmolStr::new(via_tcp));
+                            let _ = bye_headers_tcp.push(SmolStr::new("Via"), SmolStr::new(via_tcp));
 
                             // Copy base headers
                             for header in bye_headers_base.iter() {
-                                bye_headers_tcp.push(header.name.clone(), header.value.clone());
+                                let _ = bye_headers_tcp.push(header.name(), header.value());
                             }
 
                             let bye_request_tcp = sip_core::Request::new(
@@ -344,26 +344,26 @@ impl ByeHandler {
 
         // Via
         let branch = generate_branch_id();
-        bye_headers.push(
+        let _ = bye_headers.push(
             SmolStr::new("Via"),
             SmolStr::new(format!("SIP/2.0/TCP placeholder;branch={}", branch)),
         );
 
         // From - same as our outgoing INVITE
         if let Some(from) = call_leg.outgoing_invite.headers.get("From") {
-            bye_headers.push(SmolStr::new("From"), from.clone());
+            let _ = bye_headers.push(SmolStr::new("From"), from);
         }
 
         // To - with callee's tag
         if let Some(to_tag) = &call_leg.callee_to_tag {
             if let Some(to) = call_leg.outgoing_invite.headers.get("To") {
-                let to_with_tag = format!("{};tag={}", to.as_str(), to_tag);
-                bye_headers.push(SmolStr::new("To"), SmolStr::new(to_with_tag));
+                let to_with_tag = format!("{};tag={}", to, to_tag);
+                let _ = bye_headers.push(SmolStr::new("To"), SmolStr::new(to_with_tag));
             }
         }
 
         // Call-ID - outgoing call leg
-        bye_headers.push(
+        let _ = bye_headers.push(
             SmolStr::new("Call-ID"),
             SmolStr::new(&call_leg.outgoing_call_id),
         );
@@ -372,7 +372,7 @@ impl ByeHandler {
         if let Some(cseq) = call_leg.outgoing_invite.headers.get("CSeq") {
             if let Some((num, _)) = cseq.split_once(' ') {
                 if let Ok(cseq_num) = num.parse::<u32>() {
-                    bye_headers.push(
+                    let _ = bye_headers.push(
                         SmolStr::new("CSeq"),
                         SmolStr::new(format!("{} BYE", cseq_num + 1)),
                     );
@@ -381,10 +381,10 @@ impl ByeHandler {
         }
 
         // Max-Forwards
-        bye_headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
+        let _ = bye_headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"));
 
         // Content-Length
-        bye_headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
+        let _ = bye_headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
 
         // Create BYE request
         let bye_request = sip_core::Request::new(
@@ -513,18 +513,18 @@ impl RequestHandler for ByeHandler {
 /// Copy essential headers from request to response
 fn copy_headers(request: &Request, headers: &mut sip_core::Headers) {
     if let Some(via) = header(&request.headers, "Via") {
-        headers.push("Via".into(), via.clone());
+        let _ = headers.push("Via", via.clone());
     }
     if let Some(from) = header(&request.headers, "From") {
-        headers.push("From".into(), from.clone());
+        let _ = headers.push("From", from.clone());
     }
     if let Some(to) = header(&request.headers, "To") {
-        headers.push("To".into(), to.clone());
+        let _ = headers.push("To", to.clone());
     }
     if let Some(call_id) = header(&request.headers, "Call-ID") {
-        headers.push("Call-ID".into(), call_id.clone());
+        let _ = headers.push("Call-ID", call_id.clone());
     }
     if let Some(cseq) = header(&request.headers, "CSeq") {
-        headers.push("CSeq".into(), cseq.clone());
+        let _ = headers.push("CSeq", cseq.clone());
     }
 }

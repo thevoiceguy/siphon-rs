@@ -44,5 +44,5 @@ pub fn shard_by_dialog_id(call_id: &SmolStr, local_tag: &SmolStr, remote_tag: &S
 pub fn shard_key_from_headers(headers: &Headers) -> Option<u64> {
     headers
         .get("Call-ID")
-        .map(|cid| shard_by_call_id(cid.as_str()))
+        .map(shard_by_call_id)
 }

@@ -110,10 +110,10 @@ impl UasRequestHandler for AutoAnswerServer {
                 ok_response.body = sdp_answer.as_bytes().to_vec().into();
                 ok_response
                     .headers
-                    .push("Content-Type".into(), "application/sdp".into());
+                    .push("Content-Type", "application/sdp");
                 ok_response
                     .headers
-                    .push("Content-Length".into(), sdp_answer.len().to_string().into());
+                    .push("Content-Length", sdp_answer.len().to_string().into());
 
                 println!("   Generated SDP answer ({} bytes)", sdp_answer.len());
             }
@@ -121,7 +121,7 @@ impl UasRequestHandler for AutoAnswerServer {
             // Add Contact header
             ok_response
                 .headers
-                .push("Contact".into(), format!("<{}>", self.local_uri).into());
+                .push("Contact", format!("<{}>", self.local_uri).into());
 
             // Send 200 OK
             handle.send_final(ok_response).await;
@@ -212,10 +212,10 @@ impl UasRequestHandler for AutoAnswerServer {
             };
             response
                 .headers
-                .push("Contact".into(), contact_with_expires.into());
+                .push("Contact", contact_with_expires.into());
         }
 
-        response.headers.push("Expires".into(), expires.into());
+        response.headers.push_unchecked("Expires", expires);
 
         handle.send_final(response).await;
         println!("   → 200 OK (registered)");
@@ -231,20 +231,20 @@ impl UasRequestHandler for AutoAnswerServer {
         let mut response = UserAgentServer::create_response(request, 200, "OK");
 
         // Add Allow header with supported methods
-        response.headers.push(
-            "Allow".into(),
-            "INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, SUBSCRIBE, NOTIFY, REFER, UPDATE, PRACK, INFO".into(),
+        response.headers.push_unchecked(
+            "Allow",
+            "INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, SUBSCRIBE, NOTIFY, REFER, UPDATE, PRACK, INFO",
         );
 
         // Add Accept header
         response
             .headers
-            .push("Accept".into(), "application/sdp, message/sipfrag".into());
+            .push("Accept", "application/sdp, message/sipfrag");
 
         // Add Supported header
         response
             .headers
-            .push("Supported".into(), "replaces, timer, 100rel".into());
+            .push("Supported", "replaces, timer, 100rel");
 
         handle.send_final(response).await;
         println!("   → 200 OK with capabilities");
@@ -304,10 +304,10 @@ impl UasRequestHandler for AutoAnswerServer {
             response.body = sdp_answer.as_bytes().to_vec().into();
             response
                 .headers
-                .push("Content-Type".into(), "application/sdp".into());
+                .push("Content-Type", "application/sdp");
             response
                 .headers
-                .push("Content-Length".into(), sdp_answer.len().to_string().into());
+                .push("Content-Length", sdp_answer.len().to_string().into());
         }
 
         handle.send_final(response).await;

@@ -30,7 +30,7 @@
 /// it explicitly to enable UDP ACKs.
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use sip_core::{Request, Response, SipUri};
+use sip_core::{Headers, Request, Response, SipUri};
 use sip_dialog::{Subscription, SubscriptionId, SubscriptionState};
 use sip_parse::header;
 use sip_transaction::{
@@ -282,7 +282,7 @@ impl ReferHandler {
         let from = header(&request.headers, "From").ok_or_else(|| anyhow!("Missing From"))?;
         let to = header(&response.headers, "To").ok_or_else(|| anyhow!("Missing To"))?;
         let from_tag = Self::extract_tag(from.as_str()).ok_or_else(|| anyhow!("Missing From tag"))?;
-        let to_tag = Self::extract_tag(to.as_str()).ok_or_else(|| anyhow!("Missing To tag"))?;
+        let to_tag = Self::extract_tag(to).ok_or_else(|| anyhow!("Missing To tag"))?;
 
         let remote_uri = sdp_utils::parse_name_addr_uri(from.as_str())
             .ok_or_else(|| anyhow!("Invalid From URI"))?;
@@ -536,7 +536,7 @@ impl RequestHandler for ReferHandler {
                 let mut invite = uac.create_invite(&refer_uri, sdp_offer.as_deref());
 
                 if let Some(replaces) = Self::extract_replaces(&refer_to_target) {
-                    invite.headers.push("Replaces".into(), replaces.into());
+                    invite.headers.push("Replaces", replaces);
                 }
 
                 let transport_name = match transport {
@@ -549,18 +549,25 @@ impl RequestHandler for ReferHandler {
                     sip_transaction::TransportKind::TlsSctp => "TLS-SCTP",
                 };
 
-                for header in invite.headers.iter_mut() {
-                    if header.name.as_str().eq_ignore_ascii_case("Via") {
+                // Find and replace the Via header
+                let mut new_headers = Headers::new();
+                let mut via_replaced = false;
+                for header in invite.headers.iter() {
+                    if !via_replaced && header.name().eq_ignore_ascii_case("Via") {
                         let branch =
-                            sip_transaction::branch_from_via(header.value.as_str())
+                            sip_transaction::branch_from_via(header.value())
                                 .unwrap_or("z9hG4bK");
-                        header.value = SmolStr::new(format!(
+                        let new_via = format!(
                             "SIP/2.0/{} placeholder;branch={}",
                             transport_name, branch
-                        ));
-                        break;
+                        );
+                        new_headers.push_unchecked(header.name(), new_via);
+                        via_replaced = true;
+                    } else {
+                        new_headers.push_unchecked(header.name(), header.value());
                     }
                 }
+                invite.headers = new_headers;
 
                 let ctx = TransportContext::new(transport, target_addr, None)
                     .with_ws_uri(ws_uri)
@@ -613,18 +620,18 @@ impl RequestHandler for ReferHandler {
 /// Copy essential headers from request to response
 fn copy_headers(request: &Request, headers: &mut sip_core::Headers) {
     if let Some(via) = header(&request.headers, "Via") {
-        headers.push("Via".into(), via.clone());
+        let _ = headers.push("Via", via.clone());
     }
     if let Some(from) = header(&request.headers, "From") {
-        headers.push("From".into(), from.clone());
+        let _ = headers.push("From", from.clone());
     }
     if let Some(to) = header(&request.headers, "To") {
-        headers.push("To".into(), to.clone());
+        let _ = headers.push("To", to.clone());
     }
     if let Some(call_id) = header(&request.headers, "Call-ID") {
-        headers.push("Call-ID".into(), call_id.clone());
+        let _ = headers.push("Call-ID", call_id.clone());
     }
     if let Some(cseq) = header(&request.headers, "CSeq") {
-        headers.push("CSeq".into(), cseq.clone());
+        let _ = headers.push("CSeq", cseq.clone());
     }
 }

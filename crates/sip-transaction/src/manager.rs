@@ -1363,7 +1363,7 @@ mod tests {
     fn build_client_request(method: Method, branch: &str) -> Request {
         let mut headers = Headers::new();
         let via = format!("SIP/2.0/UDP host.invalid;branch={}", branch);
-        headers.push(SmolStr::new("Via"), SmolStr::new(via));
+        headers.push_unchecked(SmolStr::new("Via"), SmolStr::new(via));
         Request::new(
             RequestLine::new(method, SipUri::parse("sip:example.com").unwrap()),
             headers,
@@ -1374,10 +1374,10 @@ mod tests {
     fn build_response_with_branch(code: u16, branch: &str, method: Method) -> Response {
         let mut headers = Headers::new();
         let via = format!("SIP/2.0/UDP host.invalid;branch={}", branch);
-        headers.push(SmolStr::new("Via"), SmolStr::new(via));
+        headers.push_unchecked(SmolStr::new("Via"), SmolStr::new(via));
         // Add CSeq header with method for transaction matching
         let cseq = format!("1 {}", method.as_str());
-        headers.push(SmolStr::new("CSeq"), SmolStr::new(cseq));
+        headers.push_unchecked(SmolStr::new("CSeq"), SmolStr::new(cseq));
         Response::new(
             StatusLine::new(code, SmolStr::new("OK")),
             headers,
@@ -1602,7 +1602,7 @@ mod tests {
         let ctx =
             TransportContext::new(TransportKind::Udp, "127.0.0.1:5090".parse().unwrap(), None);
         let mut request = build_request(Method::Invite);
-        request.headers.push(
+        request.headers.push_unchecked(
             SmolStr::new("Via"),
             SmolStr::new("SIP/2.0/UDP host;branch=z9hG4bKretrans".to_owned()),
         );
@@ -1638,7 +1638,7 @@ mod tests {
         // Create 5 transactions (at limit)
         for i in 0..5 {
             let mut request = build_request(Method::Invite);
-            request.headers.push(
+            request.headers.push_unchecked(
                 SmolStr::new("Via"),
                 SmolStr::new(format!("SIP/2.0/UDP host;branch=z9hG4bKtest{}", i)),
             );
@@ -1650,7 +1650,7 @@ mod tests {
 
         // Add one more transaction - should trigger eviction
         let mut request = build_request(Method::Invite);
-        request.headers.push(
+        request.headers.push_unchecked(
             SmolStr::new("Via"),
             SmolStr::new("SIP/2.0/UDP host;branch=z9hG4bKtest_overflow".to_owned()),
         );
@@ -1679,7 +1679,7 @@ mod tests {
         // Create 3 client transactions (at limit)
         for i in 0..3 {
             let mut request = build_request(Method::Invite);
-            request.headers.push(
+            request.headers.push_unchecked(
                 SmolStr::new("Via"),
                 SmolStr::new(format!("SIP/2.0/UDP host;branch=z9hG4bKclient{}", i)),
             );
@@ -1693,7 +1693,7 @@ mod tests {
 
         // Add one more transaction - should trigger eviction
         let mut request = build_request(Method::Invite);
-        request.headers.push(
+        request.headers.push_unchecked(
             SmolStr::new("Via"),
             SmolStr::new("SIP/2.0/UDP host;branch=z9hG4bKclient_overflow".to_owned()),
         );
@@ -1722,7 +1722,7 @@ mod tests {
         // Create 3 transactions with small delays to ensure ordering
         for i in 0..3 {
             let mut request = build_request(Method::Options);
-            request.headers.push(
+            request.headers.push_unchecked(
                 SmolStr::new("Via"),
                 SmolStr::new(format!("SIP/2.0/UDP host;branch=z9hG4bKorder{}", i)),
             );
@@ -1740,7 +1740,7 @@ mod tests {
 
         // Add one more - should evict the oldest (first one)
         let mut request = build_request(Method::Options);
-        request.headers.push(
+        request.headers.push_unchecked(
             SmolStr::new("Via"),
             SmolStr::new("SIP/2.0/UDP host;branch=z9hG4bKorder3".to_owned()),
         );
@@ -1769,7 +1769,7 @@ mod tests {
         // Create many transactions without hitting limit
         for i in 0..100 {
             let mut request = build_request(Method::Options);
-            request.headers.push(
+            request.headers.push_unchecked(
                 SmolStr::new("Via"),
                 SmolStr::new(format!("SIP/2.0/UDP host;branch=z9hG4bKunlim{}", i)),
             );

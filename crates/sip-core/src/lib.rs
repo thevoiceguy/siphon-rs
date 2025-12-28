@@ -86,7 +86,7 @@ pub use event::{EventHeader, EventHeaderError, SubscriptionState, SubscriptionSt
 pub use geolocation::{
     GeolocationErrorHeader, GeolocationHeader, GeolocationRoutingHeader, GeolocationValue,
 };
-pub use headers::{Header, Headers};
+pub use headers::{Header, HeaderError, Headers};
 pub use history_info::{HistoryInfoEntry, HistoryInfoHeader};
 pub use max_forwards::{decrement_max_forwards, is_valid_branch, MaxForwardsError};
 pub use message_waiting::{

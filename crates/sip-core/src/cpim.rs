@@ -603,7 +603,7 @@ impl fmt::Display for CpimMessage {
 
 fn validate_header_name(name: &str) -> Result<(), CpimError> {
     if name.is_empty() {
-        return Err(CpimError::InvalidHeaderName("empty name".into()));
+        return Err(CpimError::InvalidHeaderName("empty name".to_string()));
     }
     if name.len() > MAX_HEADER_NAME_LENGTH {
         return Err(CpimError::HeaderNameTooLong {
@@ -613,7 +613,7 @@ fn validate_header_name(name: &str) -> Result<(), CpimError> {
     }
     if name.chars().any(|c| c.is_ascii_control()) {
         return Err(CpimError::InvalidHeaderName(
-            "contains control characters".into(),
+            "contains control characters".to_string(),
         ));
     }
     if name
@@ -621,7 +621,7 @@ fn validate_header_name(name: &str) -> Result<(), CpimError> {
         .any(|c| matches!(c, ':' | ';' | '=' | '\\' | '"'))
     {
         return Err(CpimError::InvalidHeaderName(
-            "contains invalid characters".into(),
+            "contains invalid characters".to_string(),
         ));
     }
     Ok(())
@@ -639,7 +639,7 @@ fn validate_cpim_header_value(value: &str) -> Result<(), CpimError> {
 
 fn validate_param_name(name: &str) -> Result<(), CpimError> {
     if name.is_empty() {
-        return Err(CpimError::InvalidParamName("empty name".into()));
+        return Err(CpimError::InvalidParamName("empty name".to_string()));
     }
     if name.len() > MAX_PARAM_NAME_LENGTH {
         return Err(CpimError::ParamNameTooLong {
@@ -652,7 +652,7 @@ fn validate_param_name(name: &str) -> Result<(), CpimError> {
         .any(|c| c.is_ascii_control() || matches!(c, ';' | '=' | '\\' | '"'))
     {
         return Err(CpimError::InvalidParamName(
-            "contains invalid characters".into(),
+            "contains invalid characters".to_string(),
         ));
     }
     Ok(())
@@ -670,7 +670,7 @@ fn validate_param_value(value: &str) -> Result<(), CpimError> {
         .any(|c| c.is_ascii_control() || matches!(c, ';' | '\\' | '"'))
     {
         return Err(CpimError::InvalidParamValue(
-            "contains invalid characters".into(),
+            "contains invalid characters".to_string(),
         ));
     }
     Ok(())
@@ -678,7 +678,7 @@ fn validate_param_value(value: &str) -> Result<(), CpimError> {
 
 fn validate_content_type(value: &str) -> Result<(), CpimError> {
     if value.is_empty() {
-        return Err(CpimError::InvalidContentType("empty content type".into()));
+        return Err(CpimError::InvalidContentType("empty content type".to_string()));
     }
     if value.len() > MAX_CONTENT_TYPE_LENGTH {
         return Err(CpimError::ContentTypeTooLong {
@@ -688,7 +688,7 @@ fn validate_content_type(value: &str) -> Result<(), CpimError> {
     }
     if value.chars().any(|c| c.is_ascii_control()) {
         return Err(CpimError::InvalidContentType(
-            "contains control characters".into(),
+            "contains control characters".to_string(),
         ));
     }
     Ok(())
@@ -704,7 +704,7 @@ fn validate_content_header_value(value: &str) -> Result<(), CpimError> {
     // Check for control characters (includes \r, \n, etc.)
     if value.chars().any(|c| c.is_ascii_control()) {
         return Err(CpimError::InvalidHeaderValue(
-            "contains control characters".into(),
+            "contains control characters".to_string(),
         ));
     }
     Ok(())
@@ -800,7 +800,7 @@ pub fn parse_cpim(input: &str) -> Result<CpimMessage, CpimError> {
 
     if sections.len() < 4 {
         return Err(CpimError::ParseError(
-            "missing required cpim sections".into(),
+            "missing required cpim sections".to_string(),
         ));
     }
 
@@ -808,7 +808,7 @@ pub fn parse_cpim(input: &str) -> Result<CpimMessage, CpimError> {
     let mime_section = sections[0];
     if !mime_section.to_lowercase().contains("message/cpim") {
         return Err(CpimError::ParseError(
-            "missing message/cpim MIME header".into(),
+            "missing message/cpim MIME header".to_string(),
         ));
     }
 
@@ -889,13 +889,13 @@ fn parse_headers(input: &str) -> Result<BTreeMap<SmolStr, Vec<CpimHeader>>, Cpim
 
         // Split into name and value
         let (name_with_params, value) =
-            line.split_once(':').ok_or_else(|| CpimError::ParseError("missing ':'".into()))?;
+            line.split_once(':').ok_or_else(|| CpimError::ParseError("missing ':'".to_string()))?;
 
         // Parse header name and parameters
         let mut parts = name_with_params.split(';');
         let name = parts
             .next()
-            .ok_or_else(|| CpimError::ParseError("missing header name".into()))?
+            .ok_or_else(|| CpimError::ParseError("missing header name".to_string()))?
             .trim();
         validate_header_name(name)?;
 
@@ -919,7 +919,7 @@ fn parse_headers(input: &str) -> Result<BTreeMap<SmolStr, Vec<CpimHeader>>, Cpim
 
         // Unescape the value
         let unescaped_value = unescape_header_value(value.trim())
-            .ok_or_else(|| CpimError::ParseError("invalid escape sequence".into()))?;
+            .ok_or_else(|| CpimError::ParseError("invalid escape sequence".to_string()))?;
         validate_cpim_header_value(&unescaped_value)?;
 
         let header = CpimHeader {

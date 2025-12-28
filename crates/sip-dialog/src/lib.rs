@@ -561,7 +561,7 @@ fn extract_tag(value: &SmolStr) -> Option<SmolStr> {
 /// Builds route set from Record-Route headers (reversed for UAC).
 fn build_route_set(headers: &Headers) -> Vec<SipUri> {
     let mut routes: Vec<SipUri> = headers
-        .get_all("Record-Route")
+        .get_all_smol("Record-Route")
         .flat_map(|v| split_header_values(v.as_str()))
         .filter_map(|v| parse_uri_from_header(v.as_str()))
         .collect();
@@ -949,27 +949,27 @@ mod tests {
         cseq: u32,
     ) -> Request {
         let mut headers = Headers::new();
-        headers.push(SmolStr::new("Call-ID"), SmolStr::new(call_id.to_owned()));
-        headers.push(
+        headers.push_unchecked(SmolStr::new("Call-ID"), SmolStr::new(call_id.to_owned()));
+        headers.push_unchecked(
             SmolStr::new("From"),
             SmolStr::new(format!("<sip:alice@example.com>;tag={}", from_tag)),
         );
         if let Some(tag) = to_tag {
-            headers.push(
+            headers.push_unchecked(
                 SmolStr::new("To"),
                 SmolStr::new(format!("<sip:bob@example.com>;tag={}", tag)),
             );
         } else {
-            headers.push(
+            headers.push_unchecked(
                 SmolStr::new("To"),
                 SmolStr::new("<sip:bob@example.com>".to_owned()),
             );
         }
-        headers.push(
+        headers.push_unchecked(
             SmolStr::new("CSeq"),
             SmolStr::new(format!("{} {}", cseq, method.as_str())),
         );
-        headers.push(
+        headers.push_unchecked(
             SmolStr::new("Contact"),
             SmolStr::new("<sip:alice@client.example.com>".to_owned()),
         );
@@ -986,19 +986,19 @@ mod tests {
 
         // Copy all headers from request except To
         for header in req.headers.iter() {
-            if header.name.as_str() != "To" {
-                headers.push(header.name.clone(), header.value.clone());
+            if header.name() != "To" {
+                headers.push_unchecked(header.name_smol().clone(), header.value_smol().clone());
             }
         }
 
         // Add To header with tag
-        headers.push(
+        headers.push_unchecked(
             SmolStr::new("To"),
             SmolStr::new(format!("<sip:bob@example.com>;tag={}", to_tag)),
         );
 
         // Add Contact header
-        headers.push(
+        headers.push_unchecked(
             SmolStr::new("Contact"),
             SmolStr::new("<sip:bob@server.example.com>".to_owned()),
         );
@@ -1240,13 +1240,13 @@ mod tests {
 
         // Copy all headers except Contact
         for header in make_response(200, &reinvite_req, "uas-tag").headers.iter() {
-            if header.name.as_str() != "Contact" {
-                reinvite_resp_headers.push(header.name.clone(), header.value.clone());
+            if header.name() != "Contact" {
+                reinvite_resp_headers.push_unchecked(header.name_smol().clone(), header.value_smol().clone());
             }
         }
 
         // Add new Contact header
-        reinvite_resp_headers.push(
+        reinvite_resp_headers.push_unchecked(
             SmolStr::new("Contact"),
             SmolStr::new("<sip:bob@newserver.example.com>".to_owned()),
         );

@@ -7,3 +7,4 @@
 cc 03473f3c89761ea0c43d4d3658fe2a84df7491fed746d9a05cf9f9e1481a5363 # shrinks to name = "A", value = "\t"
 cc 4bdcba4c2f824aaae2315b607ab89d5af617145bb2170373a60fe0b26efe1461 # shrinks to name = "a", value = ""
 cc 8328764589be4f3ba05c4d237ef7b8b9f7b466225ca2dac0a3b0a26bfab6f5d4 # shrinks to name = "l", value = "¡"
+cc 86e0ef5afa3a532d63de32fb484be3c0c7df19d477f8c84fc98d9e5e5d90aa4e # shrinks to name = "a", value = "¡\0"

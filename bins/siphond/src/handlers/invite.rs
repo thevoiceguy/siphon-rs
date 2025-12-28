@@ -192,32 +192,32 @@ impl InviteHandler {
 
         // Copy essential headers
         if let Some(via) = header(&request.headers, "Via") {
-            response_headers.push("Via".into(), via.clone());
+            let _ = response_headers.push("Via", via.clone());
         }
         if let Some(from) = header(&request.headers, "From") {
-            response_headers.push("From".into(), from.clone());
+            let _ = response_headers.push("From", from.clone());
         }
         if let Some(to) = header(&request.headers, "To") {
-            response_headers.push("To".into(), to.clone());
+            let _ = response_headers.push("To", to.clone());
         }
         if let Some(call_id_hdr) = header(&request.headers, "Call-ID") {
-            response_headers.push("Call-ID".into(), call_id_hdr.clone());
+            let _ = response_headers.push("Call-ID", call_id_hdr.clone());
         }
         if let Some(cseq) = header(&request.headers, "CSeq") {
-            response_headers.push("CSeq".into(), cseq.clone());
+            let _ = response_headers.push("CSeq", cseq.clone());
         }
 
         // Add Contact header (B2BUA's URI)
-        response_headers.push("Contact".into(), format!("<{}>", services.config.local_uri).into());
+        let _ = response_headers.push("Contact", format!("<{}>", services.config.local_uri));
 
         // Echo back the SDP from the original request
         if !request.body.is_empty() {
             if let Some(content_type) = header(&request.headers, "Content-Type") {
-                response_headers.push("Content-Type".into(), content_type.clone());
+                let _ = response_headers.push("Content-Type", content_type.clone());
             }
-            response_headers.push("Content-Length".into(), request.body.len().to_string().into());
+            let _ = response_headers.push("Content-Length", request.body.len().to_string());
         } else {
-            response_headers.push("Content-Length".into(), "0".into());
+            let _ = response_headers.push("Content-Length", "0");
         }
 
         let response = sip_core::Response::new(
@@ -353,7 +353,7 @@ impl InviteHandler {
             &from_header[start + 1..end]
         } else {
             // No angle brackets, extract URI before semicolon
-            from_header.split(';').next().unwrap_or(from_header.as_str()).trim()
+            from_header.split(';').next().unwrap_or(from_header).trim()
         };
 
         let caller_uri = sip_core::SipUri::parse(from_uri)
@@ -539,15 +539,15 @@ impl InviteHandler {
             .caller_request
             .headers
             .iter()
-            .filter(|h| h.name.as_str().eq_ignore_ascii_case("Via"))
+            .filter(|h| h.name().eq_ignore_ascii_case("Via"))
         {
-            new_headers.push("Via".into(), via.value.clone());
+            let _ = new_headers.push("Via", via.value());
         }
 
         // Use caller's dialog identifiers
-        new_headers.push("Call-ID".into(), caller_call_id.clone());
-        new_headers.push("From".into(), caller_from.clone());
-        new_headers.push("CSeq".into(), caller_cseq.clone());
+        let _ = new_headers.push("Call-ID", caller_call_id.clone());
+        let _ = new_headers.push("From", caller_from.clone());
+        let _ = new_headers.push("CSeq", caller_cseq.clone());
 
         // Handle To header - add callee's To-tag if present (from 200 OK)
         if let Some(callee_to_tag) = header(&callee_response.headers, "To").and_then(|to_hdr| {
@@ -565,7 +565,7 @@ impl InviteHandler {
         }) {
             // Add tag to caller's To header
             let to_with_tag = format!("{};tag={}", caller_to.as_str(), callee_to_tag);
-            new_headers.push("To".into(), to_with_tag.into());
+            let _ = new_headers.push("To", to_with_tag);
 
             // Store the callee's To-tag for future ACK/BYE (only for 2xx responses)
             if callee_response.start.code >= 200 && callee_response.start.code < 300 {
@@ -684,24 +684,24 @@ impl InviteHandler {
             }
         } else {
             // No To-tag in callee's response (provisional responses may not have it)
-            new_headers.push("To".into(), caller_to.clone());
+            let _ = new_headers.push("To", caller_to.clone());
         }
 
         // IMPORTANT: Replace Contact with B2BUA's own contact
         // This ensures ACK and BYE come through the B2BUA, not directly to callee
         // Use the local_uri from config as our contact
         let b2bua_contact = format!("<{}>", services.config.local_uri);
-        new_headers.push("Contact".into(), b2bua_contact.into());
+        let _ = new_headers.push("Contact", b2bua_contact);
 
         // Copy Content-Type and Content-Length if body is present
         if !callee_response.body.is_empty() {
             if let Some(content_type) = header(&callee_response.headers, "Content-Type") {
-                new_headers.push("Content-Type".into(), content_type.clone());
+                let _ = new_headers.push("Content-Type", content_type.clone());
             }
             let content_length = callee_response.body.len().to_string();
-            new_headers.push("Content-Length".into(), content_length.into());
+            let _ = new_headers.push("Content-Length", content_length);
         } else {
-            new_headers.push("Content-Length".into(), "0".into());
+            let _ = new_headers.push("Content-Length", "0");
         }
 
         // Copy other useful headers
@@ -714,7 +714,7 @@ impl InviteHandler {
             "Require",
         ] {
             if let Some(value) = header(&callee_response.headers, header_name) {
-                new_headers.push((*header_name).into(), value.clone());
+                let _ = new_headers.push(*header_name, value.clone());
             }
         }
 
@@ -1207,13 +1207,12 @@ impl RequestHandler for InviteHandler {
 
                     let rseq = services.rseq_mgr.next_rseq(&early_dialog.id);
                     reliable_info = Some((Self::dialog_id_key(&early_dialog.id), rseq));
-                    ringing.headers.push("RSeq".into(), rseq.to_string().into());
-                    ringing
+                    let _ = ringing.headers.push("RSeq", rseq.to_string());
+                    let _ = ringing
                         .headers
-                        .push("Require".into(), "100rel".into());
-                    ringing.headers.push(
-                        "Contact".into(),
-                        format!("<{}>", services.config.local_uri).into(),
+                        .push("Require", "100rel");
+                    let _ = ringing.headers.push("Contact",
+                        format!("<{}>", services.config.local_uri),
                     );
 
                     if let Some(cseq) = header(&request.headers, "CSeq")
@@ -1310,19 +1309,17 @@ impl RequestHandler for InviteHandler {
                 if services.config.features.enable_session_timers {
                     let has_se = response.headers.get("Session-Expires").is_some();
                     if !has_se {
-                        response.headers.push(
-                            "Session-Expires".into(),
+                        let _ = response.headers.push("Session-Expires",
                             sip_dialog::session_timer_manager::DEFAULT_SESSION_EXPIRES
                                 .as_secs()
-                                .to_string()
-                                .into(),
+                                .to_string(),
                         );
                         response
                             .headers
-                            .push("Supported".into(), "timer".into());
+                            .push("Supported", "timer");
                         response
                             .headers
-                            .push("Min-SE".into(), "90".into());
+                            .push("Min-SE", "90");
                     }
 
                     dialog.update_from_response(&response);
@@ -1380,18 +1377,18 @@ impl RequestHandler for InviteHandler {
 /// Copy dialog-forming headers from request to response headers
 fn copy_dialog_headers(request: &Request, headers: &mut sip_core::Headers) {
     if let Some(via) = header(&request.headers, "Via") {
-        headers.push("Via".into(), via.clone());
+        let _ = headers.push("Via", via.clone());
     }
     if let Some(from) = header(&request.headers, "From") {
-        headers.push("From".into(), from.clone());
+        let _ = headers.push("From", from.clone());
     }
     if let Some(to) = header(&request.headers, "To") {
-        headers.push("To".into(), to.clone());
+        let _ = headers.push("To", to.clone());
     }
     if let Some(call_id) = header(&request.headers, "Call-ID") {
-        headers.push("Call-ID".into(), call_id.clone());
+        let _ = headers.push("Call-ID", call_id.clone());
     }
     if let Some(cseq) = header(&request.headers, "CSeq") {
-        headers.push("CSeq".into(), cseq.clone());
+        let _ = headers.push("CSeq", cseq.clone());
     }
 }
