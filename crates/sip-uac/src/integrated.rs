@@ -810,7 +810,12 @@ impl IntegratedUAC {
         if let Some(via_value) = request.headers.get("Via") {
             // Extract branch parameter from placeholder
             let branch = if let Some(b) = via_value.split("branch=").nth(1) {
-                b.split(';').next().unwrap_or("z9hG4bK").to_string()
+                let candidate = b.split(';').next().unwrap_or("").trim();
+                if candidate.is_empty() {
+                    crate::generate_branch()
+                } else {
+                    candidate.to_string()
+                }
             } else {
                 crate::generate_branch()
             };

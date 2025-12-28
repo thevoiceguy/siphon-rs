@@ -618,7 +618,7 @@ mod tests {
     fn sample_request_bytes() -> Bytes {
         Bytes::from_static(
             b"OPTIONS sip:example.com SIP/2.0\r\n\
-Via: SIP/2.0/UDP host;branch=z9hG4bK\r\n\
+Via: SIP/2.0/UDP host;branch=z9hG4bKx\r\n\
 To: <sip:bob@example.com>\r\n\
 From: <sip:alice@example.com>;tag=123\r\n\
 Call-ID: abc123\r\n\
@@ -631,7 +631,7 @@ Content-Length: 0\r\n\r\n",
     fn sample_response_bytes() -> Bytes {
         Bytes::from_static(
             b"SIP/2.0 200 OK\r\n\
-Via: SIP/2.0/TCP host;branch=z9hG4bK\r\n\
+Via: SIP/2.0/TCP host;branch=z9hG4bKx\r\n\
 To: <sip:bob@example.com>;tag=321\r\n\
 From: <sip:alice@example.com>;tag=123\r\n\
 Call-ID: abc123\r\n\
@@ -673,7 +673,7 @@ t=0 0",
         assert_eq!(req.start.uri.as_str(), "sip:example.com");
         assert_eq!(
             header(&req.headers, "via").unwrap().as_str(),
-            "SIP/2.0/UDP host;branch=z9hG4bK"
+            "SIP/2.0/UDP host;branch=z9hG4bKx"
         );
         assert_eq!(
             header(&req.headers, "to").unwrap().as_str(),
@@ -722,7 +722,7 @@ t=0 0",
     fn parse_request_rejects_folded_header_lines() {
         let raw = Bytes::from_static(
             b"OPTIONS sip:example.com SIP/2.0\r\n\
-Via: SIP/2.0/UDP host;branch=z9hG4bK\r\n\
+Via: SIP/2.0/UDP host;branch=z9hG4bKx\r\n\
 Subject: first line\r\n\
 \tsecond line\r\n\
  max forwards\r\n\
@@ -785,7 +785,7 @@ body",
     fn parse_request_rejects_non_folded_header_lines() {
         let raw = Bytes::from_static(
             b"OPTIONS sip:example.com SIP/2.0\r\n\
-Via: SIP/2.0/UDP host;branch=z9hG4bK\r\n\
+Via: SIP/2.0/UDP host;branch=z9hG4bKx\r\n\
 BadHeader\r\n\
 Content-Length: 0\r\n\r\n",
         );
@@ -796,7 +796,7 @@ Content-Length: 0\r\n\r\n",
     fn parse_request_strict_rejects_missing_content_length_with_body() {
         let raw = Bytes::from_static(
             b"OPTIONS sip:example.com SIP/2.0\r\n\
-Via: SIP/2.0/UDP host;branch=z9hG4bK\r\n\
+Via: SIP/2.0/UDP host;branch=z9hG4bKx\r\n\
 \r\n\
 body",
         );
@@ -997,8 +997,8 @@ l: 0\r\n\r\n",
         assert_eq!(path.routes[0].uri().as_str(), "sip:path.example.com");
 
         let history = parse_history_info(&resp.headers);
-        assert_eq!(history.entries.len(), 1);
-        assert_eq!(history.entries[0].uri.as_str(), "sip:callee@example.com");
+        assert_eq!(history.len(), 1);
+        assert_eq!(history.get(0).unwrap().uri().as_str(), "sip:callee@example.com");
 
         let reason = parse_reason_header(header(&resp.headers, "Reason").unwrap());
         assert_eq!(reason.protocol.as_str(), "Q.850");
@@ -1131,7 +1131,7 @@ Content-Length: 0\r\n\r\n",
     fn parses_basic_response() {
         let raw = Bytes::from_static(
             b"SIP/2.0 200 OK\r\n\
-Via: SIP/2.0/UDP host;branch=z9hG4bK\r\n\
+Via: SIP/2.0/UDP host;branch=z9hG4bKx\r\n\
 Record-Route: <sip:proxy1>\r\n\
 Record-Route: <sip:proxy2>\r\n\
 Content-Length: 5\r\n\r\nhello",
@@ -1460,12 +1460,12 @@ body",
             let mut headers = Headers::new();
             headers.push(SmolStr::new("History-Info"), SmolStr::new(header_value)).unwrap();
             let parsed = parse_history_info(&headers);
-            prop_assert_eq!(parsed.entries.len(), entries.len());
-            for (entry, (user, index)) in parsed.entries.iter().zip(entries.iter()) {
-                prop_assert!(entry.uri.as_str().contains(user));
+            prop_assert_eq!(parsed.len(), entries.len());
+            for (entry, (user, index)) in parsed.entries().zip(entries.iter()) {
+                prop_assert!(entry.uri().as_str().contains(user));
                 prop_assert_eq!(
-                    entry.params.get(&SmolStr::new("index".to_owned())),
-                    Some(&Some(SmolStr::new(index.to_owned())))
+                    entry.get_param("index"),
+                    Some(Some(index.as_str()))
                 );
             }
         }

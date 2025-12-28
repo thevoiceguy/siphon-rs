@@ -7,7 +7,7 @@ use sip_transaction::{branch_from_via, generate_branch_id};
 
 // Helper function to validate branch has RFC 3261 magic cookie
 fn is_valid_branch(branch: &str) -> bool {
-    branch.starts_with("z9hG4bK")
+    branch.starts_with("z9hG4bK") && branch.len() > "z9hG4bK".len()
 }
 
 proptest! {
@@ -126,7 +126,6 @@ fn branch_from_via_complex() {
 #[test]
 fn valid_branch_magic_cookie() {
     assert!(is_valid_branch("z9hG4bKabcdef123"));
-    assert!(is_valid_branch("z9hG4bK"));
     assert!(is_valid_branch("z9hG4bKx"));
 }
 

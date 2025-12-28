@@ -554,9 +554,10 @@ impl RequestHandler for ReferHandler {
                 let mut via_replaced = false;
                 for header in invite.headers.iter() {
                     if !via_replaced && header.name().eq_ignore_ascii_case("Via") {
-                        let branch =
-                            sip_transaction::branch_from_via(header.value())
-                                .unwrap_or("z9hG4bK");
+                        let branch = sip_transaction::branch_from_via(header.value())
+                            .filter(|value| !value.is_empty())
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| sip_transaction::generate_branch_id().to_string());
                         let new_via = format!(
                             "SIP/2.0/{} placeholder;branch={}",
                             transport_name, branch
