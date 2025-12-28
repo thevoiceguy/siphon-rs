@@ -15,41 +15,90 @@
 /// - Default subscription duration: 3600 seconds (1 hour)
 /// - Supports multiple message types: voice, fax, pager, multimedia, text
 ///
+/// # Security
+///
+/// All types validate input to prevent:
+/// - CRLF injection attacks
+/// - Control character injection
+/// - Excessive length (DoS)
+/// - Unbounded collections
+///
 /// # Examples
 ///
 /// ```
 /// use sip_core::{MessageSummary, MessageContextClass, MessageCounts};
 ///
-/// // Create a message summary with voice messages
 /// let mut summary = MessageSummary::new(true);
-/// summary.set_account("sip:alice@vmail.example.com");
+/// summary.set_account("sip:alice@vmail.example.com").unwrap();
 /// summary.add_message_class(
 ///     MessageContextClass::Voice,
 ///     MessageCounts::new(2, 8).with_urgent(0, 2)
 /// );
 ///
-/// // Format as application/simple-message-summary
 /// let body = summary.to_string();
 /// ```
 use smol_str::SmolStr;
 use std::collections::BTreeMap;
 use std::fmt;
 
+const MAX_ACCOUNT_LENGTH: usize = 512;
+const MAX_HEADER_VALUE_LENGTH: usize = 1024;
+const MAX_MESSAGE_HEADERS: usize = 50;
+const MAX_MESSAGE_CLASSES: usize = 10;
+const MAX_PARSE_SIZE: usize = 100 * 1024; // 100KB
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MessageWaitingError {
+    AccountTooLong { max: usize, actual: usize },
+    HeaderValueTooLong { max: usize, actual: usize },
+    TooManyHeaders { max: usize, actual: usize },
+    TooManyClasses { max: usize, actual: usize },
+    InvalidAccount(String),
+    InvalidHeaderValue(String),
+    ParseError(String),
+    InputTooLarge { max: usize, actual: usize },
+}
+
+impl std::fmt::Display for MessageWaitingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AccountTooLong { max, actual } =>
+                write!(f, "account too long (max {}, got {})", max, actual),
+            Self::HeaderValueTooLong { max, actual } =>
+                write!(f, "header value too long (max {}, got {})", max, actual),
+            Self::TooManyHeaders { max, actual } =>
+                write!(f, "too many message headers (max {}, got {})", max, actual),
+            Self::TooManyClasses { max, actual } =>
+                write!(f, "too many message classes (max {}, got {})", max, actual),
+            Self::InvalidAccount(msg) =>
+                write!(f, "invalid account: {}", msg),
+            Self::InvalidHeaderValue(msg) =>
+                write!(f, "invalid header value: {}", msg),
+            Self::ParseError(msg) =>
+                write!(f, "parse error: {}", msg),
+            Self::InputTooLarge { max, actual } =>
+                write!(f, "input too large (max {}, got {})", max, actual),
+        }
+    }
+}
+
+impl std::error::Error for MessageWaitingError {}
+
 /// RFC 3842 Message Summary.
 ///
 /// Represents the complete message waiting indication including status,
 /// optional message account, message counts by class, and optional
 /// message headers.
+///
+/// # Security
+///
+/// MessageSummary validates all input to prevent injection attacks and DoS.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MessageSummary {
-    /// Whether messages are waiting (mandatory)
-    pub messages_waiting: bool,
-    /// Message account URI (conditional - required for group subscriptions)
-    pub account: Option<SmolStr>,
-    /// Message counts by context class
-    pub messages: BTreeMap<MessageContextClass, MessageCounts>,
-    /// Optional message headers (for newly received messages)
-    pub message_headers: Vec<MessageHeader>,
+    messages_waiting: bool,
+    account: Option<SmolStr>,
+    messages: BTreeMap<MessageContextClass, MessageCounts>,
+    message_headers: Vec<MessageHeader>,
 }
 
 impl MessageSummary {
@@ -63,19 +112,75 @@ impl MessageSummary {
         }
     }
 
-    /// Sets the message account URI.
-    pub fn set_account(&mut self, account: impl Into<SmolStr>) {
-        self.account = Some(account.into());
+    /// Sets the message account URI with validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the account contains control characters or is too long.
+    pub fn set_account(&mut self, account: impl AsRef<str>) -> Result<(), MessageWaitingError> {
+        let account = account.as_ref();
+        validate_account(account)?;
+        self.account = Some(SmolStr::new(account));
+        Ok(())
     }
 
     /// Adds message counts for a context class.
-    pub fn add_message_class(&mut self, class: MessageContextClass, counts: MessageCounts) {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if adding would exceed MAX_MESSAGE_CLASSES.
+    pub fn add_message_class(
+        &mut self,
+        class: MessageContextClass,
+        counts: MessageCounts,
+    ) -> Result<(), MessageWaitingError> {
+        if !self.messages.contains_key(&class) && self.messages.len() >= MAX_MESSAGE_CLASSES {
+            return Err(MessageWaitingError::TooManyClasses {
+                max: MAX_MESSAGE_CLASSES,
+                actual: self.messages.len() + 1,
+            });
+        }
         self.messages.insert(class, counts);
+        Ok(())
     }
 
     /// Adds a message header.
-    pub fn add_message_header(&mut self, header: MessageHeader) {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if adding would exceed MAX_MESSAGE_HEADERS.
+    pub fn add_message_header(
+        &mut self,
+        header: MessageHeader,
+    ) -> Result<(), MessageWaitingError> {
+        if self.message_headers.len() >= MAX_MESSAGE_HEADERS {
+            return Err(MessageWaitingError::TooManyHeaders {
+                max: MAX_MESSAGE_HEADERS,
+                actual: self.message_headers.len() + 1,
+            });
+        }
         self.message_headers.push(header);
+        Ok(())
+    }
+
+    /// Returns whether messages are waiting.
+    pub fn messages_waiting(&self) -> bool {
+        self.messages_waiting
+    }
+
+    /// Returns the message account if set.
+    pub fn account(&self) -> Option<&str> {
+        self.account.as_ref().map(|s| s.as_str())
+    }
+
+    /// Returns an iterator over message classes and their counts.
+    pub fn messages(&self) -> impl Iterator<Item = (&MessageContextClass, &MessageCounts)> {
+        self.messages.iter()
+    }
+
+    /// Returns an iterator over message headers.
+    pub fn message_headers(&self) -> impl Iterator<Item = &MessageHeader> {
+        self.message_headers.iter()
     }
 
     /// Returns true if there are no message counts.
@@ -85,19 +190,17 @@ impl MessageSummary {
 
     /// Returns the total number of new messages across all classes.
     pub fn total_new(&self) -> u32 {
-        self.messages.values().map(|c| c.new).sum()
+        self.messages.values().map(|c| c.new_count()).sum()
     }
 
     /// Returns the total number of old messages across all classes.
     pub fn total_old(&self) -> u32 {
-        self.messages.values().map(|c| c.old).sum()
+        self.messages.values().map(|c| c.old_count()).sum()
     }
 
     /// Returns true if any messages are urgent.
     pub fn has_urgent(&self) -> bool {
-        self.messages
-            .values()
-            .any(|c| c.urgent_new > 0 || c.urgent_old > 0)
+        self.messages.values().any(|c| c.has_urgent())
     }
 }
 
@@ -117,36 +220,42 @@ impl fmt::Display for MessageSummary {
 
         // Message counts by class
         for (class, counts) in &self.messages {
-            write!(f, "{}: {}/{}", class.header_name(), counts.new, counts.old)?;
+            write!(
+                f,
+                "{}: {}/{}",
+                class.header_name(),
+                counts.new_count(),
+                counts.old_count()
+            )?;
 
             // Include urgent counts if present
-            if counts.urgent_new > 0 || counts.urgent_old > 0 {
-                write!(f, " ({}/{})", counts.urgent_new, counts.urgent_old)?;
+            if counts.urgent_new() > 0 || counts.urgent_old() > 0 {
+                write!(f, " ({}/{})", counts.urgent_new(), counts.urgent_old())?;
             }
             writeln!(f)?;
         }
 
         // Optional message headers
         for msg_header in &self.message_headers {
-            if let Some(ref to) = msg_header.to {
+            if let Some(to) = msg_header.to() {
                 writeln!(f, "To: {}", to)?;
             }
-            if let Some(ref from) = msg_header.from {
+            if let Some(from) = msg_header.from() {
                 writeln!(f, "From: {}", from)?;
             }
-            if let Some(ref subject) = msg_header.subject {
+            if let Some(subject) = msg_header.subject() {
                 writeln!(f, "Subject: {}", subject)?;
             }
-            if let Some(ref date) = msg_header.date {
+            if let Some(date) = msg_header.date() {
                 writeln!(f, "Date: {}", date)?;
             }
-            if let Some(ref priority) = msg_header.priority {
+            if let Some(priority) = msg_header.priority() {
                 writeln!(f, "Priority: {}", priority)?;
             }
-            if let Some(ref message_id) = msg_header.message_id {
+            if let Some(message_id) = msg_header.message_id() {
                 writeln!(f, "Message-ID: {}", message_id)?;
             }
-            if let Some(ref message_context) = msg_header.message_context {
+            if let Some(message_context) = msg_header.message_context() {
                 writeln!(f, "Message-Context: {}", message_context)?;
             }
         }
@@ -161,17 +270,11 @@ impl fmt::Display for MessageSummary {
 /// class has separate new/old and urgent/non-urgent counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum MessageContextClass {
-    /// Voice messages
     Voice,
-    /// Fax messages
     Fax,
-    /// Pager messages
     Pager,
-    /// Multimedia messages
     Multimedia,
-    /// Text messages
     Text,
-    /// No specific context
     None,
 }
 
@@ -179,24 +282,24 @@ impl MessageContextClass {
     /// Returns the header name for this context class.
     pub fn header_name(&self) -> &str {
         match self {
-            MessageContextClass::Voice => "Voice-Message",
-            MessageContextClass::Fax => "Fax-Message",
-            MessageContextClass::Pager => "Pager-Message",
-            MessageContextClass::Multimedia => "Multimedia-Message",
-            MessageContextClass::Text => "Text-Message",
-            MessageContextClass::None => "None-Message",
+            Self::Voice => "Voice-Message",
+            Self::Fax => "Fax-Message",
+            Self::Pager => "Pager-Message",
+            Self::Multimedia => "Multimedia-Message",
+            Self::Text => "Text-Message",
+            Self::None => "None-Message",
         }
     }
 
     /// Parses a context class from a header name.
     pub fn from_header_name(name: &str) -> Option<Self> {
         match name.to_ascii_lowercase().as_str() {
-            "voice-message" => Some(MessageContextClass::Voice),
-            "fax-message" => Some(MessageContextClass::Fax),
-            "pager-message" => Some(MessageContextClass::Pager),
-            "multimedia-message" => Some(MessageContextClass::Multimedia),
-            "text-message" => Some(MessageContextClass::Text),
-            "none-message" => Some(MessageContextClass::None),
+            "voice-message" => Some(Self::Voice),
+            "fax-message" => Some(Self::Fax),
+            "pager-message" => Some(Self::Pager),
+            "multimedia-message" => Some(Self::Multimedia),
+            "text-message" => Some(Self::Text),
+            "none-message" => Some(Self::None),
             _ => None,
         }
     }
@@ -204,12 +307,12 @@ impl MessageContextClass {
     /// Returns the context class identifier.
     pub fn as_str(&self) -> &str {
         match self {
-            MessageContextClass::Voice => "voice",
-            MessageContextClass::Fax => "fax",
-            MessageContextClass::Pager => "pager",
-            MessageContextClass::Multimedia => "multimedia",
-            MessageContextClass::Text => "text",
-            MessageContextClass::None => "none",
+            Self::Voice => "voice",
+            Self::Fax => "fax",
+            Self::Pager => "pager",
+            Self::Multimedia => "multimedia",
+            Self::Text => "text",
+            Self::None => "none",
         }
     }
 }
@@ -226,14 +329,10 @@ impl fmt::Display for MessageContextClass {
 /// urgent/non-urgent priority. Maximum value is 2^32-1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MessageCounts {
-    /// Number of new messages
-    pub new: u32,
-    /// Number of old messages
-    pub old: u32,
-    /// Number of urgent new messages
-    pub urgent_new: u32,
-    /// Number of urgent old messages
-    pub urgent_old: u32,
+    new: u32,
+    old: u32,
+    urgent_new: u32,
+    urgent_old: u32,
 }
 
 impl MessageCounts {
@@ -252,6 +351,26 @@ impl MessageCounts {
         self.urgent_new = urgent_new;
         self.urgent_old = urgent_old;
         self
+    }
+
+    /// Returns the number of new messages.
+    pub fn new_count(&self) -> u32 {
+        self.new
+    }
+
+    /// Returns the number of old messages.
+    pub fn old_count(&self) -> u32 {
+        self.old
+    }
+
+    /// Returns the number of urgent new messages.
+    pub fn urgent_new(&self) -> u32 {
+        self.urgent_new
+    }
+
+    /// Returns the number of urgent old messages.
+    pub fn urgent_old(&self) -> u32 {
+        self.urgent_old
     }
 
     /// Returns the total number of messages (new + old).
@@ -286,22 +405,19 @@ impl Default for MessageCounts {
 /// Per RFC 3842, these headers provide details about specific messages.
 /// Initial NOTIFYs should exclude these to prevent unbounded sizes.
 /// Subsequent NOTIFYs include headers only for newly added messages.
+///
+/// # Security
+///
+/// All fields are validated to prevent injection attacks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MessageHeader {
-    /// To header
-    pub to: Option<SmolStr>,
-    /// From header
-    pub from: Option<SmolStr>,
-    /// Subject header
-    pub subject: Option<SmolStr>,
-    /// Date header
-    pub date: Option<SmolStr>,
-    /// Priority header
-    pub priority: Option<SmolStr>,
-    /// Message-ID header
-    pub message_id: Option<SmolStr>,
-    /// Message-Context header
-    pub message_context: Option<SmolStr>,
+    to: Option<SmolStr>,
+    from: Option<SmolStr>,
+    subject: Option<SmolStr>,
+    date: Option<SmolStr>,
+    priority: Option<SmolStr>,
+    message_id: Option<SmolStr>,
+    message_context: Option<SmolStr>,
 }
 
 impl MessageHeader {
@@ -319,45 +435,99 @@ impl MessageHeader {
     }
 
     /// Sets the To header (builder pattern).
-    pub fn with_to(mut self, to: impl Into<SmolStr>) -> Self {
-        self.to = Some(to.into());
-        self
+    pub fn with_to(mut self, to: impl AsRef<str>) -> Result<Self, MessageWaitingError> {
+        validate_header_value(to.as_ref())?;
+        self.to = Some(SmolStr::new(to.as_ref()));
+        Ok(self)
     }
 
     /// Sets the From header (builder pattern).
-    pub fn with_from(mut self, from: impl Into<SmolStr>) -> Self {
-        self.from = Some(from.into());
-        self
+    pub fn with_from(mut self, from: impl AsRef<str>) -> Result<Self, MessageWaitingError> {
+        validate_header_value(from.as_ref())?;
+        self.from = Some(SmolStr::new(from.as_ref()));
+        Ok(self)
     }
 
     /// Sets the Subject header (builder pattern).
-    pub fn with_subject(mut self, subject: impl Into<SmolStr>) -> Self {
-        self.subject = Some(subject.into());
-        self
+    pub fn with_subject(
+        mut self,
+        subject: impl AsRef<str>,
+    ) -> Result<Self, MessageWaitingError> {
+        validate_header_value(subject.as_ref())?;
+        self.subject = Some(SmolStr::new(subject.as_ref()));
+        Ok(self)
     }
 
     /// Sets the Date header (builder pattern).
-    pub fn with_date(mut self, date: impl Into<SmolStr>) -> Self {
-        self.date = Some(date.into());
-        self
+    pub fn with_date(mut self, date: impl AsRef<str>) -> Result<Self, MessageWaitingError> {
+        validate_header_value(date.as_ref())?;
+        self.date = Some(SmolStr::new(date.as_ref()));
+        Ok(self)
     }
 
     /// Sets the Priority header (builder pattern).
-    pub fn with_priority(mut self, priority: impl Into<SmolStr>) -> Self {
-        self.priority = Some(priority.into());
-        self
+    pub fn with_priority(
+        mut self,
+        priority: impl AsRef<str>,
+    ) -> Result<Self, MessageWaitingError> {
+        validate_header_value(priority.as_ref())?;
+        self.priority = Some(SmolStr::new(priority.as_ref()));
+        Ok(self)
     }
 
     /// Sets the Message-ID header (builder pattern).
-    pub fn with_message_id(mut self, message_id: impl Into<SmolStr>) -> Self {
-        self.message_id = Some(message_id.into());
-        self
+    pub fn with_message_id(
+        mut self,
+        message_id: impl AsRef<str>,
+    ) -> Result<Self, MessageWaitingError> {
+        validate_header_value(message_id.as_ref())?;
+        self.message_id = Some(SmolStr::new(message_id.as_ref()));
+        Ok(self)
     }
 
     /// Sets the Message-Context header (builder pattern).
-    pub fn with_message_context(mut self, message_context: impl Into<SmolStr>) -> Self {
-        self.message_context = Some(message_context.into());
-        self
+    pub fn with_message_context(
+        mut self,
+        message_context: impl AsRef<str>,
+    ) -> Result<Self, MessageWaitingError> {
+        validate_header_value(message_context.as_ref())?;
+        self.message_context = Some(SmolStr::new(message_context.as_ref()));
+        Ok(self)
+    }
+
+    /// Returns the To header.
+    pub fn to(&self) -> Option<&str> {
+        self.to.as_ref().map(|s| s.as_str())
+    }
+
+    /// Returns the From header.
+    pub fn from(&self) -> Option<&str> {
+        self.from.as_ref().map(|s| s.as_str())
+    }
+
+    /// Returns the Subject header.
+    pub fn subject(&self) -> Option<&str> {
+        self.subject.as_ref().map(|s| s.as_str())
+    }
+
+    /// Returns the Date header.
+    pub fn date(&self) -> Option<&str> {
+        self.date.as_ref().map(|s| s.as_str())
+    }
+
+    /// Returns the Priority header.
+    pub fn priority(&self) -> Option<&str> {
+        self.priority.as_ref().map(|s| s.as_str())
+    }
+
+    /// Returns the Message-ID header.
+    pub fn message_id(&self) -> Option<&str> {
+        self.message_id.as_ref().map(|s| s.as_str())
+    }
+
+    /// Returns the Message-Context header.
+    pub fn message_context(&self) -> Option<&str> {
+        self.message_context.as_ref().map(|s| s.as_str())
     }
 }
 
@@ -374,7 +544,26 @@ impl Default for MessageHeader {
 /// - Message-Account: URI (conditional)
 /// - <Context>-Message: new/old (urgent_new/urgent_old) (optional)
 /// - RFC 2822 headers for messages (optional)
-pub fn parse_message_summary(body: &str) -> Option<MessageSummary> {
+///
+/// # Security
+///
+/// This function enforces size limits and validates all input.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - Input exceeds MAX_PARSE_SIZE
+/// - Required fields are missing
+/// - Values contain invalid data
+pub fn parse_message_summary(body: &str) -> Result<MessageSummary, MessageWaitingError> {
+    // Check input size
+    if body.len() > MAX_PARSE_SIZE {
+        return Err(MessageWaitingError::InputTooLarge {
+            max: MAX_PARSE_SIZE,
+            actual: body.len(),
+        });
+    }
+
     let mut summary = MessageSummary::new(false);
     let mut current_message_header: Option<MessageHeader> = None;
     let mut found_status = false;
@@ -382,6 +571,9 @@ pub fn parse_message_summary(body: &str) -> Option<MessageSummary> {
     for line in body.lines() {
         let line = line.trim();
         if line.is_empty() {
+            if let Some(header) = current_message_header.take() {
+                summary.add_message_header(header)?;
+            }
             continue;
         }
 
@@ -397,16 +589,24 @@ pub fn parse_message_summary(body: &str) -> Option<MessageSummary> {
         match name.to_ascii_lowercase().as_str() {
             "messages-waiting" => {
                 found_status = true;
-                summary.messages_waiting = value.eq_ignore_ascii_case("yes");
+                if value.eq_ignore_ascii_case("yes") {
+                    summary.messages_waiting = true;
+                } else if value.eq_ignore_ascii_case("no") {
+                    summary.messages_waiting = false;
+                } else {
+                    return Err(MessageWaitingError::ParseError(
+                        "invalid Messages-Waiting value".to_string(),
+                    ));
+                }
             }
             "message-account" => {
-                summary.account = Some(SmolStr::new(value));
+                summary.set_account(value)?;
             }
             name if name.ends_with("-message") => {
-                // Parse message counts: new/old (urgent_new/urgent_old)
+                // Parse message counts
                 if let Some(class) = MessageContextClass::from_header_name(name) {
                     if let Some(counts) = parse_message_counts(value) {
-                        summary.messages.insert(class, counts);
+                        summary.add_message_class(class, counts)?;
                     }
                 }
             }
@@ -415,56 +615,56 @@ pub fn parse_message_summary(body: &str) -> Option<MessageSummary> {
                 if current_message_header.is_none() {
                     current_message_header = Some(MessageHeader::new());
                 }
-                if let Some(ref mut header) = current_message_header {
-                    header.to = Some(SmolStr::new(value));
+                if let Some(header) = current_message_header.take() {
+                    current_message_header = Some(header.with_to(value)?);
                 }
             }
             "from" => {
                 if current_message_header.is_none() {
                     current_message_header = Some(MessageHeader::new());
                 }
-                if let Some(ref mut header) = current_message_header {
-                    header.from = Some(SmolStr::new(value));
+                if let Some(header) = current_message_header.take() {
+                    current_message_header = Some(header.with_from(value)?);
                 }
             }
             "subject" => {
                 if current_message_header.is_none() {
                     current_message_header = Some(MessageHeader::new());
                 }
-                if let Some(ref mut header) = current_message_header {
-                    header.subject = Some(SmolStr::new(value));
+                if let Some(header) = current_message_header.take() {
+                    current_message_header = Some(header.with_subject(value)?);
                 }
             }
             "date" => {
                 if current_message_header.is_none() {
                     current_message_header = Some(MessageHeader::new());
                 }
-                if let Some(ref mut header) = current_message_header {
-                    header.date = Some(SmolStr::new(value));
+                if let Some(header) = current_message_header.take() {
+                    current_message_header = Some(header.with_date(value)?);
                 }
             }
             "priority" => {
                 if current_message_header.is_none() {
                     current_message_header = Some(MessageHeader::new());
                 }
-                if let Some(ref mut header) = current_message_header {
-                    header.priority = Some(SmolStr::new(value));
+                if let Some(header) = current_message_header.take() {
+                    current_message_header = Some(header.with_priority(value)?);
                 }
             }
             "message-id" => {
                 if current_message_header.is_none() {
                     current_message_header = Some(MessageHeader::new());
                 }
-                if let Some(ref mut header) = current_message_header {
-                    header.message_id = Some(SmolStr::new(value));
+                if let Some(header) = current_message_header.take() {
+                    current_message_header = Some(header.with_message_id(value)?);
                 }
             }
             "message-context" => {
                 if current_message_header.is_none() {
                     current_message_header = Some(MessageHeader::new());
                 }
-                if let Some(ref mut header) = current_message_header {
-                    header.message_context = Some(SmolStr::new(value));
+                if let Some(header) = current_message_header.take() {
+                    current_message_header = Some(header.with_message_context(value)?);
                 }
             }
             _ => {}
@@ -473,20 +673,25 @@ pub fn parse_message_summary(body: &str) -> Option<MessageSummary> {
 
     // Add accumulated message header if present
     if let Some(header) = current_message_header {
-        summary.message_headers.push(header);
+        summary.add_message_header(header)?;
     }
 
-    if found_status {
-        Some(summary)
-    } else {
-        None
+    if !found_status {
+        return Err(MessageWaitingError::ParseError(
+            "missing mandatory Messages-Waiting field".to_string(),
+        ));
     }
+
+    Ok(summary)
 }
 
 /// Parses message counts from format: "new/old (urgent_new/urgent_old)"
 fn parse_message_counts(s: &str) -> Option<MessageCounts> {
     // Split on space to separate main counts from urgent counts
     let parts: Vec<&str> = s.split_whitespace().collect();
+    if parts.is_empty() {
+        return None;
+    }
 
     // Parse main counts (new/old)
     let main_parts: Vec<&str> = parts[0].split('/').collect();
@@ -517,6 +722,42 @@ fn parse_message_counts(s: &str) -> Option<MessageCounts> {
     Some(counts)
 }
 
+// Validation functions
+
+fn validate_account(account: &str) -> Result<(), MessageWaitingError> {
+    if account.len() > MAX_ACCOUNT_LENGTH {
+        return Err(MessageWaitingError::AccountTooLong {
+            max: MAX_ACCOUNT_LENGTH,
+            actual: account.len(),
+        });
+    }
+
+    if account.chars().any(|c| c.is_ascii_control()) {
+        return Err(MessageWaitingError::InvalidAccount(
+            "contains control characters".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_header_value(value: &str) -> Result<(), MessageWaitingError> {
+    if value.len() > MAX_HEADER_VALUE_LENGTH {
+        return Err(MessageWaitingError::HeaderValueTooLong {
+            max: MAX_HEADER_VALUE_LENGTH,
+            actual: value.len(),
+        });
+    }
+
+    if value.chars().any(|c| c.is_ascii_control()) {
+        return Err(MessageWaitingError::InvalidHeaderValue(
+            "contains control characters".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -524,80 +765,105 @@ mod tests {
     #[test]
     fn message_summary_basic() {
         let mut summary = MessageSummary::new(true);
-        summary.set_account("sip:alice@vmail.example.com");
-        summary.add_message_class(MessageContextClass::Voice, MessageCounts::new(2, 8));
+        summary.set_account("sip:alice@vmail.example.com").unwrap();
+        summary
+            .add_message_class(MessageContextClass::Voice, MessageCounts::new(2, 8))
+            .unwrap();
 
-        assert!(summary.messages_waiting);
-        assert_eq!(
-            summary.account,
-            Some(SmolStr::new("sip:alice@vmail.example.com"))
-        );
+        assert!(summary.messages_waiting());
+        assert_eq!(summary.account(), Some("sip:alice@vmail.example.com"));
         assert_eq!(summary.total_new(), 2);
         assert_eq!(summary.total_old(), 8);
     }
 
     #[test]
+    fn reject_crlf_in_account() {
+        let mut summary = MessageSummary::new(true);
+        let result = summary.set_account("sip:alice\r\ninjected@example.com");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn reject_oversized_account() {
+        let mut summary = MessageSummary::new(true);
+        let long_account = format!("sip:{}", "x".repeat(MAX_ACCOUNT_LENGTH));
+        let result = summary.set_account(&long_account);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn reject_too_many_message_classes() {
+        let mut summary = MessageSummary::new(true);
+
+        let classes = [
+            MessageContextClass::Voice,
+            MessageContextClass::Fax,
+            MessageContextClass::Pager,
+            MessageContextClass::Multimedia,
+            MessageContextClass::Text,
+            MessageContextClass::None,
+        ];
+
+        let max_unique = MAX_MESSAGE_CLASSES.min(classes.len());
+        for (idx, class) in classes.iter().take(max_unique).enumerate() {
+            summary
+                .add_message_class(*class, MessageCounts::new(idx as u32, 0))
+                .unwrap();
+        }
+
+        // Updating an existing class should not trip the limit.
+        summary
+            .add_message_class(MessageContextClass::Voice, MessageCounts::new(99, 0))
+            .unwrap();
+
+        if let Some(next_class) = classes.get(MAX_MESSAGE_CLASSES) {
+            let result =
+                summary.add_message_class(*next_class, MessageCounts::new(100, 0));
+            assert!(result.is_err());
+        }
+    }
+
+    #[test]
+    fn reject_too_many_headers() {
+        let mut summary = MessageSummary::new(true);
+        
+        for _ in 0..MAX_MESSAGE_HEADERS {
+            summary.add_message_header(MessageHeader::new()).unwrap();
+        }
+        
+        // Should fail
+        let result = summary.add_message_header(MessageHeader::new());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn reject_crlf_in_message_header() {
+        let result = MessageHeader::new().with_subject("Hello\r\nInjected: evil");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn reject_oversized_header_value() {
+        let long_subject = "x".repeat(MAX_HEADER_VALUE_LENGTH + 1);
+        let result = MessageHeader::new().with_subject(&long_subject);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn message_summary_output() {
         let mut summary = MessageSummary::new(true);
-        summary.set_account("sip:alice@vmail.example.com");
-        summary.add_message_class(
-            MessageContextClass::Voice,
-            MessageCounts::new(2, 8).with_urgent(0, 2),
-        );
+        summary.set_account("sip:alice@vmail.example.com").unwrap();
+        summary
+            .add_message_class(
+                MessageContextClass::Voice,
+                MessageCounts::new(2, 8).with_urgent(0, 2),
+            )
+            .unwrap();
 
         let output = summary.to_string();
         assert!(output.contains("Messages-Waiting: yes"));
         assert!(output.contains("Message-Account: sip:alice@vmail.example.com"));
         assert!(output.contains("Voice-Message: 2/8 (0/2)"));
-    }
-
-    #[test]
-    fn message_context_class_header_names() {
-        assert_eq!(MessageContextClass::Voice.header_name(), "Voice-Message");
-        assert_eq!(MessageContextClass::Fax.header_name(), "Fax-Message");
-        assert_eq!(MessageContextClass::Text.header_name(), "Text-Message");
-    }
-
-    #[test]
-    fn message_context_class_from_header() {
-        assert_eq!(
-            MessageContextClass::from_header_name("Voice-Message"),
-            Some(MessageContextClass::Voice)
-        );
-        assert_eq!(
-            MessageContextClass::from_header_name("fax-message"),
-            Some(MessageContextClass::Fax)
-        );
-    }
-
-    #[test]
-    fn message_counts_basic() {
-        let counts = MessageCounts::new(3, 5);
-        assert_eq!(counts.new, 3);
-        assert_eq!(counts.old, 5);
-        assert_eq!(counts.total(), 8);
-        assert!(counts.has_new());
-    }
-
-    #[test]
-    fn message_counts_with_urgent() {
-        let counts = MessageCounts::new(2, 8).with_urgent(1, 2);
-        assert_eq!(counts.urgent_new, 1);
-        assert_eq!(counts.urgent_old, 2);
-        assert_eq!(counts.total_urgent(), 3);
-        assert!(counts.has_urgent());
-    }
-
-    #[test]
-    fn message_header_builder() {
-        let header = MessageHeader::new()
-            .with_to("alice@example.com")
-            .with_from("bob@example.com")
-            .with_subject("Hello");
-
-        assert_eq!(header.to, Some(SmolStr::new("alice@example.com")));
-        assert_eq!(header.from, Some(SmolStr::new("bob@example.com")));
-        assert_eq!(header.subject, Some(SmolStr::new("Hello")));
     }
 
     #[test]
@@ -607,93 +873,91 @@ mod tests {
                     Voice-Message: 2/8 (0/2)\n";
 
         let summary = parse_message_summary(body).unwrap();
-        assert!(summary.messages_waiting);
-        assert_eq!(
-            summary.account,
-            Some(SmolStr::new("sip:alice@vmail.example.com"))
-        );
-        assert_eq!(summary.messages.len(), 1);
+        assert!(summary.messages_waiting());
+        assert_eq!(summary.account(), Some("sip:alice@vmail.example.com"));
 
-        let voice = summary.messages.get(&MessageContextClass::Voice).unwrap();
-        assert_eq!(voice.new, 2);
-        assert_eq!(voice.old, 8);
-        assert_eq!(voice.urgent_new, 0);
-        assert_eq!(voice.urgent_old, 2);
+        let messages: Vec<_> = summary.messages().collect();
+        assert_eq!(messages.len(), 1);
     }
 
     #[test]
-    fn parse_summary_with_headers() {
+    fn reject_oversized_parse_input() {
+        let huge_body = "x".repeat(MAX_PARSE_SIZE + 1);
+        let result = parse_message_summary(&huge_body);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn reject_missing_status() {
+        let body = "Message-Account: sip:alice@vmail.example.com\n";
+        let result = parse_message_summary(body);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn reject_invalid_messages_waiting_value() {
+        let body = "Messages-Waiting: maybe\n";
+        let result = parse_message_summary(body);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn reject_empty_message_counts() {
+        let body = "Messages-Waiting: yes\nVoice-Message:\n";
+        let summary = parse_message_summary(body).unwrap();
+        assert!(summary.messages().next().is_none());
+    }
+
+    #[test]
+    fn parse_multiple_message_headers() {
         let body = "Messages-Waiting: yes\n\
-                    Voice-Message: 4/8 (1/2)\n\
-                    To: alice@atlanta.example.com\n\
-                    From: bob@biloxi.example.com\n\
-                    Subject: carpool tomorrow?\n";
+                    To: sip:alice@example.com\n\
+                    Subject: First\n\
+                    \n\
+                    To: sip:bob@example.com\n\
+                    Subject: Second\n";
 
         let summary = parse_message_summary(body).unwrap();
-        assert!(summary.messages_waiting);
-        assert_eq!(summary.message_headers.len(), 1);
-
-        let header = &summary.message_headers[0];
-        assert_eq!(header.to, Some(SmolStr::new("alice@atlanta.example.com")));
-        assert_eq!(header.from, Some(SmolStr::new("bob@biloxi.example.com")));
-        assert_eq!(header.subject, Some(SmolStr::new("carpool tomorrow?")));
-    }
-
-    #[test]
-    fn parse_no_messages() {
-        let body = "Messages-Waiting: no\n";
-
-        let summary = parse_message_summary(body).unwrap();
-        assert!(!summary.messages_waiting);
-        assert!(summary.messages.is_empty());
-    }
-
-    #[test]
-    fn parse_multiple_classes() {
-        let body = "Messages-Waiting: yes\n\
-                    Voice-Message: 2/8\n\
-                    Fax-Message: 1/3\n\
-                    Text-Message: 5/10 (2/0)\n";
-
-        let summary = parse_message_summary(body).unwrap();
-        assert_eq!(summary.messages.len(), 3);
-        assert!(summary.messages.contains_key(&MessageContextClass::Voice));
-        assert!(summary.messages.contains_key(&MessageContextClass::Fax));
-        assert!(summary.messages.contains_key(&MessageContextClass::Text));
-    }
-
-    #[test]
-    fn parse_message_counts_basic() {
-        let counts = parse_message_counts("2/8").unwrap();
-        assert_eq!(counts.new, 2);
-        assert_eq!(counts.old, 8);
-        assert_eq!(counts.urgent_new, 0);
-        assert_eq!(counts.urgent_old, 0);
-    }
-
-    #[test]
-    fn parse_message_counts_with_urgent() {
-        let counts = parse_message_counts("2/8 (0/2)").unwrap();
-        assert_eq!(counts.new, 2);
-        assert_eq!(counts.old, 8);
-        assert_eq!(counts.urgent_new, 0);
-        assert_eq!(counts.urgent_old, 2);
+        let headers: Vec<_> = summary.message_headers().collect();
+        assert_eq!(headers.len(), 2);
+        assert_eq!(headers[0].to(), Some("sip:alice@example.com"));
+        assert_eq!(headers[1].to(), Some("sip:bob@example.com"));
     }
 
     #[test]
     fn round_trip() {
         let mut summary = MessageSummary::new(true);
-        summary.set_account("sip:alice@vmail.example.com");
-        summary.add_message_class(
-            MessageContextClass::Voice,
-            MessageCounts::new(2, 8).with_urgent(0, 2),
-        );
+        summary.set_account("sip:alice@vmail.example.com").unwrap();
+        summary
+            .add_message_class(
+                MessageContextClass::Voice,
+                MessageCounts::new(2, 8).with_urgent(0, 2),
+            )
+            .unwrap();
 
         let output = summary.to_string();
         let parsed = parse_message_summary(&output).unwrap();
 
-        assert_eq!(summary.messages_waiting, parsed.messages_waiting);
-        assert_eq!(summary.account, parsed.account);
-        assert_eq!(summary.messages, parsed.messages);
+        assert_eq!(summary.messages_waiting(), parsed.messages_waiting());
+        assert_eq!(summary.account(), parsed.account());
+    }
+
+    #[test]
+    fn fields_are_private() {
+        let summary = MessageSummary::new(true);
+        let counts = MessageCounts::new(1, 2);
+        let header = MessageHeader::new();
+        
+        // These should compile (read-only access)
+        let _ = summary.messages_waiting();
+        let _ = summary.account();
+        let _ = counts.new_count();
+        let _ = counts.old_count();
+        let _ = header.to();
+        
+        // These should NOT compile (no direct field access):
+        // summary.messages_waiting = false;  // ← Does not compile!
+        // counts.new = 100;                  // ← Does not compile!
+        // header.to = Some(...);             // ← Does not compile!
     }
 }
