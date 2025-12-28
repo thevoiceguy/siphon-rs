@@ -321,7 +321,7 @@ fn parse_status_line(line: &str) -> Option<StatusLine> {
 
 /// Maps a method token to the [`Method`] enum, including extension methods.
 pub(crate) fn detect_method(token: &str) -> Option<Method> {
-    Some(Method::from_token(token))
+    Method::from_token(token).ok()
 }
 
 /// Returns the first header value matching `name` (case insensitive).

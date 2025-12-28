@@ -215,7 +215,8 @@ pub async fn run_scenario(path: &Path, services: &ServiceRegistry) -> Result<()>
                 body,
                 transport,
             } => {
-                let method = Method::from_token(&method);
+                let method =
+                    Method::from_token(&method).map_err(|err| anyhow!("Invalid method: {err}"))?;
                 let uri = SipUri::parse(&uri).ok_or_else(|| anyhow!("Invalid URI: {}", uri))?;
                 let request = build_request(
                     method.clone(),

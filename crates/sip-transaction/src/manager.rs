@@ -503,7 +503,7 @@ impl TransactionManager {
         let cseq = headers.get("CSeq")?;
         // CSeq format: "123 INVITE" or "456 CANCEL"
         let method_str = cseq.split_whitespace().nth(1)?;
-        Some(Method::from_token(method_str))
+        Method::from_token(method_str).ok()
     }
 
     fn spawn_command_loop(&self, mut rx: mpsc::Receiver<ManagerCommand>) {
