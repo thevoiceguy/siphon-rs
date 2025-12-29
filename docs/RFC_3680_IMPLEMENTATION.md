@@ -788,17 +788,17 @@ use sip_core::parse_reginfo_xml;
 fn handle_reg_notify(notify: &Request) -> anyhow::Result<()> {
     let reginfo = parse_reginfo_xml(&notify.body)?;
 
-    println!("Version: {}", reginfo.version);
-    println!("State: {}", reginfo.state.as_str());
+    println!("Version: {}", reginfo.version());
+    println!("State: {}", reginfo.state().as_str());
 
-    for registration in &reginfo.registrations {
-        println!("  AOR: {}", registration.aor);
-        println!("  State: {}", registration.state.as_str());
+    for registration in reginfo.registrations() {
+        println!("  AOR: {}", registration.aor());
+        println!("  State: {}", registration.state().as_str());
 
-        for contact in &registration.contacts {
-            println!("    Contact: {}", contact.uri);
-            println!("    State: {}", contact.state.as_str());
-            if let Some(expires) = contact.expires {
+        for contact in registration.contacts() {
+            println!("    Contact: {}", contact.uri());
+            println!("    State: {}", contact.state().as_str());
+            if let Some(expires) = contact.expires() {
                 println!("    Expires: {}s", expires);
             }
         }

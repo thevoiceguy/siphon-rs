@@ -2051,17 +2051,18 @@ impl UserAgentClient {
     ///     SmolStr::new("sip:bob@example.com"),
     ///     SmolStr::new("reg1"),
     ///     RegistrationState::Active
-    /// );
+    /// ).unwrap();
     ///
     /// let contact = Contact::new(
     ///     SmolStr::new("contact1"),
     ///     ContactState::Active,
     ///     SmolStr::new("sip:bob@192.168.1.200:5060")
-    /// ).with_event(ContactEvent::Registered)
+    /// ).unwrap()
+    ///   .with_event(ContactEvent::Registered)
     ///   .with_expires(3600);
     ///
-    /// registration.add_contact(contact);
-    /// reginfo.add_registration(registration);
+    /// registration.add_contact(contact).unwrap();
+    /// reginfo.add_registration(registration).unwrap();
     ///
     /// // Create NOTIFY with reginfo body
     /// # let subscription = todo!();
