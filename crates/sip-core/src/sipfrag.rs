@@ -130,9 +130,8 @@ impl SipFrag {
     /// assert!(frag.is_response());
     /// ```
     pub fn status_only(code: u16, reason: SmolStr) -> Result<Self, SipFragError> {
-        let status = StatusLine::new(code, reason).map_err(|e| {
-            SipFragError::ValidationError(format!("Invalid status line: {}", e))
-        })?;
+        let status = StatusLine::new(code, reason)
+            .map_err(|e| SipFragError::ValidationError(format!("Invalid status line: {}", e)))?;
         Ok(Self {
             start_line: Some(StartLine::Response(status)),
             headers: Headers::new(),
@@ -449,12 +448,8 @@ mod tests {
     #[test]
     fn sipfrag_headers_only() {
         let mut headers = Headers::new();
-        headers
-            .push("From", "sip:alice@example.com")
-            .unwrap();
-        headers
-            .push("To", "sip:bob@example.com")
-            .unwrap();
+        headers.push("From", "sip:alice@example.com").unwrap();
+        headers.push("To", "sip:bob@example.com").unwrap();
 
         let frag = SipFrag::headers_only(headers);
         assert!(frag.start_line().is_none());
@@ -491,10 +486,7 @@ mod tests {
             .unwrap()
             .with_body(Bytes::from(large_body));
 
-        assert!(matches!(
-            result,
-            Err(SipFragError::BodyTooLarge { .. })
-        ));
+        assert!(matches!(result, Err(SipFragError::BodyTooLarge { .. })));
     }
 
     #[test]
@@ -553,10 +545,7 @@ mod tests {
         .expect("valid response");
 
         let result = SipFrag::from_response(response);
-        assert!(matches!(
-            result,
-            Err(SipFragError::BodyTooLarge { .. })
-        ));
+        assert!(matches!(result, Err(SipFragError::BodyTooLarge { .. })));
     }
 
     #[test]

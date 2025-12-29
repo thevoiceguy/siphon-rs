@@ -71,27 +71,27 @@ impl DialogId {
     /// Creates a dialog ID from a request, using the From tag as local tag.
     /// Returns None if Call-ID or From tag is missing.
     pub fn from_request(req: &Request) -> Option<Self> {
-        let call_id = header(&req.headers(), "Call-ID")?.clone();
-        let from_tag = extract_tag(header(&req.headers(), "From")?)?;
-        let to_tag = extract_tag(header(&req.headers(), "To")?)?;
+        let call_id = header(req.headers(), "Call-ID")?.clone();
+        let from_tag = extract_tag(header(req.headers(), "From")?)?;
+        let to_tag = extract_tag(header(req.headers(), "To")?)?;
         Some(Self::new(call_id, from_tag, to_tag))
     }
 
     /// Creates a dialog ID from a response, considering UAC perspective.
     /// For UAC: From tag is local, To tag is remote.
     pub fn from_response_uac(resp: &Response) -> Option<Self> {
-        let call_id = header(&resp.headers(), "Call-ID")?.clone();
-        let from_tag = extract_tag(header(&resp.headers(), "From")?)?;
-        let to_tag = extract_tag(header(&resp.headers(), "To")?)?;
+        let call_id = header(resp.headers(), "Call-ID")?.clone();
+        let from_tag = extract_tag(header(resp.headers(), "From")?)?;
+        let to_tag = extract_tag(header(resp.headers(), "To")?)?;
         Some(Self::new(call_id, from_tag, to_tag))
     }
 
     /// Creates a dialog ID from a response, considering UAS perspective.
     /// For UAS: To tag is local, From tag is remote.
     pub fn from_response_uas(resp: &Response) -> Option<Self> {
-        let call_id = header(&resp.headers(), "Call-ID")?.clone();
-        let to_tag = extract_tag(header(&resp.headers(), "To")?)?;
-        let from_tag = extract_tag(header(&resp.headers(), "From")?)?;
+        let call_id = header(resp.headers(), "Call-ID")?.clone();
+        let to_tag = extract_tag(header(resp.headers(), "To")?)?;
+        let from_tag = extract_tag(header(resp.headers(), "From")?)?;
         Some(Self::new(call_id, to_tag, from_tag))
     }
 }
@@ -232,20 +232,20 @@ impl Dialog {
 
         // Extract remote target from Contact header
         let remote_target =
-            extract_contact_uri(&resp.headers()).or_else(|| Some(remote_uri.clone()))?;
+            extract_contact_uri(resp.headers()).or_else(|| Some(remote_uri.clone()))?;
 
         // Build route set from Record-Route (stored in reverse for requests)
-        let route_set = build_route_set(&resp.headers());
+        let route_set = build_route_set(resp.headers());
 
         // Parse CSeq from request
-        let local_cseq = parse_cseq_number(&req.headers())?;
+        let local_cseq = parse_cseq_number(req.headers())?;
         let remote_cseq = 0; // Will be updated when we receive requests
 
         // Extract session timer info
         let (session_expires, refresher) = extract_session_timer(resp);
 
         // Check if secure before moving URIs
-        let secure = local_uri.sips || remote_uri.sips;
+        let secure = local_uri.is_sips() || remote_uri.is_sips();
 
         Some(Self {
             id,
@@ -281,19 +281,19 @@ impl Dialog {
 
         // Extract remote target from Contact in request (caller's contact)
         let remote_target =
-            extract_contact_uri(&req.headers()).or_else(|| Some(remote_uri.clone()))?;
+            extract_contact_uri(req.headers()).or_else(|| Some(remote_uri.clone()))?;
 
         // Build route set from Record-Route (from initial request for UAS)
-        let route_set = build_route_set(&req.headers());
+        let route_set = build_route_set(req.headers());
 
         // Parse CSeq from request (this is remote CSeq since they sent it)
-        let remote_cseq = parse_cseq_number(&req.headers())?;
+        let remote_cseq = parse_cseq_number(req.headers())?;
         let local_cseq = 0; // Will be incremented when we send requests
 
         let (session_expires, refresher) = extract_session_timer(resp);
 
         // Check if secure before moving URIs
-        let secure = local_uri.sips || remote_uri.sips;
+        let secure = local_uri.is_sips() || remote_uri.is_sips();
 
         Some(Self {
             id,
@@ -347,12 +347,12 @@ impl Dialog {
     /// ```
     pub fn update_from_response(&mut self, resp: &Response) {
         // Update remote target if Contact present
-        if let Some(contact) = extract_contact_uri(&resp.headers()) {
+        if let Some(contact) = extract_contact_uri(resp.headers()) {
             self.remote_target = contact;
         }
 
         // Update route set if Record-Route present
-        let new_route_set = build_route_set(&resp.headers());
+        let new_route_set = build_route_set(resp.headers());
         if !new_route_set.is_empty() {
             self.route_set = new_route_set;
         }
@@ -389,7 +389,7 @@ impl Dialog {
     /// - ACK CSeq must match the INVITE/re-INVITE CSeq for the dialog
     pub fn update_from_request(&mut self, req: &Request) -> Result<(), DialogError> {
         // Validate and update remote CSeq
-        let cseq = parse_cseq_number(&req.headers()).ok_or(DialogError::MissingHeader)?;
+        let cseq = parse_cseq_number(req.headers()).ok_or(DialogError::MissingHeader)?;
 
         // RFC 3261 requires CSeq >= 1
         if cseq == 0 {
@@ -414,7 +414,7 @@ impl Dialog {
         }
 
         // Update remote target from Contact
-        if let Some(contact) = extract_contact_uri(&req.headers()) {
+        if let Some(contact) = extract_contact_uri(req.headers()) {
             self.remote_target = contact;
         }
 
@@ -587,7 +587,7 @@ fn parse_cseq_number(headers: &Headers) -> Option<u32> {
 
 /// Extracts session timer information from response.
 fn extract_session_timer(resp: &Response) -> (Option<Duration>, Option<RefresherRole>) {
-    if let Some(se_header) = header(&resp.headers(), "Session-Expires") {
+    if let Some(se_header) = header(resp.headers(), "Session-Expires") {
         if let Some(se) = parse_session_expires(se_header) {
             return (
                 Some(Duration::from_secs(se.delta_seconds() as u64)),
@@ -608,7 +608,7 @@ fn parse_uri_from_header(raw: &str) -> Option<SipUri> {
         // No angle brackets, might have parameters after
         trimmed.split(';').next()?
     };
-    SipUri::parse(uri_part.trim())
+    SipUri::parse(uri_part.trim()).ok()
 }
 
 /// Splits a header value into comma-separated elements, respecting quotes and <>.
@@ -700,20 +700,20 @@ impl SubscriptionId {
 
     /// Creates a subscription ID from a SUBSCRIBE request or NOTIFY request.
     pub fn from_request(req: &Request) -> Option<Self> {
-        let call_id = header(&req.headers(), "Call-ID")?.clone();
-        let from_tag = extract_tag(header(&req.headers(), "From")?)?;
-        let to_tag = extract_tag(header(&req.headers(), "To")?)?;
-        let event = header(&req.headers(), "Event")?.clone();
+        let call_id = header(req.headers(), "Call-ID")?.clone();
+        let from_tag = extract_tag(header(req.headers(), "From")?)?;
+        let to_tag = extract_tag(header(req.headers(), "To")?)?;
+        let event = header(req.headers(), "Event")?.clone();
         Some(Self::new(call_id, from_tag, to_tag, event))
     }
 
     /// Creates a subscription ID from request and response (notifier perspective).
     /// Uses From tag from request and To tag from response.
     pub fn from_request_response(req: &Request, resp: &Response) -> Option<Self> {
-        let call_id = header(&req.headers(), "Call-ID")?.clone();
-        let from_tag = extract_tag(header(&req.headers(), "From")?)?;
-        let to_tag = extract_tag(header(&resp.headers(), "To")?)?;
-        let event = header(&req.headers(), "Event")?.clone();
+        let call_id = header(req.headers(), "Call-ID")?.clone();
+        let from_tag = extract_tag(header(req.headers(), "From")?)?;
+        let to_tag = extract_tag(header(resp.headers(), "To")?)?;
+        let event = header(req.headers(), "Event")?.clone();
         Some(Self::new(call_id, from_tag, to_tag, event))
     }
 }
@@ -740,13 +740,13 @@ impl Subscription {
         remote_uri: SipUri,
     ) -> Option<Self> {
         let id = SubscriptionId::from_request_response(request, response)?;
-        let contact = extract_contact_uri(&response.headers())?;
-        let local_cseq = parse_cseq_number(&request.headers())?;
+        let contact = extract_contact_uri(response.headers())?;
+        let local_cseq = parse_cseq_number(request.headers())?;
 
         // Parse expires from response or request
-        let expires = if let Some(exp_str) = header(&response.headers(), "Expires") {
+        let expires = if let Some(exp_str) = header(response.headers(), "Expires") {
             Duration::from_secs(exp_str.parse().ok()?)
-        } else if let Some(exp_str) = header(&request.headers(), "Expires") {
+        } else if let Some(exp_str) = header(request.headers(), "Expires") {
             Duration::from_secs(exp_str.parse().ok()?)
         } else {
             Duration::from_secs(3600) // Default
@@ -772,12 +772,12 @@ impl Subscription {
         remote_uri: SipUri,
     ) -> Option<Self> {
         let id = SubscriptionId::from_request_response(request, response)?;
-        let contact = extract_contact_uri(&response.headers())?;
+        let contact = extract_contact_uri(response.headers())?;
         let remote_cseq = 0;
-        let local_cseq = parse_cseq_number(&request.headers())?;
+        let local_cseq = parse_cseq_number(request.headers())?;
 
         // Parse expires from response
-        let expires = if let Some(exp_str) = header(&response.headers(), "Expires") {
+        let expires = if let Some(exp_str) = header(response.headers(), "Expires") {
             Duration::from_secs(exp_str.parse().ok()?)
         } else {
             Duration::from_secs(3600) // Default
@@ -1289,7 +1289,7 @@ mod tests {
         dialog.update_from_response(&reinvite_resp);
 
         assert_ne!(dialog.remote_target, original_target);
-        assert_eq!(dialog.remote_target.host.as_str(), "newserver.example.com");
+        assert_eq!(dialog.remote_target.host(), "newserver.example.com");
     }
 
     #[test]
@@ -1317,17 +1317,17 @@ mod tests {
     #[test]
     fn parse_uri_with_angle_brackets() {
         let uri = parse_uri_from_header("<sip:bob@example.com>").unwrap();
-        assert_eq!(uri.host.as_str(), "example.com");
+        assert_eq!(uri.host(), "example.com");
 
         let uri2 = parse_uri_from_header("  <sip:alice@test.com:5060>  ").unwrap();
-        assert_eq!(uri2.host.as_str(), "test.com");
-        assert_eq!(uri2.port, Some(5060));
+        assert_eq!(uri2.host(), "test.com");
+        assert_eq!(uri2.port(), Some(5060));
     }
 
     #[test]
     fn parse_uri_without_angle_brackets() {
         let uri = parse_uri_from_header("sip:bob@example.com").unwrap();
-        assert_eq!(uri.host.as_str(), "example.com");
+        assert_eq!(uri.host(), "example.com");
     }
 
     #[test]

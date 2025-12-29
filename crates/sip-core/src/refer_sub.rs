@@ -475,11 +475,11 @@ mod tests {
     #[test]
     fn field_is_private() {
         let refer_sub = ReferSubHeader::new(true);
-        
+
         // These should compile (read-only access)
         let _ = refer_sub.is_enabled();
         let _ = refer_sub.is_suppressed();
-        
+
         // This should NOT compile (no direct field access):
         // refer_sub.enabled = false;  // ← Does not compile!
     }

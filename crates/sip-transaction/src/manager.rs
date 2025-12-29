@@ -703,7 +703,7 @@ impl TransactionManager {
     /// Feeds a network response into the appropriate client transaction.
     pub async fn receive_response(&self, response: Response) {
         // Extract branch from Via header
-        let branch = match Self::extract_branch(&response.headers()) {
+        let branch = match Self::extract_branch(response.headers()) {
             Some(b) => b,
             None => {
                 debug!("Response has no branch in Via header");
@@ -712,7 +712,7 @@ impl TransactionManager {
         };
 
         // Extract method from CSeq header
-        let method = match Self::extract_cseq_method(&response.headers()) {
+        let method = match Self::extract_cseq_method(response.headers()) {
             Some(m) => m,
             None => {
                 debug!("Response has no method in CSeq header");

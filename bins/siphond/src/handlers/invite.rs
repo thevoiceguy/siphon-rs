@@ -18,6 +18,7 @@ use sip_dialog::Dialog;
 use sip_parse::header;
 use sip_transaction::{ServerTransactionHandle, TransportContext};
 use sip_uas::UserAgentServer;
+use smol_str::SmolStr;
 use std::time::Duration;
 use tracing::{info, warn};
 
@@ -176,7 +177,7 @@ impl InviteHandler {
 
         // Parse B2BUA URI for creating UAC
         let b2bua_contact_uri = sip_core::SipUri::parse(&services.config.local_uri)
-            .ok_or_else(|| anyhow!("Invalid local_uri"))?;
+            .map_err(|_| anyhow!("Invalid local_uri"))?;
 
         // Create UAC for outgoing re-INVITE (use B2BUA as both local and contact)
         let uac =
@@ -188,8 +189,8 @@ impl InviteHandler {
         // Determine target address from the other dialog's remote target
         let target_addr = format!(
             "{}:{}",
-            other_dialog.remote_target.host,
-            other_dialog.remote_target.port.unwrap_or(5060)
+            other_dialog.remote_target.host(),
+            other_dialog.remote_target.port().unwrap_or(5060)
         )
         .parse::<std::net::SocketAddr>()?;
 
@@ -293,8 +294,8 @@ impl InviteHandler {
         // Normalize lookup key - strip parameters to match registration AOR format
         // The registrar stores: sip:user@host;transport=X
         // But phones may call with different transport, so we need to try multiple lookups
-        let user = target_uri.user.as_deref().unwrap_or("");
-        let host = &target_uri.host;
+        let user = target_uri.user().unwrap_or("");
+        let host = target_uri.host();
 
         info!(call_id, target = %target_uri.as_str(), user = %user, host = %host, "Looking up callee in location service");
 
@@ -362,7 +363,7 @@ impl InviteHandler {
         // Parse callee's contact URI
         let callee_contact_str = bindings[0].contact.as_str();
         let callee_contact = sip_core::SipUri::parse(callee_contact_str)
-            .ok_or_else(|| anyhow!("Invalid contact URI: {}", callee_contact_str))?;
+            .map_err(|_| anyhow!("Invalid contact URI: {}", callee_contact_str))?;
 
         info!(call_id, callee = %callee_contact.as_str(), "Found callee, creating outgoing INVITE");
 
@@ -381,11 +382,11 @@ impl InviteHandler {
         };
 
         let caller_uri = sip_core::SipUri::parse(from_uri)
-            .ok_or_else(|| anyhow!("Invalid From URI: {}", from_uri))?;
+            .map_err(|_| anyhow!("Invalid From URI: {}", from_uri))?;
 
         // Parse B2BUA URI for Contact (responses should route back to B2BUA)
         let b2bua_contact_uri = sip_core::SipUri::parse(&services.config.local_uri)
-            .ok_or_else(|| anyhow!("Invalid local_uri"))?;
+            .map_err(|_| anyhow!("Invalid local_uri"))?;
 
         // Create UAC for outgoing leg
         // From: caller's URI (preserves caller ID)
@@ -460,8 +461,7 @@ impl InviteHandler {
                     if caller_response.code() >= 100 && caller_response.code() < 200 {
                         // Provisional response (1xx)
                         handle.send_provisional(caller_response).await;
-                    } else if caller_response.code() >= 200 && caller_response.code() < 300
-                    {
+                    } else if caller_response.code() >= 200 && caller_response.code() < 300 {
                         // 2xx response - call established
                         handle.send_final(caller_response).await;
 
@@ -509,8 +509,8 @@ impl InviteHandler {
         // Send INVITE to callee via TCP
         let callee_addr = format!(
             "{}:{}",
-            callee_contact.host,
-            callee_contact.port.unwrap_or(5060)
+            callee_contact.host(),
+            callee_contact.port().unwrap_or(5060)
         )
         .parse::<std::net::SocketAddr>()?;
 
@@ -616,7 +616,7 @@ impl InviteHandler {
                                 .unwrap_or(from_hdr.as_str())
                                 .trim()
                         };
-                        sip_core::SipUri::parse(from_uri)
+                        sip_core::SipUri::parse(from_uri).ok()
                     } else {
                         None
                     };
@@ -631,7 +631,7 @@ impl InviteHandler {
                     } else {
                         contact.split(';').next().unwrap_or(contact.as_str()).trim()
                     };
-                    sip_core::SipUri::parse(contact_uri)
+                    sip_core::SipUri::parse(contact_uri).ok()
                 } else {
                     None
                 };
@@ -688,9 +688,9 @@ impl InviteHandler {
                         .trim()
                 };
 
-                if let Some(caller_uri) = sip_core::SipUri::parse(caller_uri_str) {
+                if let Ok(caller_uri) = sip_core::SipUri::parse(caller_uri_str) {
                     let b2bua_uri = sip_core::SipUri::parse(&services.config.local_uri);
-                    if let Some(b2bua_uri) = b2bua_uri {
+                    if let Ok(b2bua_uri) = b2bua_uri {
                         if let Some(uas_dialog) = sip_dialog::Dialog::new_uas(
                             &call_leg.caller_request,
                             &uas_response,
@@ -855,7 +855,7 @@ impl InviteHandler {
             });
 
         // Step 3: Add Record-Route (stay in signaling path)
-        if let Some(proxy_uri) = sip_core::SipUri::parse(&services.config.local_uri) {
+        if let Ok(proxy_uri) = sip_core::SipUri::parse(&services.config.local_uri) {
             ProxyHelpers::add_record_route(&mut proxied_req, &proxy_uri);
         }
 
@@ -866,8 +866,8 @@ impl InviteHandler {
             .ok_or_else(|| anyhow!("Request-URI must be SIP URI for proxy"))?;
 
         // Normalize lookup key - try multiple transport variants
-        let user = target_uri.user.as_deref().unwrap_or("");
-        let host = &target_uri.host;
+        let user = target_uri.user().unwrap_or("");
+        let host = target_uri.host();
 
         info!(call_id, target = %target_uri.as_str(), user = %user, host = %host, "Looking up target in location service");
 
@@ -929,31 +929,35 @@ impl InviteHandler {
 
         // Parse contact URI
         let contact_uri = sip_core::SipUri::parse(contact_str)
-            .ok_or_else(|| anyhow!("Invalid contact URI: {}", contact_str))?;
+            .map_err(|_| anyhow!("Invalid contact URI: {}", contact_str))?;
 
         // Step 5: Update Request-URI to registered contact
         ProxyHelpers::set_request_uri(&mut proxied_req, contact_uri.clone());
 
         // Step 6: Forward via transport
-        let target_addr = format!("{}:{}", contact_uri.host, contact_uri.port.unwrap_or(5060))
-            .parse::<std::net::SocketAddr>()?;
+        let target_addr = format!(
+            "{}:{}",
+            contact_uri.host(),
+            contact_uri.port().unwrap_or(5060)
+        )
+        .parse::<std::net::SocketAddr>()?;
 
         info!(call_id, target = %target_addr, "Forwarding INVITE to registered contact");
 
         // Serialize and send via strict transport selection (RFC 3263 + transport param)
         let payload = serialize_request(&proxied_req);
-        let transport_param = contact_uri
-            .params
-            .get("transport")
-            .and_then(|v| v.as_ref())
-            .map(|s| s.to_ascii_lowercase());
+        let transport_param: Option<&SmolStr> = contact_uri
+            .params()
+            .get(&SmolStr::new("transport"))
+            .and_then(|v| v.as_ref());
+        let transport_param = transport_param.map(|s| s.to_ascii_lowercase());
         let transport = match transport_param.as_deref() {
             Some("udp") => sip_transaction::TransportKind::Udp,
             Some("tcp") => sip_transaction::TransportKind::Tcp,
             Some("tls") => sip_transaction::TransportKind::Tls,
             Some("ws") => sip_transaction::TransportKind::Ws,
             Some("wss") => sip_transaction::TransportKind::Wss,
-            _ if contact_uri.sips => sip_transaction::TransportKind::Tls,
+            _ if contact_uri.is_sips() => sip_transaction::TransportKind::Tls,
             _ => sip_transaction::TransportKind::Udp,
         };
 
@@ -978,7 +982,7 @@ impl InviteHandler {
                         .get()
                         .ok_or_else(|| anyhow!("TLS client config not available"))?;
                     let tls = sip_transport::TlsConfig {
-                        server_name: contact_uri.host.to_string(),
+                        server_name: contact_uri.host().to_string(),
                         client_config: config.clone(),
                     };
                     sip_transport::send_tls(&target_addr, &payload, &tls).await?;
@@ -998,7 +1002,7 @@ impl InviteHandler {
                         "ws"
                     };
                     let ws_url =
-                        format!("{}://{}:{}", scheme, contact_uri.host, target_addr.port());
+                        format!("{}://{}:{}", scheme, contact_uri.host(), target_addr.port());
                     if transport == sip_transaction::TransportKind::Wss {
                         sip_transport::send_wss(&ws_url, payload).await?;
                     } else {
@@ -1117,8 +1121,8 @@ impl RequestHandler for InviteHandler {
             };
 
             let local_uri = match sip_core::SipUri::parse(&services.config.local_uri) {
-                Some(uri) => uri,
-                None => {
+                Ok(uri) => uri,
+                Err(_) => {
                     warn!("Invalid local_uri in config");
                     let response = UserAgentServer::create_response(request, 500, "Server Error");
                     handle.send_final(response).await;
@@ -1169,8 +1173,8 @@ impl RequestHandler for InviteHandler {
 
         // Parse local and contact URIs early so we can use UAS for all responses
         let local_uri = match sip_core::SipUri::parse(&services.config.local_uri) {
-            Some(uri) => uri,
-            None => {
+            Ok(uri) => uri,
+            Err(_) => {
                 warn!("Invalid local_uri in config: {}", services.config.local_uri);
                 return Err(anyhow!("Invalid local_uri configuration"));
             }
@@ -1275,8 +1279,7 @@ impl RequestHandler for InviteHandler {
             }
 
             let ringing_for_retransmit = ringing.clone();
-            if let (Some(key), Some(to)) =
-                (pending_key.as_deref(), header(ringing.headers(), "To"))
+            if let (Some(key), Some(to)) = (pending_key.as_deref(), header(ringing.headers(), "To"))
             {
                 services.invite_state.update_to_header(key, to.clone());
             }
@@ -1293,8 +1296,7 @@ impl RequestHandler for InviteHandler {
             }
         } else {
             let ringing = uas.create_ringing(request);
-            if let (Some(key), Some(to)) =
-                (pending_key.as_deref(), header(ringing.headers(), "To"))
+            if let (Some(key), Some(to)) = (pending_key.as_deref(), header(ringing.headers(), "To"))
             {
                 services.invite_state.update_to_header(key, to.clone());
             }

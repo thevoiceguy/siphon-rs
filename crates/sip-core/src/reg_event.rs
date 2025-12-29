@@ -30,16 +30,19 @@ pub enum RegEventsError {
 impl std::fmt::Display for RegEventsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UriTooLong { max, actual } =>
-                write!(f, "URI too long (max {}, got {})", max, actual),
-            Self::IdTooLong { max, actual } =>
-                write!(f, "ID too long (max {}, got {})", max, actual),
-            Self::TooManyRegistrations { max, actual } =>
-                write!(f, "too many registrations (max {}, got {})", max, actual),
-            Self::TooManyContacts { max, actual } =>
-                write!(f, "too many contacts (max {}, got {})", max, actual),
-            Self::InvalidQValue(val) =>
-                write!(f, "invalid q-value {} (must be 0.0-1.0)", val),
+            Self::UriTooLong { max, actual } => {
+                write!(f, "URI too long (max {}, got {})", max, actual)
+            }
+            Self::IdTooLong { max, actual } => {
+                write!(f, "ID too long (max {}, got {})", max, actual)
+            }
+            Self::TooManyRegistrations { max, actual } => {
+                write!(f, "too many registrations (max {}, got {})", max, actual)
+            }
+            Self::TooManyContacts { max, actual } => {
+                write!(f, "too many contacts (max {}, got {})", max, actual)
+            }
+            Self::InvalidQValue(val) => write!(f, "invalid q-value {} (must be 0.0-1.0)", val),
             _ => write!(f, "{:?}", self),
         }
     }
@@ -597,7 +600,11 @@ impl fmt::Display for RegInfo {
                 writeln!(f, "      <uri>{}</uri>", xml_escape(&contact.uri))?;
 
                 if let Some(ref display_name) = contact.display_name {
-                    writeln!(f, "      <display-name>{}</display-name>", xml_escape(display_name))?;
+                    writeln!(
+                        f,
+                        "      <display-name>{}</display-name>",
+                        xml_escape(display_name)
+                    )?;
                 }
 
                 writeln!(f, "    </contact>")?;
@@ -627,11 +634,8 @@ mod tests {
     fn reginfo_with_registration() {
         let mut reginfo = RegInfo::new(1, RegInfoState::Full);
 
-        let registration = Registration::new(
-            "sip:alice@example.com",
-            "reg1",
-            RegistrationState::Active,
-        ).unwrap();
+        let registration =
+            Registration::new("sip:alice@example.com", "reg1", RegistrationState::Active).unwrap();
 
         reginfo.add_registration(registration).unwrap();
         assert!(!reginfo.is_empty());
@@ -640,17 +644,15 @@ mod tests {
 
     #[test]
     fn registration_with_contact() {
-        let mut registration = Registration::new(
-            "sip:alice@example.com",
-            "reg1",
-            RegistrationState::Active,
-        ).unwrap();
+        let mut registration =
+            Registration::new("sip:alice@example.com", "reg1", RegistrationState::Active).unwrap();
 
         let contact = Contact::new(
             "contact1",
             ContactState::Active,
             "sip:alice@192.168.1.100:5060",
-        ).unwrap();
+        )
+        .unwrap();
 
         registration.add_contact(contact).unwrap();
         assert!(!registration.is_empty());
@@ -682,11 +684,8 @@ mod tests {
     fn reginfo_xml_output() {
         let mut reginfo = RegInfo::new(1, RegInfoState::Full);
 
-        let mut registration = Registration::new(
-            "sip:alice@example.com",
-            "reg1",
-            RegistrationState::Active,
-        ).unwrap();
+        let mut registration =
+            Registration::new("sip:alice@example.com", "reg1", RegistrationState::Active).unwrap();
 
         let contact = Contact::new(
             "contact1",
@@ -762,23 +761,18 @@ mod tests {
 
     #[test]
     fn multiple_contacts_in_registration() {
-        let mut registration = Registration::new(
-            "sip:alice@example.com",
-            "reg1",
-            RegistrationState::Active,
-        ).unwrap();
+        let mut registration =
+            Registration::new("sip:alice@example.com", "reg1", RegistrationState::Active).unwrap();
 
         let contact1 = Contact::new(
             "contact1",
             ContactState::Active,
             "sip:alice@192.168.1.100:5060",
-        ).unwrap();
+        )
+        .unwrap();
 
-        let contact2 = Contact::new(
-            "contact2",
-            ContactState::Active,
-            "sip:alice@10.0.0.50:5060",
-        ).unwrap();
+        let contact2 =
+            Contact::new("contact2", ContactState::Active, "sip:alice@10.0.0.50:5060").unwrap();
 
         registration.add_contact(contact1).unwrap();
         registration.add_contact(contact2).unwrap();
@@ -800,18 +794,16 @@ mod tests {
     #[test]
     fn xml_injection_prevention() {
         let mut reginfo = RegInfo::new(1, RegInfoState::Full);
-        let mut registration = Registration::new(
-            "sip:alice@example.com",
-            "reg1",
-            RegistrationState::Active,
-        ).unwrap();
+        let mut registration =
+            Registration::new("sip:alice@example.com", "reg1", RegistrationState::Active).unwrap();
 
         // Try to inject XML
         let contact = Contact::new(
             "contact1",
             ContactState::Active,
             "sip:alice@example.com</uri><script>alert('xss')</script><uri>",
-        ).unwrap();
+        )
+        .unwrap();
 
         registration.add_contact(contact).unwrap();
         reginfo.add_registration(registration).unwrap();
@@ -850,11 +842,8 @@ mod tests {
 
     #[test]
     fn reject_invalid_q_value() {
-        let contact = Contact::new(
-            "contact1",
-            ContactState::Active,
-            "sip:alice@example.com",
-        ).unwrap();
+        let contact =
+            Contact::new("contact1", ContactState::Active, "sip:alice@example.com").unwrap();
 
         assert!(contact.clone().with_q(-0.1).is_err());
         assert!(contact.clone().with_q(1.1).is_err());
@@ -863,11 +852,8 @@ mod tests {
 
     #[test]
     fn accept_valid_q_value() {
-        let contact = Contact::new(
-            "contact1",
-            ContactState::Active,
-            "sip:alice@example.com",
-        ).unwrap();
+        let contact =
+            Contact::new("contact1", ContactState::Active, "sip:alice@example.com").unwrap();
 
         assert!(contact.clone().with_q(0.0).is_ok());
         assert!(contact.clone().with_q(0.5).is_ok());
@@ -883,35 +869,39 @@ mod tests {
                 &format!("sip:user{}@example.com", i),
                 &format!("reg{}", i),
                 RegistrationState::Active,
-            ).unwrap();
+            )
+            .unwrap();
             reginfo.add_registration(reg).unwrap();
         }
 
         let result = reginfo.add_registration(
-            Registration::new("sip:overflow@example.com", "overflow", RegistrationState::Active).unwrap()
+            Registration::new(
+                "sip:overflow@example.com",
+                "overflow",
+                RegistrationState::Active,
+            )
+            .unwrap(),
         );
         assert!(result.is_err());
     }
 
     #[test]
     fn reject_too_many_contacts() {
-        let mut registration = Registration::new(
-            "sip:alice@example.com",
-            "reg1",
-            RegistrationState::Active,
-        ).unwrap();
+        let mut registration =
+            Registration::new("sip:alice@example.com", "reg1", RegistrationState::Active).unwrap();
 
         for i in 0..MAX_CONTACTS {
             let contact = Contact::new(
                 &format!("contact{}", i),
                 ContactState::Active,
                 &format!("sip:alice@192.168.1.{}:5060", i),
-            ).unwrap();
+            )
+            .unwrap();
             registration.add_contact(contact).unwrap();
         }
 
         let result = registration.add_contact(
-            Contact::new("overflow", ContactState::Active, "sip:overflow@example.com").unwrap()
+            Contact::new("overflow", ContactState::Active, "sip:overflow@example.com").unwrap(),
         );
         assert!(result.is_err());
     }
@@ -925,21 +915,19 @@ mod tests {
 
     #[test]
     fn reject_empty_call_id() {
-        let result = Contact::new(
-            "contact1",
-            ContactState::Active,
-            "sip:alice@example.com",
-        )
-        .unwrap()
-        .with_call_id("");
+        let result = Contact::new("contact1", ContactState::Active, "sip:alice@example.com")
+            .unwrap()
+            .with_call_id("");
         assert!(result.is_err());
     }
 
     #[test]
     fn fields_are_private() {
         let reginfo = RegInfo::new(1, RegInfoState::Full);
-        let registration = Registration::new("sip:alice@example.com", "reg1", RegistrationState::Active).unwrap();
-        let contact = Contact::new("contact1", ContactState::Active, "sip:alice@example.com").unwrap();
+        let registration =
+            Registration::new("sip:alice@example.com", "reg1", RegistrationState::Active).unwrap();
+        let contact =
+            Contact::new("contact1", ContactState::Active, "sip:alice@example.com").unwrap();
 
         // These should compile (read-only access)
         let _ = reginfo.version();

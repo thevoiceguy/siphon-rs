@@ -261,7 +261,11 @@ fn provisional_with_rseq_has_headers() {
     let parsed = parse_response(&bytes).expect("resp parse");
     assert_eq!(parsed.code(), 183);
     assert_eq!(
-        parsed.headers().get("Require").unwrap().to_ascii_lowercase(),
+        parsed
+            .headers()
+            .get("Require")
+            .unwrap()
+            .to_ascii_lowercase(),
         "100rel"
     );
     assert_eq!(parsed.headers().get("RSeq").unwrap(), "10");
@@ -312,10 +316,7 @@ fn register_auth_scenario() {
     let parsed_chal = parse_response(&serialize_response(&challenge)).unwrap();
     assert_eq!(parsed_chal.code(), 401);
     let parsed_retry = parse_request(&serialize_request(&retry)).unwrap();
-    assert_eq!(
-        parsed_retry.method().as_str(),
-        Method::Register.as_str()
-    );
+    assert_eq!(parsed_retry.method().as_str(), Method::Register.as_str());
     assert!(parsed_retry.headers().get("Authorization").is_some());
 }
 

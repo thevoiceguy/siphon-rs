@@ -7,14 +7,15 @@ use std::collections::BTreeMap;
 use bytes::Bytes;
 use sip_core::geolocation::GeolocationError;
 use sip_core::{
-    AllowHeader, AuthorizationHeader, ContactHeader, DateHeader, EventHeader, FromHeader,
-    GeolocationErrorHeader, GeolocationHeader, GeolocationRoutingHeader, GeolocationValue, Headers,
-    HistoryInfoEntry, HistoryInfoHeader, MimeType, MinSessionExpires, NameAddr, NameAddrHeader,
-    p_headers::PHeaderError, service_route::MAX_ROUTES, PAccessNetworkInfo, PAssertedIdentityHeader, PPreferredIdentityHeader,
-    PVisitedNetworkIdHeader, PathHeader, PriorityValue, RAckHeader, RSeqHeader, ReasonHeader,
-    ResourcePriorityHeader, RouteHeader, SdpSession, ServiceRouteHeader,
-    SessionExpires, SipETagHeader, SubjectHeader, SubscriptionState, SubscriptionStateHeader,
-    SupportedHeader, ToHeader, TokenList, Uri, ViaHeader,
+    p_headers::PHeaderError, service_route::MAX_ROUTES, AllowHeader, AuthorizationHeader,
+    ContactHeader, DateHeader, EventHeader, FromHeader, GeolocationErrorHeader, GeolocationHeader,
+    GeolocationRoutingHeader, GeolocationValue, Headers, HistoryInfoEntry, HistoryInfoHeader,
+    MimeType, MinSessionExpires, NameAddr, NameAddrHeader, PAccessNetworkInfo,
+    PAssertedIdentityHeader, PPreferredIdentityHeader, PVisitedNetworkIdHeader, PathHeader,
+    PriorityValue, RAckHeader, RSeqHeader, ReasonHeader, ResourcePriorityHeader, RouteHeader,
+    SdpSession, ServiceRouteHeader, SessionExpires, SipETagHeader, SubjectHeader,
+    SubscriptionState, SubscriptionStateHeader, SupportedHeader, ToHeader, TokenList, Uri,
+    ViaHeader,
 };
 use smol_str::SmolStr;
 
@@ -350,10 +351,8 @@ pub fn parse_p_access_network_info(value: &SmolStr) -> Option<PAccessNetworkInfo
             {
                 return None;
             }
-        } else {
-            if header.add_param(part, Option::<&str>::None).is_err() {
-                return None;
-            }
+        } else if header.add_param(part, Option::<&str>::None).is_err() {
+            return None;
         }
     }
     Some(header)
@@ -399,7 +398,6 @@ pub fn parse_p_preferred_identity(
     sip_core::parse_p_preferred_identity(headers)
 }
 
-
 fn parse_name_addr(value: &SmolStr) -> Option<NameAddr> {
     let input = value.trim();
     if input.is_empty() {
@@ -410,7 +408,7 @@ fn parse_name_addr(value: &SmolStr) -> Option<NameAddr> {
             let display = input[..start].trim();
             let uri = input[start + 1..end].trim();
             let params = parse_params(input[end + 1..].trim());
-            let uri = Uri::parse(uri)?;
+            let uri = Uri::parse(uri).ok()?;
             NameAddr::new(
                 if display.is_empty() {
                     None
@@ -424,7 +422,7 @@ fn parse_name_addr(value: &SmolStr) -> Option<NameAddr> {
         }
         Ok(None) => {
             let (uri_part, param_part) = input.split_once(';').unwrap_or((input, ""));
-            let uri = Uri::parse(uri_part.trim())?;
+            let uri = Uri::parse(uri_part.trim()).ok()?;
             NameAddr::new(None, uri, parse_params(param_part)).ok()
         }
         Err(()) => None,

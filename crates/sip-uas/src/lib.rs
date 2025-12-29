@@ -187,8 +187,12 @@ impl UserAgentServer {
                 .unwrap();
 
             let (start, headers, _) = response.into_parts();
-            response = Response::new(start, headers, Bytes::from(body_content.as_bytes().to_vec()))
-                .expect("valid response");
+            response = Response::new(
+                start,
+                headers,
+                Bytes::from(body_content.as_bytes().to_vec()),
+            )
+            .expect("valid response");
         }
 
         response
@@ -609,15 +613,15 @@ impl UserAgentServer {
         let branch = generate_branch();
         let transport = self
             .contact_uri
-            .params
+            .params()
             .get("transport")
             .and_then(|v| v.as_ref())
             .map(|v| v.as_str().to_ascii_uppercase())
             .unwrap_or_else(|| "UDP".to_string());
-        let host = self.contact_uri.host.as_str();
+        let host = self.contact_uri.host();
         let port = self
             .contact_uri
-            .port
+            .port()
             .map(|p| format!(":{}", p))
             .unwrap_or_default();
         headers
@@ -870,8 +874,12 @@ impl UserAgentServer {
                 .unwrap();
 
             let (start, headers, _) = response.into_parts();
-            response = Response::new(start, headers, Bytes::from(body_content.as_bytes().to_vec()))
-                .expect("valid response");
+            response = Response::new(
+                start,
+                headers,
+                Bytes::from(body_content.as_bytes().to_vec()),
+            )
+            .expect("valid response");
         }
 
         response
@@ -1095,7 +1103,7 @@ fn extract_from_uri(request: &Request) -> Result<SipUri> {
         }
     };
 
-    SipUri::parse(uri_str.trim()).ok_or_else(|| anyhow!("Failed to parse From URI"))
+    SipUri::parse(uri_str.trim()).map_err(|_| anyhow!("Failed to parse From URI"))
 }
 
 #[cfg(test)]

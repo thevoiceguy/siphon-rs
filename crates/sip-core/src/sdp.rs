@@ -126,50 +126,49 @@ impl std::error::Error for SdpError {}
 // =============================================================================
 
 // String length limits (RFC 4566 §5 + reasonable bounds)
-const MAX_USERNAME_LEN: usize = 255;          // o= username
-const MAX_SESSION_ID_LEN: usize = 64;         // o= sess-id
-const MAX_SESSION_VERSION_LEN: usize = 64;    // o= sess-version
-const MAX_SESSION_NAME_LEN: usize = 1024;     // s=
-const MAX_SESSION_INFO_LEN: usize = 2048;     // i=
-const MAX_URI_LEN: usize = 2048;              // u=
-const MAX_EMAIL_LEN: usize = 320;             // e= (RFC 5321 limit)
-const MAX_PHONE_LEN: usize = 32;              // p=
-const MAX_NETTYPE_LEN: usize = 16;            // Network type (IN)
-const MAX_ADDRTYPE_LEN: usize = 16;           // Address type (IP4, IP6)
-const MAX_ADDRESS_LEN: usize = 255;           // Unicast/multicast address
-const MAX_BANDWIDTH_TYPE_LEN: usize = 32;     // b= modifier
-const MAX_ENCRYPTION_METHOD_LEN: usize = 64;  // k= method
-const MAX_ENCRYPTION_KEY_LEN: usize = 1024;   // k= key
-const MAX_ATTRIBUTE_NAME_LEN: usize = 128;    // a= name
-const MAX_ATTRIBUTE_VALUE_LEN: usize = 4096;  // a= value
-const MAX_MEDIA_TYPE_LEN: usize = 32;         // m= media type
-const MAX_PROTO_LEN: usize = 64;              // m= protocol
-const MAX_FORMAT_LEN: usize = 16;             // m= format identifier
-const MAX_MID_LEN: usize = 64;                // a=mid: value
-const MAX_ENCODING_NAME_LEN: usize = 64;      // rtpmap encoding name
-const MAX_FMTP_PARAMS_LEN: usize = 1024;      // fmtp parameters
+const MAX_USERNAME_LEN: usize = 255; // o= username
+const MAX_SESSION_ID_LEN: usize = 64; // o= sess-id
+const MAX_SESSION_VERSION_LEN: usize = 64; // o= sess-version
+const MAX_SESSION_NAME_LEN: usize = 1024; // s=
+const MAX_SESSION_INFO_LEN: usize = 2048; // i=
+const MAX_URI_LEN: usize = 2048; // u=
+const MAX_EMAIL_LEN: usize = 320; // e= (RFC 5321 limit)
+const MAX_PHONE_LEN: usize = 32; // p=
+const MAX_NETTYPE_LEN: usize = 16; // Network type (IN)
+const MAX_ADDRTYPE_LEN: usize = 16; // Address type (IP4, IP6)
+const MAX_ADDRESS_LEN: usize = 255; // Unicast/multicast address
+const MAX_BANDWIDTH_TYPE_LEN: usize = 32; // b= modifier
+const MAX_ENCRYPTION_METHOD_LEN: usize = 64; // k= method
+const MAX_ENCRYPTION_KEY_LEN: usize = 1024; // k= key
+const MAX_ATTRIBUTE_NAME_LEN: usize = 128; // a= name
+const MAX_ATTRIBUTE_VALUE_LEN: usize = 4096; // a= value
+const MAX_MEDIA_TYPE_LEN: usize = 32; // m= media type
+const MAX_PROTO_LEN: usize = 64; // m= protocol
+const MAX_FORMAT_LEN: usize = 16; // m= format identifier
+const MAX_MID_LEN: usize = 64; // a=mid: value
+const MAX_ENCODING_NAME_LEN: usize = 64; // rtpmap encoding name
+const MAX_FMTP_PARAMS_LEN: usize = 1024; // fmtp parameters
 
 // Collection size limits (DoS protection)
-const MAX_EMAILS: usize = 10;                 // Maximum email addresses
-const MAX_PHONES: usize = 10;                 // Maximum phone numbers
-const MAX_BANDWIDTH_ENTRIES: usize = 20;      // Maximum bandwidth lines
-const MAX_TIMING_ENTRIES: usize = 10;         // Maximum timing lines
-const MAX_REPEAT_TIMES: usize = 10;           // Maximum repeat times
-const MAX_TIME_ZONES: usize = 50;             // Maximum timezone adjustments
-const MAX_ATTRIBUTES: usize = 100;            // Maximum attributes per level
-const MAX_MEDIA_DESCRIPTIONS: usize = 50;     // Maximum media descriptions
-const MAX_FORMAT_TYPES: usize = 128;          // Maximum format types per media
-const MAX_GROUPS: usize = 20;                 // Maximum media groups
-const MAX_MIDS: usize = 50;                   // Maximum mids in a group
+const MAX_EMAILS: usize = 10; // Maximum email addresses
+const MAX_PHONES: usize = 10; // Maximum phone numbers
+const MAX_BANDWIDTH_ENTRIES: usize = 20; // Maximum bandwidth lines
+const MAX_TIMING_ENTRIES: usize = 10; // Maximum timing lines
+const MAX_REPEAT_TIMES: usize = 10; // Maximum repeat times
+const MAX_TIME_ZONES: usize = 50; // Maximum timezone adjustments
+const MAX_ATTRIBUTES: usize = 100; // Maximum attributes per level
+const MAX_MEDIA_DESCRIPTIONS: usize = 50; // Maximum media descriptions
+const MAX_FORMAT_TYPES: usize = 128; // Maximum format types per media
+const MAX_GROUPS: usize = 20; // Maximum media groups
+const MAX_MIDS: usize = 50; // Maximum mids in a group
 const MAX_CAPABILITY_DESCRIPTIONS: usize = 50; // Maximum capability descriptions
 const MAX_CAPABILITY_PARAMETERS: usize = 100; // Maximum capability parameters
-const MAX_OFFSETS: usize = 50;                // Maximum repeat time offsets
+const MAX_OFFSETS: usize = 50; // Maximum repeat time offsets
 
 // Integer validation ranges
 const MAX_BANDWIDTH_VALUE: u64 = 10_000_000; // 10 Gbps in kbps
-const MAX_PAYLOAD_TYPE: u8 = 127;             // RTP payload type range (RFC 3551)
-const MAX_CLOCK_RATE: u32 = 1_000_000_000;    // 1 GHz (unrealistic but safe)
-const MAX_SEQUENCE_NUMBER: u8 = 255;          // RFC 3407 sqn/cdsc cap-num
+const MAX_PAYLOAD_TYPE: u8 = 127; // RTP payload type range (RFC 3551)
+const MAX_CLOCK_RATE: u32 = 1_000_000_000; // 1 GHz (unrealistic but safe)
 
 /// Validates a string for length and forbidden characters (CR/LF/NUL).
 ///
@@ -180,11 +179,7 @@ const MAX_SEQUENCE_NUMBER: u8 = 255;          // RFC 3407 sqn/cdsc cap-num
 fn validate_string(s: &str, field_name: &'static str, max_len: usize) -> Result<(), SdpError> {
     // Check length
     if s.len() > max_len {
-        return Err(SdpError::StringLengthExceeded(
-            field_name,
-            max_len,
-            s.len(),
-        ));
+        return Err(SdpError::StringLengthExceeded(field_name, max_len, s.len()));
     }
 
     // Check for forbidden characters (CR, LF, NUL)
@@ -271,12 +266,7 @@ fn validate_clock_rate(rate: u32) -> Result<(), SdpError> {
 
 /// Validates a sequence number (RFC 3407).
 fn validate_sequence_number(seq: u8) -> Result<(), SdpError> {
-    if seq > MAX_SEQUENCE_NUMBER {
-        return Err(SdpError::IntegerOutOfRange(
-            "sequence_number",
-            format!("must be 0-255, got {}", seq),
-        ));
-    }
+    let _ = seq;
     Ok(())
 }
 
@@ -286,12 +276,6 @@ fn validate_capability_number(cap_num: u8) -> Result<(), SdpError> {
         return Err(SdpError::IntegerOutOfRange(
             "cap_num",
             "must be > 0".to_string(),
-        ));
-    }
-    if cap_num > MAX_SEQUENCE_NUMBER {
-        return Err(SdpError::IntegerOutOfRange(
-            "cap_num",
-            format!("must be 1-255, got {}", cap_num),
         ));
     }
     Ok(())
@@ -1442,7 +1426,11 @@ impl SdpSession {
                 'b' => {
                     self.bandwidth.push(parse_bandwidth(line)?);
                     // Security: Check bandwidth collection size
-                    validate_collection_size(&self.bandwidth, "b= bandwidth", MAX_BANDWIDTH_ENTRIES)?;
+                    validate_collection_size(
+                        &self.bandwidth,
+                        "b= bandwidth",
+                        MAX_BANDWIDTH_ENTRIES,
+                    )?;
                 }
                 't' => {
                     self.timing.push(parse_timing(line)?);
@@ -1453,7 +1441,11 @@ impl SdpSession {
                         idx += 1;
                         self.repeat_times.push(parse_repeat_time(lines[idx])?);
                         // Security: Check repeat times collection size
-                        validate_collection_size(&self.repeat_times, "r= repeat-times", MAX_REPEAT_TIMES)?;
+                        validate_collection_size(
+                            &self.repeat_times,
+                            "r= repeat-times",
+                            MAX_REPEAT_TIMES,
+                        )?;
                     }
                 }
                 'r' => return Err(SdpError::InvalidOrder("r= must follow t= line".to_string())),
@@ -1595,7 +1587,11 @@ impl SdpSession {
                     if let Some(value) = &attr.value {
                         descriptions.push(CapabilityDescription::parse(value)?);
                         // Security: Check capability descriptions collection size
-                        validate_collection_size(&descriptions, "a=cdsc", MAX_CAPABILITY_DESCRIPTIONS)?;
+                        validate_collection_size(
+                            &descriptions,
+                            "a=cdsc",
+                            MAX_CAPABILITY_DESCRIPTIONS,
+                        )?;
                     } else {
                         return Err(SdpError::InvalidFormat("a=cdsc requires value"));
                     }
@@ -1607,7 +1603,11 @@ impl SdpSession {
                             value,
                         ));
                         // Security: Check capability parameters collection size
-                        validate_collection_size(&parameters, "a=cpar*", MAX_CAPABILITY_PARAMETERS)?;
+                        validate_collection_size(
+                            &parameters,
+                            "a=cpar*",
+                            MAX_CAPABILITY_PARAMETERS,
+                        )?;
                     } else {
                         return Err(SdpError::InvalidFormat("a=cpar requires value"));
                     }
@@ -1619,7 +1619,11 @@ impl SdpSession {
                             value,
                         ));
                         // Security: Check capability parameters collection size
-                        validate_collection_size(&parameters, "a=cpar*", MAX_CAPABILITY_PARAMETERS)?;
+                        validate_collection_size(
+                            &parameters,
+                            "a=cpar*",
+                            MAX_CAPABILITY_PARAMETERS,
+                        )?;
                     } else {
                         return Err(SdpError::InvalidFormat("a=cparmin requires value"));
                     }
@@ -1631,7 +1635,11 @@ impl SdpSession {
                             value,
                         ));
                         // Security: Check capability parameters collection size
-                        validate_collection_size(&parameters, "a=cpar*", MAX_CAPABILITY_PARAMETERS)?;
+                        validate_collection_size(
+                            &parameters,
+                            "a=cpar*",
+                            MAX_CAPABILITY_PARAMETERS,
+                        )?;
                     } else {
                         return Err(SdpError::InvalidFormat("a=cparmax requires value"));
                     }
@@ -1985,13 +1993,21 @@ impl MediaDescription {
                 'b' => {
                     desc.bandwidth.push(parse_bandwidth(line)?);
                     // Security: Check bandwidth collection size
-                    validate_collection_size(&desc.bandwidth, "b= media-bandwidth", MAX_BANDWIDTH_ENTRIES)?;
+                    validate_collection_size(
+                        &desc.bandwidth,
+                        "b= media-bandwidth",
+                        MAX_BANDWIDTH_ENTRIES,
+                    )?;
                 }
                 'k' => desc.encryption_key = Some(parse_encryption_key(line)?),
                 'a' => {
                     desc.attributes.push(parse_attribute(line)?);
                     // Security: Check attributes collection size
-                    validate_collection_size(&desc.attributes, "a= media-attributes", MAX_ATTRIBUTES)?;
+                    validate_collection_size(
+                        &desc.attributes,
+                        "a= media-attributes",
+                        MAX_ATTRIBUTES,
+                    )?;
                 }
                 _ => {
                     // Unknown or out-of-order field
@@ -2145,7 +2161,12 @@ impl RtpMap {
 
         // Security: Validate payload type, encoding name, and clock rate
         validate_payload_type(payload_type).ok()?;
-        validate_string(encoding_parts[0], "rtpmap encoding-name", MAX_ENCODING_NAME_LEN).ok()?;
+        validate_string(
+            encoding_parts[0],
+            "rtpmap encoding-name",
+            MAX_ENCODING_NAME_LEN,
+        )
+        .ok()?;
 
         let encoding_name = encoding_parts[0].to_string();
         let clock_rate = encoding_parts[1].parse().ok()?;
@@ -5202,7 +5223,7 @@ mod tests {
         let mut sdp = String::from(
             "v=0\r\n\
              o=alice 123 456 IN IP4 192.0.2.1\r\n\
-             s=Session\r\n"
+             s=Session\r\n",
         );
 
         // Add more than MAX_EMAILS
@@ -5226,7 +5247,7 @@ mod tests {
              o=alice 123 456 IN IP4 192.0.2.1\r\n\
              s=Session\r\n\
              c=IN IP4 192.0.2.1\r\n\
-             t=0 0\r\n"
+             t=0 0\r\n",
         );
 
         // Add more than MAX_MEDIA_DESCRIPTIONS
@@ -5288,7 +5309,7 @@ mod tests {
              o=alice 123 456 IN IP4 192.0.2.1\r\n\
              s=Session\r\n\
              c=IN IP4 192.0.2.1\r\n\
-             t=0 0\r\n"
+             t=0 0\r\n",
         );
 
         // Add more than MAX_ATTRIBUTES
@@ -5327,7 +5348,7 @@ mod tests {
              s=Session\r\n\
              c=IN IP4 192.0.2.1\r\n\
              t=0 0\r\n\
-             m=audio 49170 RTP/AVP"
+             m=audio 49170 RTP/AVP",
         );
 
         // Add more than MAX_FORMAT_TYPES
@@ -5348,7 +5369,7 @@ mod tests {
         let mut sdp = String::from(
             "v=0\r\n\
              o=alice 123 456 IN IP4 192.0.2.1\r\n\
-             s=Valid Session\r\n"
+             s=Valid Session\r\n",
         );
 
         // Add emails within limit

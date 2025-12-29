@@ -97,7 +97,7 @@ impl RequestHandler for UpdateHandler {
         };
 
         let local_uri = sip_core::SipUri::parse(&services.config.local_uri)
-            .ok_or_else(|| anyhow!("Invalid local_uri"))?;
+            .map_err(|_| anyhow!("Invalid local_uri"))?;
         let contact_uri = local_uri.clone();
         let mut uas = UserAgentServer::new(local_uri, contact_uri);
         uas.dialog_manager = services.dialog_mgr.clone();

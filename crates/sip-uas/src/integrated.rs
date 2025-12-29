@@ -289,7 +289,8 @@ impl IntegratedUAS {
     ) -> Result<()> {
         info!(
             "Dispatching {:?} request from {}",
-            request.method(), ctx.peer
+            request.method(),
+            ctx.peer
         );
 
         if self.config.require_authentication && request.method() != &Method::Ack {
@@ -482,11 +483,7 @@ impl IntegratedUAS {
 
             let contact_value = format!(
                 "<sip:{}@{}:{}>",
-                contact_uri
-                    .user
-                    .as_ref()
-                    .map(|u| u.as_str())
-                    .unwrap_or("server"),
+                contact_uri.user().unwrap_or("server"),
                 addr.ip(),
                 addr.port()
             );
@@ -542,13 +539,13 @@ impl IntegratedUASBuilder {
 
     /// Sets the local SIP URI (used in To/Contact headers).
     pub fn local_uri(mut self, uri: impl AsRef<str>) -> Self {
-        self.local_uri = SipUri::parse(uri.as_ref());
+        self.local_uri = SipUri::parse(uri.as_ref()).ok();
         self
     }
 
     /// Sets the contact URI (used in Contact header).
     pub fn contact_uri(mut self, uri: impl AsRef<str>) -> Self {
-        self.contact_uri = SipUri::parse(uri.as_ref());
+        self.contact_uri = SipUri::parse(uri.as_ref()).ok();
         self
     }
 
@@ -635,11 +632,7 @@ impl IntegratedUASBuilder {
         // Create embedded helper
         let contact_uri = self.contact_uri.unwrap_or_else(|| {
             // Default contact: sip:server@local_addr
-            let user = local_uri
-                .user
-                .as_ref()
-                .map(|u| u.as_str())
-                .unwrap_or("server");
+            let user = local_uri.user().unwrap_or("server");
             SipUri::parse(&format!("sip:{}@{}", user, local_addr)).unwrap()
         });
 

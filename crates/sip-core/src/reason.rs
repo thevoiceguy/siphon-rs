@@ -31,24 +31,25 @@ pub enum ReasonError {
 impl std::fmt::Display for ReasonError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::ProtocolTooLong { max, actual } =>
-                write!(f, "protocol too long (max {}, got {})", max, actual),
-            Self::ParamNameTooLong { max, actual } =>
-                write!(f, "param name too long (max {}, got {})", max, actual),
-            Self::ParamValueTooLong { max, actual } =>
-                write!(f, "param value too long (max {}, got {})", max, actual),
-            Self::TooManyParams { max, actual } =>
-                write!(f, "too many params (max {}, got {})", max, actual),
-            Self::InvalidProtocol(msg) =>
-                write!(f, "invalid protocol: {}", msg),
-            Self::EmptyProtocol =>
-                write!(f, "protocol cannot be empty"),
-            Self::DuplicateParam(name) =>
-                write!(f, "duplicate parameter: {}", name),
-            Self::InputTooLarge { max, actual } =>
-                write!(f, "input too large (max {}, got {})", max, actual),
-            Self::ParseError(msg) =>
-                write!(f, "parse error: {}", msg),
+            Self::ProtocolTooLong { max, actual } => {
+                write!(f, "protocol too long (max {}, got {})", max, actual)
+            }
+            Self::ParamNameTooLong { max, actual } => {
+                write!(f, "param name too long (max {}, got {})", max, actual)
+            }
+            Self::ParamValueTooLong { max, actual } => {
+                write!(f, "param value too long (max {}, got {})", max, actual)
+            }
+            Self::TooManyParams { max, actual } => {
+                write!(f, "too many params (max {}, got {})", max, actual)
+            }
+            Self::InvalidProtocol(msg) => write!(f, "invalid protocol: {}", msg),
+            Self::EmptyProtocol => write!(f, "protocol cannot be empty"),
+            Self::DuplicateParam(name) => write!(f, "duplicate parameter: {}", name),
+            Self::InputTooLarge { max, actual } => {
+                write!(f, "input too large (max {}, got {})", max, actual)
+            }
+            Self::ParseError(msg) => write!(f, "parse error: {}", msg),
             _ => write!(f, "{:?}", self),
         }
     }
@@ -265,7 +266,7 @@ impl ReasonHeader {
 
         let default_text = sip_response_text(code);
         let text_value = text.unwrap_or(default_text);
-        
+
         validate_param_value(text_value)?;
         params.insert(SmolStr::new("text"), Some(SmolStr::new(text_value)));
 
@@ -326,14 +327,14 @@ impl ReasonHeader {
 
     /// Returns an iterator over parameters.
     pub fn params(&self) -> impl Iterator<Item = (&str, Option<&str>)> {
-        self.params.iter().map(|(k, v)| {
-            (k.as_str(), v.as_ref().map(|s| s.as_str()))
-        })
+        self.params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_ref().map(|s| s.as_str())))
     }
 
     /// Gets a parameter value by name (case-insensitive).
     pub fn get_param(&self, name: &str) -> Option<&Option<SmolStr>> {
-        self.params.get(&SmolStr::new(&name.to_ascii_lowercase()))
+        self.params.get(&SmolStr::new(name.to_ascii_lowercase()))
     }
 
     /// Returns the cause code as a u16 if present and valid.
@@ -527,7 +528,7 @@ pub fn parse_reason_from_string(value: &str) -> Result<ReasonHeader, ReasonError
 
     let mut parts = value.split(';');
     let protocol = parts.next().unwrap_or("").trim();
-    
+
     validate_protocol(protocol)?;
 
     let mut params = BTreeMap::new();
@@ -547,12 +548,13 @@ pub fn parse_reason_from_string(value: &str) -> Result<ReasonHeader, ReasonError
         if let Some((name, val)) = part.split_once('=') {
             let name_lower = name.trim().to_ascii_lowercase();
             let raw_val = val.trim();
-            let val_trimmed = if raw_val.starts_with('"') && raw_val.ends_with('"') && raw_val.len() >= 2 {
-                unescape_quoted_string(&raw_val[1..raw_val.len() - 1])?
-            } else {
-                raw_val.to_string()
-            };
-            
+            let val_trimmed =
+                if raw_val.starts_with('"') && raw_val.ends_with('"') && raw_val.len() >= 2 {
+                    unescape_quoted_string(&raw_val[1..raw_val.len() - 1])?
+                } else {
+                    raw_val.to_string()
+                };
+
             validate_param_name(&name_lower)?;
             validate_param_value(&val_trimmed)?;
 
@@ -560,10 +562,7 @@ pub fn parse_reason_from_string(value: &str) -> Result<ReasonHeader, ReasonError
                 return Err(ReasonError::DuplicateParam(name_lower));
             }
 
-            params.insert(
-                SmolStr::new(&name_lower),
-                Some(SmolStr::new(val_trimmed)),
-            );
+            params.insert(SmolStr::new(&name_lower), Some(SmolStr::new(val_trimmed)));
         } else {
             let name_lower = part.to_ascii_lowercase();
             validate_param_name(&name_lower)?;
@@ -628,8 +627,14 @@ mod tests {
 
     #[test]
     fn reason_protocol_parse() {
-        assert_eq!("sip".parse::<ReasonProtocol>().unwrap(), ReasonProtocol::Sip);
-        assert_eq!("Q.850".parse::<ReasonProtocol>().unwrap(), ReasonProtocol::Q850);
+        assert_eq!(
+            "sip".parse::<ReasonProtocol>().unwrap(),
+            ReasonProtocol::Sip
+        );
+        assert_eq!(
+            "Q.850".parse::<ReasonProtocol>().unwrap(),
+            ReasonProtocol::Q850
+        );
         assert!("unknown".parse::<ReasonProtocol>().is_err());
     }
 
@@ -643,7 +648,10 @@ mod tests {
 
     #[test]
     fn q850_from_code() {
-        assert_eq!(Q850Cause::from_code(16), Some(Q850Cause::NormalCallClearing));
+        assert_eq!(
+            Q850Cause::from_code(16),
+            Some(Q850Cause::NormalCallClearing)
+        );
         assert_eq!(Q850Cause::from_code(17), Some(Q850Cause::UserBusy));
         assert_eq!(Q850Cause::from_code(999), None);
     }
@@ -677,7 +685,10 @@ mod tests {
     #[test]
     fn reason_header_display_q850() {
         let reason = ReasonHeader::q850(Q850Cause::NormalCallClearing).unwrap();
-        assert_eq!(reason.to_string(), "Q.850;cause=16;text=\"Normal Call Clearing\"");
+        assert_eq!(
+            reason.to_string(),
+            "Q.850;cause=16;text=\"Normal Call Clearing\""
+        );
     }
 
     #[test]
@@ -782,12 +793,12 @@ mod tests {
     #[test]
     fn fields_are_private() {
         let reason = ReasonHeader::q850(Q850Cause::UserBusy).unwrap();
-        
+
         // These should compile
         let _ = reason.protocol();
         let _ = reason.cause_code();
         let _ = reason.params();
-        
+
         // These should NOT compile:
         // reason.protocol = SmolStr::new("evil");  // ← Does not compile!
         // reason.params.clear();                    // ← Does not compile!

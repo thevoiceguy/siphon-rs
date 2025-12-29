@@ -59,20 +59,19 @@ pub enum ReferredByError {
 impl std::fmt::Display for ReferredByError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::CidTooLong { max, actual } =>
-                write!(f, "CID too long (max {}, got {})", max, actual),
-            Self::TooManyParams { max, actual } =>
-                write!(f, "too many params (max {}, got {})", max, actual),
-            Self::InvalidCid(msg) =>
-                write!(f, "invalid CID: {}", msg),
-            Self::InvalidUri(msg) =>
-                write!(f, "invalid URI: {}", msg),
-            Self::DuplicateParam(name) =>
-                write!(f, "duplicate parameter: {}", name),
-            Self::ParseError(msg) =>
-                write!(f, "parse error: {}", msg),
-            Self::InputTooLarge { max, actual } =>
-                write!(f, "input too large (max {}, got {})", max, actual),
+            Self::CidTooLong { max, actual } => {
+                write!(f, "CID too long (max {}, got {})", max, actual)
+            }
+            Self::TooManyParams { max, actual } => {
+                write!(f, "too many params (max {}, got {})", max, actual)
+            }
+            Self::InvalidCid(msg) => write!(f, "invalid CID: {}", msg),
+            Self::InvalidUri(msg) => write!(f, "invalid URI: {}", msg),
+            Self::DuplicateParam(name) => write!(f, "duplicate parameter: {}", name),
+            Self::ParseError(msg) => write!(f, "parse error: {}", msg),
+            Self::InputTooLarge { max, actual } => {
+                write!(f, "input too large (max {}, got {})", max, actual)
+            }
             _ => write!(f, "{:?}", self),
         }
     }
@@ -149,11 +148,11 @@ impl ReferredByHeader {
     /// ```
     pub fn new(uri: impl AsRef<str>) -> Result<Self, ReferredByError> {
         let parsed_uri = SipUri::parse(uri.as_ref())
-            .ok_or_else(|| ReferredByError::InvalidUri("failed to parse SIP URI".to_string()))?;
-        
+            .map_err(|_| ReferredByError::InvalidUri("failed to parse SIP URI".to_string()))?;
+
         let name_addr = NameAddr::new(None, Uri::from(parsed_uri), BTreeMap::new())
             .map_err(|e| ReferredByError::InvalidUri(e.to_string()))?;
-        
+
         Ok(Self {
             name_addr,
             cid: None,
@@ -187,15 +186,15 @@ impl ReferredByHeader {
         uri: impl AsRef<str>,
     ) -> Result<Self, ReferredByError> {
         let parsed_uri = SipUri::parse(uri.as_ref())
-            .ok_or_else(|| ReferredByError::InvalidUri("failed to parse SIP URI".to_string()))?;
-        
+            .map_err(|_| ReferredByError::InvalidUri("failed to parse SIP URI".to_string()))?;
+
         let name_addr = NameAddr::new(
             Some(SmolStr::new(display_name.as_ref())),
             Uri::from(parsed_uri),
             BTreeMap::new(),
         )
         .map_err(|e| ReferredByError::InvalidUri(e.to_string()))?;
-        
+
         Ok(Self {
             name_addr,
             cid: None,
@@ -281,7 +280,7 @@ impl ReferredByHeader {
             });
         }
 
-        let name_key = SmolStr::new(&name.to_ascii_lowercase());
+        let name_key = SmolStr::new(name.to_ascii_lowercase());
 
         if self.params.contains_key(&name_key) {
             return Err(ReferredByError::DuplicateParam(name.to_string()));
@@ -309,7 +308,7 @@ impl ReferredByHeader {
     /// Gets a parameter value by name.
     pub fn get_param(&self, name: &str) -> Option<&str> {
         self.params
-            .get(&SmolStr::new(&name.to_ascii_lowercase()))
+            .get(&SmolStr::new(name.to_ascii_lowercase()))
             .map(|s| s.as_str())
     }
 
@@ -359,17 +358,16 @@ impl ReferredByHeader {
         let input = input.trim();
 
         // Find the end of the name-addr part (before parameters)
-        let (name_addr_str, params_str) = if let Some((_, angle_end)) =
-            find_unquoted_angle_brackets(input)?
-        {
-            let na = &input[..=angle_end];
-            let rest = input[angle_end + 1..].trim();
-            (na, rest)
-        } else if let Some(semi_pos) = input.find(';') {
-            (&input[..semi_pos], input[semi_pos..].trim())
-        } else {
-            (input, "")
-        };
+        let (name_addr_str, params_str) =
+            if let Some((_, angle_end)) = find_unquoted_angle_brackets(input)? {
+                let na = &input[..=angle_end];
+                let rest = input[angle_end + 1..].trim();
+                (na, rest)
+            } else if let Some(semi_pos) = input.find(';') {
+                (&input[..semi_pos], input[semi_pos..].trim())
+            } else {
+                (input, "")
+            };
 
         // Parse the name-addr
         let (display_name, uri_str) = if let Some((angle_start, angle_end)) =
@@ -395,7 +393,7 @@ impl ReferredByHeader {
         };
 
         let uri = Uri::parse(uri_str)
-            .ok_or_else(|| ReferredByError::InvalidUri("failed to parse URI".to_string()))?;
+            .map_err(|_| ReferredByError::InvalidUri("failed to parse URI".to_string()))?;
 
         let name_addr = NameAddr::new(display_name, uri, BTreeMap::new())
             .map_err(|e| ReferredByError::InvalidUri(e.to_string()))?;
@@ -438,7 +436,7 @@ impl ReferredByHeader {
                         validate_param_name(key)?;
                         validate_param_value(value)?;
 
-                        let key_lower = SmolStr::new(&key.to_ascii_lowercase());
+                        let key_lower = SmolStr::new(key.to_ascii_lowercase());
                         if params.contains_key(&key_lower) {
                             return Err(ReferredByError::DuplicateParam(key.to_string()));
                         }
@@ -825,11 +823,11 @@ mod tests {
     #[test]
     fn reject_too_many_params() {
         let mut referred_by = ReferredByHeader::new("sip:alice@example.com").unwrap();
-        
+
         for i in 0..MAX_PARAMS {
             referred_by.add_param(&format!("p{}", i), "value").unwrap();
         }
-        
+
         let result = referred_by.add_param("overflow", "value");
         assert!(result.is_err());
     }
@@ -882,12 +880,12 @@ mod tests {
     #[test]
     fn fields_are_private() {
         let referred_by = ReferredByHeader::new("sip:alice@example.com").unwrap();
-        
+
         // These should compile
         let _ = referred_by.name_addr();
         let _ = referred_by.get_cid();
         let _ = referred_by.params();
-        
+
         // These should NOT compile:
         // referred_by.name_addr = ...;  // ← Does not compile!
         // referred_by.cid = None;       // ← Does not compile!

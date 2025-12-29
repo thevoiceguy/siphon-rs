@@ -26,14 +26,16 @@ pub enum MessageError {
 impl std::fmt::Display for MessageError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidStatusCode { code } =>
-                write!(f, "invalid SIP status code: {} (must be 100-699)", code),
-            Self::ReasonTooLong { max, actual } =>
-                write!(f, "reason phrase too long (max {}, got {})", max, actual),
-            Self::InvalidReason(msg) =>
-                write!(f, "invalid reason phrase: {}", msg),
-            Self::BodyTooLarge { max, actual } =>
-                write!(f, "body too large (max {}, got {})", max, actual),
+            Self::InvalidStatusCode { code } => {
+                write!(f, "invalid SIP status code: {} (must be 100-699)", code)
+            }
+            Self::ReasonTooLong { max, actual } => {
+                write!(f, "reason phrase too long (max {}, got {})", max, actual)
+            }
+            Self::InvalidReason(msg) => write!(f, "invalid reason phrase: {}", msg),
+            Self::BodyTooLarge { max, actual } => {
+                write!(f, "body too large (max {}, got {})", max, actual)
+            }
         }
     }
 }
@@ -278,7 +280,7 @@ impl Request {
     /// Returns an error if the body exceeds MAX_BODY_SIZE.
     pub fn new(start: RequestLine, headers: Headers, body: Bytes) -> Result<Self, MessageError> {
         validate_body_size(&body)?;
-        
+
         Ok(Self {
             start,
             headers,
@@ -380,7 +382,7 @@ impl Response {
     /// Returns an error if the body exceeds MAX_BODY_SIZE.
     pub fn new(start: StatusLine, headers: Headers, body: Bytes) -> Result<Self, MessageError> {
         validate_body_size(&body)?;
-        
+
         Ok(Self {
             start,
             headers,
@@ -606,7 +608,7 @@ mod tests {
     fn create_request_line() {
         let uri = mock_uri();
         let request_line = RequestLine::new(Method::Invite, uri.clone());
-        
+
         assert_eq!(request_line.method(), &Method::Invite);
         assert_eq!(request_line.uri(), &uri);
         assert_eq!(request_line.version(), &SipVersion::V2);
@@ -615,7 +617,7 @@ mod tests {
     #[test]
     fn create_status_line() {
         let status = StatusLine::new(200, "OK").unwrap();
-        
+
         assert_eq!(status.code(), 200);
         assert_eq!(status.reason(), "OK");
         assert_eq!(status.version(), &SipVersion::V2);
@@ -625,10 +627,10 @@ mod tests {
     fn reject_invalid_status_codes() {
         // Too low
         assert!(StatusLine::new(99, "Invalid").is_err());
-        
+
         // Too high
         assert!(StatusLine::new(700, "Invalid").is_err());
-        
+
         // Way out of range
         assert!(StatusLine::new(0, "Invalid").is_err());
         assert!(StatusLine::new(999, "Invalid").is_err());
@@ -639,7 +641,7 @@ mod tests {
         // Boundary values
         assert!(StatusLine::new(100, "Trying").is_ok());
         assert!(StatusLine::new(699, "Unknown").is_ok());
-        
+
         // Common codes
         assert!(StatusLine::new(200, "OK").is_ok());
         assert!(StatusLine::new(404, "Not Found").is_ok());
@@ -673,7 +675,7 @@ mod tests {
         assert!(StatusLine::new(404, "Not Found").unwrap().is_client_error());
         assert!(StatusLine::new(500, "Error").unwrap().is_server_error());
         assert!(StatusLine::new(603, "Decline").unwrap().is_global_failure());
-        
+
         assert!(StatusLine::new(404, "Not Found").unwrap().is_error());
         assert!(!StatusLine::new(200, "OK").unwrap().is_error());
     }
@@ -684,9 +686,9 @@ mod tests {
         let request_line = RequestLine::new(Method::Invite, uri);
         let headers = Headers::new();
         let body = Bytes::new();
-        
+
         let request = Request::new(request_line, headers, body).unwrap();
-        
+
         assert_eq!(request.method(), &Method::Invite);
         assert!(!request.has_body());
         assert_eq!(request.body_len(), 0);
@@ -697,10 +699,10 @@ mod tests {
         let uri = mock_uri();
         let request_line = RequestLine::new(Method::Invite, uri);
         let headers = Headers::new();
-        
+
         // Create body larger than MAX_BODY_SIZE
         let huge_body = Bytes::from(vec![0u8; MAX_BODY_SIZE + 1]);
-        
+
         let result = Request::new(request_line, headers, huge_body);
         assert!(result.is_err());
     }
@@ -710,9 +712,9 @@ mod tests {
         let status_line = StatusLine::new(200, "OK").unwrap();
         let headers = Headers::new();
         let body = Bytes::new();
-        
+
         let response = Response::new(status_line, headers, body).unwrap();
-        
+
         assert_eq!(response.code(), 200);
         assert_eq!(response.reason(), "OK");
         assert!(response.is_success());
@@ -723,10 +725,10 @@ mod tests {
     fn reject_oversized_response_body() {
         let status_line = StatusLine::new(200, "OK").unwrap();
         let headers = Headers::new();
-        
+
         // Create body larger than MAX_BODY_SIZE
         let huge_body = Bytes::from(vec![0u8; MAX_BODY_SIZE + 1]);
-        
+
         let result = Response::new(status_line, headers, huge_body);
         assert!(result.is_err());
     }
@@ -736,9 +738,9 @@ mod tests {
         let uri = mock_uri();
         let request_line = RequestLine::new(Method::Invite, uri);
         let request = Request::new(request_line, Headers::new(), Bytes::new()).unwrap();
-        
+
         let message = SipMessage::Request(request);
-        
+
         assert!(message.is_request());
         assert!(!message.is_response());
         assert!(message.as_request().is_some());
@@ -749,9 +751,9 @@ mod tests {
     fn sip_message_response() {
         let status_line = StatusLine::new(200, "OK").unwrap();
         let response = Response::new(status_line, Headers::new(), Bytes::new()).unwrap();
-        
+
         let message = SipMessage::Response(response);
-        
+
         assert!(!message.is_request());
         assert!(message.is_response());
         assert!(message.as_request().is_none());
@@ -763,9 +765,9 @@ mod tests {
         let uri = mock_uri();
         let request_line = RequestLine::new(Method::Invite, uri);
         let body = Bytes::from("SDP content here");
-        
+
         let request = Request::new(request_line, Headers::new(), body.clone()).unwrap();
-        
+
         assert!(request.has_body());
         assert_eq!(request.body_len(), body.len());
         assert_eq!(request.body(), &body);
@@ -777,7 +779,7 @@ mod tests {
         let request_line = RequestLine::new(Method::Invite, uri);
         let status_line = StatusLine::new(200, "OK").unwrap();
         let request = Request::new(request_line.clone(), Headers::new(), Bytes::new()).unwrap();
-        
+
         // These should compile (read-only access)
         let _ = request_line.method();
         let _ = request_line.uri();
@@ -785,7 +787,7 @@ mod tests {
         let _ = status_line.reason();
         let _ = request.method();
         let _ = request.headers();
-        
+
         // These should NOT compile (no direct field access):
         // request_line.method = Method::Bye;  // ← Does not compile!
         // status_line.code = 404;             // ← Does not compile!
@@ -797,7 +799,7 @@ mod tests {
         let uri = mock_uri();
         let request_line = RequestLine::new(Method::Invite, uri.clone());
         let (method, returned_uri, version) = request_line.into_parts();
-        
+
         assert_eq!(method, Method::Invite);
         assert_eq!(returned_uri, uri);
         assert_eq!(version, SipVersion::V2);

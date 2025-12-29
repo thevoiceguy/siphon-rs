@@ -269,7 +269,7 @@ impl RequestTarget {
                     sip_dns::Transport::Tls => "sips",
                     _ => "sip",
                 };
-                SipUri::parse(&format!("{}:{}:{}", scheme, dns.host, dns.port))
+                SipUri::parse(&format!("{}:{}:{}", scheme, dns.host, dns.port)).ok()
             }
         }
     }
@@ -308,7 +308,7 @@ fn prepare_in_dialog_request(dialog: &mut Dialog, request: &mut Request) -> SipU
     }
 
     let first_route = dialog.route_set.first().cloned().unwrap();
-    let loose_route = first_route.params.contains_key("lr");
+    let loose_route = first_route.params().contains_key(&SmolStr::new("lr"));
 
     if loose_route {
         let request_uri = dialog.remote_target.clone();
@@ -367,7 +367,7 @@ fn apply_route_set_to_request(dialog: &Dialog, request: &mut Request) {
     }
 
     let first_route = dialog.route_set.first().cloned().unwrap();
-    let loose_route = first_route.params.contains_key("lr");
+    let loose_route = first_route.params().contains_key(&SmolStr::new("lr"));
 
     if loose_route {
         let request_uri = dialog.remote_target.clone();
@@ -379,9 +379,8 @@ fn apply_route_set_to_request(dialog: &Dialog, request: &mut Request) {
                 )
                 .unwrap();
         }
-        let new_request =
-            Request::new(RequestLine::new(method, request_uri), headers, body)
-                .expect("valid in-dialog request");
+        let new_request = Request::new(RequestLine::new(method, request_uri), headers, body)
+            .expect("valid in-dialog request");
         *request = new_request;
     } else {
         let request_uri = first_route.clone();
@@ -399,9 +398,8 @@ fn apply_route_set_to_request(dialog: &Dialog, request: &mut Request) {
                 SmolStr::new(format!("<{}>", dialog.remote_target.as_str())),
             )
             .unwrap();
-        let new_request =
-            Request::new(RequestLine::new(method, request_uri), headers, body)
-                .expect("valid in-dialog request");
+        let new_request = Request::new(RequestLine::new(method, request_uri), headers, body)
+            .expect("valid in-dialog request");
         *request = new_request;
     }
 }
@@ -439,7 +437,7 @@ impl From<DnsTarget> for RequestTarget {
 impl From<&str> for RequestTarget {
     fn from(s: &str) -> Self {
         // Try to parse as SIP URI
-        if let Some(uri) = SipUri::parse(s) {
+        if let Ok(uri) = SipUri::parse(s) {
             RequestTarget::Uri(uri)
         } else {
             // For invalid URIs, we'll fail at resolution time
@@ -812,7 +810,7 @@ impl IntegratedUAC {
                     _ => "sip",
                 };
                 SipUri::parse(&format!("{}:{}:{}", scheme, dns.host, dns.port))
-                    .ok_or_else(|| anyhow!("Failed to reconstruct URI from DNS target"))
+                    .map_err(|_| anyhow!("Failed to reconstruct URI from DNS target"))
             }
         }
     }
@@ -936,7 +934,9 @@ impl IntegratedUAC {
                 } else {
                     format!("{}{}", new_contact, extra_params)
                 };
-                let _ = request.headers_mut().set_or_push("Contact", updated_contact);
+                let _ = request
+                    .headers_mut()
+                    .set_or_push("Contact", updated_contact);
             }
         }
 
@@ -967,9 +967,9 @@ impl IntegratedUAC {
             RequestTarget::Resolved(dns) => Ok(dns.clone()),
             RequestTarget::Uri(uri) if !self.config.auto_dns_resolution => {
                 // No auto resolution - create simple target
-                let port = uri.port.unwrap_or(5060);
+                let port = uri.port().unwrap_or(5060);
                 Ok(DnsTarget {
-                    host: SmolStr::new(uri.host.clone()),
+                    host: SmolStr::new(uri.host()),
                     port,
                     transport: sip_dns::Transport::Udp,
                     priority: 0,
@@ -1934,7 +1934,8 @@ mod tests {
         let mut dialog = base_dialog();
         let manager = DialogManager::new();
         let response = Response::new(
-            StatusLine::new(481, SmolStr::new("Call/Transaction Does Not Exist")).expect("valid status line"),
+            StatusLine::new(481, SmolStr::new("Call/Transaction Does Not Exist"))
+                .expect("valid status line"),
             Headers::new(),
             Bytes::new(),
         )
@@ -2111,7 +2112,8 @@ impl ClientTransactionUser for InviteTransactionUser {
                 if early_dialogs.contains_key(&to_tag) {
                     debug!(
                         "Updated existing early dialog from {}: to-tag={}",
-                        response.code(), to_tag
+                        response.code(),
+                        to_tag
                     );
                 } else {
                     debug!(
@@ -2139,7 +2141,8 @@ impl ClientTransactionUser for InviteTransactionUser {
             if let Some(dialog) = helper.process_invite_response(&self.request, response) {
                 info!(
                     "Confirmed dialog from {}: {}",
-                    response.code(), dialog.id.call_id
+                    response.code(),
+                    dialog.id.call_id
                 );
             }
         }
@@ -2169,7 +2172,8 @@ impl ClientTransactionUser for InviteTransactionUser {
     ) {
         info!(
             "Sending ACK for {} response (is_2xx={})",
-            response.code(), is_2xx
+            response.code(),
+            is_2xx
         );
 
         let original_via = self.request.headers().get("Via").map(|via| via.to_string());
@@ -2328,10 +2332,7 @@ impl ClientTransactionUser for InviteTransactionUser {
     }
 
     async fn send_prack(&self, _key: &TransactionKey, response: Response, ctx: &TransportContext) {
-        info!(
-            "Sending PRACK for reliable provisional {}",
-            response.code()
-        );
+        info!("Sending PRACK for reliable provisional {}", response.code());
 
         // Find dialog for this response
         let helper = self.helper.lock().await;
@@ -2516,13 +2517,13 @@ impl IntegratedUACBuilder {
 
     /// Sets the local SIP URI (used in From header).
     pub fn local_uri(mut self, uri: impl AsRef<str>) -> Self {
-        self.local_uri = SipUri::parse(uri.as_ref());
+        self.local_uri = SipUri::parse(uri.as_ref()).ok();
         self
     }
 
     /// Sets the contact URI (used in Contact header).
     pub fn contact_uri(mut self, uri: impl AsRef<str>) -> Self {
-        self.contact_uri = SipUri::parse(uri.as_ref());
+        self.contact_uri = SipUri::parse(uri.as_ref()).ok();
         self
     }
 
@@ -2743,11 +2744,7 @@ impl IntegratedUACBuilder {
         // Create embedded helper
         let contact_uri = self.contact_uri.unwrap_or_else(|| {
             // Default contact: sip:user@advertised_contact
-            let user = local_uri
-                .user
-                .as_ref()
-                .map(|u| u.as_str())
-                .unwrap_or("user");
+            let user = local_uri.user().unwrap_or("user");
             let contact_host = self
                 .config
                 .contact_advertised

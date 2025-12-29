@@ -124,7 +124,10 @@ fn main() {
     println!("REFER sip:alice@192.168.1.100:5060 SIP/2.0");
     println!("From: {}", refer_request.headers().get("From").unwrap());
     println!("To: {}", refer_request.headers().get("To").unwrap());
-    println!("Call-ID: {}", refer_request.headers().get("Call-ID").unwrap());
+    println!(
+        "Call-ID: {}",
+        refer_request.headers().get("Call-ID").unwrap()
+    );
     println!("CSeq: {}", refer_request.headers().get("CSeq").unwrap());
     println!(
         "Refer-To: {}",

@@ -73,7 +73,10 @@ impl ProxyHelpers {
     /// * `proxy_uri` - The proxy's SIP URI (will be in Route headers of future requests)
     pub fn add_record_route(request: &mut Request, proxy_uri: &SipUri) {
         let rr_value = format!("<{}>", proxy_uri.as_str());
-        request.headers_mut().push("Record-Route", rr_value).unwrap();
+        request
+            .headers_mut()
+            .push("Record-Route", rr_value)
+            .unwrap();
     }
 
     /// Decrements Max-Forwards header and checks for loop.
@@ -135,9 +138,8 @@ impl ProxyHelpers {
         let method = request.method().clone();
         let headers = request.headers().clone();
         let body = request.body().clone();
-        *request =
-            Request::new(RequestLine::new(method, target_uri), headers, body)
-                .expect("valid request");
+        *request = Request::new(RequestLine::new(method, target_uri), headers, body)
+            .expect("valid request");
     }
 }
 

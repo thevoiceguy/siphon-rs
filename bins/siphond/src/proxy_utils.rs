@@ -8,6 +8,7 @@ use sip_core::{Headers, Request, SipUri};
 use sip_parse::header;
 use sip_proxy::ProxyHelpers;
 use sip_transaction::TransportKind;
+use smol_str::SmolStr;
 
 use crate::services::ServiceRegistry;
 
@@ -25,7 +26,7 @@ fn extract_first_route(headers: &Headers) -> Option<String> {
 
 fn parse_route_uri(route_value: &str) -> Option<SipUri> {
     let trimmed = route_value.trim().trim_matches('<').trim_matches('>');
-    SipUri::parse(trimmed)
+    SipUri::parse(trimmed).ok()
 }
 
 fn remove_top_route(headers: &mut Headers) {
@@ -48,20 +49,19 @@ fn remove_top_route(headers: &mut Headers) {
 }
 
 fn is_route_local(route_uri: &SipUri, local_uri: &SipUri) -> bool {
-    let local_host = local_uri.host.as_str();
-    let route_host = route_uri.host.as_str();
-    let local_port = local_uri.port.unwrap_or(5060);
-    let route_port = route_uri.port.unwrap_or(5060);
+    let local_host = local_uri.host();
+    let route_host = route_uri.host();
+    let local_port = local_uri.port().unwrap_or(5060);
+    let route_port = route_uri.port().unwrap_or(5060);
     local_host.eq_ignore_ascii_case(route_host) && local_port == route_port
 }
 
 fn select_transport(uri: &SipUri) -> TransportKind {
-    if let Some(transport) = uri
-        .params
-        .get("transport")
-        .and_then(|v| v.as_ref())
-        .map(|v| v.to_ascii_lowercase())
-    {
+    let transport_param: Option<&SmolStr> = uri
+        .params()
+        .get(&SmolStr::new("transport"))
+        .and_then(|v| v.as_ref());
+    if let Some(transport) = transport_param.map(|v| v.to_ascii_lowercase()) {
         return match transport.as_str() {
             "udp" => TransportKind::Udp,
             "tcp" => TransportKind::Tcp,
@@ -72,7 +72,7 @@ fn select_transport(uri: &SipUri) -> TransportKind {
         };
     }
 
-    if uri.sips {
+    if uri.is_sips() {
         TransportKind::Tls
     } else {
         TransportKind::Udp
@@ -83,10 +83,7 @@ pub fn next_hop_from_request(request: &Request, local_uri: &SipUri) -> (SipUri, 
     if let Some(route_value) = extract_first_route(request.headers()) {
         if let Some(route_uri) = parse_route_uri(&route_value) {
             if is_route_local(&route_uri, local_uri) {
-                return (
-                    request.uri().as_sip().cloned().unwrap_or(route_uri),
-                    true,
-                );
+                return (request.uri().as_sip().cloned().unwrap_or(route_uri), true);
             }
             return (route_uri, false);
         }
@@ -143,13 +140,13 @@ pub async fn forward_request(
         });
 
     if options.add_record_route {
-        if let Some(proxy_uri) = sip_core::SipUri::parse(&services.config.local_uri) {
+        if let Ok(proxy_uri) = sip_core::SipUri::parse(&services.config.local_uri) {
             ProxyHelpers::add_record_route(&mut proxied_req, &proxy_uri);
         }
     }
 
     let local_uri = sip_core::SipUri::parse(&services.config.local_uri)
-        .ok_or_else(|| anyhow!("Invalid local_uri"))?;
+        .map_err(|_| anyhow!("Invalid local_uri"))?;
 
     let (target_uri, remove_route) = next_hop_from_request(&proxied_req, &local_uri);
     if remove_route {
@@ -160,8 +157,12 @@ pub async fn forward_request(
         ProxyHelpers::set_request_uri(&mut proxied_req, target_uri.clone());
     }
 
-    let target_addr = format!("{}:{}", target_uri.host, target_uri.port.unwrap_or(5060))
-        .parse::<std::net::SocketAddr>()?;
+    let target_addr = format!(
+        "{}:{}",
+        target_uri.host(),
+        target_uri.port().unwrap_or(5060)
+    )
+    .parse::<std::net::SocketAddr>()?;
 
     let transport = select_transport(&target_uri);
     let payload = sip_parse::serialize_request(&proxied_req);
@@ -185,7 +186,7 @@ pub async fn forward_request(
                     .get()
                     .ok_or_else(|| anyhow!("TLS client config not available"))?;
                 let tls = sip_transport::TlsConfig {
-                    server_name: target_uri.host.to_string(),
+                    server_name: target_uri.host().to_string(),
                     client_config: config.clone(),
                 };
                 sip_transport::send_tls(&target_addr, &payload, &tls).await?;
@@ -203,7 +204,7 @@ pub async fn forward_request(
                 } else {
                     "ws"
                 };
-                let ws_url = format!("{}://{}:{}", scheme, target_uri.host, target_addr.port());
+                let ws_url = format!("{}://{}:{}", scheme, target_uri.host(), target_addr.port());
                 let data = bytes::Bytes::from(payload.to_vec());
                 if transport == TransportKind::Wss {
                     sip_transport::send_wss(&ws_url, data).await?;

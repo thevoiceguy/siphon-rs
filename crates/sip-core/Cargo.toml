@@ -1,6 +1,6 @@
 [package]
 name = "sip-core"
-version = "0.6.20"
+version = "0.6.21"
 edition = "2021"
 license.workspace = true
 description = "Core SIP types, headers, URIs, and message primitives."

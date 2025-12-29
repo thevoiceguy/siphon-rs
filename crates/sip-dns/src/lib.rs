@@ -208,12 +208,13 @@ impl SipResolver {
 
     /// Determines the default transport for a URI.
     fn default_transport(uri: &SipUri) -> Transport {
-        if uri.sips {
+        if uri.is_sips() {
             Transport::Tls
         } else {
             // Check for explicit transport parameter
-            if let Some(Some(t)) = uri.params.get(&SmolStr::new("transport")) {
-                return match t.as_str().to_ascii_lowercase().as_str() {
+            if let Some(Some(t)) = uri.params().get(&SmolStr::new("transport")) {
+                let transport = t.as_str().to_ascii_lowercase();
+                return match transport.as_str() {
                     "tcp" => Transport::Tcp,
                     "tls" => Transport::Tls,
                     "ws" => Transport::Ws,
@@ -229,9 +230,10 @@ impl SipResolver {
 
     /// Returns the transport parameter from the URI, if present.
     fn transport_param(uri: &SipUri) -> Option<Transport> {
-        let transport_param = uri.params.get(&SmolStr::new("transport"))?;
+        let transport_param = uri.params().get(&SmolStr::new("transport"))?;
         let param = transport_param.as_ref()?;
-        Some(match param.as_str().to_ascii_lowercase().as_str() {
+        let transport = param.as_str().to_ascii_lowercase();
+        Some(match transport.as_str() {
             "tcp" => Transport::Tcp,
             "tls" => Transport::Tls,
             "ws" => Transport::Ws,
@@ -249,11 +251,13 @@ impl SipResolver {
 
     /// Performs complete RFC 3263 resolution.
     async fn resolve_internal(&self, uri: &SipUri) -> Result<Vec<DnsTarget>> {
-        let host = uri.host.as_str();
+        let host = uri.host();
 
         // RFC 3263 §4: If numeric IP, use directly
         if Self::is_numeric_ip(host) {
-            let port = uri.port.unwrap_or(if uri.sips { 5061 } else { 5060 });
+            let port = uri
+                .port()
+                .unwrap_or(if uri.is_sips() { 5061 } else { 5060 });
             return Ok(vec![DnsTarget::new(
                 host,
                 port,
@@ -262,7 +266,7 @@ impl SipResolver {
         }
 
         // RFC 3263 §4: If explicit port, skip SRV, do A/AAAA
-        if let Some(port) = uri.port {
+        if let Some(port) = uri.port() {
             let ips = self.lookup_a_aaaa(host).await?;
             return Ok(ips
                 .into_iter()
@@ -271,7 +275,7 @@ impl SipResolver {
         }
 
         // RFC 3263 §4.1: Perform NAPTR lookup
-        let transport_override = if uri.sips {
+        let transport_override = if uri.is_sips() {
             Some(Transport::Tls)
         } else {
             Self::transport_param(uri)
@@ -292,7 +296,7 @@ impl SipResolver {
                     .map(|replacement| replacement.as_str())
                     .unwrap_or(host);
                 if let Ok(targets) = self
-                    .lookup_srv(lookup_host, record.transport, uri.sips)
+                    .lookup_srv(lookup_host, record.transport, uri.is_sips())
                     .await
                 {
                     all_targets.extend(targets);
@@ -301,7 +305,7 @@ impl SipResolver {
         } else {
             let transports = self.default_transport_order(uri);
             for transport in transports {
-                if let Ok(targets) = self.lookup_srv(host, transport, uri.sips).await {
+                if let Ok(targets) = self.lookup_srv(host, transport, uri.is_sips()).await {
                     all_targets.extend(targets);
                 }
             }
@@ -309,7 +313,7 @@ impl SipResolver {
 
         // RFC 3263 §4.3: Fallback to A/AAAA if no SRV records
         if all_targets.is_empty() {
-            let default_port = if uri.sips { 5061 } else { 5060 };
+            let default_port = if uri.is_sips() { 5061 } else { 5060 };
             let ips = self.lookup_a_aaaa(host).await?;
             for ip in ips {
                 all_targets.push(DnsTarget::new(
@@ -329,13 +333,14 @@ impl SipResolver {
 
     /// Returns default transport ordering when NAPTR is unavailable.
     fn default_transport_order(&self, uri: &SipUri) -> Vec<Transport> {
-        if uri.sips {
+        if uri.is_sips() {
             // SIPS requires TLS
             vec![Transport::Tls]
         } else {
             // Check for explicit transport parameter
-            if let Some(Some(t)) = uri.params.get(&SmolStr::new("transport")) {
-                let transport = match t.as_str().to_ascii_lowercase().as_str() {
+            if let Some(Some(t)) = uri.params().get(&SmolStr::new("transport")) {
+                let transport = t.as_str().to_ascii_lowercase();
+                let transport = match transport.as_str() {
                     "tcp" => Transport::Tcp,
                     "tls" => Transport::Tls,
                     "ws" => Transport::Ws,
@@ -357,7 +362,7 @@ impl SipResolver {
         uri: &SipUri,
         allowed_transport: Option<Transport>,
     ) -> Result<Vec<NaptrRecord>> {
-        let host = uri.host.as_str();
+        let host = uri.host();
         let lookup = self
             .resolver
             .lookup(format!("{}.", host), RecordType::NAPTR)
@@ -964,15 +969,17 @@ impl<D: DhcpProvider, R: Resolver> DhcpResolver<D, R> {
             match server {
                 DhcpSipServer::Ipv4(addr) => {
                     // Use IPv4 address directly
-                    let port = if uri.sips { 5061 } else { 5060 };
+                    let port = if uri.is_sips() { 5061 } else { 5060 };
                     let transport = SipResolver::default_transport(uri);
                     all_targets.push(DnsTarget::new(addr.to_string(), port, transport));
                 }
                 DhcpSipServer::Domain(domain) => {
                     // Create a temporary URI with the DHCP domain for DNS resolution
-                    let mut temp_uri = uri.clone();
-                    temp_uri.host = domain.clone();
-                    temp_uri.port = None; // Let DNS resolver determine the port
+                    let temp_uri = uri
+                        .clone()
+                        .with_host(domain.clone())
+                        .map_err(|e| anyhow!(e))?
+                        .without_port();
 
                     // Resolve the domain via DNS (RFC 3263)
                     if let Ok(targets) = self.dns_resolver.resolve(&temp_uri).await {
@@ -1050,14 +1057,16 @@ impl<D: DhcpProvider, R: Resolver> Resolver for HybridResolver<D, R> {
                 for server in servers {
                     match server {
                         DhcpSipServer::Ipv4(addr) => {
-                            let port = if uri.sips { 5061 } else { 5060 };
+                            let port = if uri.is_sips() { 5061 } else { 5060 };
                             let transport = SipResolver::default_transport(uri);
                             all_targets.push(DnsTarget::new(addr.to_string(), port, transport));
                         }
                         DhcpSipServer::Domain(domain) => {
-                            let mut temp_uri = uri.clone();
-                            temp_uri.host = domain.clone();
-                            temp_uri.port = None;
+                            let temp_uri = uri
+                                .clone()
+                                .with_host(domain.clone())
+                                .map_err(|e| anyhow!(e))?
+                                .without_port();
 
                             if let Ok(targets) = self.dns_resolver.resolve(&temp_uri).await {
                                 all_targets.extend(targets);

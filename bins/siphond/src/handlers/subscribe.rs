@@ -31,7 +31,10 @@ struct NotifyTransactionUser;
 #[async_trait]
 impl ClientTransactionUser for NotifyTransactionUser {
     async fn on_provisional(&self, _key: &TransactionKey, response: &Response) {
-        debug!(status = response.code(), "NOTIFY received provisional response");
+        debug!(
+            status = response.code(),
+            "NOTIFY received provisional response"
+        );
     }
 
     async fn on_final(&self, _key: &TransactionKey, response: &Response) {
@@ -112,8 +115,8 @@ impl SubscribeHandler {
 
         // Create UAC for generating NOTIFY
         let local_uri = match sip_core::SipUri::parse(&services.config.local_uri) {
-            Some(uri) => uri,
-            None => {
+            Ok(uri) => uri,
+            Err(_) => {
                 warn!("Invalid local_uri, cannot send NOTIFY");
                 return Ok(());
             }
@@ -260,8 +263,8 @@ impl RequestHandler for SubscribeHandler {
 
         // Parse local URI from config
         let local_uri = match sip_core::SipUri::parse(&services.config.local_uri) {
-            Some(uri) => uri,
-            None => {
+            Ok(uri) => uri,
+            Err(_) => {
                 warn!("Invalid local_uri in config");
                 let error = UserAgentServer::create_response(request, 603, "Decline");
                 handle.send_final(error).await;

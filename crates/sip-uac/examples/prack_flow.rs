@@ -140,7 +140,10 @@ fn main() {
     println!("PRACK sip:bob@192.168.1.200:5060 SIP/2.0");
     println!("From: {}", prack_request.headers().get("From").unwrap());
     println!("To: {}", prack_request.headers().get("To").unwrap());
-    println!("Call-ID: {}", prack_request.headers().get("Call-ID").unwrap());
+    println!(
+        "Call-ID: {}",
+        prack_request.headers().get("Call-ID").unwrap()
+    );
     println!("CSeq: {}", prack_request.headers().get("CSeq").unwrap());
     println!("RAck: {}", prack_request.headers().get("RAck").unwrap());
     println!();

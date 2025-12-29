@@ -67,18 +67,14 @@ pub enum RouteError {
 impl std::fmt::Display for RouteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidNameAddr(msg) =>
-                write!(f, "invalid name-addr: {}", msg),
-            Self::InputTooLarge { max, actual } =>
-                write!(f, "input too large (max {}, got {})", max, actual),
-            Self::ParseError(msg) =>
-                write!(f, "parse error: {}", msg),
-            Self::EmptyInput =>
-                write!(f, "empty input"),
-            Self::MissingUri =>
-                write!(f, "missing URI"),
-            Self::UnbalancedQuotes =>
-                write!(f, "unbalanced quotes in display name"),
+            Self::InvalidNameAddr(msg) => write!(f, "invalid name-addr: {}", msg),
+            Self::InputTooLarge { max, actual } => {
+                write!(f, "input too large (max {}, got {})", max, actual)
+            }
+            Self::ParseError(msg) => write!(f, "parse error: {}", msg),
+            Self::EmptyInput => write!(f, "empty input"),
+            Self::MissingUri => write!(f, "missing URI"),
+            Self::UnbalancedQuotes => write!(f, "unbalanced quotes in display name"),
         }
     }
 }
@@ -194,7 +190,7 @@ impl RouteHeader {
         self.0
             .uri()
             .as_sip()
-            .map(|sip| sip.params.contains_key("lr"))
+            .map(|sip| sip.params().contains_key("lr"))
             .unwrap_or(false)
     }
 
@@ -333,8 +329,8 @@ fn parse_name_addr(input: &str) -> Result<NameAddr, RouteError> {
             let display = input[..start].trim();
             let uri = input[start + 1..end].trim();
             let params = parse_params(input[end + 1..].trim());
-            let uri = Uri::parse(uri)
-                .ok_or_else(|| RouteError::ParseError("invalid uri".to_string()))?;
+            let uri =
+                Uri::parse(uri).map_err(|_| RouteError::ParseError("invalid uri".to_string()))?;
             NameAddr::new(
                 if display.is_empty() {
                     None
@@ -348,7 +344,7 @@ fn parse_name_addr(input: &str) -> Result<NameAddr, RouteError> {
         }
         None => {
             let (uri_part, param_part) = input.split_once(';').unwrap_or((input, ""));
-            let uri = Uri::parse(uri_part.trim()).ok_or(RouteError::MissingUri)?;
+            let uri = Uri::parse(uri_part.trim()).map_err(|_| RouteError::MissingUri)?;
             NameAddr::new(None, uri, parse_params(param_part))
                 .map_err(|err| RouteError::InvalidNameAddr(err.to_string()))
         }
@@ -485,7 +481,10 @@ mod tests {
     #[test]
     fn parse_route_with_display_name() {
         let route = RouteHeader::parse("\"My Proxy\" <sip:proxy.example.com;lr>").unwrap();
-        assert_eq!(route.inner().display_name().map(|s| s.as_str()), Some("My Proxy"));
+        assert_eq!(
+            route.inner().display_name().map(|s| s.as_str()),
+            Some("My Proxy")
+        );
         assert!(route.has_lr());
     }
 
@@ -494,12 +493,12 @@ mod tests {
         let route = RouteHeader::parse("<sip:proxy.example.com;lr;transport=tcp>").unwrap();
         assert!(route.has_lr());
 
-        let sip_params = &route.uri().as_sip().unwrap().params;
-        assert!(sip_params.contains_key("lr"));
-        assert_eq!(
-            sip_params.get("transport").and_then(|v| v.as_ref()).map(|s| s.as_str()),
-            Some("tcp")
-        );
+        let sip_params = route.uri().as_sip().unwrap().params();
+        assert!(sip_params.contains_key(&SmolStr::new("lr")));
+        let transport: Option<&SmolStr> = sip_params
+            .get(&SmolStr::new("transport"))
+            .and_then(|v| v.as_ref());
+        assert_eq!(transport.map(|s| s.as_str()), Some("tcp"));
     }
 
     #[test]
@@ -553,12 +552,12 @@ mod tests {
     #[test]
     fn tuple_field_is_private() {
         let route = RouteHeader::parse("<sip:proxy.example.com;lr>").unwrap();
-        
+
         // These should compile (read-only access)
         let _ = route.uri();
         let _ = route.params();
         let _ = route.inner();
-        
+
         // This should NOT compile (no direct field access):
         // route.0 = ...;  // ← Does not compile!
     }

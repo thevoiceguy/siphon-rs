@@ -170,7 +170,7 @@ impl AckForwarder {
                 if header.name().eq_ignore_ascii_case("Route") && !used_route {
                     let uri_str = header.value().trim_matches(|c| c == '<' || c == '>');
 
-                    if let Some(uri) = SipUri::parse(uri_str) {
+                    if let Ok(uri) = SipUri::parse(uri_str) {
                         crate::ProxyHelpers::set_request_uri(&mut ack, uri);
                         used_route = true;
                         // Skip the consumed Route header
@@ -259,7 +259,7 @@ impl RouteProcessor {
                 // Extract URI from Route header (remove angle brackets)
                 let route_uri_str = last_route.as_str().trim_matches(|c| c == '<' || c == '>');
 
-                if let Some(route_uri) = SipUri::parse(route_uri_str) {
+                if let Ok(route_uri) = SipUri::parse(route_uri_str) {
                     debug!("Moving Route header to Request-URI: {}", route_uri.as_str());
 
                     // Update Request-URI
@@ -295,7 +295,7 @@ impl RouteProcessor {
         if let Some(route) = request.headers().get("Route") {
             // Extract URI from Route header
             let uri_str = route.trim_matches(|c| c == '<' || c == '>');
-            SipUri::parse(uri_str).ok_or_else(|| anyhow!("Invalid Route header URI"))
+            SipUri::parse(uri_str).map_err(|_| anyhow!("Invalid Route header URI"))
         } else {
             // Use Request-URI
             request

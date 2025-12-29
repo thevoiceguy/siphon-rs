@@ -44,18 +44,16 @@ pub enum PHeaderError {
 impl std::fmt::Display for PHeaderError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::DisplayNameTooLong { max, actual } =>
-                write!(f, "display name too long (max {}, got {})", max, actual),
-            Self::TooManyIdentities { max, actual } =>
-                write!(f, "too many identities (max {}, got {})", max, actual),
-            Self::InvalidDisplayName(msg) =>
-                write!(f, "invalid display name: {}", msg),
-            Self::EmptyIdentities =>
-                write!(f, "identities cannot be empty"),
-            Self::InvalidTelUri(msg) =>
-                write!(f, "invalid tel URI: {}", msg),
-            Self::ParseError(msg) =>
-                write!(f, "parse error: {}", msg),
+            Self::DisplayNameTooLong { max, actual } => {
+                write!(f, "display name too long (max {}, got {})", max, actual)
+            }
+            Self::TooManyIdentities { max, actual } => {
+                write!(f, "too many identities (max {}, got {})", max, actual)
+            }
+            Self::InvalidDisplayName(msg) => write!(f, "invalid display name: {}", msg),
+            Self::EmptyIdentities => write!(f, "identities cannot be empty"),
+            Self::InvalidTelUri(msg) => write!(f, "invalid tel URI: {}", msg),
+            Self::ParseError(msg) => write!(f, "parse error: {}", msg),
             _ => write!(f, "{:?}", self),
         }
     }
@@ -129,7 +127,7 @@ impl PIdentity {
             });
         }
 
-        let name_key = SmolStr::new(&name.to_ascii_lowercase());
+        let name_key = SmolStr::new(name.to_ascii_lowercase());
 
         if self.params.contains_key(&name_key) {
             return Err(PHeaderError::DuplicateParam(name.to_string()));
@@ -152,14 +150,14 @@ impl PIdentity {
 
     /// Returns an iterator over parameters.
     pub fn params(&self) -> impl Iterator<Item = (&str, Option<&str>)> {
-        self.params.iter().map(|(k, v)| {
-            (k.as_str(), v.as_ref().map(|s| s.as_str()))
-        })
+        self.params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_ref().map(|s| s.as_str())))
     }
 
     /// Gets a parameter value by name (case-insensitive).
     pub fn get_param(&self, name: &str) -> Option<&Option<SmolStr>> {
-        self.params.get(&SmolStr::new(&name.to_ascii_lowercase()))
+        self.params.get(&SmolStr::new(name.to_ascii_lowercase()))
     }
 }
 
@@ -201,7 +199,7 @@ impl PAccessNetworkInfo {
     /// Returns an error if the access type is invalid.
     pub fn new(access_type: impl AsRef<str>) -> Result<Self, PHeaderError> {
         validate_access_type(access_type.as_ref())?;
-        
+
         Ok(Self {
             access_type: SmolStr::new(access_type.as_ref()),
             params: BTreeMap::new(),
@@ -238,7 +236,7 @@ impl PAccessNetworkInfo {
             });
         }
 
-        let name_key = SmolStr::new(&name.to_ascii_lowercase());
+        let name_key = SmolStr::new(name.to_ascii_lowercase());
 
         if self.params.contains_key(&name_key) {
             return Err(PHeaderError::DuplicateParam(name.to_string()));
@@ -256,14 +254,14 @@ impl PAccessNetworkInfo {
 
     /// Returns an iterator over parameters.
     pub fn params(&self) -> impl Iterator<Item = (&str, Option<&str>)> {
-        self.params.iter().map(|(k, v)| {
-            (k.as_str(), v.as_ref().map(|s| s.as_str()))
-        })
+        self.params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_ref().map(|s| s.as_str())))
     }
 
     /// Gets a parameter value by name (case-insensitive).
     pub fn get_param(&self, name: &str) -> Option<&Option<SmolStr>> {
-        self.params.get(&SmolStr::new(&name.to_ascii_lowercase()))
+        self.params.get(&SmolStr::new(name.to_ascii_lowercase()))
     }
 }
 
@@ -367,7 +365,7 @@ impl PAssertedIdentityHeader {
 
         let tel_uri = TelUri::parse(&tel_uri_str)
             .map_err(|_| PHeaderError::InvalidTelUri(tel_uri_str.clone()))?;
-        
+
         Ok(Self {
             identities: vec![PIdentity::from_uri(Uri::Tel(tel_uri))],
         })
@@ -378,10 +376,7 @@ impl PAssertedIdentityHeader {
     /// # Errors
     ///
     /// Returns an error if the tel number is invalid.
-    pub fn sip_and_tel(
-        sip_uri: SipUri,
-        tel_number: impl AsRef<str>,
-    ) -> Result<Self, PHeaderError> {
+    pub fn sip_and_tel(sip_uri: SipUri, tel_number: impl AsRef<str>) -> Result<Self, PHeaderError> {
         let tel_number = tel_number.as_ref();
         let tel_uri_str = if tel_number.starts_with("tel:") {
             tel_number.to_string()
@@ -391,7 +386,7 @@ impl PAssertedIdentityHeader {
 
         let tel_uri = TelUri::parse(&tel_uri_str)
             .map_err(|_| PHeaderError::InvalidTelUri(tel_uri_str.clone()))?;
-        
+
         Ok(Self {
             identities: vec![
                 PIdentity::from_uri(Uri::Sip(sip_uri)),
@@ -510,7 +505,7 @@ impl PPreferredIdentityHeader {
 
         let tel_uri = TelUri::parse(&tel_uri_str)
             .map_err(|_| PHeaderError::InvalidTelUri(tel_uri_str.clone()))?;
-        
+
         Ok(Self {
             identities: vec![PIdentity::from_uri(Uri::Tel(tel_uri))],
         })
@@ -521,10 +516,7 @@ impl PPreferredIdentityHeader {
     /// # Errors
     ///
     /// Returns an error if the tel number is invalid.
-    pub fn sip_and_tel(
-        sip_uri: SipUri,
-        tel_number: impl AsRef<str>,
-    ) -> Result<Self, PHeaderError> {
+    pub fn sip_and_tel(sip_uri: SipUri, tel_number: impl AsRef<str>) -> Result<Self, PHeaderError> {
         let tel_number = tel_number.as_ref();
         let tel_uri_str = if tel_number.starts_with("tel:") {
             tel_number.to_string()
@@ -534,7 +526,7 @@ impl PPreferredIdentityHeader {
 
         let tel_uri = TelUri::parse(&tel_uri_str)
             .map_err(|_| PHeaderError::InvalidTelUri(tel_uri_str.clone()))?;
-        
+
         Ok(Self {
             identities: vec![
                 PIdentity::from_uri(Uri::Sip(sip_uri)),
@@ -672,8 +664,8 @@ fn parse_p_identity(value: &str) -> Result<PIdentity, PHeaderError> {
         let uri_str = input[start + 1..end].trim();
         let params_str = input[end + 1..].trim();
 
-        let uri = Uri::parse(uri_str)
-            .ok_or_else(|| PHeaderError::ParseError("invalid URI".to_string()))?;
+        let uri =
+            Uri::parse(uri_str).map_err(|_| PHeaderError::ParseError("invalid URI".to_string()))?;
 
         let mut identity = PIdentity {
             display_name: None,
@@ -695,8 +687,8 @@ fn parse_p_identity(value: &str) -> Result<PIdentity, PHeaderError> {
         // Plain URI without brackets
         let (uri_part, params_part) = split_uri_and_params(input);
         let uri = Uri::parse(uri_part)
-            .ok_or_else(|| PHeaderError::ParseError("invalid URI".to_string()))?;
-        
+            .map_err(|_| PHeaderError::ParseError("invalid URI".to_string()))?;
+
         let mut identity = PIdentity {
             display_name: None,
             uri,
@@ -835,8 +827,11 @@ fn validate_param_name(name: &str) -> Result<(), PHeaderError> {
     }
 
     if !name.chars().all(|c| {
-        c.is_ascii_alphanumeric() || 
-        matches!(c, '-' | '.' | '!' | '%' | '*' | '_' | '+' | '`' | '\'' | '~')
+        c.is_ascii_alphanumeric()
+            || matches!(
+                c,
+                '-' | '.' | '!' | '%' | '*' | '_' | '+' | '`' | '\'' | '~'
+            )
     }) {
         return Err(PHeaderError::InvalidParamName(
             "contains invalid characters".to_string(),
@@ -865,7 +860,9 @@ fn validate_param_value(value: &str) -> Result<(), PHeaderError> {
 
 fn validate_access_type(access_type: &str) -> Result<(), PHeaderError> {
     if access_type.is_empty() {
-        return Err(PHeaderError::InvalidAccessType("empty access type".to_string()));
+        return Err(PHeaderError::InvalidAccessType(
+            "empty access type".to_string(),
+        ));
     }
 
     if access_type.len() > MAX_ACCESS_TYPE_LENGTH {
@@ -886,7 +883,9 @@ fn validate_access_type(access_type: &str) -> Result<(), PHeaderError> {
 
 fn validate_network_id(network_id: &str) -> Result<(), PHeaderError> {
     if network_id.is_empty() {
-        return Err(PHeaderError::InvalidNetworkId("empty network ID".to_string()));
+        return Err(PHeaderError::InvalidNetworkId(
+            "empty network ID".to_string(),
+        ));
     }
 
     if network_id.len() > MAX_NETWORK_ID_LENGTH {
@@ -933,8 +932,7 @@ mod tests {
     #[test]
     fn reject_crlf_in_display_name() {
         let uri = Uri::parse("sip:alice@example.com").unwrap();
-        let result = PIdentity::from_uri(uri)
-            .with_display_name("Alice\r\nInjected");
+        let result = PIdentity::from_uri(uri).with_display_name("Alice\r\nInjected");
         assert!(result.is_err());
     }
 
@@ -942,8 +940,7 @@ mod tests {
     fn reject_oversized_display_name() {
         let uri = Uri::parse("sip:alice@example.com").unwrap();
         let long_name = "x".repeat(MAX_DISPLAY_NAME_LENGTH + 1);
-        let result = PIdentity::from_uri(uri)
-            .with_display_name(&long_name);
+        let result = PIdentity::from_uri(uri).with_display_name(&long_name);
         assert!(result.is_err());
     }
 
@@ -965,11 +962,13 @@ mod tests {
     fn reject_too_many_params() {
         let uri = Uri::parse("sip:alice@example.com").unwrap();
         let mut identity = PIdentity::from_uri(uri);
-        
+
         for i in 0..MAX_PARAMS {
-            identity.add_param(&format!("p{}", i), Some("value")).unwrap();
+            identity
+                .add_param(&format!("p{}", i), Some("value"))
+                .unwrap();
         }
-        
+
         let result = identity.add_param("overflow", Some("value"));
         assert!(result.is_err());
     }
@@ -979,12 +978,12 @@ mod tests {
         let uri = SipUri::parse("sip:alice@example.com").unwrap();
         let pai = PAssertedIdentityHeader::single_sip(uri);
         let identity = pai.identities().next().unwrap();
-        
+
         // These should compile (read-only access)
         let _ = identity.display_name();
         let _ = identity.uri();
         let _ = pai.has_sip_identity();
-        
+
         // These should NOT compile (no direct field access):
         // identity.display_name = Some(...);  // ← Does not compile!
         // pai.identities.clear();             // ← Does not compile!
@@ -1010,14 +1009,20 @@ mod tests {
             parse_p_identity("\"Alice\" <sip:alice@example.com>;foo=bar;secure").unwrap();
         assert_eq!(identity.uri().as_str(), "sip:alice@example.com");
         assert_eq!(identity.display_name(), Some("Alice"));
-        assert_eq!(identity.get_param("foo").and_then(|v| v.as_ref()).map(|v| v.as_str()), Some("bar"));
+        assert_eq!(
+            identity
+                .get_param("foo")
+                .and_then(|v| v.as_ref())
+                .map(|v| v.as_str()),
+            Some("bar")
+        );
         assert!(identity.get_param("secure").is_some());
     }
 
     #[test]
     fn parse_p_identity_list_with_commas() {
-        let values = parse_p_identities("\"Alice\" <sip:alice@example.com>, <tel:+15551234567>")
-            .unwrap();
+        let values =
+            parse_p_identities("\"Alice\" <sip:alice@example.com>, <tel:+15551234567>").unwrap();
         assert_eq!(values.len(), 2);
         assert!(values[0].uri().is_sip());
         assert!(values[1].uri().is_tel());
@@ -1028,7 +1033,7 @@ mod tests {
         // Missing closing bracket
         let result = parse_p_identity("<sip:alice@example.com");
         assert!(result.is_err());
-        
+
         // Empty input
         let result = parse_p_identity("");
         assert!(result.is_err());

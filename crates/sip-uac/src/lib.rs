@@ -2723,7 +2723,7 @@ fn extract_to_uri(response: &Response) -> Option<SipUri> {
         }
     };
 
-    SipUri::parse(uri_str.trim())
+    SipUri::parse(uri_str.trim()).ok()
 }
 
 #[cfg(test)]
@@ -2762,7 +2762,10 @@ mod tests {
         let first = uac.create_register(&registrar, 300);
         let second = uac.create_register(&registrar, 300);
 
-        assert_eq!(first.headers().get("Call-ID"), second.headers().get("Call-ID"));
+        assert_eq!(
+            first.headers().get("Call-ID"),
+            second.headers().get("Call-ID")
+        );
     }
 
     #[test]
@@ -2997,7 +3000,10 @@ mod tests {
 
         assert_eq!(ack.method().as_str(), Method::Ack.as_str());
         assert_eq!(ack.body().len(), sdp_answer.len());
-        assert_eq!(ack.headers().get("Content-Type").unwrap(), "application/sdp");
+        assert_eq!(
+            ack.headers().get("Content-Type").unwrap(),
+            "application/sdp"
+        );
         assert_eq!(
             ack.headers().get("Content-Length").unwrap(),
             sdp_answer.len().to_string()
@@ -3247,7 +3253,10 @@ mod tests {
 
         assert_eq!(notify.method().as_str(), Method::Notify.as_str());
         assert_eq!(notify.headers().get("Event").unwrap(), "refer");
-        assert_eq!(notify.headers().get("Subscription-State").unwrap(), "active");
+        assert_eq!(
+            notify.headers().get("Subscription-State").unwrap(),
+            "active"
+        );
         assert_eq!(notify.body().len(), 9); // "test body"
     }
 
@@ -3533,10 +3542,7 @@ mod tests {
         // Verify Privacy header
         let privacy = private_invite.headers().get("Privacy").unwrap();
         assert_eq!(privacy, "header; session");
-        assert_eq!(
-            private_invite.method().as_str(),
-            Method::Invite.as_str()
-        );
+        assert_eq!(private_invite.method().as_str(), Method::Invite.as_str());
     }
 
     #[test]

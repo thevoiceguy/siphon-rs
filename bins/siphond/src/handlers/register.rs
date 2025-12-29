@@ -48,8 +48,7 @@ impl RequestHandler for RegisterHandler {
                 let mut headers = sip_core::Headers::new();
                 copy_headers(request, &mut headers);
                 let response = sip_core::Response::new(
-                    sip_core::StatusLine::new(501, "Not Implemented")
-                        .expect("valid status line"),
+                    sip_core::StatusLine::new(501, "Not Implemented").expect("valid status line"),
                     headers,
                     bytes::Bytes::new(),
                 )

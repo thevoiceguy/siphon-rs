@@ -87,7 +87,9 @@ impl RequestHandler for OptionsHandler {
         services: &ServiceRegistry,
     ) -> Result<()> {
         // Extract required headers from request
-        let via = header(request.headers(), "Via").cloned().unwrap_or_default();
+        let via = header(request.headers(), "Via")
+            .cloned()
+            .unwrap_or_default();
         let from = header(request.headers(), "From")
             .cloned()
             .unwrap_or_default();

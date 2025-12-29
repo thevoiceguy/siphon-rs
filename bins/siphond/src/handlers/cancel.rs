@@ -144,8 +144,8 @@ impl CancelHandler {
         // Send CANCEL via TCP to callee
         let callee_addr = format!(
             "{}:{}",
-            call_leg.callee_contact.host,
-            call_leg.callee_contact.port.unwrap_or(5060)
+            call_leg.callee_contact.host(),
+            call_leg.callee_contact.port().unwrap_or(5060)
         )
         .parse::<std::net::SocketAddr>()?;
 
@@ -194,8 +194,8 @@ impl RequestHandler for CancelHandler {
 
         // Parse local URI from config
         let local_uri = match sip_core::SipUri::parse(&services.config.local_uri) {
-            Some(uri) => uri,
-            None => {
+            Ok(uri) => uri,
+            Err(_) => {
                 warn!("Invalid local_uri in config");
                 let error = UserAgentServer::create_response(request, 500, "Server Error");
                 handle.send_final(error).await;

@@ -723,7 +723,9 @@ mod tests {
 
     #[test]
     fn session_expires_with_refresher() {
-        let se = SessionExpires::new(1800).unwrap().with_refresher(RefresherRole::Uac);
+        let se = SessionExpires::new(1800)
+            .unwrap()
+            .with_refresher(RefresherRole::Uac);
         assert_eq!(se.delta_seconds(), 1800);
         assert_eq!(se.refresher(), Some(RefresherRole::Uac));
     }
@@ -736,13 +738,17 @@ mod tests {
 
     #[test]
     fn session_expires_format_with_refresher_uac() {
-        let se = SessionExpires::new(1800).unwrap().with_refresher(RefresherRole::Uac);
+        let se = SessionExpires::new(1800)
+            .unwrap()
+            .with_refresher(RefresherRole::Uac);
         assert_eq!(se.to_string(), "1800;refresher=uac");
     }
 
     #[test]
     fn session_expires_format_with_refresher_uas() {
-        let se = SessionExpires::new(1800).unwrap().with_refresher(RefresherRole::Uas);
+        let se = SessionExpires::new(1800)
+            .unwrap()
+            .with_refresher(RefresherRole::Uas);
         assert_eq!(se.to_string(), "1800;refresher=uas");
     }
 
@@ -788,7 +794,9 @@ mod tests {
 
     #[test]
     fn session_expires_round_trip() {
-        let original = SessionExpires::new(1800).unwrap().with_refresher(RefresherRole::Uas);
+        let original = SessionExpires::new(1800)
+            .unwrap()
+            .with_refresher(RefresherRole::Uas);
         let formatted = original.to_string();
         let parsed = SessionExpires::parse(&formatted).unwrap();
         assert_eq!(parsed, original);
@@ -1056,7 +1064,8 @@ mod tests {
     fn session_expires_fields_are_private() {
         // This test verifies that fields are private by attempting to use
         // only public API. If this compiles, encapsulation is maintained.
-        let se = SessionExpires::new(1800).unwrap()
+        let se = SessionExpires::new(1800)
+            .unwrap()
             .with_refresher(RefresherRole::Uac);
 
         // Can only access via getters

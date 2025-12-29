@@ -226,7 +226,8 @@ impl ProxyContext {
         if !is_final {
             debug!(
                 "Forwarding provisional {} response from branch {}",
-                response.code(), branch_id
+                response.code(),
+                branch_id
             );
             return Some(response);
         }
@@ -238,7 +239,8 @@ impl ProxyContext {
         if should_forward {
             info!(
                 "Selected {} as best response (branch {})",
-                response.code(), branch_id
+                response.code(),
+                branch_id
             );
             *best_final = Some(response.clone());
 

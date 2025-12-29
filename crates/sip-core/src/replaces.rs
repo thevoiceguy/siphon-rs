@@ -48,26 +48,22 @@ pub enum ReplacesError {
 impl std::fmt::Display for ReplacesError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::CallIdTooLong { max, actual } =>
-                write!(f, "Call-ID too long (max {}, got {})", max, actual),
-            Self::TagTooLong { max, actual } =>
-                write!(f, "tag too long (max {}, got {})", max, actual),
-            Self::InvalidCallId(msg) =>
-                write!(f, "invalid Call-ID: {}", msg),
-            Self::InvalidTag(msg) =>
-                write!(f, "invalid tag: {}", msg),
-            Self::EmptyCallId =>
-                write!(f, "Call-ID cannot be empty"),
-            Self::EmptyTag =>
-                write!(f, "tag cannot be empty"),
-            Self::MissingToTag =>
-                write!(f, "missing required to-tag parameter"),
-            Self::MissingFromTag =>
-                write!(f, "missing required from-tag parameter"),
-            Self::InputTooLarge { max, actual } =>
-                write!(f, "input too large (max {}, got {})", max, actual),
-            Self::ParseError(msg) =>
-                write!(f, "parse error: {}", msg),
+            Self::CallIdTooLong { max, actual } => {
+                write!(f, "Call-ID too long (max {}, got {})", max, actual)
+            }
+            Self::TagTooLong { max, actual } => {
+                write!(f, "tag too long (max {}, got {})", max, actual)
+            }
+            Self::InvalidCallId(msg) => write!(f, "invalid Call-ID: {}", msg),
+            Self::InvalidTag(msg) => write!(f, "invalid tag: {}", msg),
+            Self::EmptyCallId => write!(f, "Call-ID cannot be empty"),
+            Self::EmptyTag => write!(f, "tag cannot be empty"),
+            Self::MissingToTag => write!(f, "missing required to-tag parameter"),
+            Self::MissingFromTag => write!(f, "missing required from-tag parameter"),
+            Self::InputTooLarge { max, actual } => {
+                write!(f, "input too large (max {}, got {})", max, actual)
+            }
+            Self::ParseError(msg) => write!(f, "parse error: {}", msg),
         }
     }
 }
@@ -389,10 +385,9 @@ mod tests {
 
     #[test]
     fn replaces_with_early_only() {
-        let replaces =
-            ReplacesHeader::new("call123@example.com", "tag1", "tag2")
-                .unwrap()
-                .with_early_only(true);
+        let replaces = ReplacesHeader::new("call123@example.com", "tag1", "tag2")
+            .unwrap()
+            .with_early_only(true);
 
         assert!(replaces.is_early_only());
     }
@@ -410,10 +405,9 @@ mod tests {
 
     #[test]
     fn format_replaces_with_early_only() {
-        let replaces =
-            ReplacesHeader::new("98asjd8@test.com", "12345", "67890")
-                .unwrap()
-                .with_early_only(true);
+        let replaces = ReplacesHeader::new("98asjd8@test.com", "12345", "67890")
+            .unwrap()
+            .with_early_only(true);
 
         let formatted = replaces.to_string();
         assert_eq!(
@@ -524,10 +518,9 @@ mod tests {
 
     #[test]
     fn round_trip_replaces() {
-        let original =
-            ReplacesHeader::new("test@example.com", "tag-a", "tag-b")
-                .unwrap()
-                .with_early_only(true);
+        let original = ReplacesHeader::new("test@example.com", "tag-a", "tag-b")
+            .unwrap()
+            .with_early_only(true);
 
         let formatted = original.to_string();
         let parsed = ReplacesHeader::parse(&formatted).unwrap();

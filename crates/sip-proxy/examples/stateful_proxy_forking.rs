@@ -85,7 +85,9 @@ fn make_invite(target_user: &str) -> Request {
     )
     .expect("valid request");
     let _ = req.headers_mut().push("Content-Type", "application/sdp");
-    let _ = req.headers_mut().push("Content-Length", sdp.len().to_string());
+    let _ = req
+        .headers_mut()
+        .push("Content-Length", sdp.len().to_string());
 
     req
 }

@@ -30,8 +30,8 @@
 //! SIP-If-Match: dx200xyz
 //! ```
 
-use std::fmt;
 use smol_str::SmolStr;
+use std::fmt;
 
 // Security: Input size limits
 const MAX_ENTITY_TAG_LENGTH: usize = 128;
@@ -76,7 +76,10 @@ fn validate_entity_tag(value: &str) -> Result<(), EntityTagError> {
     }
 
     // Entity-tag is a token per RFC 3903/3261.
-    if value.chars().any(|c| c.is_ascii_control() || c.is_whitespace()) {
+    if value
+        .chars()
+        .any(|c| c.is_ascii_control() || c.is_whitespace())
+    {
         return Err(EntityTagError::InvalidCharacters(
             "contains control or whitespace characters".to_string(),
         ));

@@ -56,24 +56,23 @@ pub enum ResourcePriorityError {
 impl std::fmt::Display for ResourcePriorityError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NamespaceTooLong { max, actual } =>
-                write!(f, "namespace too long (max {}, got {})", max, actual),
-            Self::PriorityTooLong { max, actual } =>
-                write!(f, "priority too long (max {}, got {})", max, actual),
-            Self::TooManyValues { max, actual } =>
-                write!(f, "too many values (max {}, got {})", max, actual),
-            Self::InvalidNamespace(msg) =>
-                write!(f, "invalid namespace: {}", msg),
-            Self::InvalidPriority(msg) =>
-                write!(f, "invalid priority: {}", msg),
-            Self::EmptyNamespace =>
-                write!(f, "namespace cannot be empty"),
-            Self::EmptyPriority =>
-                write!(f, "priority cannot be empty"),
-            Self::InputTooLarge { max, actual } =>
-                write!(f, "input too large (max {}, got {})", max, actual),
-            Self::ParseError(msg) =>
-                write!(f, "parse error: {}", msg),
+            Self::NamespaceTooLong { max, actual } => {
+                write!(f, "namespace too long (max {}, got {})", max, actual)
+            }
+            Self::PriorityTooLong { max, actual } => {
+                write!(f, "priority too long (max {}, got {})", max, actual)
+            }
+            Self::TooManyValues { max, actual } => {
+                write!(f, "too many values (max {}, got {})", max, actual)
+            }
+            Self::InvalidNamespace(msg) => write!(f, "invalid namespace: {}", msg),
+            Self::InvalidPriority(msg) => write!(f, "invalid priority: {}", msg),
+            Self::EmptyNamespace => write!(f, "namespace cannot be empty"),
+            Self::EmptyPriority => write!(f, "priority cannot be empty"),
+            Self::InputTooLarge { max, actual } => {
+                write!(f, "input too large (max {}, got {})", max, actual)
+            }
+            Self::ParseError(msg) => write!(f, "parse error: {}", msg),
         }
     }
 }
@@ -140,9 +139,9 @@ impl ResourcePriorityValue {
     pub fn parse(input: &str) -> Result<Self, ResourcePriorityError> {
         let input = input.trim();
 
-        let (namespace, priority) = input
-            .split_once('.')
-            .ok_or_else(|| ResourcePriorityError::ParseError("missing '.' separator".to_string()))?;
+        let (namespace, priority) = input.split_once('.').ok_or_else(|| {
+            ResourcePriorityError::ParseError("missing '.' separator".to_string())
+        })?;
 
         Self::new(namespace, priority)
     }
@@ -183,9 +182,7 @@ pub struct ResourcePriorityHeader {
 impl ResourcePriorityHeader {
     /// Creates a new empty Resource-Priority header.
     pub fn new() -> Self {
-        Self {
-            values: Vec::new(),
-        }
+        Self { values: Vec::new() }
     }
 
     /// Creates a Resource-Priority header with a single value.
@@ -300,7 +297,10 @@ fn validate_namespace(namespace: &str) -> Result<(), ResourcePriorityError> {
 
     // RFC 4412: namespace is a token (alphanumeric + special chars)
     // Block control characters and whitespace
-    if namespace.chars().any(|c| c.is_ascii_control() || c.is_whitespace()) {
+    if namespace
+        .chars()
+        .any(|c| c.is_ascii_control() || c.is_whitespace())
+    {
         return Err(ResourcePriorityError::InvalidNamespace(
             "contains control characters or whitespace".to_string(),
         ));
@@ -323,7 +323,10 @@ fn validate_priority(priority: &str) -> Result<(), ResourcePriorityError> {
 
     // RFC 4412: priority is a token (alphanumeric + special chars)
     // Block control characters and whitespace
-    if priority.chars().any(|c| c.is_ascii_control() || c.is_whitespace()) {
+    if priority
+        .chars()
+        .any(|c| c.is_ascii_control() || c.is_whitespace())
+    {
         return Err(ResourcePriorityError::InvalidPriority(
             "contains control characters or whitespace".to_string(),
         ));
@@ -380,23 +383,33 @@ mod tests {
     #[test]
     fn add_values_to_header() {
         let mut header = ResourcePriorityHeader::new();
-        header.add_value(ResourcePriorityValue::new("dsn", "flash").unwrap()).unwrap();
-        header.add_value(ResourcePriorityValue::new("wps", "0").unwrap()).unwrap();
+        header
+            .add_value(ResourcePriorityValue::new("dsn", "flash").unwrap())
+            .unwrap();
+        header
+            .add_value(ResourcePriorityValue::new("wps", "0").unwrap())
+            .unwrap();
         assert_eq!(header.len(), 2);
     }
 
     #[test]
     fn format_header_single_value() {
         let mut header = ResourcePriorityHeader::new();
-        header.add_value(ResourcePriorityValue::new("dsn", "flash-override").unwrap()).unwrap();
+        header
+            .add_value(ResourcePriorityValue::new("dsn", "flash-override").unwrap())
+            .unwrap();
         assert_eq!(header.to_string(), "dsn.flash-override");
     }
 
     #[test]
     fn format_header_multiple_values() {
         let mut header = ResourcePriorityHeader::new();
-        header.add_value(ResourcePriorityValue::new("dsn", "flash").unwrap()).unwrap();
-        header.add_value(ResourcePriorityValue::new("wps", "0").unwrap()).unwrap();
+        header
+            .add_value(ResourcePriorityValue::new("dsn", "flash").unwrap())
+            .unwrap();
+        header
+            .add_value(ResourcePriorityValue::new("wps", "0").unwrap())
+            .unwrap();
         assert_eq!(header.to_string(), "dsn.flash, wps.0");
     }
 
@@ -433,8 +446,12 @@ mod tests {
     #[test]
     fn round_trip_header() {
         let mut original = ResourcePriorityHeader::new();
-        original.add_value(ResourcePriorityValue::new("dsn", "flash").unwrap()).unwrap();
-        original.add_value(ResourcePriorityValue::new("wps", "0").unwrap()).unwrap();
+        original
+            .add_value(ResourcePriorityValue::new("dsn", "flash").unwrap())
+            .unwrap();
+        original
+            .add_value(ResourcePriorityValue::new("wps", "0").unwrap())
+            .unwrap();
 
         let formatted = original.to_string();
         let parsed = ResourcePriorityHeader::parse(&formatted).unwrap();
@@ -498,14 +515,12 @@ mod tests {
         let mut header = ResourcePriorityHeader::new();
 
         for i in 0..MAX_VALUES {
-            header.add_value(
-                ResourcePriorityValue::new("dsn", &format!("{}", i)).unwrap()
-            ).unwrap();
+            header
+                .add_value(ResourcePriorityValue::new("dsn", &format!("{}", i)).unwrap())
+                .unwrap();
         }
 
-        let result = header.add_value(
-            ResourcePriorityValue::new("dsn", "overflow").unwrap()
-        );
+        let result = header.add_value(ResourcePriorityValue::new("dsn", "overflow").unwrap());
         assert!(result.is_err());
     }
 

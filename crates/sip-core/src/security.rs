@@ -272,11 +272,7 @@ impl SecurityEntry {
     }
 
     /// Creates an IPsec-IKE security entry.
-    pub fn ipsec_ike(
-        algorithm: &str,
-        protocol: &str,
-        mode: &str,
-    ) -> Result<Self, SecurityError> {
+    pub fn ipsec_ike(algorithm: &str, protocol: &str, mode: &str) -> Result<Self, SecurityError> {
         let mut entry = Self::new(SecurityMechanism::IpsecIke);
         entry.set_param("algorithm", Some(algorithm))?;
         entry.set_param("protocol", Some(protocol))?;
@@ -940,10 +936,7 @@ mod tests {
         assert_eq!(header.len(), 2);
         assert_eq!(header.entries()[0].mechanism(), &SecurityMechanism::Tls);
         assert_eq!(header.entries()[0].preference(), Some(0.5));
-        assert_eq!(
-            header.entries()[1].mechanism(),
-            &SecurityMechanism::Digest
-        );
+        assert_eq!(header.entries()[1].mechanism(), &SecurityMechanism::Digest);
         assert_eq!(header.entries()[1].preference(), Some(0.3));
     }
 

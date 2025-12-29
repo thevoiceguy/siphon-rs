@@ -272,7 +272,7 @@ fn parse_request_line(line: &str) -> Option<(Method, Uri)> {
     }
     let method = detect_method(method_token)?;
     // Use Uri::parse to support both SIP and tel URIs
-    let uri = Uri::parse(uri_token)?;
+    let uri = Uri::parse(uri_token).ok()?;
     Some((method, uri))
 }
 
@@ -667,7 +667,10 @@ t=0 0",
         );
         assert_eq!(header(req.headers(), "call-id").unwrap().as_str(), "abc123");
         assert_eq!(header(req.headers(), "cseq").unwrap().as_str(), "1 OPTIONS");
-        assert_eq!(header(req.headers(), "max-forwards").unwrap().as_str(), "70");
+        assert_eq!(
+            header(req.headers(), "max-forwards").unwrap().as_str(),
+            "70"
+        );
     }
 
     #[test]
@@ -988,10 +991,16 @@ l: 0\r\n\r\n",
             "sip:callee@example.com"
         );
 
-        let reason = parse_reason_header(header(resp.headers(), "Reason").unwrap())
-            .expect("reason");
+        let reason =
+            parse_reason_header(header(resp.headers(), "Reason").unwrap()).expect("reason");
         assert_eq!(reason.protocol(), "Q.850");
-        assert_eq!(reason.get_param("cause").and_then(|v| v.as_ref()).map(|v| v.as_str()), Some("16"));
+        assert_eq!(
+            reason
+                .get_param("cause")
+                .and_then(|v| v.as_ref())
+                .map(|v| v.as_str()),
+            Some("16")
+        );
 
         let etag = parse_sip_etag(header(resp.headers(), "SIP-ETag").unwrap()).expect("etag");
         assert_eq!(etag.value(), "abc123");
@@ -1112,8 +1121,7 @@ Content-Length: 0\r\n\r\n",
         let date = parse_date_header(&date_value);
         assert!(date.timestamp().is_some());
 
-        let subject = parse_subject_header(&SmolStr::new("Test Call".to_owned()))
-            .expect("subject");
+        let subject = parse_subject_header(&SmolStr::new("Test Call".to_owned())).expect("subject");
         assert_eq!(subject.value(), "Test Call");
     }
 

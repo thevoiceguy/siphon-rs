@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 // Security: Input size limits
-const MAX_TELEPHONE_NUMBER_LENGTH: usize = 64;  // E.164 allows max ~15 digits, generous buffer
+const MAX_TELEPHONE_NUMBER_LENGTH: usize = 64; // E.164 allows max ~15 digits, generous buffer
 const MAX_PHONE_CONTEXT_LENGTH: usize = 256;
 const MAX_PARAMETER_NAME_LENGTH: usize = 32;
 const MAX_PARAMETER_VALUE_LENGTH: usize = 128;
@@ -69,7 +69,9 @@ impl std::error::Error for TelUriError {}
 /// Validates a telephone number.
 fn validate_telephone_number(number: &str) -> Result<(), TelUriError> {
     if number.is_empty() {
-        return Err(TelUriError::InvalidNumber("number cannot be empty".to_string()));
+        return Err(TelUriError::InvalidNumber(
+            "number cannot be empty".to_string(),
+        ));
     }
 
     if number.len() > MAX_TELEPHONE_NUMBER_LENGTH {
@@ -82,7 +84,7 @@ fn validate_telephone_number(number: &str) -> Result<(), TelUriError> {
     // RFC 3966: telephone-subscriber = global-number / local-number
     // global-number starts with '+', followed by digits
     // local-number is more flexible but must be valid
-    
+
     // Check for control characters
     if number.chars().any(|c| c.is_control()) {
         return Err(TelUriError::InvalidNumber(
@@ -93,9 +95,10 @@ fn validate_telephone_number(number: &str) -> Result<(), TelUriError> {
     // For global numbers (E.164), validate format
     if number.starts_with('+') {
         // After '+', should only have digits and optional visual separators
-        let has_invalid_chars = number.chars().skip(1).any(|c| {
-            !c.is_ascii_digit() && !matches!(c, '-' | '.' | ' ' | '(' | ')')
-        });
+        let has_invalid_chars = number
+            .chars()
+            .skip(1)
+            .any(|c| !c.is_ascii_digit() && !matches!(c, '-' | '.' | ' ' | '(' | ')'));
 
         if has_invalid_chars {
             return Err(TelUriError::InvalidNumber(
@@ -350,11 +353,11 @@ impl TelUri {
                 }
 
                 parameters.insert(key_smol, Some(value_smol));
-        } else {
-            validate_parameter_name(param)?;
-            parameters.insert(SmolStr::new(param), None);
+            } else {
+                validate_parameter_name(param)?;
+                parameters.insert(SmolStr::new(param), None);
+            }
         }
-    }
 
         // Validate: local numbers MUST have phone-context
         if !is_global && phone_context.is_none() {
@@ -487,10 +490,7 @@ fn normalize_global_number(number: &str) -> SmolStr {
     SmolStr::new(normalized)
 }
 
-fn build_raw_uri(
-    number: &SmolStr,
-    parameters: &BTreeMap<SmolStr, Option<SmolStr>>,
-) -> SmolStr {
+fn build_raw_uri(number: &SmolStr, parameters: &BTreeMap<SmolStr, Option<SmolStr>>) -> SmolStr {
     let mut out = format!("tel:{}", number);
     for (key, value) in parameters {
         out.push(';');
@@ -622,7 +622,7 @@ mod tests {
     fn new_validates_number_format() {
         // Global number must start with '+'
         assert!(TelUri::new("15551234", true).is_err());
-        
+
         // Local number cannot start with '+'
         assert!(TelUri::new("+15551234", false).is_err());
     }
@@ -630,11 +630,11 @@ mod tests {
     #[test]
     fn with_parameter_validates() {
         let uri = TelUri::new("+15551234", true).unwrap();
-        
+
         // Valid parameter
         let uri = uri.with_parameter("ext", Some("1234")).unwrap();
         assert!(uri.parameters().contains_key("ext"));
-        
+
         // Too many parameters
         let mut uri = TelUri::new("+15551234", true).unwrap();
         for i in 0..MAX_PARAMETERS {
@@ -646,11 +646,11 @@ mod tests {
     #[test]
     fn with_phone_context_validates() {
         let uri = TelUri::new("5551234", false).unwrap();
-        
+
         // Valid phone-context
         let uri = uri.with_phone_context("example.com").unwrap();
         assert_eq!(uri.phone_context().unwrap(), "example.com");
-        
+
         // Global number cannot have phone-context
         let global = TelUri::new("+15551234", true).unwrap();
         assert!(global.with_phone_context("example.com").is_err());
@@ -659,13 +659,13 @@ mod tests {
     #[test]
     fn fields_are_private() {
         let uri = TelUri::new("+15551234", true).unwrap();
-        
+
         // These should compile (read access via getters)
         let _ = uri.number();
         let _ = uri.is_global();
         let _ = uri.phone_context();
         let _ = uri.parameters();
-        
+
         // These should NOT compile:
         // uri.number = SmolStr::new("evil");           // ← Does not compile!
         // uri.is_global = false;                       // ← Does not compile!
@@ -684,7 +684,7 @@ mod tests {
     fn rejects_invalid_global_numbers() {
         // No digits after '+'
         assert!(TelUri::parse("tel:+").is_err());
-        
+
         // Invalid characters
         assert!(TelUri::parse("tel:+abc").is_err());
         assert!(TelUri::parse("tel:+1555#1234").is_err());
@@ -694,7 +694,7 @@ mod tests {
     fn error_display() {
         let err1 = TelUriError::InvalidScheme;
         assert_eq!(err1.to_string(), "Invalid scheme (must be 'tel:')");
-        
+
         let err2 = TelUriError::TooManyParameters { max: 20 };
         assert_eq!(err2.to_string(), "Too many parameters (max 20)");
     }

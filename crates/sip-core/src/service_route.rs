@@ -136,7 +136,7 @@ impl PathHeader {
             r.get_param("lr").is_some()
                 || r.uri()
                     .as_sip()
-                    .map(|sip| sip.params.contains_key("lr"))
+                    .map(|sip| sip.params().contains_key("lr"))
                     .unwrap_or(false)
         })
     }
@@ -263,7 +263,7 @@ impl ServiceRouteHeader {
             r.get_param("lr").is_some()
                 || r.uri()
                     .as_sip()
-                    .map(|sip| sip.params.contains_key("lr"))
+                    .map(|sip| sip.params().contains_key("lr"))
                     .unwrap_or(false)
         })
     }
@@ -411,7 +411,7 @@ mod tests {
         let uri2 = SipUri::parse("sip:proxy2.example.com;lr").unwrap();
         let path = PathHeader::from_uris(vec![Uri::from(uri1), Uri::from(uri2)]).unwrap();
 
-        let uris: Vec<&str> = path.uris().map(|u| u.as_str()).collect();
+        let uris: Vec<&str> = path.uris().map(|u: &Uri| u.as_str()).collect();
         assert_eq!(uris.len(), 2);
         assert_eq!(uris[0], "sip:proxy1.example.com;lr");
         assert_eq!(uris[1], "sip:proxy2.example.com;lr");
@@ -534,7 +534,7 @@ mod tests {
         let uri2 = SipUri::parse("sip:service2.example.com;lr").unwrap();
         let sr = ServiceRouteHeader::from_uris(vec![Uri::from(uri1), Uri::from(uri2)]).unwrap();
 
-        let uris: Vec<&str> = sr.uris().map(|u| u.as_str()).collect();
+        let uris: Vec<&str> = sr.uris().map(|u: &Uri| u.as_str()).collect();
         assert_eq!(uris.len(), 2);
         assert_eq!(uris[0], "sip:service1.example.com;lr");
         assert_eq!(uris[1], "sip:service2.example.com;lr");

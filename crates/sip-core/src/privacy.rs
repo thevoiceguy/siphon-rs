@@ -20,16 +20,15 @@ pub enum PrivacyError {
 impl std::fmt::Display for PrivacyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::TooManyValues { max, actual } =>
-                write!(f, "too many privacy values (max {}, got {})", max, actual),
-            Self::InputTooLarge { max, actual } =>
-                write!(f, "input too large (max {}, got {})", max, actual),
-            Self::InvalidValue(val) =>
-                write!(f, "invalid privacy value: {}", val),
-            Self::EmptyValues =>
-                write!(f, "privacy values cannot be empty"),
-            Self::ParseError(msg) =>
-                write!(f, "parse error: {}", msg),
+            Self::TooManyValues { max, actual } => {
+                write!(f, "too many privacy values (max {}, got {})", max, actual)
+            }
+            Self::InputTooLarge { max, actual } => {
+                write!(f, "input too large (max {}, got {})", max, actual)
+            }
+            Self::InvalidValue(val) => write!(f, "invalid privacy value: {}", val),
+            Self::EmptyValues => write!(f, "privacy values cannot be empty"),
+            Self::ParseError(msg) => write!(f, "parse error: {}", msg),
         }
     }
 }
@@ -440,7 +439,7 @@ fn anonymize_identity_header(header_value: &str) -> Result<String, PrivacyError>
 
     // Replace the URI with anonymous.invalid, preserving only header parameters.
     let (_, params) = split_header_params(header_value);
-    
+
     Ok(if params.is_empty() {
         "\"Anonymous\" <sip:anonymous@anonymous.invalid>".to_string()
     } else {
@@ -653,7 +652,8 @@ mod tests {
             PrivacyValue::Header,
             PrivacyValue::Session,
             PrivacyValue::Critical,
-        ]).unwrap();
+        ])
+        .unwrap();
         assert_eq!(header.to_string(), "header; session; critical");
     }
 
@@ -842,7 +842,8 @@ mod tests {
             PrivacyValue::Id,
             PrivacyValue::Header,
             PrivacyValue::Critical,
-        ]).unwrap();
+        ])
+        .unwrap();
         enforce_privacy(&mut headers, &privacy).unwrap();
 
         // Both id and header privacy applied
@@ -1040,12 +1041,12 @@ mod tests {
     #[test]
     fn fields_are_private() {
         let header = PrivacyHeader::single(PrivacyValue::Id);
-        
+
         // These should compile (read-only access)
         let _ = header.contains(PrivacyValue::Id);
         let _ = header.len();
         let _ = header.values();
-        
+
         // This should NOT compile (no direct field access):
         // header.values.clear();  // ← Does not compile!
     }

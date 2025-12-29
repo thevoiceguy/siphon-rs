@@ -21,13 +21,13 @@ proptest! {
         let uri_str = format!("{}:{}{}{}", scheme_str, user_part, host, port_part);
 
         let parsed = SipUri::parse(&uri_str);
-        prop_assert!(parsed.is_some(), "Failed to parse: {}", uri_str);
+        prop_assert!(parsed.is_ok(), "Failed to parse: {}", uri_str);
 
         let uri = parsed.unwrap();
-        prop_assert_eq!(uri.sips, scheme);
-        prop_assert_eq!(uri.user.as_ref().map(|s| s.as_str()), user.as_deref());
-        prop_assert_eq!(uri.host.as_str(), &host);
-        prop_assert_eq!(uri.port, port);
+        prop_assert_eq!(uri.is_sips(), scheme);
+        prop_assert_eq!(uri.user(), user.as_deref());
+        prop_assert_eq!(uri.host(), &host);
+        prop_assert_eq!(uri.port(), port);
 
         // Verify string representation
         let reconstructed = uri.as_str();
@@ -73,7 +73,7 @@ proptest! {
         let parsed = SipUri::parse(&uri_str);
 
         // All should parse successfully
-        prop_assert!(parsed.is_some(), "Failed to parse: {}", uri_str);
+        prop_assert!(parsed.is_ok(), "Failed to parse: {}", uri_str);
     }
 
     /// Test various valid SIP URI edge cases.
@@ -86,9 +86,9 @@ proptest! {
         let uri_str = format!("sip:{}{}{}@example.com", user_prefix, separator, user_suffix);
         let parsed = SipUri::parse(&uri_str);
 
-        prop_assert!(parsed.is_some(), "Failed to parse: {}", uri_str);
+        prop_assert!(parsed.is_ok(), "Failed to parse: {}", uri_str);
         let uri = parsed.unwrap();
-        let user_part = uri.user.expect("user should be present");
+        let user_part = uri.user().expect("user should be present");
         prop_assert!(user_part.contains(&user_prefix));
         prop_assert!(user_part.contains(&user_suffix));
     }
@@ -99,9 +99,9 @@ proptest! {
         let uri_str = format!("sip:example.com:{}", port);
         let parsed = SipUri::parse(&uri_str);
 
-        prop_assert!(parsed.is_some());
+        prop_assert!(parsed.is_ok());
         let uri = parsed.unwrap();
-        prop_assert_eq!(uri.port, Some(port));
+        prop_assert_eq!(uri.port(), Some(port));
     }
 
     /// Test scheme case insensitivity (sip vs SIP).
@@ -113,10 +113,10 @@ proptest! {
         let uri_str = format!("{}:{}", scheme_case, host);
         let parsed = SipUri::parse(&uri_str);
 
-        prop_assert!(parsed.is_some(), "Failed to parse: {}", uri_str);
+        prop_assert!(parsed.is_ok(), "Failed to parse: {}", uri_str);
         // Should always normalize to lowercase
         let uri = parsed.unwrap();
-        prop_assert_eq!(uri.sips, false);
+        prop_assert_eq!(uri.is_sips(), false);
     }
 }
 
@@ -134,7 +134,7 @@ fn uri_reject_invalid() {
 
     for uri_str in invalid_uris {
         assert!(
-            SipUri::parse(uri_str).is_none(),
+            SipUri::parse(uri_str).is_err(),
             "Should reject invalid URI: {}",
             uri_str
         );
@@ -144,11 +144,11 @@ fn uri_reject_invalid() {
 #[test]
 fn uri_default_ports() {
     let sip_uri = SipUri::parse("sip:example.com").expect("parse");
-    assert_eq!(sip_uri.port, None); // Port should be None (defaults to 5060)
+    assert_eq!(sip_uri.port(), None); // Port should be None (defaults to 5060)
 
     let sips_uri = SipUri::parse("sips:example.com").expect("parse");
-    assert_eq!(sips_uri.port, None); // Port should be None (defaults to 5061)
-    assert!(sips_uri.sips);
+    assert_eq!(sips_uri.port(), None); // Port should be None (defaults to 5061)
+    assert!(sips_uri.is_sips());
 }
 
 #[test]
@@ -156,8 +156,8 @@ fn uri_with_multiple_params() {
     let uri_str = "sip:alice@example.com;transport=tcp;lr;maddr=192.168.1.1";
     let uri = SipUri::parse(uri_str).expect("parse");
 
-    assert_eq!(uri.user.as_ref().map(|s| s.as_str()), Some("alice"));
-    assert_eq!(uri.host.as_str(), "example.com");
+    assert_eq!(uri.user(), Some("alice"));
+    assert_eq!(uri.host(), "example.com");
 
     // Params should be preserved in string representation
     let reconstructed = uri.as_str();

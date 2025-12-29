@@ -61,9 +61,7 @@ impl ByeHandler {
                 // Create BYE for caller
                 // Extract caller's contact from original INVITE
                 let caller_contact =
-                    if let Some(contact_header) =
-                        header(leg.caller_request.headers(), "Contact")
-                    {
+                    if let Some(contact_header) = header(leg.caller_request.headers(), "Contact") {
                         // Parse contact URI from Contact header (may have angle brackets)
                         let contact_str = contact_header;
                         if let Some(start) = contact_str.find('<') {
@@ -86,8 +84,8 @@ impl ByeHandler {
 
                 // Parse caller's contact URI
                 let caller_contact_uri = match sip_core::Uri::parse(caller_contact) {
-                    Some(uri) => uri,
-                    None => {
+                    Ok(uri) => uri,
+                    Err(_) => {
                         warn!(
                             call_id,
                             contact = caller_contact,
@@ -166,8 +164,8 @@ impl ByeHandler {
                 // Send BYE to caller
                 let caller_addr = format!(
                     "{}:{}",
-                    caller_sip_uri.host,
-                    caller_sip_uri.port.unwrap_or(5060)
+                    caller_sip_uri.host(),
+                    caller_sip_uri.port().unwrap_or(5060)
                 );
 
                 if let Ok(addr) = caller_addr.parse::<std::net::SocketAddr>() {
@@ -407,8 +405,8 @@ impl ByeHandler {
         // Send BYE to callee
         let callee_addr = format!(
             "{}:{}",
-            call_leg.callee_contact.host,
-            call_leg.callee_contact.port.unwrap_or(5060)
+            call_leg.callee_contact.host(),
+            call_leg.callee_contact.port().unwrap_or(5060)
         );
 
         if let Ok(addr) = callee_addr.parse::<std::net::SocketAddr>() {

@@ -987,9 +987,7 @@ mod tests {
 
         let offer = SdpSession::parse(offer_sdp).unwrap();
 
-        let options = AnswerOptions::default()
-            .with_reject_media(vec![1])
-            .unwrap();
+        let options = AnswerOptions::default().with_reject_media(vec![1]).unwrap();
 
         let engine = OfferAnswerEngine::new();
         let answer = engine.generate_answer(&offer, options).unwrap();
@@ -1136,8 +1134,9 @@ mod tests {
 
     #[test]
     fn reject_too_many_media_streams() {
-        let mut offer_sdp = "v=0\r\no=- 0 0 IN IP4 0.0.0.0\r\ns=-\r\nc=IN IP4 0.0.0.0\r\nt=0 0\r\n".to_string();
-        
+        let mut offer_sdp =
+            "v=0\r\no=- 0 0 IN IP4 0.0.0.0\r\ns=-\r\nc=IN IP4 0.0.0.0\r\nt=0 0\r\n".to_string();
+
         for i in 0..=MAX_MEDIA_STREAMS {
             offer_sdp.push_str(&format!("m=audio {} RTP/AVP 0\r\n", 10000 + i * 2));
         }
@@ -1145,8 +1144,11 @@ mod tests {
         let offer = SdpSession::parse(&offer_sdp).unwrap();
         let engine = OfferAnswerEngine::new();
         let result = engine.generate_answer(&offer, AnswerOptions::default());
-        
-        assert!(matches!(result, Err(NegotiationError::TooManyMediaStreams { .. })));
+
+        assert!(matches!(
+            result,
+            Err(NegotiationError::TooManyMediaStreams { .. })
+        ));
     }
 
     #[test]

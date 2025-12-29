@@ -231,10 +231,7 @@ mod tests {
 
     #[test]
     fn subject_parse_empty() {
-        assert!(matches!(
-            SubjectHeader::parse(""),
-            Err(SubjectError::Empty)
-        ));
+        assert!(matches!(SubjectHeader::parse(""), Err(SubjectError::Empty)));
         assert!(matches!(
             SubjectHeader::parse("   "),
             Err(SubjectError::Empty)

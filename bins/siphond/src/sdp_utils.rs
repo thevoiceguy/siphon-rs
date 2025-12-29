@@ -23,18 +23,18 @@ use crate::config::DaemonConfig;
 pub fn parse_name_addr_uri(value: &str) -> Option<SipUri> {
     if let Some(start) = value.find('<') {
         let end = value.find('>').unwrap_or(value.len());
-        SipUri::parse(&value[start + 1..end])
+        SipUri::parse(&value[start + 1..end]).ok()
     } else {
         let uri = value.split(';').next()?.trim();
-        SipUri::parse(uri)
+        SipUri::parse(uri).ok()
     }
 }
 
 /// Extract username and host from local_uri configuration
 pub fn local_identity(config: &DaemonConfig) -> (String, String) {
-    if let Some(uri) = SipUri::parse(&config.local_uri) {
-        let username = uri.user.as_deref().unwrap_or("siphond").to_string();
-        (username, uri.host.to_string())
+    if let Ok(uri) = SipUri::parse(&config.local_uri) {
+        let username = uri.user().unwrap_or("siphond").to_string();
+        (username, uri.host().to_string())
     } else {
         ("siphond".to_string(), "127.0.0.1".to_string())
     }
@@ -132,15 +132,15 @@ mod tests {
     #[test]
     fn parses_name_addr_with_brackets() {
         let uri = parse_name_addr_uri("Alice <sip:alice@example.com>").unwrap();
-        assert_eq!(uri.user.as_deref(), Some("alice"));
-        assert_eq!(uri.host.as_str(), "example.com");
+        assert_eq!(uri.user().as_deref(), Some("alice"));
+        assert_eq!(uri.host(), "example.com");
     }
 
     #[test]
     fn parses_name_addr_without_brackets() {
         let uri = parse_name_addr_uri("sip:bob@example.com;tag=123").unwrap();
-        assert_eq!(uri.user.as_deref(), Some("bob"));
-        assert_eq!(uri.host.as_str(), "example.com");
+        assert_eq!(uri.user().as_deref(), Some("bob"));
+        assert_eq!(uri.host(), "example.com");
     }
 
     #[test]

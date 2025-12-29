@@ -49,18 +49,16 @@ pub enum RSeqError {
 impl std::fmt::Display for RSeqError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidSequence(val) =>
-                write!(f, "invalid sequence number: {} (must be 1-2147483647)", val),
-            Self::ZeroSequence =>
-                write!(f, "sequence number cannot be zero"),
-            Self::InvalidMethod(msg) =>
-                write!(f, "invalid method: {}", msg),
-            Self::ParseError(msg) =>
-                write!(f, "parse error: {}", msg),
-            Self::InputTooLarge { max, actual } =>
-                write!(f, "input too large (max {}, got {})", max, actual),
-            Self::MissingField(field) =>
-                write!(f, "missing required field: {}", field),
+            Self::InvalidSequence(val) => {
+                write!(f, "invalid sequence number: {} (must be 1-2147483647)", val)
+            }
+            Self::ZeroSequence => write!(f, "sequence number cannot be zero"),
+            Self::InvalidMethod(msg) => write!(f, "invalid method: {}", msg),
+            Self::ParseError(msg) => write!(f, "parse error: {}", msg),
+            Self::InputTooLarge { max, actual } => {
+                write!(f, "input too large (max {}, got {})", max, actual)
+            }
+            Self::MissingField(field) => write!(f, "missing required field: {}", field),
         }
     }
 }
@@ -233,11 +231,7 @@ impl RAckHeader {
     /// assert_eq!(rack.rseq(), 1);
     /// assert_eq!(rack.cseq_number(), 314159);
     /// ```
-    pub fn new(
-        rseq: u32,
-        cseq_number: u32,
-        cseq_method: crate::Method,
-    ) -> Result<Self, RSeqError> {
+    pub fn new(rseq: u32, cseq_number: u32, cseq_method: crate::Method) -> Result<Self, RSeqError> {
         validate_sequence(rseq)?;
         validate_sequence(cseq_number)?;
 
@@ -289,7 +283,7 @@ impl RAckHeader {
             });
         }
 
-        let parts: Vec<&str> = input.trim().split_whitespace().collect();
+        let parts: Vec<&str> = input.split_whitespace().collect();
 
         if parts.len() != 3 {
             return Err(RSeqError::ParseError(

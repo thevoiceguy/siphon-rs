@@ -67,8 +67,8 @@ impl RequestHandler for PrackHandler {
         };
 
         let local_uri = match sip_core::SipUri::parse(&services.config.local_uri) {
-            Some(uri) => uri,
-            None => {
+            Ok(uri) => uri,
+            Err(_) => {
                 warn!(call_id, "Invalid local_uri, rejecting PRACK");
                 let response = UserAgentServer::create_response(request, 500, "Server Error");
                 handle.send_final(response).await;

@@ -170,8 +170,7 @@ fn build_request(
         bytes::Bytes::new()
     };
 
-    Request::new(RequestLine::new(method, uri), hdrs, request_body)
-        .expect("valid scenario request")
+    Request::new(RequestLine::new(method, uri), hdrs, request_body).expect("valid scenario request")
 }
 
 pub async fn run_scenario(path: &Path, services: &ServiceRegistry) -> Result<()> {
@@ -195,8 +194,8 @@ pub async fn run_scenario(path: &Path, services: &ServiceRegistry) -> Result<()>
         .as_deref()
         .unwrap_or(&services.config.local_uri);
 
-    let local_uri = SipUri::parse(local_uri).ok_or_else(|| anyhow!("Invalid local_uri"))?;
-    let contact_uri = SipUri::parse(contact_uri).ok_or_else(|| anyhow!("Invalid contact_uri"))?;
+    let local_uri = SipUri::parse(local_uri).map_err(|_| anyhow!("Invalid local_uri"))?;
+    let contact_uri = SipUri::parse(contact_uri).map_err(|_| anyhow!("Invalid contact_uri"))?;
 
     let Some(transaction_mgr) = services.transaction_mgr.get() else {
         return Err(anyhow!("Transaction manager not available for scenario"));
@@ -218,7 +217,7 @@ pub async fn run_scenario(path: &Path, services: &ServiceRegistry) -> Result<()>
             } => {
                 let method =
                     Method::from_token(&method).map_err(|err| anyhow!("Invalid method: {err}"))?;
-                let uri = SipUri::parse(&uri).ok_or_else(|| anyhow!("Invalid URI: {}", uri))?;
+                let uri = SipUri::parse(&uri).map_err(|_| anyhow!("Invalid URI: {}", uri))?;
                 let request = build_request(
                     method.clone(),
                     uri.clone(),
@@ -231,12 +230,14 @@ pub async fn run_scenario(path: &Path, services: &ServiceRegistry) -> Result<()>
 
                 let transport =
                     parse_transport(transport.as_deref().or(default_transport.as_deref()));
-                let target_addr = format!("{}:{}", uri.host, uri.port.unwrap_or(5060))
+                let target_addr = format!("{}:{}", uri.host(), uri.port().unwrap_or(5060))
                     .parse::<std::net::SocketAddr>()?;
                 let ws_uri = match transport {
-                    TransportKind::Ws => Some(format!("ws://{}:{}", uri.host, target_addr.port())),
+                    TransportKind::Ws => {
+                        Some(format!("ws://{}:{}", uri.host(), target_addr.port()))
+                    }
                     TransportKind::Wss => {
-                        Some(format!("wss://{}:{}", uri.host, target_addr.port()))
+                        Some(format!("wss://{}:{}", uri.host(), target_addr.port()))
                     }
                     _ => None,
                 };

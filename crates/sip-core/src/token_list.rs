@@ -72,7 +72,9 @@ impl std::error::Error for TokenListError {}
 /// Validates a token per RFC 3261 token format.
 fn validate_token(token: &str) -> Result<(), TokenListError> {
     if token.is_empty() {
-        return Err(TokenListError::InvalidToken("token cannot be empty".to_string()));
+        return Err(TokenListError::InvalidToken(
+            "token cannot be empty".to_string(),
+        ));
     }
 
     if token.len() > MAX_TOKEN_LENGTH {
@@ -232,9 +234,7 @@ impl TokenList {
 
     /// Checks if the list contains a specific token (case-insensitive).
     pub fn contains(&self, token: &str) -> bool {
-        self.tokens
-            .iter()
-            .any(|t| t.eq_ignore_ascii_case(token))
+        self.tokens.iter().any(|t| t.eq_ignore_ascii_case(token))
     }
 
     /// Adds a token to the list with validation.
@@ -456,14 +456,14 @@ mod tests {
     fn token_list_rejects_invalid_chars() {
         // Spaces
         assert!(TokenList::from_tokens(vec!["INVITE ACK"]).is_err());
-        
+
         // Control characters
         assert!(TokenList::from_tokens(vec!["INVITE\r\n"]).is_err());
         assert!(TokenList::from_tokens(vec!["IN\x00VITE"]).is_err());
-        
+
         // Commas (these are separators, not part of tokens)
         assert!(TokenList::from_tokens(vec!["INVITE,ACK"]).is_err());
-        
+
         // Other invalid chars
         assert!(TokenList::from_tokens(vec!["INVITE@HOME"]).is_err());
         assert!(TokenList::from_tokens(vec!["INVITE#123"]).is_err());
@@ -473,7 +473,7 @@ mod tests {
     fn token_list_accepts_valid_chars() {
         // Alphanumeric
         assert!(TokenList::from_tokens(vec!["INVITE123"]).is_ok());
-        
+
         // Valid special chars per RFC 3261
         assert!(TokenList::from_tokens(vec!["timer-draft"]).is_ok());
         assert!(TokenList::from_tokens(vec!["ext.v1"]).is_ok());
@@ -485,10 +485,10 @@ mod tests {
     fn token_list_add_token() {
         let mut list = TokenList::new();
         assert!(list.is_empty());
-        
+
         list.add_token("INVITE").unwrap();
         list.add_token("ACK").unwrap();
-        
+
         assert_eq!(list.len(), 2);
         assert!(list.contains("INVITE"));
     }
@@ -499,17 +499,20 @@ mod tests {
         for i in 0..MAX_TOKENS {
             list.add_token(&format!("token{}", i)).unwrap();
         }
-        
+
         assert!(list.add_token("extra").is_err());
     }
 
     #[test]
     fn token_list_with_token_builder() {
         let list = TokenList::new()
-            .with_token("INVITE").unwrap()
-            .with_token("ACK").unwrap()
-            .with_token("BYE").unwrap();
-        
+            .with_token("INVITE")
+            .unwrap()
+            .with_token("ACK")
+            .unwrap()
+            .with_token("BYE")
+            .unwrap();
+
         assert_eq!(list.len(), 3);
     }
 
@@ -562,7 +565,7 @@ mod tests {
         let list1 = TokenList::from_tokens(vec!["INVITE", "ACK"]).unwrap();
         let list2 = TokenList::from_tokens(vec!["INVITE", "ACK"]).unwrap();
         let list3 = TokenList::from_tokens(vec!["INVITE", "BYE"]).unwrap();
-        
+
         assert_eq!(list1, list2);
         assert_ne!(list1, list3);
     }
@@ -577,10 +580,10 @@ mod tests {
     #[test]
     fn field_is_private() {
         let list = TokenList::from_tokens(vec!["INVITE"]).unwrap();
-        
+
         // This should compile (read access via getter)
         let _ = list.tokens();
-        
+
         // This should NOT compile:
         // list.tokens = vec![];                     // ← Does not compile!
         // list.tokens.push(SmolStr::new("evil"));   // ← Does not compile!
@@ -592,7 +595,7 @@ mod tests {
         let list = TokenList::parse(original).unwrap();
         let formatted = list.to_string();
         let reparsed = TokenList::parse(&formatted).unwrap();
-        
+
         assert_eq!(list, reparsed);
     }
 
@@ -600,10 +603,10 @@ mod tests {
     fn error_display() {
         let err1 = TokenListError::Empty;
         assert_eq!(err1.to_string(), "Token list cannot be empty");
-        
+
         let err2 = TokenListError::TooManyTokens { max: 50 };
         assert_eq!(err2.to_string(), "Too many tokens (max 50)");
-        
+
         let err3 = TokenListError::TokenTooLong { max: 64 };
         assert_eq!(err3.to_string(), "Token too long (max 64)");
     }

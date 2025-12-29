@@ -39,8 +39,8 @@ fn request_with_sip_uri_still_works() {
     assert_eq!(request_line.uri().as_str(), "sip:bob@example.com");
 
     let sip = request_line.uri().as_sip().unwrap();
-    assert_eq!(sip.host.as_str(), "example.com");
-    assert_eq!(sip.user.as_ref().unwrap().as_str(), "bob");
+    assert_eq!(sip.host(), "example.com");
+    assert_eq!(sip.user().unwrap(), "bob");
 }
 
 #[test]
@@ -116,7 +116,7 @@ fn uri_parse_automatically_detects_scheme() {
 
     let sips_uri = Uri::parse("sips:bob@example.com").expect("valid URI");
     assert!(sips_uri.is_sip());
-    assert!(sips_uri.as_sip().unwrap().sips);
+    assert!(sips_uri.as_sip().unwrap().is_sips());
 }
 
 #[test]
@@ -143,10 +143,7 @@ fn tel_uri_builder_methods() {
         .with_phone_context("example.com")
         .unwrap();
     assert!(!local_tel.is_global());
-    assert_eq!(
-        local_tel.phone_context().unwrap(),
-        "example.com"
-    );
+    assert_eq!(local_tel.phone_context().unwrap(), "example.com");
 
     let tel_with_ext = TelUri::new("+15551234567", true)
         .unwrap()
@@ -176,11 +173,6 @@ fn tel_uri_visual_separators_normalized() {
 
     for variant in variants {
         let tel_uri = TelUri::parse(variant).expect("valid tel URI");
-        assert_eq!(
-            tel_uri.number(),
-            "+15551234567",
-            "failed for {}",
-            variant
-        );
+        assert_eq!(tel_uri.number(), "+15551234567", "failed for {}", variant);
     }
 }

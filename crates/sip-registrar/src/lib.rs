@@ -100,17 +100,17 @@ pub fn normalize_aor(uri: &Uri) -> Result<String, NormalizeError> {
 }
 
 fn normalize_sip_aor(uri: &SipUri) -> String {
-    let scheme = if uri.sips { "sips" } else { "sip" };
+    let scheme = if uri.is_sips() { "sips" } else { "sip" };
 
-    let host = uri.host.as_str().to_ascii_lowercase();
-    let host_port = match uri.port {
+    let host = uri.host().to_ascii_lowercase();
+    let host_port = match uri.port() {
         Some(port) => format!("{}:{}", host, port),
         None => host.clone(),
     };
 
-    let user = uri.user.as_ref().map(|u| {
+    let user = uri.user().map(|u| {
         if let Some((local, domain)) = u.rsplit_once('@') {
-            if domain.eq_ignore_ascii_case(uri.host.as_str()) {
+            if domain.eq_ignore_ascii_case(uri.host()) {
                 return local.to_string();
             }
         }
@@ -796,7 +796,7 @@ impl<S, A> BasicRegistrar<S, A> {
     }
 
     fn parse_cseq_number(&self, request: &Request) -> Result<u32, Response> {
-        let cseq = match header(&request.headers(), "CSeq") {
+        let cseq = match header(request.headers(), "CSeq") {
             Some(value) => value,
             None => {
                 return Err(self
@@ -948,14 +948,13 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
                 if let Some(key) = key_fn(request) {
                     if !limiter.check_rate_limit(key.as_str()) {
                         warn!(key = %key, "REGISTER rate limit exceeded");
-                        return Ok(
-                            self.build_error_response(
+                        return Ok(self
+                            .build_error_response(
                                 request,
                                 503,
                                 "Service Unavailable - Rate Limit Exceeded",
                             )
-                            .expect("valid request"),
-                        );
+                            .expect("valid request"));
                     }
                 }
             } else {
@@ -965,7 +964,7 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
 
         // Authentication (sync authenticator)
         if let Some(auth) = &self.authenticator {
-            match auth.verify(request, &request.headers()) {
+            match auth.verify(request, request.headers()) {
                 Ok(true) => {}
                 Ok(false) => {
                     info!("REGISTER authentication failed, issuing challenge");
@@ -978,7 +977,7 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
             }
         }
 
-        let to_uri = match header(&request.headers(), "To") {
+        let to_uri = match header(request.headers(), "To") {
             Some(h) => h,
             None => {
                 warn!("REGISTER missing To header");
@@ -1005,7 +1004,7 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
             }
         };
 
-        let call_id = header(&request.headers(), "Call-ID")
+        let call_id = header(request.headers(), "Call-ID")
             .cloned()
             .unwrap_or_else(|| SmolStr::new(""));
 
@@ -1014,7 +1013,7 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
             Err(response) => return Ok(response),
         };
 
-        let contacts = contact_headers(&request.headers());
+        let contacts = contact_headers(request.headers());
         if contacts.is_empty() {
             warn!("REGISTER missing Contact header");
             return self.build_error_response(request, 400, "Bad Request - Missing Contact header");
@@ -1029,7 +1028,7 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
         }
 
         if contacts.len() == 1 && contacts[0].trim() == "*" {
-            let expires = match header(&request.headers(), "Expires") {
+            let expires = match header(request.headers(), "Expires") {
                 Some(value) => match value.parse::<u64>() {
                     Ok(value) => value,
                     Err(_) => {
@@ -1105,7 +1104,7 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
                 }
             };
             match Uri::parse(contact_uri.as_str()) {
-                Some(Uri::Sip(_)) => {}
+                Ok(Uri::Sip(_)) => {}
                 _ => {
                     return self.build_error_response(
                         request,
@@ -1238,7 +1237,7 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
 
         // Authenticate if authenticator is configured
         if let Some(auth) = &self.authenticator {
-            match auth.verify(request, &request.headers()) {
+            match auth.verify(request, request.headers()) {
                 Ok(true) => {
                     // Authentication succeeded, continue processing
                 }
@@ -1257,7 +1256,7 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
         }
 
         // Extract AOR from To header
-        let to_uri = match header(&request.headers(), "To") {
+        let to_uri = match header(request.headers(), "To") {
             Some(h) => h,
             None => {
                 warn!("REGISTER missing To header");
@@ -1285,7 +1284,7 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
         };
 
         // Extract Call-ID and CSeq
-        let call_id = header(&request.headers(), "Call-ID")
+        let call_id = header(request.headers(), "Call-ID")
             .cloned()
             .unwrap_or_else(|| SmolStr::new(""));
 
@@ -1295,7 +1294,7 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
         };
 
         // Get all Contact headers
-        let contacts = contact_headers(&request.headers());
+        let contacts = contact_headers(request.headers());
         if contacts.is_empty() {
             warn!("REGISTER missing Contact header");
             return self.build_error_response(request, 400, "Bad Request - Missing Contact header");
@@ -1311,7 +1310,7 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
 
         // Check for wildcard Contact (*)
         if contacts.len() == 1 && contacts[0].trim() == "*" {
-            let expires = match header(&request.headers(), "Expires") {
+            let expires = match header(request.headers(), "Expires") {
                 Some(value) => match value.parse::<u64>() {
                     Ok(value) => value,
                     Err(_) => {
@@ -1391,7 +1390,7 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
                 }
             };
             match Uri::parse(contact_uri.as_str()) {
-                Some(Uri::Sip(_)) => {}
+                Ok(Uri::Sip(_)) => {}
                 _ => {
                     return self.build_error_response(
                         request,
@@ -2142,7 +2141,8 @@ mod tests {
             .handle_register(&request)
             .expect("should return response");
         assert_eq!(
-            response.code(), 401,
+            response.code(),
+            401,
             "Unknown user should return 401, not 500"
         );
         assert!(response.headers().get("WWW-Authenticate").is_some());
@@ -2191,7 +2191,8 @@ mod tests {
             .handle_register(&request)
             .expect("should return response");
         assert_eq!(
-            response.code(), 401,
+            response.code(),
+            401,
             "Malformed auth should return 401, not 500"
         );
         assert!(response.headers().get("WWW-Authenticate").is_some());
@@ -2251,7 +2252,8 @@ mod tests {
             .handle_register(&request)
             .expect("should return response");
         assert_eq!(
-            response.code(), 401,
+            response.code(),
+            401,
             "Invalid nc format should return 401, not 500"
         );
         assert!(response.headers().get("WWW-Authenticate").is_some());
@@ -2288,10 +2290,7 @@ mod tests {
         let response = registrar
             .handle_register(&request)
             .expect("should return response");
-        assert_eq!(
-            response.code(), 400,
-            "Missing To header should return 400"
-        );
+        assert_eq!(response.code(), 400, "Missing To header should return 400");
         assert!(response.reason().contains("To"));
     }
 
@@ -2326,10 +2325,7 @@ mod tests {
         let response = registrar
             .handle_register(&request)
             .expect("should return response");
-        assert_eq!(
-            response.code(), 400,
-            "Invalid To header should return 400"
-        );
+        assert_eq!(response.code(), 400, "Invalid To header should return 400");
         assert!(response.reason().contains("To"));
     }
 
@@ -2365,7 +2361,8 @@ mod tests {
             .handle_register(&request)
             .expect("should return response");
         assert_eq!(
-            response.code(), 400,
+            response.code(),
+            400,
             "Missing Contact header should return 400"
         );
         assert!(response.reason().contains("Contact"));

@@ -114,13 +114,11 @@ impl ReferTransferTransactionUser {
 #[async_trait]
 impl ClientTransactionUser for ReferTransferTransactionUser {
     async fn on_provisional(&self, _key: &TransactionKey, response: &Response) {
-        self.send_notify(response.code(), response.reason())
-            .await;
+        self.send_notify(response.code(), response.reason()).await;
     }
 
     async fn on_final(&self, _key: &TransactionKey, response: &Response) {
-        self.send_notify(response.code(), response.reason())
-            .await;
+        self.send_notify(response.code(), response.reason()).await;
     }
 
     async fn on_terminated(&self, _key: &TransactionKey, reason: &str) {
@@ -391,7 +389,8 @@ impl RequestHandler for ReferHandler {
             let mut headers = sip_core::Headers::new();
             copy_headers(request, &mut headers);
             let response = sip_core::Response::new(
-                sip_core::StatusLine::new(481, "Call/Transaction Does Not Exist").expect("valid status line"),
+                sip_core::StatusLine::new(481, "Call/Transaction Does Not Exist")
+                    .expect("valid status line"),
                 headers,
                 bytes::Bytes::new(),
             )
@@ -404,8 +403,8 @@ impl RequestHandler for ReferHandler {
 
         // Parse local URI from config
         let local_uri = match sip_core::SipUri::parse(&services.config.local_uri) {
-            Some(uri) => uri,
-            None => {
+            Ok(uri) => uri,
+            Err(_) => {
                 warn!("Invalid local_uri in config");
                 let error = UserAgentServer::reject_refer(request, 603, "Decline");
                 handle.send_final(error).await;
@@ -467,8 +466,8 @@ impl RequestHandler for ReferHandler {
                     }
                 };
 
-                let target_port = refer_uri.port.unwrap_or(5060);
-                let target_addr = format!("{}:{}", refer_uri.host, target_port);
+                let target_port = refer_uri.port().unwrap_or(5060);
+                let target_addr = format!("{}:{}", refer_uri.host(), target_port);
                 let Ok(target_addr) = target_addr.parse::<std::net::SocketAddr>() else {
                     warn!(call_id, "Invalid Refer-To target address");
                     Self::send_notify(&uas, &mut subscription, 400, "Bad Request", services, _ctx)
@@ -476,11 +475,11 @@ impl RequestHandler for ReferHandler {
                     return Ok(());
                 };
 
-                let transport_param = refer_uri
-                    .params
-                    .get("transport")
-                    .and_then(|value| value.as_ref())
-                    .map(|value| value.to_ascii_lowercase());
+                let transport_param: Option<&SmolStr> = refer_uri
+                    .params()
+                    .get(&SmolStr::new("transport"))
+                    .and_then(|value| value.as_ref());
+                let transport_param = transport_param.map(|value| value.to_ascii_lowercase());
                 let transport = match transport_param.as_deref() {
                     Some("ws") => sip_transaction::TransportKind::Ws,
                     Some("wss") => sip_transaction::TransportKind::Wss,
@@ -491,10 +490,10 @@ impl RequestHandler for ReferHandler {
 
                 let ws_uri = match transport {
                     sip_transaction::TransportKind::Ws => {
-                        Some(format!("ws://{}:{}", refer_uri.host, target_port))
+                        Some(format!("ws://{}:{}", refer_uri.host(), target_port))
                     }
                     sip_transaction::TransportKind::Wss => {
-                        Some(format!("wss://{}:{}", refer_uri.host, target_port))
+                        Some(format!("wss://{}:{}", refer_uri.host(), target_port))
                     }
                     _ => None,
                 };

@@ -17,14 +17,12 @@ pub enum MethodError {
 impl std::fmt::Display for MethodError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::TooLong { max, actual } =>
-                write!(f, "method too long (max {}, got {})", max, actual),
-            Self::Empty =>
-                write!(f, "method cannot be empty"),
-            Self::InvalidCharacters(msg) =>
-                write!(f, "invalid method characters: {}", msg),
-            Self::ContainsControlChars =>
-                write!(f, "method contains control characters"),
+            Self::TooLong { max, actual } => {
+                write!(f, "method too long (max {}, got {})", max, actual)
+            }
+            Self::Empty => write!(f, "method cannot be empty"),
+            Self::InvalidCharacters(msg) => write!(f, "invalid method characters: {}", msg),
+            Self::ContainsControlChars => write!(f, "method contains control characters"),
         }
     }
 }
@@ -182,7 +180,7 @@ impl Method {
 
         // Validate extension method
         validate_method_token(token)?;
-        
+
         // Store in uppercase for consistency
         Ok(Self::Unknown(SmolStr::new(token.to_ascii_uppercase())))
     }
@@ -253,11 +251,14 @@ fn validate_method_token(token: &str) -> Result<(), MethodError> {
     // Check for valid token characters per RFC 3261
     // Valid: alphanumeric + ! % ' * + - . ^ _ ` | ~
     if !token.chars().all(|c| {
-        c.is_ascii_alphanumeric() || 
-        matches!(c, '!' | '%' | '\'' | '*' | '+' | '-' | '.' | '^' | '_' | '`' | '|' | '~')
+        c.is_ascii_alphanumeric()
+            || matches!(
+                c,
+                '!' | '%' | '\'' | '*' | '+' | '-' | '.' | '^' | '_' | '`' | '|' | '~'
+            )
     }) {
         return Err(MethodError::InvalidCharacters(
-            "contains invalid characters for method token".to_string()
+            "contains invalid characters for method token".to_string(),
         ));
     }
 
@@ -331,7 +332,7 @@ mod tests {
     fn reject_control_characters() {
         let result = Method::from_token("GET\x01\x02");
         assert!(matches!(result, Err(MethodError::ContainsControlChars)));
-        
+
         let result = Method::from_token("GET\ttab");
         assert!(matches!(result, Err(MethodError::ContainsControlChars)));
     }
@@ -348,15 +349,15 @@ mod tests {
         // Space is not allowed
         let result = Method::from_token("GET STUFF");
         assert!(matches!(result, Err(MethodError::InvalidCharacters(_))));
-        
+
         // Colon is not allowed
         let result = Method::from_token("GET:STUFF");
         assert!(matches!(result, Err(MethodError::InvalidCharacters(_))));
-        
+
         // Semicolon is not allowed
         let result = Method::from_token("GET;STUFF");
         assert!(matches!(result, Err(MethodError::InvalidCharacters(_))));
-        
+
         // Angle brackets are not allowed
         let result = Method::from_token("GET<STUFF>");
         assert!(matches!(result, Err(MethodError::InvalidCharacters(_))));
@@ -374,7 +375,7 @@ mod tests {
     fn method_as_str() {
         assert_eq!(Method::Invite.as_str(), "INVITE");
         assert_eq!(Method::Ack.as_str(), "ACK");
-        
+
         let custom = Method::from_token("CUSTOMMETHOD").unwrap();
         assert_eq!(custom.as_str(), "CUSTOMMETHOD");
     }
@@ -383,7 +384,7 @@ mod tests {
     fn method_display() {
         assert_eq!(Method::Invite.to_string(), "INVITE");
         assert_eq!(Method::Bye.to_string(), "BYE");
-        
+
         let custom = Method::from_token("CUSTOM").unwrap();
         assert_eq!(custom.to_string(), "CUSTOM");
     }
@@ -391,7 +392,7 @@ mod tests {
     #[test]
     fn method_from_str_trait() {
         use std::str::FromStr;
-        
+
         assert_eq!(Method::from_str("INVITE").unwrap(), Method::Invite);
         assert!(Method::from_str("INVALID\r\n").is_err());
     }
@@ -400,7 +401,7 @@ mod tests {
     fn is_standard() {
         assert!(Method::Invite.is_standard());
         assert!(Method::Register.is_standard());
-        
+
         let custom = Method::from_token("CUSTOM").unwrap();
         assert!(!custom.is_standard());
         assert!(custom.is_extension());
@@ -413,7 +414,7 @@ mod tests {
         assert!(Method::Cancel.is_idempotent());
         assert!(Method::Options.is_idempotent());
         assert!(Method::Register.is_idempotent());
-        
+
         assert!(!Method::Invite.is_idempotent());
         assert!(!Method::Subscribe.is_idempotent());
     }
@@ -423,7 +424,7 @@ mod tests {
         // Exactly MAX_METHOD_LENGTH should succeed
         let max_len = "M".repeat(MAX_METHOD_LENGTH);
         assert!(Method::from_token(&max_len).is_ok());
-        
+
         // One more should fail
         let over_max = "M".repeat(MAX_METHOD_LENGTH + 1);
         assert!(Method::from_token(&over_max).is_err());
@@ -432,11 +433,11 @@ mod tests {
     #[test]
     fn hash_and_eq() {
         use std::collections::HashSet;
-        
+
         let mut set = HashSet::new();
         set.insert(Method::Invite);
         set.insert(Method::from_token("INVITE").unwrap());
-        
+
         // Should only have one entry (they're equal)
         assert_eq!(set.len(), 1);
     }

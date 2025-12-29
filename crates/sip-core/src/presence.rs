@@ -48,24 +48,25 @@ pub enum PresenceError {
 impl std::fmt::Display for PresenceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::EntityTooLong { max, actual } =>
-                write!(f, "entity too long (max {}, got {})", max, actual),
-            Self::IdTooLong { max, actual } =>
-                write!(f, "ID too long (max {}, got {})", max, actual),
-            Self::TooManyTuples { max, actual } =>
-                write!(f, "too many tuples (max {}, got {})", max, actual),
-            Self::TooManyNotes { max, actual } =>
-                write!(f, "too many notes (max {}, got {})", max, actual),
-            Self::InvalidEntity(msg) =>
-                write!(f, "invalid entity: {}", msg),
-            Self::EmptyEntity =>
-                write!(f, "entity cannot be empty"),
-            Self::EmptyId =>
-                write!(f, "tuple ID cannot be empty"),
-            Self::ParseError(msg) =>
-                write!(f, "parse error: {}", msg),
-            Self::InputTooLarge { max, actual } =>
-                write!(f, "input too large (max {}, got {})", max, actual),
+            Self::EntityTooLong { max, actual } => {
+                write!(f, "entity too long (max {}, got {})", max, actual)
+            }
+            Self::IdTooLong { max, actual } => {
+                write!(f, "ID too long (max {}, got {})", max, actual)
+            }
+            Self::TooManyTuples { max, actual } => {
+                write!(f, "too many tuples (max {}, got {})", max, actual)
+            }
+            Self::TooManyNotes { max, actual } => {
+                write!(f, "too many notes (max {}, got {})", max, actual)
+            }
+            Self::InvalidEntity(msg) => write!(f, "invalid entity: {}", msg),
+            Self::EmptyEntity => write!(f, "entity cannot be empty"),
+            Self::EmptyId => write!(f, "tuple ID cannot be empty"),
+            Self::ParseError(msg) => write!(f, "parse error: {}", msg),
+            Self::InputTooLarge { max, actual } => {
+                write!(f, "input too large (max {}, got {})", max, actual)
+            }
             _ => write!(f, "{:?}", self),
         }
     }
@@ -100,7 +101,7 @@ impl PresenceDocument {
     /// Returns an error if the entity is invalid.
     pub fn new(entity: impl AsRef<str>) -> Result<Self, PresenceError> {
         validate_entity(entity.as_ref())?;
-        
+
         Ok(Self {
             entity: SmolStr::new(entity.as_ref()),
             tuples: Vec::new(),
@@ -131,14 +132,14 @@ impl PresenceDocument {
     /// Returns an error if the note is invalid or exceeds limits.
     pub fn add_note(&mut self, note: impl AsRef<str>) -> Result<(), PresenceError> {
         validate_note(note.as_ref())?;
-        
+
         if self.notes.len() >= MAX_NOTES_PER_DOC {
             return Err(PresenceError::TooManyNotes {
                 max: MAX_NOTES_PER_DOC,
                 actual: self.notes.len() + 1,
             });
         }
-        
+
         self.notes.push(SmolStr::new(note.as_ref()));
         Ok(())
     }
@@ -229,7 +230,7 @@ impl Tuple {
     /// Returns an error if the ID is invalid.
     pub fn new(id: impl AsRef<str>) -> Result<Self, PresenceError> {
         validate_id(id.as_ref())?;
-        
+
         Ok(Self {
             id: SmolStr::new(id.as_ref()),
             status: None,
@@ -263,14 +264,14 @@ impl Tuple {
     /// Returns an error if the note is invalid or exceeds limits.
     pub fn with_note(mut self, note: impl AsRef<str>) -> Result<Self, PresenceError> {
         validate_note(note.as_ref())?;
-        
+
         if self.notes.len() >= MAX_NOTES_PER_TUPLE {
             return Err(PresenceError::TooManyNotes {
                 max: MAX_NOTES_PER_TUPLE,
                 actual: self.notes.len() + 1,
             });
         }
-        
+
         self.notes.push(SmolStr::new(note.as_ref()));
         Ok(self)
     }
@@ -464,7 +465,8 @@ pub fn parse_pidf(xml: &str) -> Result<PresenceDocument, PresenceError> {
         let tuple_end = xml[abs_start..]
             .find("</tuple>")
             .ok_or_else(|| PresenceError::ParseError("unclosed tuple".to_string()))?
-            + abs_start + 8;
+            + abs_start
+            + 8;
         let tuple_xml = &xml[abs_start..tuple_end];
 
         let tuple = parse_tuple(tuple_xml)?;
@@ -492,11 +494,10 @@ fn parse_tuple(xml: &str) -> Result<Tuple, PresenceError> {
     if let Some(basic_start) = xml.find("<basic>") {
         if let Some(basic_end) = xml.find("</basic>") {
             let status_str = &xml[basic_start + 7..basic_end].trim();
-            tuple.status = Some(
-                BasicStatus::parse(status_str).ok_or_else(|| {
+            tuple.status =
+                Some(BasicStatus::parse(status_str).ok_or_else(|| {
                     PresenceError::ParseError("invalid basic status".to_string())
-                })?,
-            );
+                })?);
         }
     }
 
@@ -760,21 +761,19 @@ mod tests {
 
     #[test]
     fn reject_crlf_in_note() {
-        let result = Tuple::new("t1")
-            .unwrap()
-            .with_note("Available\r\ninjected");
+        let result = Tuple::new("t1").unwrap().with_note("Available\r\ninjected");
         assert!(result.is_err());
     }
 
     #[test]
     fn reject_too_many_tuples() {
         let mut doc = PresenceDocument::new("pres:alice@example.com").unwrap();
-        
+
         for i in 0..MAX_TUPLES {
             let tuple = Tuple::new(&format!("t{}", i)).unwrap();
             doc.add_tuple(tuple).unwrap();
         }
-        
+
         // Should fail
         let tuple = Tuple::new("overflow").unwrap();
         let result = doc.add_tuple(tuple);
@@ -785,11 +784,11 @@ mod tests {
     fn reject_too_many_notes() {
         let tuple = Tuple::new("t1").unwrap();
         let mut tuple = tuple;
-        
+
         for _ in 0..MAX_NOTES_PER_TUPLE {
             tuple = tuple.with_note("note").unwrap();
         }
-        
+
         // Should fail
         let result = tuple.with_note("overflow");
         assert!(result.is_err());
@@ -827,16 +826,20 @@ mod tests {
 
     #[test]
     fn reject_oversized_parse_input() {
-        let huge_xml = format!("<?xml version=\"1.0\"?><presence>{}</presence>", 
-            "x".repeat(MAX_PARSE_SIZE));
+        let huge_xml = format!(
+            "<?xml version=\"1.0\"?><presence>{}</presence>",
+            "x".repeat(MAX_PARSE_SIZE)
+        );
         let result = parse_pidf(&huge_xml);
         assert!(result.is_err());
     }
 
     #[test]
     fn parse_validates_entity() {
-        let xml = format!("<?xml version=\"1.0\"?>\n<presence entity=\"{}\"></presence>",
-            "x".repeat(MAX_ENTITY_LENGTH + 1));
+        let xml = format!(
+            "<?xml version=\"1.0\"?>\n<presence entity=\"{}\"></presence>",
+            "x".repeat(MAX_ENTITY_LENGTH + 1)
+        );
         let result = parse_pidf(&xml);
         assert!(result.is_err());
     }
@@ -851,8 +854,9 @@ mod tests {
                 .with_contact("sip:alice@192.168.1.100")
                 .unwrap()
                 .with_note("Available")
-                .unwrap()
-        ).unwrap();
+                .unwrap(),
+        )
+        .unwrap();
 
         let xml = doc.to_xml();
         let parsed = parse_pidf(&xml).unwrap();
@@ -893,13 +897,13 @@ mod tests {
     fn fields_are_private() {
         let doc = PresenceDocument::new("pres:alice@example.com").unwrap();
         let tuple = Tuple::new("t1").unwrap();
-        
+
         // These should compile (read-only access)
         let _ = doc.entity();
         let _ = doc.tuples();
         let _ = tuple.id();
         let _ = tuple.status();
-        
+
         // These should NOT compile (no direct field access):
         // doc.entity = SmolStr::new("evil");  // ← Does not compile!
         // tuple.id = SmolStr::new("evil");    // ← Does not compile!

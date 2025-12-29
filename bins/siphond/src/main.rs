@@ -449,14 +449,14 @@ async fn handle_packet(
         ) {
             header(req.headers(), "Route").and_then(|route| {
                 let raw = route.trim_matches('<').trim_matches('>');
-                SipUri::parse(raw).map(|uri| {
+                SipUri::parse(raw).ok().map(|uri| {
                     let scheme = if matches!(packet.transport, sip_transport::TransportKind::Wss) {
                         "wss"
                     } else {
                         "ws"
                     };
-                    let port = uri.port.unwrap_or(80);
-                    format!("{}://{}:{}", scheme, uri.host, port)
+                    let port = uri.port().unwrap_or(80);
+                    format!("{}://{}:{}", scheme, uri.host(), port)
                 })
             })
         } else {
@@ -515,8 +515,8 @@ async fn handle_packet(
                         // Send ACK to callee
                         let callee_addr = format!(
                             "{}:{}",
-                            call_leg.callee_contact.host,
-                            call_leg.callee_contact.port.unwrap_or(5060)
+                            call_leg.callee_contact.host(),
+                            call_leg.callee_contact.port().unwrap_or(5060)
                         );
 
                         if let Ok(addr) = callee_addr.parse::<std::net::SocketAddr>() {

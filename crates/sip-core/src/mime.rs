@@ -2,8 +2,8 @@
 // Copyright (C) 2025 James Ferris <ferrous.communications@gmail.com>
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use std::collections::BTreeMap;
 use smol_str::SmolStr;
+use std::collections::BTreeMap;
 
 const MAX_TYPE_LENGTH: usize = 64;
 const MAX_SUBTYPE_LENGTH: usize = 64;
@@ -30,30 +30,28 @@ pub enum MimeTypeError {
 impl std::fmt::Display for MimeTypeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::TypeTooLong { max, actual } =>
-                write!(f, "type too long (max {}, got {})", max, actual),
-            Self::SubtypeTooLong { max, actual } =>
-                write!(f, "subtype too long (max {}, got {})", max, actual),
-            Self::ParamNameTooLong { max, actual } =>
-                write!(f, "param name too long (max {}, got {})", max, actual),
-            Self::ParamValueTooLong { max, actual } =>
-                write!(f, "param value too long (max {}, got {})", max, actual),
-            Self::TooManyParams { max, actual } =>
-                write!(f, "too many params (max {}, got {})", max, actual),
-            Self::InvalidType(msg) =>
-                write!(f, "invalid type: {}", msg),
-            Self::InvalidSubtype(msg) =>
-                write!(f, "invalid subtype: {}", msg),
-            Self::InvalidParamName(msg) =>
-                write!(f, "invalid param name: {}", msg),
-            Self::InvalidParamValue(msg) =>
-                write!(f, "invalid param value: {}", msg),
-            Self::EmptyType =>
-                write!(f, "type cannot be empty"),
-            Self::EmptySubtype =>
-                write!(f, "subtype cannot be empty"),
-            Self::DuplicateParam(name) =>
-                write!(f, "duplicate parameter: {}", name),
+            Self::TypeTooLong { max, actual } => {
+                write!(f, "type too long (max {}, got {})", max, actual)
+            }
+            Self::SubtypeTooLong { max, actual } => {
+                write!(f, "subtype too long (max {}, got {})", max, actual)
+            }
+            Self::ParamNameTooLong { max, actual } => {
+                write!(f, "param name too long (max {}, got {})", max, actual)
+            }
+            Self::ParamValueTooLong { max, actual } => {
+                write!(f, "param value too long (max {}, got {})", max, actual)
+            }
+            Self::TooManyParams { max, actual } => {
+                write!(f, "too many params (max {}, got {})", max, actual)
+            }
+            Self::InvalidType(msg) => write!(f, "invalid type: {}", msg),
+            Self::InvalidSubtype(msg) => write!(f, "invalid subtype: {}", msg),
+            Self::InvalidParamName(msg) => write!(f, "invalid param name: {}", msg),
+            Self::InvalidParamValue(msg) => write!(f, "invalid param value: {}", msg),
+            Self::EmptyType => write!(f, "type cannot be empty"),
+            Self::EmptySubtype => write!(f, "subtype cannot be empty"),
+            Self::DuplicateParam(name) => write!(f, "duplicate parameter: {}", name),
         }
     }
 }
@@ -337,8 +335,11 @@ fn validate_type(type_str: &str) -> Result<(), MimeTypeError> {
 
     // Type must be a valid token per RFC 2045
     if !type_str.chars().all(|c| {
-        c.is_ascii_alphanumeric() || 
-        matches!(c, '-' | '.' | '!' | '%' | '*' | '_' | '+' | '`' | '\'' | '~')
+        c.is_ascii_alphanumeric()
+            || matches!(
+                c,
+                '-' | '.' | '!' | '%' | '*' | '_' | '+' | '`' | '\'' | '~'
+            )
     }) {
         return Err(MimeTypeError::InvalidType(
             "contains invalid characters for MIME type".to_string(),
@@ -368,8 +369,11 @@ fn validate_subtype(subtype: &str) -> Result<(), MimeTypeError> {
 
     // Subtype must be a valid token per RFC 2045
     if !subtype.chars().all(|c| {
-        c.is_ascii_alphanumeric() || 
-        matches!(c, '-' | '.' | '!' | '%' | '*' | '_' | '+' | '`' | '\'' | '~')
+        c.is_ascii_alphanumeric()
+            || matches!(
+                c,
+                '-' | '.' | '!' | '%' | '*' | '_' | '+' | '`' | '\'' | '~'
+            )
     }) {
         return Err(MimeTypeError::InvalidSubtype(
             "contains invalid characters for MIME subtype".to_string(),
@@ -399,8 +403,11 @@ fn validate_param_name(name: &str) -> Result<(), MimeTypeError> {
 
     // Parameter names must be valid tokens
     if !name.chars().all(|c| {
-        c.is_ascii_alphanumeric() || 
-        matches!(c, '-' | '.' | '!' | '%' | '*' | '_' | '+' | '`' | '\'' | '~')
+        c.is_ascii_alphanumeric()
+            || matches!(
+                c,
+                '-' | '.' | '!' | '%' | '*' | '_' | '+' | '`' | '\'' | '~'
+            )
     }) {
         return Err(MimeTypeError::InvalidParamName(
             "contains invalid characters".to_string(),
@@ -410,12 +417,14 @@ fn validate_param_name(name: &str) -> Result<(), MimeTypeError> {
     Ok(())
 }
 
-
 fn is_token(value: &str) -> bool {
     !value.is_empty()
         && value.chars().all(|c| {
             c.is_ascii_alphanumeric()
-                || matches!(c, '-' | '.' | '!' | '%' | '*' | '_' | '+' | '`' | '\'' | '~')
+                || matches!(
+                    c,
+                    '-' | '.' | '!' | '%' | '*' | '_' | '+' | '`' | '\'' | '~'
+                )
         })
 }
 
@@ -480,7 +489,7 @@ fn normalize_param_value(value: &str) -> Result<SmolStr, MimeTypeError> {
 fn parse_mime_type(s: &str) -> Result<MimeType, MimeTypeError> {
     // Split on semicolon to separate type from parameters
     let parts: Vec<&str> = s.split(';').collect();
-    
+
     if parts.is_empty() {
         return Err(MimeTypeError::InvalidType("empty string".to_string()));
     }
@@ -617,11 +626,11 @@ mod tests {
     #[test]
     fn reject_too_many_params() {
         let mut mime = MimeType::new("text", "plain").unwrap();
-        
+
         for i in 0..MAX_PARAMS {
             mime.add_param(&format!("p{}", i), "value").unwrap();
         }
-        
+
         // Should fail
         let result = mime.add_param("overflow", "value");
         assert!(result.is_err());
@@ -642,7 +651,7 @@ mod tests {
         // Slash in type (other than separator)
         let result = MimeType::new("app/lication", "sdp");
         assert!(result.is_err());
-        
+
         // Space in type
         let result = MimeType::new("app lication", "sdp");
         assert!(result.is_err());
@@ -654,7 +663,7 @@ mod tests {
             .unwrap()
             .with_param("charset", "utf-8")
             .unwrap();
-        
+
         assert_eq!(mime.to_string_with_params(), "text/plain;charset=utf-8");
     }
 
@@ -667,7 +676,7 @@ mod tests {
     #[test]
     fn parse_simple() {
         use std::str::FromStr;
-        
+
         let mime = MimeType::from_str("application/sdp").unwrap();
         assert_eq!(mime.top_level(), "application");
         assert_eq!(mime.subtype(), "sdp");
@@ -676,7 +685,7 @@ mod tests {
     #[test]
     fn parse_with_params() {
         use std::str::FromStr;
-        
+
         let mime = MimeType::from_str("text/plain;charset=utf-8").unwrap();
         assert_eq!(mime.top_level(), "text");
         assert_eq!(mime.subtype(), "plain");
@@ -686,7 +695,7 @@ mod tests {
     #[test]
     fn parse_multiple_params() {
         use std::str::FromStr;
-        
+
         let mime = MimeType::from_str("text/plain;charset=utf-8;boundary=----bound").unwrap();
         assert_eq!(mime.param("charset"), Some("utf-8"));
         assert_eq!(mime.param("boundary"), Some("----bound"));
@@ -698,10 +707,10 @@ mod tests {
             .unwrap()
             .with_param("charset", "utf-8")
             .unwrap();
-        
+
         let serialized = original.to_string_with_params();
         let parsed = parse_mime_type(&serialized).unwrap();
-        
+
         assert_eq!(original, parsed);
     }
 
@@ -717,12 +726,12 @@ mod tests {
     #[test]
     fn fields_are_private() {
         let mime = MimeType::new("application", "sdp").unwrap();
-        
+
         // These should compile (read-only access)
         let _ = mime.top_level();
         let _ = mime.subtype();
         let _ = mime.param("test");
-        
+
         // These should NOT compile (no direct field access):
         // mime.top_level = SmolStr::new("evil");  // ← Does not compile!
         // mime.subtype = SmolStr::new("evil");    // ← Does not compile!

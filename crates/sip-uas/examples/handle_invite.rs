@@ -155,11 +155,7 @@ a=rtpmap:0 PCMU/8000
     println!("\n--- Alternative: Rejecting the Call ---");
     println!("If user is busy:");
     let busy_response = uas.create_busy(&invite_request);
-    println!(
-        "  {} {}",
-        busy_response.code(),
-        busy_response.reason()
-    );
+    println!("  {} {}", busy_response.code(), busy_response.reason());
 
     println!("\nIf user declines:");
     let decline_response = uas.create_decline(&invite_request);

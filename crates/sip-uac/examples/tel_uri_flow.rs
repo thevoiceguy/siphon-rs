@@ -98,10 +98,7 @@ fn main() {
     println!("Local tel URI: {}", local_tel.as_str());
     println!("  Number: {}", local_tel.number());
     println!("  Is global: {}", local_tel.is_global());
-    println!(
-        "  Phone context: {}",
-        local_tel.phone_context().unwrap()
-    );
+    println!("  Phone context: {}", local_tel.phone_context().unwrap());
     println!();
 
     // Invalid: local number without phone-context
@@ -172,10 +169,10 @@ fn main() {
         if uri.is_sip() {
             let sip = uri.as_sip().unwrap();
             println!("(SIP)");
-            println!("  Scheme: {}", if sip.sips { "sips" } else { "sip" });
-            println!("  Host: {}", sip.host.as_str());
-            if let Some(user) = &sip.user {
-                println!("  User: {}", user.as_str());
+            println!("  Scheme: {}", if sip.is_sips() { "sips" } else { "sip" });
+            println!("  Host: {}", sip.host());
+            if let Some(user) = sip.user() {
+                println!("  User: {}", user);
             }
         } else if uri.is_tel() {
             let tel = uri.as_tel().unwrap();
