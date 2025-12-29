@@ -9,9 +9,17 @@
 
 use std::fmt;
 
+const MAX_ENCODING_NAME_LENGTH: usize = 32;
+
 /// Static payload type information from RFC 3551.
 ///
 /// Represents a codec with its fixed assignment in the RTP/AVP profile.
+///
+/// # Security Note
+///
+/// All instances of this type are const, making the public fields effectively
+/// immutable. While the fields are public for backward compatibility, they
+/// cannot be modified at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StaticPayloadType {
     /// Payload type number (0-95)
@@ -300,102 +308,20 @@ pub const STATIC_PAYLOAD_TYPES: [Option<&'static StaticPayloadType>; 128] = [
     Some(&MP2T),       // 33
     Some(&H263),       // 34
     // 35-71: unassigned (37 elements)
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
+    None, None, None, None, None, None, None, None, None, None,
+    None, None, None, None, None, None, None, None, None, None,
+    None, None, None, None, None, None, None, None, None, None,
+    None, None, None, None, None, None, None,
     // 72-76: reserved for RTCP conflict avoidance (5 elements)
-    None,
-    None,
-    None,
-    None,
-    None,
+    None, None, None, None, None,
     // 77-95: unassigned (19 elements)
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
+    None, None, None, None, None, None, None, None, None, None,
+    None, None, None, None, None, None, None, None, None,
     // 96-127: dynamic (32 elements)
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
+    None, None, None, None, None, None, None, None, None, None,
+    None, None, None, None, None, None, None, None, None, None,
+    None, None, None, None, None, None, None, None, None, None,
+    None, None,
 ];
 
 /// Returns static payload type information for a given payload type number.
@@ -437,12 +363,12 @@ pub fn get_static_payload_type(pt: u8) -> Option<&'static StaticPayloadType> {
 ///
 /// # Arguments
 ///
-/// * `encoding_name` - Encoding name (case-insensitive)
+/// * `encoding_name` - Encoding name (case-insensitive, max 32 chars)
 ///
 /// # Returns
 ///
 /// * `Some(pt)` if a static payload type exists for this encoding
-/// * `None` if no static payload type is defined
+/// * `None` if no static payload type is defined or name is too long
 ///
 /// # Example
 ///
@@ -455,6 +381,11 @@ pub fn get_static_payload_type(pt: u8) -> Option<&'static StaticPayloadType> {
 /// assert_eq!(get_payload_type("Unknown"), None);
 /// ```
 pub fn get_payload_type(encoding_name: &str) -> Option<u8> {
+    // Reject oversized input to prevent DoS
+    if encoding_name.len() > MAX_ENCODING_NAME_LENGTH {
+        return None;
+    }
+
     let name_upper = encoding_name.to_uppercase();
     STATIC_PAYLOAD_TYPES
         .iter()
@@ -477,7 +408,7 @@ pub fn get_payload_type(encoding_name: &str) -> Option<u8> {
 ///
 /// # Arguments
 ///
-/// * `encoding_name` - Encoding name (case-insensitive)
+/// * `encoding_name` - Encoding name (case-insensitive, max 32 chars)
 /// * `clock_rate` - Clock rate in Hz
 ///
 /// # Example
@@ -491,6 +422,11 @@ pub fn get_payload_type(encoding_name: &str) -> Option<u8> {
 /// assert_eq!(get_payload_type_with_rate("DVI4", 22050), Some(17));
 /// ```
 pub fn get_payload_type_with_rate(encoding_name: &str, clock_rate: u32) -> Option<u8> {
+    // Reject oversized input to prevent DoS
+    if encoding_name.len() > MAX_ENCODING_NAME_LENGTH {
+        return None;
+    }
+
     let name_upper = encoding_name.to_uppercase();
     STATIC_PAYLOAD_TYPES
         .iter()
@@ -659,5 +595,30 @@ mod tests {
         assert!(get_static_payload_type(32).is_some()); // MPV
         assert!(get_static_payload_type(33).is_some()); // MP2T
         assert!(get_static_payload_type(34).is_some()); // H263
+    }
+
+    // Security tests
+
+    #[test]
+    fn reject_oversized_encoding_name() {
+        let long_name = "x".repeat(MAX_ENCODING_NAME_LENGTH + 1);
+        assert_eq!(get_payload_type(&long_name), None);
+        assert_eq!(get_payload_type_with_rate(&long_name, 8000), None);
+    }
+
+    #[test]
+    fn const_data_cannot_be_mutated() {
+        // This test documents that even though fields are public,
+        // const instances cannot be mutated
+        let pcmu = get_static_payload_type(0).unwrap();
+        
+        // Can read fields
+        let _ = pcmu.payload_type;
+        let _ = pcmu.encoding_name;
+        
+        // Cannot mutate (these would not compile):
+        // pcmu.payload_type = 99;  // ← Does not compile! (const data)
+        // let mut_pcmu = pcmu;
+        // mut_pcmu.payload_type = 99;  // ← Also does not compile!
     }
 }
