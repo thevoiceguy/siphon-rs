@@ -376,7 +376,7 @@ impl UserAgentClient {
 
             for header in request.headers().iter() {
                 if header.name().eq_ignore_ascii_case("Route") && !inserted {
-                    for route in &service_route.routes {
+                    for route in service_route.routes() {
                         let route_value = format!("<{}>", route.uri().as_str());
                         new_headers.push(
                             Header::new("Route", route_value)
@@ -390,7 +390,7 @@ impl UserAgentClient {
             }
 
             if !inserted {
-                for route in &service_route.routes {
+                for route in service_route.routes() {
                     let route_value = format!("<{}>", route.uri().as_str());
                     new_headers.push(
                         Header::new("Route", route_value).expect("route header should be valid"),
@@ -4007,7 +4007,7 @@ mod tests {
         assert!(uac.get_service_route().is_some());
         let service_route = uac.get_service_route().unwrap();
         assert_eq!(service_route.len(), 1);
-        assert!(service_route.routes[0]
+        assert!(service_route.routes()[0]
             .uri()
             .as_str()
             .contains("proxy.example.com"));
@@ -4040,11 +4040,11 @@ mod tests {
 
         let service_route = uac.get_service_route().unwrap();
         assert_eq!(service_route.len(), 2);
-        assert!(service_route.routes[0]
+        assert!(service_route.routes()[0]
             .uri()
             .as_str()
             .contains("proxy1.example.com"));
-        assert!(service_route.routes[1]
+        assert!(service_route.routes()[1]
             .uri()
             .as_str()
             .contains("proxy2.example.com"));

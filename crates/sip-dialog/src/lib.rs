@@ -590,8 +590,8 @@ fn extract_session_timer(resp: &Response) -> (Option<Duration>, Option<Refresher
     if let Some(se_header) = header(&resp.headers(), "Session-Expires") {
         if let Some(se) = parse_session_expires(se_header) {
             return (
-                Some(Duration::from_secs(se.delta_seconds as u64)),
-                se.refresher,
+                Some(Duration::from_secs(se.delta_seconds() as u64)),
+                se.refresher(),
             );
         }
     }
