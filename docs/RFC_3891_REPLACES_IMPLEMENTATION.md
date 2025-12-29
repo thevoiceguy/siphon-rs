@@ -72,10 +72,7 @@ The main structure representing a Replaces header:
 
 ```rust
 pub struct ReplacesHeader {
-    pub call_id: SmolStr,
-    pub to_tag: SmolStr,
-    pub from_tag: SmolStr,
-    pub early_only: bool,
+    // fields are private; use accessors
 }
 ```
 
@@ -105,10 +102,10 @@ let replaces = ReplacesHeader::new(
     "6472"
 );
 
-assert_eq!(replaces.call_id, "425928@bobster.example.org");
-assert_eq!(replaces.to_tag, "7743");
-assert_eq!(replaces.from_tag, "6472");
-assert!(!replaces.early_only);
+assert_eq!(replaces.call_id(), "425928@bobster.example.org");
+assert_eq!(replaces.to_tag(), "7743");
+assert_eq!(replaces.from_tag(), "6472");
+assert!(!replaces.is_early_only());
 
 // Format as string
 println!("{}", replaces);
@@ -141,15 +138,15 @@ use sip_core::ReplacesHeader;
 let input = "425928@bobster.example.org;to-tag=7743;from-tag=6472";
 let replaces = ReplacesHeader::parse(input).unwrap();
 
-assert_eq!(replaces.call_id, "425928@bobster.example.org");
-assert_eq!(replaces.to_tag, "7743");
-assert_eq!(replaces.from_tag, "6472");
+assert_eq!(replaces.call_id(), "425928@bobster.example.org");
+assert_eq!(replaces.to_tag(), "7743");
+assert_eq!(replaces.from_tag(), "6472");
 
 // Parse with early-only
 let input = "98asjd8@test.com;to-tag=12345;from-tag=67890;early-only";
 let replaces = ReplacesHeader::parse(input).unwrap();
 
-assert!(replaces.early_only);
+assert!(replaces.is_early_only());
 ```
 
 ## Use Cases
@@ -203,7 +200,7 @@ let replaces_value = request.headers().get("Replaces").unwrap();
 let replaces = ReplacesHeader::parse(replaces_value).unwrap();
 
 // Charlie's phone finds the matching dialog (Call B with Bob)
-if let Some(dialog) = find_dialog(&replaces.call_id, &replaces.to_tag, &replaces.from_tag) {
+if let Some(dialog) = find_dialog(replaces.call_id(), replaces.to_tag(), replaces.from_tag()) {
     // Terminate the existing dialog with Bob
     dialog.send_bye();
 
@@ -354,7 +351,7 @@ fn handle_invite_with_replaces(request: &Request) -> Response {
         };
 
         // Find the matching dialog
-        let dialog = match find_dialog(&replaces.call_id, &replaces.to_tag, &replaces.from_tag) {
+        let dialog = match find_dialog(replaces.call_id(), replaces.to_tag(), replaces.from_tag()) {
             Some(d) => d,
             None => return Response::new(481, "Call/Transaction Does Not Exist"),
         };
@@ -365,7 +362,7 @@ fn handle_invite_with_replaces(request: &Request) -> Response {
         }
 
         // Check early-only flag
-        if replaces.early_only && dialog.is_confirmed() {
+        if replaces.is_early_only() && dialog.is_confirmed() {
             return Response::new(486, "Busy Here");
         }
 
@@ -570,9 +567,9 @@ fn handle_invite_from_alice(request: &Request) {
 
         // Find Call B with Bob
         let dialog_b = find_dialog(
-            &replaces.call_id,
-            &replaces.to_tag,
-            &replaces.from_tag
+            replaces.call_id(),
+            replaces.to_tag(),
+            replaces.from_tag()
         ).unwrap();
 
         // Send BYE to Bob on Call B
@@ -627,7 +624,7 @@ impl CallPickupService {
         };
 
         // Verify early-only constraint
-        if replaces.early_only && dialog.state != DialogState::Early {
+        if replaces.is_early_only() && dialog.state != DialogState::Early {
             return Response::new(486, "Busy Here");
         }
 
