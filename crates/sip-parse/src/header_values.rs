@@ -10,9 +10,8 @@ use sip_core::{
     AllowHeader, AuthorizationHeader, ContactHeader, DateHeader, EventHeader, FromHeader,
     GeolocationErrorHeader, GeolocationHeader, GeolocationRoutingHeader, GeolocationValue, Headers,
     HistoryInfoEntry, HistoryInfoHeader, MimeType, MinSessionExpires, NameAddr, NameAddrHeader,
-    p_headers::PHeaderError, PAccessNetworkInfo, PAssertedIdentityHeader, PPreferredIdentityHeader,
+    p_headers::PHeaderError, service_route::MAX_ROUTES, PAccessNetworkInfo, PAssertedIdentityHeader, PPreferredIdentityHeader,
     PVisitedNetworkIdHeader, PathHeader, PriorityValue, RAckHeader, RSeqHeader, ReasonHeader,
-    RefresherRole,
     ResourcePriorityHeader, RouteHeader, SdpSession, ServiceRouteHeader,
     SessionExpires, SipETagHeader, SubjectHeader, SubscriptionState, SubscriptionStateHeader,
     SupportedHeader, ToHeader, TokenList, Uri, ViaHeader,
@@ -99,7 +98,10 @@ pub fn parse_service_route(headers: &Headers) -> ServiceRouteHeader {
             }
         }
     }
-    ServiceRouteHeader { routes }
+    if routes.len() > MAX_ROUTES {
+        routes.truncate(MAX_ROUTES);
+    }
+    ServiceRouteHeader::new(routes).unwrap_or_else(|_| ServiceRouteHeader::new(Vec::new()).unwrap())
 }
 
 pub fn parse_path(headers: &Headers) -> PathHeader {
@@ -111,7 +113,10 @@ pub fn parse_path(headers: &Headers) -> PathHeader {
             }
         }
     }
-    PathHeader { routes }
+    if routes.len() > MAX_ROUTES {
+        routes.truncate(MAX_ROUTES);
+    }
+    PathHeader::new(routes).unwrap_or_else(|_| PathHeader::new(Vec::new()).unwrap())
 }
 
 pub fn parse_mime_type(value: &SmolStr) -> Option<MimeType> {
@@ -171,33 +176,13 @@ pub fn parse_rack_header(value: &SmolStr) -> Option<RAckHeader> {
 }
 
 pub fn parse_session_expires(value: &SmolStr) -> Option<SessionExpires> {
-    let mut parts = value.split(';');
-    let delta = parts.next()?.trim().parse().ok()?;
-    let mut refresher = None;
-    for part in parts {
-        let part = part.trim();
-        if let Some((name, val)) = part.split_once('=') {
-            if name.eq_ignore_ascii_case("refresher") {
-                refresher = match val.trim().to_ascii_lowercase().as_str() {
-                    "uac" => Some(RefresherRole::Uac),
-                    "uas" => Some(RefresherRole::Uas),
-                    _ => None,
-                };
-            }
-        }
-    }
-    Some(SessionExpires {
-        delta_seconds: delta,
-        refresher,
-    })
+    // Use the validated parser from sip-core which checks ranges and control characters
+    SessionExpires::parse(value.as_str())
 }
 
 pub fn parse_min_se(value: &SmolStr) -> Option<MinSessionExpires> {
-    value
-        .trim()
-        .parse()
-        .ok()
-        .map(|delta_seconds| MinSessionExpires { delta_seconds })
+    // Use the validated parser from sip-core which checks ranges and control characters
+    MinSessionExpires::parse(value.as_str())
 }
 
 pub fn parse_resource_priority(value: &SmolStr) -> Option<ResourcePriorityHeader> {

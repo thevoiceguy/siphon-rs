@@ -633,7 +633,7 @@ P-Preferred-Identity: <sip:alice@example.com>\r\n\
 RAck: 2000 1 INVITE\r\n\
 RSeq: 2000\r\n\
 Session-Expires: 90;refresher=uac\r\n\
-Min-SE: 60\r\n\
+Min-SE: 90\r\n\
 Resource-Priority: drs.5, drs.4\r\n\
 Event: dialog;id=123\r\n\
 Subscription-State: active;expires=10\r\n\
@@ -948,14 +948,14 @@ l: 0\r\n\r\n",
 
         let session_expires =
             parse_session_expires(header(resp.headers(), "Session-Expires").unwrap()).expect("se");
-        assert_eq!(session_expires.delta_seconds, 90);
+        assert_eq!(session_expires.delta_seconds(), 90);
         assert!(matches!(
-            session_expires.refresher,
+            session_expires.refresher(),
             Some(RefresherRole::Uac)
         ));
 
         let min_se = parse_min_se(header(resp.headers(), "Min-SE").unwrap()).expect("min-se");
-        assert_eq!(min_se.delta_seconds, 60);
+        assert_eq!(min_se.delta_seconds(), 90);
 
         let rp = parse_resource_priority(header(resp.headers(), "Resource-Priority").unwrap())
             .expect("resource-priority");
@@ -971,15 +971,15 @@ l: 0\r\n\r\n",
         assert!(matches!(sub_state.state(), SubscriptionState::Active));
 
         let service_route = parse_service_route(resp.headers());
-        assert_eq!(service_route.routes.len(), 1);
+        assert_eq!(service_route.routes().len(), 1);
         assert_eq!(
-            service_route.routes[0].uri().as_str(),
+            service_route.routes()[0].uri().as_str(),
             "sip:service.example.com"
         );
 
         let path = parse_path(resp.headers());
-        assert_eq!(path.routes.len(), 1);
-        assert_eq!(path.routes[0].uri().as_str(), "sip:path.example.com");
+        assert_eq!(path.routes().len(), 1);
+        assert_eq!(path.routes()[0].uri().as_str(), "sip:path.example.com");
 
         let history = parse_history_info(resp.headers());
         assert_eq!(history.len(), 1);
