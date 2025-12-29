@@ -134,13 +134,12 @@ fn normalize_sip_aor(uri: &SipUri) -> String {
 fn normalize_tel_aor(uri: &TelUri) -> String {
     // For tel URIs, remove visual separators and include phone-context for local numbers per RFC 3966.
     // Include all other tel URI parameters to avoid collisions (ext, isub, etc.).
-    let number = normalize_tel_number(uri.number.as_str());
+    let number = normalize_tel_number(uri.number());
     let mut params = Vec::new();
 
     // Normalize phone-context value based on its format
     // RFC 3966 allows phone-context to be either a global number or a domain name
-    let phone_context = uri.phone_context.as_ref().map(|context| {
-        let context = context.as_str();
+    let phone_context = uri.phone_context().map(|context| {
         if context.starts_with('+') {
             // Global number context: remove visual separators
             // Example: tel:123;phone-context=+1-555 -> tel:123;phone-context=+1555
@@ -155,7 +154,7 @@ fn normalize_tel_aor(uri: &TelUri) -> String {
 
     // Collect all parameters except phone-context (handled separately)
     // Normalize parameter keys to lowercase for canonical form
-    for (key, value) in &uri.parameters {
+    for (key, value) in uri.parameters() {
         if key.as_str().eq_ignore_ascii_case("phone-context") {
             continue; // Skip phone-context, handled separately above
         }
@@ -168,7 +167,7 @@ fn normalize_tel_aor(uri: &TelUri) -> String {
     // This ensures tel:+1...;ext=123;isub=xyz and tel:+1...;isub=xyz;ext=123 normalize identically
     params.sort_by(|a, b| a.0.cmp(&b.0));
 
-    if uri.is_global {
+    if uri.is_global() {
         // Global number: tel:+15551234567
         let mut out = format!("tel:{}", number);
         for (key, value) in params {

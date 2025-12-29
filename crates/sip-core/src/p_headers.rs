@@ -366,7 +366,7 @@ impl PAssertedIdentityHeader {
         };
 
         let tel_uri = TelUri::parse(&tel_uri_str)
-            .ok_or_else(|| PHeaderError::InvalidTelUri(tel_uri_str.clone()))?;
+            .map_err(|_| PHeaderError::InvalidTelUri(tel_uri_str.clone()))?;
         
         Ok(Self {
             identities: vec![PIdentity::from_uri(Uri::Tel(tel_uri))],
@@ -390,7 +390,7 @@ impl PAssertedIdentityHeader {
         };
 
         let tel_uri = TelUri::parse(&tel_uri_str)
-            .ok_or_else(|| PHeaderError::InvalidTelUri(tel_uri_str.clone()))?;
+            .map_err(|_| PHeaderError::InvalidTelUri(tel_uri_str.clone()))?;
         
         Ok(Self {
             identities: vec![
@@ -509,7 +509,7 @@ impl PPreferredIdentityHeader {
         };
 
         let tel_uri = TelUri::parse(&tel_uri_str)
-            .ok_or_else(|| PHeaderError::InvalidTelUri(tel_uri_str.clone()))?;
+            .map_err(|_| PHeaderError::InvalidTelUri(tel_uri_str.clone()))?;
         
         Ok(Self {
             identities: vec![PIdentity::from_uri(Uri::Tel(tel_uri))],
@@ -533,7 +533,7 @@ impl PPreferredIdentityHeader {
         };
 
         let tel_uri = TelUri::parse(&tel_uri_str)
-            .ok_or_else(|| PHeaderError::InvalidTelUri(tel_uri_str.clone()))?;
+            .map_err(|_| PHeaderError::InvalidTelUri(tel_uri_str.clone()))?;
         
         Ok(Self {
             identities: vec![

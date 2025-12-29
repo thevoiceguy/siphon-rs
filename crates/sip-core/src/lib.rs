@@ -23,7 +23,7 @@
 //! let uri = SipUri::parse("sip:alice@example.com").unwrap();
 //!
 //! // Create a tel URI (E.164)
-//! let tel = TelUri::new("+15551234567", true);
+//! let tel = TelUri::new("+15551234567", true).unwrap();
 //! ```
 
 pub mod addr_headers;

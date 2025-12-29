@@ -37,8 +37,8 @@ fn main() {
     // Bob's phone number as tel URI
     let bob_tel_uri = TelUri::parse("tel:+1-555-123-4567").expect("valid tel URI");
     println!("Bob's tel URI: {}", bob_tel_uri.as_str());
-    println!("  Normalized number: {}", bob_tel_uri.number.as_str());
-    println!("  Is global (E.164): {}", bob_tel_uri.is_global);
+    println!("  Normalized number: {}", bob_tel_uri.number());
+    println!("  Is global (E.164): {}", bob_tel_uri.is_global());
     println!();
 
     // The Request-URI is the SIP gateway that will route to PSTN
@@ -78,7 +78,7 @@ fn main() {
     for variant in &variants {
         let tel_uri = TelUri::parse(variant).expect("valid tel URI");
         println!("Original:   {}", variant);
-        println!("Normalized: {}", tel_uri.number.as_str());
+        println!("Normalized: {}", tel_uri.number());
         println!();
     }
 
@@ -96,11 +96,11 @@ fn main() {
     let local_tel =
         TelUri::parse("tel:5551234;phone-context=example.com").expect("valid local tel URI");
     println!("Local tel URI: {}", local_tel.as_str());
-    println!("  Number: {}", local_tel.number.as_str());
-    println!("  Is global: {}", local_tel.is_global);
+    println!("  Number: {}", local_tel.number());
+    println!("  Is global: {}", local_tel.is_global());
     println!(
         "  Phone context: {}",
-        local_tel.phone_context.as_ref().unwrap().as_str()
+        local_tel.phone_context().unwrap()
     );
     println!();
 
@@ -120,11 +120,11 @@ fn main() {
     let tel_with_ext =
         TelUri::parse("tel:+1-555-123-4567;ext=1234").expect("valid tel URI with extension");
     println!("tel URI with extension: {}", tel_with_ext.as_str());
-    println!("  Main number: {}", tel_with_ext.number.as_str());
+    println!("  Main number: {}", tel_with_ext.number());
     println!(
         "  Extension: {}",
         tel_with_ext
-            .parameters
+            .parameters()
             .get("ext")
             .unwrap()
             .as_ref()
@@ -134,13 +134,16 @@ fn main() {
     println!();
 
     // Other common parameters
-    let tel_with_isub = TelUri::new("+15551234567", true).with_parameter("isub", Some("9876"));
+    let tel_with_isub = TelUri::new("+15551234567", true)
+        .unwrap()
+        .with_parameter("isub", Some("9876"))
+        .unwrap();
 
     println!("tel URI with ISDN subaddress: {}", tel_with_isub.as_str());
     println!(
         "  isub parameter: {}",
         tel_with_isub
-            .parameters
+            .parameters()
             .get("isub")
             .unwrap()
             .as_ref()
@@ -177,17 +180,17 @@ fn main() {
         } else if uri.is_tel() {
             let tel = uri.as_tel().unwrap();
             println!("(tel)");
-            println!("  Number: {}", tel.number.as_str());
+            println!("  Number: {}", tel.number());
             println!(
                 "  Type: {}",
-                if tel.is_global {
+                if tel.is_global() {
                     "Global (E.164)"
                 } else {
                     "Local"
                 }
             );
-            if let Some(context) = &tel.phone_context {
-                println!("  Context: {}", context.as_str());
+            if let Some(context) = tel.phone_context() {
+                println!("  Context: {}", context);
             }
         }
         println!();
@@ -201,17 +204,23 @@ fn main() {
     println!("Building tel URIs programmatically with builder pattern\n");
 
     // Global tel URI
-    let global_tel = TelUri::new("+15551234567", true);
+    let global_tel = TelUri::new("+15551234567", true).unwrap();
     println!("Global tel URI: {}", global_tel.as_str());
 
     // Local tel URI with phone-context
-    let local_tel = TelUri::new("5551234", false).with_phone_context("example.com");
+    let local_tel = TelUri::new("5551234", false)
+        .unwrap()
+        .with_phone_context("example.com")
+        .unwrap();
     println!("Local tel URI: {}", local_tel.as_str());
 
     // tel URI with multiple parameters
     let complex_tel = TelUri::new("+15551234567", true)
+        .unwrap()
         .with_parameter("ext", Some("1234"))
-        .with_parameter("isub", Some("9876"));
+        .unwrap()
+        .with_parameter("isub", Some("9876"))
+        .unwrap();
     println!("Complex tel URI: {}", complex_tel.as_str());
     println!();
 

@@ -24,8 +24,8 @@ fn request_with_tel_uri_in_request_line() {
     assert_eq!(request_line.uri().as_str(), "tel:+1-555-123-4567");
 
     let tel = request_line.uri().as_tel().unwrap();
-    assert!(tel.is_global);
-    assert_eq!(tel.number.as_str(), "+15551234567");
+    assert!(tel.is_global());
+    assert_eq!(tel.number(), "+15551234567");
 }
 
 #[test]
@@ -88,9 +88,9 @@ fn tel_uri_with_phone_context() {
     assert!(uri.is_tel());
 
     let tel = uri.as_tel().unwrap();
-    assert!(!tel.is_global);
-    assert_eq!(tel.number.as_str(), "5551234");
-    assert_eq!(tel.phone_context.as_ref().unwrap().as_str(), "example.com");
+    assert!(!tel.is_global());
+    assert_eq!(tel.number(), "5551234");
+    assert_eq!(tel.phone_context().unwrap(), "example.com");
 }
 
 #[test]
@@ -98,10 +98,10 @@ fn tel_uri_with_extension() {
     // Test tel URI with extension parameter
     let tel_uri = TelUri::parse("tel:+1-555-123-4567;ext=1234").expect("valid tel URI");
 
-    assert!(tel_uri.is_global);
-    assert_eq!(tel_uri.number.as_str(), "+15551234567");
+    assert!(tel_uri.is_global());
+    assert_eq!(tel_uri.number(), "+15551234567");
 
-    let ext = tel_uri.parameters.get("ext").unwrap();
+    let ext = tel_uri.parameters().get("ext").unwrap();
     assert_eq!(ext.as_ref().unwrap().as_str(), "1234");
 }
 
@@ -122,33 +122,39 @@ fn uri_parse_automatically_detects_scheme() {
 #[test]
 fn tel_uri_rejects_invalid_formats() {
     // Local tel URI without phone-context should be rejected
-    assert!(TelUri::parse("tel:5551234").is_none());
+    assert!(TelUri::parse("tel:5551234").is_err());
 
     // Global tel URI with phone-context should be rejected
-    assert!(TelUri::parse("tel:+15551234;phone-context=example.com").is_none());
+    assert!(TelUri::parse("tel:+15551234;phone-context=example.com").is_err());
 
     // Non-tel scheme should be rejected
-    assert!(TelUri::parse("sip:user@example.com").is_none());
+    assert!(TelUri::parse("sip:user@example.com").is_err());
 }
 
 #[test]
 fn tel_uri_builder_methods() {
     // Test programmatic construction of tel URIs
-    let tel_uri = TelUri::new("+15551234567", true);
-    assert!(tel_uri.is_global);
+    let tel_uri = TelUri::new("+15551234567", true).unwrap();
+    assert!(tel_uri.is_global());
     assert_eq!(tel_uri.as_str(), "tel:+15551234567");
 
-    let local_tel = TelUri::new("5551234", false).with_phone_context("example.com");
-    assert!(!local_tel.is_global);
+    let local_tel = TelUri::new("5551234", false)
+        .unwrap()
+        .with_phone_context("example.com")
+        .unwrap();
+    assert!(!local_tel.is_global());
     assert_eq!(
-        local_tel.phone_context.as_ref().unwrap().as_str(),
+        local_tel.phone_context().unwrap(),
         "example.com"
     );
 
-    let tel_with_ext = TelUri::new("+15551234567", true).with_parameter("ext", Some("1234"));
+    let tel_with_ext = TelUri::new("+15551234567", true)
+        .unwrap()
+        .with_parameter("ext", Some("1234"))
+        .unwrap();
     assert_eq!(
         tel_with_ext
-            .parameters
+            .parameters()
             .get("ext")
             .unwrap()
             .as_ref()
@@ -171,7 +177,7 @@ fn tel_uri_visual_separators_normalized() {
     for variant in variants {
         let tel_uri = TelUri::parse(variant).expect("valid tel URI");
         assert_eq!(
-            tel_uri.number.as_str(),
+            tel_uri.number(),
             "+15551234567",
             "failed for {}",
             variant

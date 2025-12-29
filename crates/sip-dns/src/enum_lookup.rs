@@ -101,11 +101,11 @@ pub fn enum_to_domain(e164_number: &str) -> Option<String> {
 /// assert_eq!(domain, "7.6.5.4.3.2.1.5.5.5.1.e164.arpa");
 /// ```
 pub fn tel_uri_to_enum_domain(tel_uri: &sip_core::TelUri) -> Option<String> {
-    if !tel_uri.is_global {
+    if !tel_uri.is_global() {
         return None;
     }
 
-    enum_to_domain(&tel_uri.number)
+    enum_to_domain(tel_uri.number())
 }
 
 /// ENUM NAPTR record per RFC 3761.

@@ -145,7 +145,7 @@ impl Uri {
     pub fn parse(input: &str) -> Option<Self> {
         // Try tel URI first (more specific prefix)
         if input.starts_with("tel:") {
-            TelUri::parse(input).map(Uri::Tel)
+            TelUri::parse(input).ok().map(Uri::Tel)
         } else if input.starts_with("sip:") || input.starts_with("sips:") {
             SipUri::parse(input).map(Uri::Sip)
         } else {
@@ -299,8 +299,8 @@ mod tests {
         assert!(!uri.is_sip());
 
         let tel_uri = uri.as_tel().unwrap();
-        assert!(tel_uri.is_global);
-        assert_eq!(tel_uri.number.as_str(), "+15551234567");
+        assert!(tel_uri.is_global());
+        assert_eq!(tel_uri.number(), "+15551234567");
     }
 
     #[test]
