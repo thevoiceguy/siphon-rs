@@ -51,7 +51,7 @@
 //! // Parse from REFER request
 //! let refer_sub = ReferSubHeader::parse("false").unwrap();
 //!
-//! if !refer_sub.enabled {
+//! if !refer_sub.is_enabled() {
 //!     // No implicit subscription - send 200 OK with Refer-Sub: false
 //!     // Do NOT send NOTIFY messages
 //! } else {
@@ -98,6 +98,8 @@
 
 use std::fmt;
 
+const MAX_INPUT_LENGTH: usize = 16;
+
 /// The Refer-Sub header (RFC 4488).
 ///
 /// Controls whether an implicit subscription is created for a REFER request.
@@ -124,17 +126,17 @@ use std::fmt;
 ///
 /// // Suppress subscription
 /// let no_sub = ReferSubHeader::new(false);
-/// assert!(!no_sub.enabled);
+/// assert!(!no_sub.is_enabled());
 /// assert_eq!(no_sub.to_string(), "false");
 ///
 /// // Enable subscription (explicit, same as omitting header)
 /// let with_sub = ReferSubHeader::new(true);
-/// assert!(with_sub.enabled);
+/// assert!(with_sub.is_enabled());
 /// assert_eq!(with_sub.to_string(), "true");
 ///
 /// // Parse from header value
 /// let parsed = ReferSubHeader::parse("false").unwrap();
-/// assert!(!parsed.enabled);
+/// assert!(!parsed.is_enabled());
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ReferSubHeader {
@@ -142,7 +144,7 @@ pub struct ReferSubHeader {
     ///
     /// - `true`: Create implicit subscription (RFC 3515 behavior)
     /// - `false`: Suppress implicit subscription (RFC 4488)
-    pub enabled: bool,
+    enabled: bool,
 }
 
 impl ReferSubHeader {
@@ -159,11 +161,11 @@ impl ReferSubHeader {
     ///
     /// // Suppress subscription
     /// let refer_sub = ReferSubHeader::new(false);
-    /// assert!(!refer_sub.enabled);
+    /// assert!(!refer_sub.is_enabled());
     ///
     /// // Enable subscription
     /// let refer_sub = ReferSubHeader::new(true);
-    /// assert!(refer_sub.enabled);
+    /// assert!(refer_sub.is_enabled());
     /// ```
     pub const fn new(enabled: bool) -> Self {
         Self { enabled }
@@ -179,7 +181,7 @@ impl ReferSubHeader {
     /// use sip_core::ReferSubHeader;
     ///
     /// let refer_sub = ReferSubHeader::suppressed();
-    /// assert!(!refer_sub.enabled);
+    /// assert!(!refer_sub.is_enabled());
     /// assert_eq!(refer_sub.to_string(), "false");
     /// ```
     pub const fn suppressed() -> Self {
@@ -197,11 +199,28 @@ impl ReferSubHeader {
     /// use sip_core::ReferSubHeader;
     ///
     /// let refer_sub = ReferSubHeader::enabled();
-    /// assert!(refer_sub.enabled);
+    /// assert!(refer_sub.is_enabled());
     /// assert_eq!(refer_sub.to_string(), "true");
     /// ```
     pub const fn enabled() -> Self {
         Self::new(true)
+    }
+
+    /// Returns whether the subscription is enabled.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use sip_core::ReferSubHeader;
+    ///
+    /// let refer_sub = ReferSubHeader::new(true);
+    /// assert!(refer_sub.is_enabled());
+    ///
+    /// let refer_sub = ReferSubHeader::new(false);
+    /// assert!(!refer_sub.is_enabled());
+    /// ```
+    pub const fn is_enabled(&self) -> bool {
+        self.enabled
     }
 
     /// Parses a Refer-Sub header from a string.
@@ -226,24 +245,29 @@ impl ReferSubHeader {
     /// use sip_core::ReferSubHeader;
     ///
     /// let sub = ReferSubHeader::parse("false").unwrap();
-    /// assert!(!sub.enabled);
+    /// assert!(!sub.is_enabled());
     ///
     /// let sub = ReferSubHeader::parse("true").unwrap();
-    /// assert!(sub.enabled);
+    /// assert!(sub.is_enabled());
     ///
     /// // Case-insensitive
     /// let sub = ReferSubHeader::parse("FALSE").unwrap();
-    /// assert!(!sub.enabled);
+    /// assert!(!sub.is_enabled());
     ///
     /// // Whitespace tolerance
     /// let sub = ReferSubHeader::parse("  false  ").unwrap();
-    /// assert!(!sub.enabled);
+    /// assert!(!sub.is_enabled());
     ///
     /// // Invalid values
     /// assert!(ReferSubHeader::parse("").is_none());
     /// assert!(ReferSubHeader::parse("maybe").is_none());
     /// ```
     pub fn parse(input: &str) -> Option<Self> {
+        // Defense in depth: reject overly long input
+        if input.len() > MAX_INPUT_LENGTH {
+            return None;
+        }
+
         let value = input.trim();
         match value.to_ascii_lowercase().as_str() {
             "true" => Some(Self::new(true)),
@@ -254,7 +278,7 @@ impl ReferSubHeader {
 
     /// Returns `true` if the subscription is suppressed (disabled).
     ///
-    /// This is equivalent to checking `!enabled`.
+    /// This is equivalent to checking `!is_enabled()`.
     ///
     /// # Examples
     ///
@@ -287,7 +311,7 @@ impl Default for ReferSubHeader {
     /// use sip_core::ReferSubHeader;
     ///
     /// let default = ReferSubHeader::default();
-    /// assert!(default.enabled);
+    /// assert!(default.is_enabled());
     /// ```
     fn default() -> Self {
         Self::new(true)
@@ -301,26 +325,26 @@ mod tests {
     #[test]
     fn new_true() {
         let refer_sub = ReferSubHeader::new(true);
-        assert!(refer_sub.enabled);
+        assert!(refer_sub.is_enabled());
     }
 
     #[test]
     fn new_false() {
         let refer_sub = ReferSubHeader::new(false);
-        assert!(!refer_sub.enabled);
+        assert!(!refer_sub.is_enabled());
     }
 
     #[test]
     fn suppressed() {
         let refer_sub = ReferSubHeader::suppressed();
-        assert!(!refer_sub.enabled);
+        assert!(!refer_sub.is_enabled());
         assert!(refer_sub.is_suppressed());
     }
 
     #[test]
     fn enabled() {
         let refer_sub = ReferSubHeader::enabled();
-        assert!(refer_sub.enabled);
+        assert!(refer_sub.is_enabled());
         assert!(!refer_sub.is_suppressed());
     }
 
@@ -345,30 +369,30 @@ mod tests {
     #[test]
     fn parse_true() {
         let refer_sub = ReferSubHeader::parse("true").unwrap();
-        assert!(refer_sub.enabled);
+        assert!(refer_sub.is_enabled());
     }
 
     #[test]
     fn parse_false() {
         let refer_sub = ReferSubHeader::parse("false").unwrap();
-        assert!(!refer_sub.enabled);
+        assert!(!refer_sub.is_enabled());
     }
 
     #[test]
     fn parse_case_insensitive() {
-        assert!(ReferSubHeader::parse("TRUE").unwrap().enabled);
-        assert!(ReferSubHeader::parse("True").unwrap().enabled);
-        assert!(!ReferSubHeader::parse("FALSE").unwrap().enabled);
-        assert!(!ReferSubHeader::parse("False").unwrap().enabled);
+        assert!(ReferSubHeader::parse("TRUE").unwrap().is_enabled());
+        assert!(ReferSubHeader::parse("True").unwrap().is_enabled());
+        assert!(!ReferSubHeader::parse("FALSE").unwrap().is_enabled());
+        assert!(!ReferSubHeader::parse("False").unwrap().is_enabled());
     }
 
     #[test]
     fn parse_with_whitespace() {
         let refer_sub = ReferSubHeader::parse("  true  ").unwrap();
-        assert!(refer_sub.enabled);
+        assert!(refer_sub.is_enabled());
 
         let refer_sub = ReferSubHeader::parse("  false  ").unwrap();
-        assert!(!refer_sub.enabled);
+        assert!(!refer_sub.is_enabled());
     }
 
     #[test]
@@ -405,7 +429,7 @@ mod tests {
     #[test]
     fn default_is_enabled() {
         let default = ReferSubHeader::default();
-        assert!(default.enabled);
+        assert!(default.is_enabled());
         assert!(!default.is_suppressed());
     }
 
@@ -433,10 +457,30 @@ mod tests {
     fn backwards_compatibility() {
         // Legacy systems omit the header, equivalent to enabled
         let default = ReferSubHeader::default();
-        assert!(default.enabled);
+        assert!(default.is_enabled());
 
         // New systems can explicitly request suppression
         let suppressed = ReferSubHeader::suppressed();
         assert!(suppressed.is_suppressed());
+    }
+
+    // Security tests
+
+    #[test]
+    fn reject_oversized_input() {
+        let huge = "true".repeat(100);
+        assert!(ReferSubHeader::parse(&huge).is_none());
+    }
+
+    #[test]
+    fn field_is_private() {
+        let refer_sub = ReferSubHeader::new(true);
+        
+        // These should compile (read-only access)
+        let _ = refer_sub.is_enabled();
+        let _ = refer_sub.is_suppressed();
+        
+        // This should NOT compile (no direct field access):
+        // refer_sub.enabled = false;  // ← Does not compile!
     }
 }
