@@ -78,6 +78,16 @@ pub enum SdpError {
     UnknownField(char),
     /// Invalid line syntax
     InvalidSyntax(String),
+    /// Input validation error (RFC 4566 §5 compliance)
+    ValidationError(String),
+    /// Collection size limit exceeded (DoS protection)
+    CollectionLimitExceeded(&'static str, usize, usize),
+    /// String length limit exceeded (DoS protection)
+    StringLengthExceeded(&'static str, usize, usize),
+    /// Invalid character detected (CR/LF/control characters)
+    InvalidCharacter(&'static str, String),
+    /// Integer out of valid range
+    IntegerOutOfRange(&'static str, String),
 }
 
 impl fmt::Display for SdpError {
@@ -88,11 +98,208 @@ impl fmt::Display for SdpError {
             SdpError::InvalidOrder(msg) => write!(f, "Invalid field order: {}", msg),
             SdpError::UnknownField(c) => write!(f, "Unknown field type: {}", c),
             SdpError::InvalidSyntax(msg) => write!(f, "Invalid syntax: {}", msg),
+            SdpError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
+            SdpError::CollectionLimitExceeded(field, limit, actual) => write!(
+                f,
+                "Collection limit exceeded for {}: limit={}, actual={}",
+                field, limit, actual
+            ),
+            SdpError::StringLengthExceeded(field, limit, actual) => write!(
+                f,
+                "String length exceeded for {}: limit={}, actual={}",
+                field, limit, actual
+            ),
+            SdpError::InvalidCharacter(field, msg) => {
+                write!(f, "Invalid character in {}: {}", field, msg)
+            }
+            SdpError::IntegerOutOfRange(field, msg) => {
+                write!(f, "Integer out of range for {}: {}", field, msg)
+            }
         }
     }
 }
 
 impl std::error::Error for SdpError {}
+
+// =============================================================================
+// Security Hardening: Validation Constants (RFC 4566 + DoS Protection)
+// =============================================================================
+
+// String length limits (RFC 4566 §5 + reasonable bounds)
+const MAX_USERNAME_LEN: usize = 255;          // o= username
+const MAX_SESSION_ID_LEN: usize = 64;         // o= sess-id
+const MAX_SESSION_VERSION_LEN: usize = 64;    // o= sess-version
+const MAX_SESSION_NAME_LEN: usize = 1024;     // s=
+const MAX_SESSION_INFO_LEN: usize = 2048;     // i=
+const MAX_URI_LEN: usize = 2048;              // u=
+const MAX_EMAIL_LEN: usize = 320;             // e= (RFC 5321 limit)
+const MAX_PHONE_LEN: usize = 32;              // p=
+const MAX_NETTYPE_LEN: usize = 16;            // Network type (IN)
+const MAX_ADDRTYPE_LEN: usize = 16;           // Address type (IP4, IP6)
+const MAX_ADDRESS_LEN: usize = 255;           // Unicast/multicast address
+const MAX_BANDWIDTH_TYPE_LEN: usize = 32;     // b= modifier
+const MAX_ENCRYPTION_METHOD_LEN: usize = 64;  // k= method
+const MAX_ENCRYPTION_KEY_LEN: usize = 1024;   // k= key
+const MAX_ATTRIBUTE_NAME_LEN: usize = 128;    // a= name
+const MAX_ATTRIBUTE_VALUE_LEN: usize = 4096;  // a= value
+const MAX_MEDIA_TYPE_LEN: usize = 32;         // m= media type
+const MAX_PROTO_LEN: usize = 64;              // m= protocol
+const MAX_FORMAT_LEN: usize = 16;             // m= format identifier
+const MAX_MID_LEN: usize = 64;                // a=mid: value
+const MAX_ENCODING_NAME_LEN: usize = 64;      // rtpmap encoding name
+const MAX_FMTP_PARAMS_LEN: usize = 1024;      // fmtp parameters
+
+// Collection size limits (DoS protection)
+const MAX_EMAILS: usize = 10;                 // Maximum email addresses
+const MAX_PHONES: usize = 10;                 // Maximum phone numbers
+const MAX_BANDWIDTH_ENTRIES: usize = 20;      // Maximum bandwidth lines
+const MAX_TIMING_ENTRIES: usize = 10;         // Maximum timing lines
+const MAX_REPEAT_TIMES: usize = 10;           // Maximum repeat times
+const MAX_TIME_ZONES: usize = 50;             // Maximum timezone adjustments
+const MAX_ATTRIBUTES: usize = 100;            // Maximum attributes per level
+const MAX_MEDIA_DESCRIPTIONS: usize = 50;     // Maximum media descriptions
+const MAX_FORMAT_TYPES: usize = 128;          // Maximum format types per media
+const MAX_GROUPS: usize = 20;                 // Maximum media groups
+const MAX_MIDS: usize = 50;                   // Maximum mids in a group
+const MAX_CAPABILITY_DESCRIPTIONS: usize = 50; // Maximum capability descriptions
+const MAX_CAPABILITY_PARAMETERS: usize = 100; // Maximum capability parameters
+const MAX_OFFSETS: usize = 50;                // Maximum repeat time offsets
+
+// Integer validation ranges
+const MAX_BANDWIDTH_VALUE: u64 = 10_000_000; // 10 Gbps in kbps
+const MAX_PAYLOAD_TYPE: u8 = 127;             // RTP payload type range (RFC 3551)
+const MAX_CLOCK_RATE: u32 = 1_000_000_000;    // 1 GHz (unrealistic but safe)
+const MAX_SEQUENCE_NUMBER: u8 = 255;          // RFC 3407 sqn/cdsc cap-num
+
+/// Validates a string for length and forbidden characters (CR/LF/NUL).
+///
+/// # Security
+/// - Prevents line injection attacks by rejecting CR (\r) and LF (\n)
+/// - Prevents NUL byte attacks
+/// - Enforces maximum length to prevent memory exhaustion
+fn validate_string(s: &str, field_name: &'static str, max_len: usize) -> Result<(), SdpError> {
+    // Check length
+    if s.len() > max_len {
+        return Err(SdpError::StringLengthExceeded(
+            field_name,
+            max_len,
+            s.len(),
+        ));
+    }
+
+    // Check for forbidden characters (CR, LF, NUL)
+    if s.contains(&['\r', '\n', '\0'][..]) {
+        return Err(SdpError::InvalidCharacter(
+            field_name,
+            "contains CR, LF, or NUL character".to_string(),
+        ));
+    }
+
+    // Check for control characters (except tab which is allowed in some contexts)
+    if s.chars().any(|c| c.is_control() && c != '\t') {
+        return Err(SdpError::InvalidCharacter(
+            field_name,
+            "contains control characters".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Validates a collection size against a maximum limit.
+fn validate_collection_size<T>(
+    collection: &[T],
+    field_name: &'static str,
+    max_size: usize,
+) -> Result<(), SdpError> {
+    if collection.len() > max_size {
+        return Err(SdpError::CollectionLimitExceeded(
+            field_name,
+            max_size,
+            collection.len(),
+        ));
+    }
+    Ok(())
+}
+
+/// Validates a port number (0-65535, already enforced by u16 type).
+///
+/// Port 0 is valid in SDP (means "not applicable" per RFC 4566).
+fn validate_port(_port: u16) -> Result<(), SdpError> {
+    // u16 already enforces 0-65535 range
+    Ok(())
+}
+
+/// Validates a payload type (0-127 for RTP per RFC 3551).
+fn validate_payload_type(pt: u8) -> Result<(), SdpError> {
+    if pt > MAX_PAYLOAD_TYPE {
+        return Err(SdpError::IntegerOutOfRange(
+            "payload_type",
+            format!("must be 0-127, got {}", pt),
+        ));
+    }
+    Ok(())
+}
+
+/// Validates a bandwidth value.
+fn validate_bandwidth(bw: u64) -> Result<(), SdpError> {
+    if bw > MAX_BANDWIDTH_VALUE {
+        return Err(SdpError::IntegerOutOfRange(
+            "bandwidth",
+            format!("exceeds maximum {} kbps", MAX_BANDWIDTH_VALUE),
+        ));
+    }
+    Ok(())
+}
+
+/// Validates a clock rate.
+fn validate_clock_rate(rate: u32) -> Result<(), SdpError> {
+    if rate == 0 {
+        return Err(SdpError::IntegerOutOfRange(
+            "clock_rate",
+            "must be > 0".to_string(),
+        ));
+    }
+    if rate > MAX_CLOCK_RATE {
+        return Err(SdpError::IntegerOutOfRange(
+            "clock_rate",
+            format!("exceeds maximum {}", MAX_CLOCK_RATE),
+        ));
+    }
+    Ok(())
+}
+
+/// Validates a sequence number (RFC 3407).
+fn validate_sequence_number(seq: u8) -> Result<(), SdpError> {
+    if seq > MAX_SEQUENCE_NUMBER {
+        return Err(SdpError::IntegerOutOfRange(
+            "sequence_number",
+            format!("must be 0-255, got {}", seq),
+        ));
+    }
+    Ok(())
+}
+
+/// Validates a capability number (RFC 3407).
+fn validate_capability_number(cap_num: u8) -> Result<(), SdpError> {
+    if cap_num == 0 {
+        return Err(SdpError::IntegerOutOfRange(
+            "cap_num",
+            "must be > 0".to_string(),
+        ));
+    }
+    if cap_num > MAX_SEQUENCE_NUMBER {
+        return Err(SdpError::IntegerOutOfRange(
+            "cap_num",
+            format!("must be 1-255, got {}", cap_num),
+        ));
+    }
+    Ok(())
+}
+
+// =============================================================================
+// End of Validation Constants and Helpers
+// =============================================================================
 
 /// SDP session description (RFC 4566).
 ///
@@ -571,6 +778,9 @@ impl MediaGroup {
             return Err(SdpError::InvalidFormat("a=group"));
         }
 
+        // Security: Validate semantics
+        validate_string(parts[0], "a=group semantics", MAX_ATTRIBUTE_NAME_LEN)?;
+
         let semantics = GroupSemantics::parse(parts[0]);
         let mids: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
 
@@ -578,6 +788,12 @@ impl MediaGroup {
             return Err(SdpError::InvalidSyntax(
                 "a=group must have at least one mid".to_string(),
             ));
+        }
+
+        // Security: Check collection size and validate each mid
+        validate_collection_size(&mids, "a=group mids", MAX_MIDS)?;
+        for mid in &mids {
+            validate_string(mid, "a=group mid", MAX_MID_LEN)?;
         }
 
         Ok(MediaGroup { semantics, mids })
@@ -627,9 +843,23 @@ impl CapabilityDescription {
         let cap_num = parts[0]
             .parse::<u8>()
             .map_err(|_| SdpError::InvalidFormat("a=cdsc cap-num"))?;
+
+        // Security: Validate capability number
+        validate_capability_number(cap_num)?;
+
+        // Security: Validate media and transport strings
+        validate_string(parts[1], "a=cdsc media", MAX_MEDIA_TYPE_LEN)?;
+        validate_string(parts[2], "a=cdsc transport", MAX_PROTO_LEN)?;
+
         let media = parts[1].to_string();
         let transport = parts[2].to_string();
         let formats: Vec<String> = parts[3..].iter().map(|s| s.to_string()).collect();
+
+        // Security: Check format collection size and validate each format
+        validate_collection_size(&formats, "a=cdsc formats", MAX_FORMAT_TYPES)?;
+        for fmt in &formats {
+            validate_string(fmt, "a=cdsc format", MAX_FORMAT_LEN)?;
+        }
 
         Ok(CapabilityDescription {
             cap_num,
@@ -1130,6 +1360,8 @@ impl SdpSession {
         while idx < lines.len() {
             let media = MediaDescription::parse(&lines, &mut idx)?;
             session.media.push(media);
+            // Security: Check media collection size
+            validate_collection_size(&session.media, "m= media", MAX_MEDIA_DESCRIPTIONS)?;
         }
 
         // Extract groups and mids from attributes (RFC 3388)
@@ -1166,7 +1398,10 @@ impl SdpSession {
         if idx >= lines.len() || !lines[idx].starts_with("s=") {
             return Err(SdpError::MissingRequiredField("s="));
         }
-        self.session_name = lines[idx][2..].to_string();
+        // Security: Validate session name
+        let session_name = &lines[idx][2..];
+        validate_string(session_name, "s= session-name", MAX_SESSION_NAME_LEN)?;
+        self.session_name = session_name.to_string();
         idx += 1;
 
         // Optional fields in order
@@ -1181,27 +1416,58 @@ impl SdpSession {
                 return Err(SdpError::InvalidSyntax("Empty line".to_string()));
             };
             match field_type {
-                'i' => self.session_info = Some(line[2..].to_string()),
-                'u' => self.uri = Some(line[2..].to_string()),
-                'e' => self.emails.push(line[2..].to_string()),
-                'p' => self.phones.push(line[2..].to_string()),
+                'i' => {
+                    // Security: Validate session info
+                    validate_string(&line[2..], "i= session-info", MAX_SESSION_INFO_LEN)?;
+                    self.session_info = Some(line[2..].to_string());
+                }
+                'u' => {
+                    // Security: Validate URI
+                    validate_string(&line[2..], "u= uri", MAX_URI_LEN)?;
+                    self.uri = Some(line[2..].to_string());
+                }
+                'e' => {
+                    // Security: Validate email and check collection size
+                    validate_string(&line[2..], "e= email", MAX_EMAIL_LEN)?;
+                    self.emails.push(line[2..].to_string());
+                    validate_collection_size(&self.emails, "e= emails", MAX_EMAILS)?;
+                }
+                'p' => {
+                    // Security: Validate phone and check collection size
+                    validate_string(&line[2..], "p= phone", MAX_PHONE_LEN)?;
+                    self.phones.push(line[2..].to_string());
+                    validate_collection_size(&self.phones, "p= phones", MAX_PHONES)?;
+                }
                 'c' => self.connection = Some(parse_connection(line)?),
-                'b' => self.bandwidth.push(parse_bandwidth(line)?),
+                'b' => {
+                    self.bandwidth.push(parse_bandwidth(line)?);
+                    // Security: Check bandwidth collection size
+                    validate_collection_size(&self.bandwidth, "b= bandwidth", MAX_BANDWIDTH_ENTRIES)?;
+                }
                 't' => {
                     self.timing.push(parse_timing(line)?);
+                    // Security: Check timing collection size
+                    validate_collection_size(&self.timing, "t= timing", MAX_TIMING_ENTRIES)?;
                     // Check for following r= lines
                     while idx + 1 < lines.len() && lines[idx + 1].starts_with("r=") {
                         idx += 1;
                         self.repeat_times.push(parse_repeat_time(lines[idx])?);
+                        // Security: Check repeat times collection size
+                        validate_collection_size(&self.repeat_times, "r= repeat-times", MAX_REPEAT_TIMES)?;
                     }
                 }
                 'r' => return Err(SdpError::InvalidOrder("r= must follow t= line".to_string())),
                 'z' => {
                     let zones = parse_time_zones(line)?;
                     self.time_zones.extend(zones);
+                    // Security: Check time zones collection size (already checked in parse_time_zones)
                 }
                 'k' => self.encryption_key = Some(parse_encryption_key(line)?),
-                'a' => self.attributes.push(parse_attribute(line)?),
+                'a' => {
+                    self.attributes.push(parse_attribute(line)?);
+                    // Security: Check attributes collection size
+                    validate_collection_size(&self.attributes, "a= attributes", MAX_ATTRIBUTES)?;
+                }
                 _ => {
                     // Unknown field - ignore per RFC 4566
                 }
@@ -1224,7 +1490,11 @@ impl SdpSession {
             if attr.name == "group" {
                 if let Some(value) = &attr.value {
                     match MediaGroup::parse(value) {
-                        Ok(group) => self.groups.push(group),
+                        Ok(group) => {
+                            self.groups.push(group);
+                            // Security: Check groups collection size
+                            validate_collection_size(&self.groups, "a=group", MAX_GROUPS)?;
+                        }
                         Err(e) => return Err(e),
                     }
                 } else {
@@ -1311,11 +1581,12 @@ impl SdpSession {
             match attr.name.as_str() {
                 "sqn" => {
                     if let Some(value) = &attr.value {
-                        sqn = Some(
-                            value
-                                .parse::<u8>()
-                                .map_err(|_| SdpError::InvalidFormat("a=sqn"))?,
-                        );
+                        let seq = value
+                            .parse::<u8>()
+                            .map_err(|_| SdpError::InvalidFormat("a=sqn"))?;
+                        // Security: Validate sequence number
+                        validate_sequence_number(seq)?;
+                        sqn = Some(seq);
                     } else {
                         return Err(SdpError::InvalidFormat("a=sqn requires value"));
                     }
@@ -1323,6 +1594,8 @@ impl SdpSession {
                 "cdsc" => {
                     if let Some(value) = &attr.value {
                         descriptions.push(CapabilityDescription::parse(value)?);
+                        // Security: Check capability descriptions collection size
+                        validate_collection_size(&descriptions, "a=cdsc", MAX_CAPABILITY_DESCRIPTIONS)?;
                     } else {
                         return Err(SdpError::InvalidFormat("a=cdsc requires value"));
                     }
@@ -1333,6 +1606,8 @@ impl SdpSession {
                             CapabilityParameterType::General,
                             value,
                         ));
+                        // Security: Check capability parameters collection size
+                        validate_collection_size(&parameters, "a=cpar*", MAX_CAPABILITY_PARAMETERS)?;
                     } else {
                         return Err(SdpError::InvalidFormat("a=cpar requires value"));
                     }
@@ -1343,6 +1618,8 @@ impl SdpSession {
                             CapabilityParameterType::Min,
                             value,
                         ));
+                        // Security: Check capability parameters collection size
+                        validate_collection_size(&parameters, "a=cpar*", MAX_CAPABILITY_PARAMETERS)?;
                     } else {
                         return Err(SdpError::InvalidFormat("a=cparmin requires value"));
                     }
@@ -1353,6 +1630,8 @@ impl SdpSession {
                             CapabilityParameterType::Max,
                             value,
                         ));
+                        // Security: Check capability parameters collection size
+                        validate_collection_size(&parameters, "a=cpar*", MAX_CAPABILITY_PARAMETERS)?;
                     } else {
                         return Err(SdpError::InvalidFormat("a=cparmax requires value"));
                     }
@@ -1697,11 +1976,23 @@ impl MediaDescription {
                 return Err(SdpError::InvalidSyntax("Empty line".to_string()));
             };
             match field_type {
-                'i' => desc.title = Some(line[2..].to_string()),
+                'i' => {
+                    // Security: Validate media title
+                    validate_string(&line[2..], "i= media-title", MAX_SESSION_INFO_LEN)?;
+                    desc.title = Some(line[2..].to_string());
+                }
                 'c' => desc.connection = Some(parse_connection(line)?),
-                'b' => desc.bandwidth.push(parse_bandwidth(line)?),
+                'b' => {
+                    desc.bandwidth.push(parse_bandwidth(line)?);
+                    // Security: Check bandwidth collection size
+                    validate_collection_size(&desc.bandwidth, "b= media-bandwidth", MAX_BANDWIDTH_ENTRIES)?;
+                }
                 'k' => desc.encryption_key = Some(parse_encryption_key(line)?),
-                'a' => desc.attributes.push(parse_attribute(line)?),
+                'a' => {
+                    desc.attributes.push(parse_attribute(line)?);
+                    // Security: Check attributes collection size
+                    validate_collection_size(&desc.attributes, "a= media-attributes", MAX_ATTRIBUTES)?;
+                }
                 _ => {
                     // Unknown or out-of-order field
                     return Err(SdpError::InvalidOrder(format!(
@@ -1852,9 +2143,20 @@ impl RtpMap {
             return None;
         }
 
+        // Security: Validate payload type, encoding name, and clock rate
+        validate_payload_type(payload_type).ok()?;
+        validate_string(encoding_parts[0], "rtpmap encoding-name", MAX_ENCODING_NAME_LEN).ok()?;
+
         let encoding_name = encoding_parts[0].to_string();
         let clock_rate = encoding_parts[1].parse().ok()?;
-        let encoding_params = encoding_parts.get(2).map(|s| s.to_string());
+        validate_clock_rate(clock_rate).ok()?;
+
+        let encoding_params = if let Some(params) = encoding_parts.get(2) {
+            validate_string(params, "rtpmap encoding-params", MAX_FORMAT_LEN).ok()?;
+            Some(params.to_string())
+        } else {
+            None
+        };
 
         Some(RtpMap {
             payload_type,
@@ -1891,6 +2193,10 @@ impl Fmtp {
             return None;
         }
 
+        // Security: Validate format and params strings
+        validate_string(parts[0], "fmtp format", MAX_FORMAT_LEN).ok()?;
+        validate_string(parts[1], "fmtp params", MAX_FMTP_PARAMS_LEN).ok()?;
+
         Some(Fmtp {
             format: parts[0].to_string(),
             params: parts[1].to_string(),
@@ -1915,6 +2221,14 @@ fn parse_origin(line: &str) -> Result<Origin, SdpError> {
         return Err(SdpError::InvalidFormat("o="));
     }
 
+    // Security: Validate all fields for length and forbidden characters (RFC 4566 §5)
+    validate_string(parts[0], "o= username", MAX_USERNAME_LEN)?;
+    validate_string(parts[1], "o= sess-id", MAX_SESSION_ID_LEN)?;
+    validate_string(parts[2], "o= sess-version", MAX_SESSION_VERSION_LEN)?;
+    validate_string(parts[3], "o= nettype", MAX_NETTYPE_LEN)?;
+    validate_string(parts[4], "o= addrtype", MAX_ADDRTYPE_LEN)?;
+    validate_string(parts[5], "o= unicast-address", MAX_ADDRESS_LEN)?;
+
     Ok(Origin {
         username: parts[0].to_string(),
         sess_id: parts[1].to_string(),
@@ -1931,6 +2245,11 @@ fn parse_connection(line: &str) -> Result<Connection, SdpError> {
         return Err(SdpError::InvalidFormat("c="));
     }
 
+    // Security: Validate fields for length and forbidden characters
+    validate_string(parts[0], "c= nettype", MAX_NETTYPE_LEN)?;
+    validate_string(parts[1], "c= addrtype", MAX_ADDRTYPE_LEN)?;
+    validate_string(parts[2], "c= connection-address", MAX_ADDRESS_LEN)?;
+
     Ok(Connection {
         nettype: parts[0].to_string(),
         addrtype: parts[1].to_string(),
@@ -1945,9 +2264,14 @@ fn parse_bandwidth(line: &str) -> Result<Bandwidth, SdpError> {
         return Err(SdpError::InvalidFormat("b="));
     }
 
+    // Security: Validate bandwidth type and value
+    validate_string(parts[0], "b= bwtype", MAX_BANDWIDTH_TYPE_LEN)?;
+
     let bandwidth = parts[1]
         .parse()
         .map_err(|_| SdpError::InvalidFormat("b="))?;
+
+    validate_bandwidth(bandwidth)?;
 
     Ok(Bandwidth {
         bwtype: parts[0].to_string(),
@@ -1980,10 +2304,22 @@ fn parse_repeat_time(line: &str) -> Result<RepeatTime, SdpError> {
         return Err(SdpError::InvalidFormat("r="));
     }
 
+    // Security: Validate fields and check offset collection size
+    validate_string(parts[0], "r= repeat-interval", MAX_FORMAT_LEN)?;
+    validate_string(parts[1], "r= active-duration", MAX_FORMAT_LEN)?;
+
+    let offsets: Vec<String> = parts[2..].iter().map(|s| s.to_string()).collect();
+    validate_collection_size(&offsets, "r= offsets", MAX_OFFSETS)?;
+
+    // Validate each offset
+    for offset in &offsets {
+        validate_string(offset, "r= offset", MAX_FORMAT_LEN)?;
+    }
+
     Ok(RepeatTime {
         repeat_interval: parts[0].to_string(),
         active_duration: parts[1].to_string(),
-        offsets: parts[2..].iter().map(|s| s.to_string()).collect(),
+        offsets,
     })
 }
 
@@ -1998,11 +2334,18 @@ fn parse_time_zones(line: &str) -> Result<Vec<TimeZone>, SdpError> {
         let adjustment_time = chunk[0]
             .parse()
             .map_err(|_| SdpError::InvalidFormat("z="))?;
+
+        // Security: Validate offset string
+        validate_string(chunk[1], "z= offset", MAX_FORMAT_LEN)?;
+
         zones.push(TimeZone {
             adjustment_time,
             offset: chunk[1].to_string(),
         });
     }
+
+    // Security: Check collection size
+    validate_collection_size(&zones, "z= time-zones", MAX_TIME_ZONES)?;
 
     Ok(zones)
 }
@@ -2011,12 +2354,16 @@ fn parse_encryption_key(line: &str) -> Result<EncryptionKey, SdpError> {
     let value = &line[2..];
     let parts: Vec<&str> = value.splitn(2, ':').collect();
 
+    // Security: Validate method and optional key
+    validate_string(parts[0], "k= method", MAX_ENCRYPTION_METHOD_LEN)?;
+
     if parts.len() == 1 {
         Ok(EncryptionKey {
             method: parts[0].to_string(),
             key: None,
         })
     } else {
+        validate_string(parts[1], "k= key", MAX_ENCRYPTION_KEY_LEN)?;
         Ok(EncryptionKey {
             method: parts[0].to_string(),
             key: Some(parts[1].to_string()),
@@ -2028,12 +2375,16 @@ fn parse_attribute(line: &str) -> Result<Attribute, SdpError> {
     let value = &line[2..];
     let parts: Vec<&str> = value.splitn(2, ':').collect();
 
+    // Security: Validate attribute name and value
+    validate_string(parts[0], "a= name", MAX_ATTRIBUTE_NAME_LEN)?;
+
     if parts.len() == 1 {
         Ok(Attribute {
             name: parts[0].to_string(),
             value: None,
         })
     } else {
+        validate_string(parts[1], "a= value", MAX_ATTRIBUTE_VALUE_LEN)?;
         Ok(Attribute {
             name: parts[0].to_string(),
             value: Some(parts[1].to_string()),
@@ -2049,6 +2400,8 @@ fn parse_media_line(line: &str) -> Result<MediaLineParsed, SdpError> {
         return Err(SdpError::InvalidFormat("m="));
     }
 
+    // Security: Validate media type and protocol
+    validate_string(parts[0], "m= media", MAX_MEDIA_TYPE_LEN)?;
     let media = parts[0].to_string();
 
     // Parse port and optional port count
@@ -2056,18 +2409,27 @@ fn parse_media_line(line: &str) -> Result<MediaLineParsed, SdpError> {
     let port = port_parts[0]
         .parse()
         .map_err(|_| SdpError::InvalidFormat("m="))?;
+    validate_port(port)?;
+
     let port_count = if port_parts.len() > 1 {
-        Some(
-            port_parts[1]
-                .parse()
-                .map_err(|_| SdpError::InvalidFormat("m="))?,
-        )
+        let count: u16 = port_parts[1]
+            .parse()
+            .map_err(|_| SdpError::InvalidFormat("m="))?;
+        validate_port(count)?;
+        Some(count)
     } else {
         None
     };
 
+    validate_string(parts[2], "m= proto", MAX_PROTO_LEN)?;
     let proto = parts[2].to_string();
-    let fmt = parts[3..].iter().map(|s| s.to_string()).collect();
+
+    // Security: Validate format list size and each format
+    let fmt: Vec<String> = parts[3..].iter().map(|s| s.to_string()).collect();
+    validate_collection_size(&fmt, "m= fmt", MAX_FORMAT_TYPES)?;
+    for f in &fmt {
+        validate_string(f, "m= format", MAX_FORMAT_LEN)?;
+    }
 
     Ok((media, port, port_count, proto, fmt))
 }
@@ -4780,5 +5142,249 @@ mod tests {
         assert_eq!(session.media[1].bandwidth[0].bandwidth, 50);
         assert_eq!(session.media[1].bandwidth[1].bwtype, "TIAS");
         assert_eq!(session.media[1].bandwidth[1].bandwidth, 42300);
+    }
+
+    // =============================================================================
+    // Security Tests - Validation and DoS Protection
+    // =============================================================================
+
+    #[test]
+    fn reject_session_name_with_control_char() {
+        let sdp = "v=0\r\n\
+                   o=alice 123 456 IN IP4 192.0.2.1\r\n\
+                   s=Session\x01Name\r\n\
+                   c=IN IP4 192.0.2.1\r\n\
+                   t=0 0\r\n";
+
+        let result = SdpSession::parse(sdp);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(matches!(e, SdpError::InvalidCharacter(_, _)));
+        }
+    }
+
+    #[test]
+    fn reject_origin_username_with_control_chars() {
+        let sdp = "v=0\r\n\
+                   o=alice\x00 123 456 IN IP4 192.0.2.1\r\n\
+                   s=Session\r\n\
+                   c=IN IP4 192.0.2.1\r\n\
+                   t=0 0\r\n";
+
+        let result = SdpSession::parse(sdp);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(matches!(e, SdpError::InvalidCharacter(_, _)));
+        }
+    }
+
+    #[test]
+    fn reject_oversized_session_name() {
+        let long_name = "X".repeat(MAX_SESSION_NAME_LEN + 1);
+        let sdp = format!(
+            "v=0\r\n\
+             o=alice 123 456 IN IP4 192.0.2.1\r\n\
+             s={}\r\n\
+             c=IN IP4 192.0.2.1\r\n\
+             t=0 0\r\n",
+            long_name
+        );
+
+        let result = SdpSession::parse(&sdp);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(matches!(e, SdpError::StringLengthExceeded(_, _, _)));
+        }
+    }
+
+    #[test]
+    fn reject_too_many_emails() {
+        let mut sdp = String::from(
+            "v=0\r\n\
+             o=alice 123 456 IN IP4 192.0.2.1\r\n\
+             s=Session\r\n"
+        );
+
+        // Add more than MAX_EMAILS
+        for i in 0..=MAX_EMAILS {
+            sdp.push_str(&format!("e=user{}@example.com\r\n", i));
+        }
+
+        sdp.push_str("c=IN IP4 192.0.2.1\r\nt=0 0\r\n");
+
+        let result = SdpSession::parse(&sdp);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(matches!(e, SdpError::CollectionLimitExceeded(_, _, _)));
+        }
+    }
+
+    #[test]
+    fn reject_too_many_media_descriptions() {
+        let mut sdp = String::from(
+            "v=0\r\n\
+             o=alice 123 456 IN IP4 192.0.2.1\r\n\
+             s=Session\r\n\
+             c=IN IP4 192.0.2.1\r\n\
+             t=0 0\r\n"
+        );
+
+        // Add more than MAX_MEDIA_DESCRIPTIONS
+        for _i in 0..=MAX_MEDIA_DESCRIPTIONS {
+            sdp.push_str("m=audio 49170 RTP/AVP 0\r\n");
+        }
+
+        let result = SdpSession::parse(&sdp);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(matches!(e, SdpError::CollectionLimitExceeded(_, _, _)));
+        }
+    }
+
+    #[test]
+    fn reject_excessive_bandwidth_value() {
+        let sdp = format!(
+            "v=0\r\n\
+             o=alice 123 456 IN IP4 192.0.2.1\r\n\
+             s=Session\r\n\
+             c=IN IP4 192.0.2.1\r\n\
+             b=AS:{}\r\n\
+             t=0 0\r\n",
+            MAX_BANDWIDTH_VALUE + 1
+        );
+
+        let result = SdpSession::parse(&sdp);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(matches!(e, SdpError::IntegerOutOfRange(_, _)));
+        }
+    }
+
+    #[test]
+    fn reject_invalid_payload_type() {
+        let sdp = format!(
+            "v=0\r\n\
+             o=alice 123 456 IN IP4 192.0.2.1\r\n\
+             s=Session\r\n\
+             c=IN IP4 192.0.2.1\r\n\
+             t=0 0\r\n\
+             m=audio 49170 RTP/AVP 0\r\n\
+             a=rtpmap:{} PCMU/8000\r\n",
+            MAX_PAYLOAD_TYPE + 1
+        );
+
+        let session = SdpSession::parse(&sdp);
+        // RtpMap::parse should return None for invalid payload type
+        if let Ok(session) = session {
+            let rtpmaps = session.find_rtpmaps(0);
+            assert_eq!(rtpmaps.len(), 0); // Should not parse invalid rtpmap
+        }
+    }
+
+    #[test]
+    fn reject_too_many_attributes() {
+        let mut sdp = String::from(
+            "v=0\r\n\
+             o=alice 123 456 IN IP4 192.0.2.1\r\n\
+             s=Session\r\n\
+             c=IN IP4 192.0.2.1\r\n\
+             t=0 0\r\n"
+        );
+
+        // Add more than MAX_ATTRIBUTES
+        for i in 0..=MAX_ATTRIBUTES {
+            sdp.push_str(&format!("a=test{}\r\n", i));
+        }
+
+        let result = SdpSession::parse(&sdp);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(matches!(e, SdpError::CollectionLimitExceeded(_, _, _)));
+        }
+    }
+
+    #[test]
+    fn reject_attribute_with_control_char_in_value() {
+        let sdp = "v=0\r\n\
+                   o=alice 123 456 IN IP4 192.0.2.1\r\n\
+                   s=Session\r\n\
+                   c=IN IP4 192.0.2.1\r\n\
+                   t=0 0\r\n\
+                   a=tool:siphon\x02value\r\n";
+
+        let result = SdpSession::parse(sdp);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(matches!(e, SdpError::InvalidCharacter(_, _)));
+        }
+    }
+
+    #[test]
+    fn reject_too_many_format_types() {
+        let mut sdp = String::from(
+            "v=0\r\n\
+             o=alice 123 456 IN IP4 192.0.2.1\r\n\
+             s=Session\r\n\
+             c=IN IP4 192.0.2.1\r\n\
+             t=0 0\r\n\
+             m=audio 49170 RTP/AVP"
+        );
+
+        // Add more than MAX_FORMAT_TYPES
+        for i in 0..=MAX_FORMAT_TYPES {
+            sdp.push_str(&format!(" {}", i));
+        }
+        sdp.push_str("\r\n");
+
+        let result = SdpSession::parse(&sdp);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(matches!(e, SdpError::CollectionLimitExceeded(_, _, _)));
+        }
+    }
+
+    #[test]
+    fn accept_valid_session_within_limits() {
+        let mut sdp = String::from(
+            "v=0\r\n\
+             o=alice 123 456 IN IP4 192.0.2.1\r\n\
+             s=Valid Session\r\n"
+        );
+
+        // Add emails within limit
+        for i in 0..5 {
+            sdp.push_str(&format!("e=user{}@example.com\r\n", i));
+        }
+
+        sdp.push_str("c=IN IP4 192.0.2.1\r\nt=0 0\r\n");
+
+        // Add media within limit
+        for _i in 0..5 {
+            sdp.push_str("m=audio 49170 RTP/AVP 0\r\n");
+        }
+
+        let result = SdpSession::parse(&sdp);
+        assert!(result.is_ok());
+        let session = result.unwrap();
+        assert_eq!(session.emails.len(), 5);
+        assert_eq!(session.media.len(), 5);
+    }
+
+    #[test]
+    fn accept_bandwidth_at_maximum() {
+        let sdp = format!(
+            "v=0\r\n\
+             o=alice 123 456 IN IP4 192.0.2.1\r\n\
+             s=Session\r\n\
+             c=IN IP4 192.0.2.1\r\n\
+             b=AS:{}\r\n\
+             t=0 0\r\n",
+            MAX_BANDWIDTH_VALUE
+        );
+
+        let result = SdpSession::parse(&sdp);
+        assert!(result.is_ok());
+        let session = result.unwrap();
+        assert_eq!(session.bandwidth[0].bandwidth, MAX_BANDWIDTH_VALUE);
     }
 }
