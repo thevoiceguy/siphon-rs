@@ -1112,8 +1112,9 @@ Content-Length: 0\r\n\r\n",
         let date = parse_date_header(&date_value);
         assert!(date.timestamp().is_some());
 
-        let subject = parse_subject_header(&SmolStr::new("Test Call".to_owned()));
-        assert_eq!(subject.value.as_str(), "Test Call");
+        let subject = parse_subject_header(&SmolStr::new("Test Call".to_owned()))
+            .expect("subject");
+        assert_eq!(subject.value(), "Test Call");
     }
 
     #[test]

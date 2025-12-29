@@ -161,10 +161,8 @@ pub fn parse_date_header(value: &SmolStr) -> DateHeader {
     DateHeader::new(value.as_str()).unwrap_or_else(|_| DateHeader::now())
 }
 
-pub fn parse_subject_header(value: &SmolStr) -> SubjectHeader {
-    SubjectHeader {
-        value: value.clone(),
-    }
+pub fn parse_subject_header(value: &SmolStr) -> Option<SubjectHeader> {
+    SubjectHeader::parse(value.as_str()).ok()
 }
 
 pub fn parse_rseq_header(value: &SmolStr) -> Option<RSeqHeader> {
