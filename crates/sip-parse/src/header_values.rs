@@ -20,40 +20,7 @@ use sip_core::{
 use smol_str::SmolStr;
 
 pub fn parse_via_header(value: &SmolStr) -> Option<ViaHeader> {
-    use nom::{
-        bytes::complete::{tag_no_case, take_until, take_while1},
-        character::complete::space1,
-        combinator::rest,
-        sequence::tuple,
-    };
-
-    let input = value.trim();
-    let transport_token =
-        take_while1::<_, _, nom::error::Error<_>>(|c: char| c.is_ascii_alphanumeric() || c == '-');
-    let mut parser = tuple((
-        tag_no_case::<_, _, nom::error::Error<_>>("SIP/2.0/"),
-        transport_token,
-        space1::<_, nom::error::Error<_>>,
-        rest::<_, nom::error::Error<_>>,
-    ));
-    let (_, (_, transport, _, remainder)) = parser(input).ok()?;
-
-    let (sent_by, params_part) = if let Ok((after, sb)) = take_until::<_, _, ()>(";")(remainder) {
-        (sb.trim(), Some(after))
-    } else {
-        (remainder.trim(), None)
-    };
-
-    if sent_by.is_empty() {
-        return None;
-    }
-
-    let params = parse_params(params_part.unwrap_or("").trim());
-    Some(ViaHeader {
-        transport: SmolStr::new(transport.to_uppercase()),
-        sent_by: SmolStr::new(sent_by),
-        params,
-    })
+    ViaHeader::parse(value.as_str()).ok()
 }
 
 pub fn parse_contact_header(value: &SmolStr) -> Option<ContactHeader> {

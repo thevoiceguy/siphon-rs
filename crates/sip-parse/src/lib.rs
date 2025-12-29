@@ -924,7 +924,7 @@ l: 0\r\n\r\n",
         let resp = parse_response(&sample_response_bytes()).expect("parse");
         let via = parse_via_header(header(resp.headers(), "Via").unwrap()).expect("via");
         assert_eq!(via.transport(), "TCP");
-        assert_eq!(via.sent_by.as_str(), "host");
+        assert_eq!(via.sent_by(), "host");
 
         let contact =
             parse_contact_header(header(resp.headers(), "Contact").unwrap()).expect("contact");
