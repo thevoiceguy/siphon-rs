@@ -993,8 +993,8 @@ l: 0\r\n\r\n",
         assert_eq!(reason.protocol(), "Q.850");
         assert_eq!(reason.get_param("cause").and_then(|v| v.as_ref()).map(|v| v.as_str()), Some("16"));
 
-        let etag = parse_sip_etag(header(resp.headers(), "SIP-ETag").unwrap());
-        assert_eq!(etag.value.as_str(), "abc123");
+        let etag = parse_sip_etag(header(resp.headers(), "SIP-ETag").unwrap()).expect("etag");
+        assert_eq!(etag.value(), "abc123");
 
         let geo = parse_geolocation_header(resp.headers()).expect("geolocation");
         assert_eq!(geo.len(), 1);

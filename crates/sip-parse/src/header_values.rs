@@ -268,10 +268,8 @@ pub fn parse_reason_header(value: &SmolStr) -> Option<ReasonHeader> {
     sip_core::reason::parse_reason_from_string(value.as_str()).ok()
 }
 
-pub fn parse_sip_etag(value: &SmolStr) -> SipETagHeader {
-    SipETagHeader {
-        value: value.clone(),
-    }
+pub fn parse_sip_etag(value: &SmolStr) -> Option<SipETagHeader> {
+    SipETagHeader::parse(value.as_str()).ok()
 }
 
 pub fn parse_geolocation_header(headers: &Headers) -> Result<GeolocationHeader, GeolocationError> {
