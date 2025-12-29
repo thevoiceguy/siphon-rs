@@ -13,7 +13,7 @@ use sip_core::{
     p_headers::PHeaderError, PAccessNetworkInfo, PAssertedIdentityHeader, PPreferredIdentityHeader,
     PVisitedNetworkIdHeader, PathHeader, PriorityValue, RAckHeader, RSeqHeader, ReasonHeader,
     RefresherRole,
-    ResourcePriorityHeader, ResourcePriorityValue, RouteHeader, SdpSession, ServiceRouteHeader,
+    ResourcePriorityHeader, RouteHeader, SdpSession, ServiceRouteHeader,
     SessionExpires, SipETagHeader, SubjectHeader, SubscriptionState, SubscriptionStateHeader,
     SupportedHeader, ToHeader, TokenList, Uri, ViaHeader,
 };
@@ -210,18 +210,8 @@ pub fn parse_min_se(value: &SmolStr) -> Option<MinSessionExpires> {
         .map(|delta_seconds| MinSessionExpires { delta_seconds })
 }
 
-pub fn parse_resource_priority(value: &SmolStr) -> ResourcePriorityHeader {
-    let mut values = Vec::new();
-    for token in value.split(',') {
-        let token = token.trim();
-        if let Some((ns, prio)) = token.split_once('.') {
-            values.push(ResourcePriorityValue {
-                namespace: SmolStr::new(ns.trim()),
-                priority: SmolStr::new(prio.trim()),
-            });
-        }
-    }
-    ResourcePriorityHeader { values }
+pub fn parse_resource_priority(value: &SmolStr) -> Option<ResourcePriorityHeader> {
+    ResourcePriorityHeader::parse(value.as_str()).ok()
 }
 
 pub fn parse_event_header(value: &SmolStr) -> Option<EventHeader> {

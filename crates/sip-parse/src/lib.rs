@@ -957,8 +957,9 @@ l: 0\r\n\r\n",
         let min_se = parse_min_se(header(resp.headers(), "Min-SE").unwrap()).expect("min-se");
         assert_eq!(min_se.delta_seconds, 60);
 
-        let rp = parse_resource_priority(header(resp.headers(), "Resource-Priority").unwrap());
-        assert_eq!(rp.values.len(), 2);
+        let rp = parse_resource_priority(header(resp.headers(), "Resource-Priority").unwrap())
+            .expect("resource-priority");
+        assert_eq!(rp.len(), 2);
 
         let event = parse_event_header(header(resp.headers(), "Event").unwrap()).expect("event");
         assert_eq!(event.package(), "dialog");
@@ -1459,11 +1460,12 @@ body",
                 .map(|(ns, priority)| format!("{}.{}", ns, priority))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let header = parse_resource_priority(&SmolStr::new(serialized));
-            prop_assert_eq!(header.values.len(), pairs.len());
-            for (parsed, (ns, priority)) in header.values.iter().zip(pairs.iter()) {
-                prop_assert_eq!(parsed.namespace.as_str(), ns);
-                prop_assert_eq!(parsed.priority.as_str(), priority);
+            let header = parse_resource_priority(&SmolStr::new(serialized))
+                .expect("resource-priority");
+            prop_assert_eq!(header.len(), pairs.len());
+            for (parsed, (ns, priority)) in header.values().iter().zip(pairs.iter()) {
+                prop_assert_eq!(parsed.namespace(), ns);
+                prop_assert_eq!(parsed.priority(), priority);
             }
         }
 
