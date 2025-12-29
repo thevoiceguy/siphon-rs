@@ -5,6 +5,37 @@
 use std::fmt;
 use std::str::FromStr;
 
+const MAX_PRIVACY_VALUES: usize = 10;
+const MAX_PARSE_INPUT: usize = 256;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrivacyError {
+    TooManyValues { max: usize, actual: usize },
+    InputTooLarge { max: usize, actual: usize },
+    InvalidValue(String),
+    EmptyValues,
+    ParseError(String),
+}
+
+impl std::fmt::Display for PrivacyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooManyValues { max, actual } =>
+                write!(f, "too many privacy values (max {}, got {})", max, actual),
+            Self::InputTooLarge { max, actual } =>
+                write!(f, "input too large (max {}, got {})", max, actual),
+            Self::InvalidValue(val) =>
+                write!(f, "invalid privacy value: {}", val),
+            Self::EmptyValues =>
+                write!(f, "privacy values cannot be empty"),
+            Self::ParseError(msg) =>
+                write!(f, "parse error: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for PrivacyError {}
+
 /// RFC 3323 Privacy header value.
 ///
 /// The Privacy header indicates the privacy requirements of the user agent.
@@ -47,43 +78,43 @@ impl PrivacyValue {
     /// Returns the string representation of this privacy value.
     pub fn as_str(&self) -> &'static str {
         match self {
-            PrivacyValue::None => "none",
-            PrivacyValue::Header => "header",
-            PrivacyValue::Session => "session",
-            PrivacyValue::User => "user",
-            PrivacyValue::Id => "id",
-            PrivacyValue::Critical => "critical",
+            Self::None => "none",
+            Self::Header => "header",
+            Self::Session => "session",
+            Self::User => "user",
+            Self::Id => "id",
+            Self::Critical => "critical",
         }
     }
 
     /// Returns true if this privacy value requires identity anonymization.
     pub fn requires_identity_anonymization(&self) -> bool {
-        matches!(self, PrivacyValue::Id | PrivacyValue::User)
+        matches!(self, Self::Id | Self::User)
     }
 
     /// Returns true if this privacy value requires header privacy.
     pub fn requires_header_privacy(&self) -> bool {
-        matches!(self, PrivacyValue::Header | PrivacyValue::User)
+        matches!(self, Self::Header | Self::User)
     }
 
     /// Returns true if this privacy value requires session privacy.
     pub fn requires_session_privacy(&self) -> bool {
-        matches!(self, PrivacyValue::Session | PrivacyValue::User)
+        matches!(self, Self::Session | Self::User)
     }
 }
 
 impl FromStr for PrivacyValue {
-    type Err = ();
+    type Err = PrivacyError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "none" => Ok(PrivacyValue::None),
-            "header" => Ok(PrivacyValue::Header),
-            "session" => Ok(PrivacyValue::Session),
-            "user" => Ok(PrivacyValue::User),
-            "id" => Ok(PrivacyValue::Id),
-            "critical" => Ok(PrivacyValue::Critical),
-            _ => Err(()),
+            "none" => Ok(Self::None),
+            "header" => Ok(Self::Header),
+            "session" => Ok(Self::Session),
+            "user" => Ok(Self::User),
+            "id" => Ok(Self::Id),
+            "critical" => Ok(Self::Critical),
+            _ => Err(PrivacyError::InvalidValue(s.to_string())),
         }
     }
 }
@@ -99,23 +130,50 @@ impl fmt::Display for PrivacyValue {
 /// The Privacy header indicates the privacy requirements of the user agent.
 /// Multiple privacy values can be specified.
 ///
+/// # Security
+///
+/// PrivacyHeader validates all inputs and enforces bounds.
+///
 /// # Examples
 ///
 /// ```
 /// use sip_core::{PrivacyHeader, PrivacyValue};
 ///
-/// let header = PrivacyHeader::new(vec![PrivacyValue::Id, PrivacyValue::Critical]);
+/// let header = PrivacyHeader::new(vec![PrivacyValue::Id, PrivacyValue::Critical]).unwrap();
 /// assert_eq!(header.to_string(), "id; critical");
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrivacyHeader {
-    pub values: Vec<PrivacyValue>,
+    values: Vec<PrivacyValue>,
 }
 
 impl PrivacyHeader {
     /// Create a new Privacy header with the given values.
-    pub fn new(values: Vec<PrivacyValue>) -> Self {
-        Self { values }
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Values list is empty
+    /// - Values list exceeds MAX_PRIVACY_VALUES
+    pub fn new(values: Vec<PrivacyValue>) -> Result<Self, PrivacyError> {
+        if values.is_empty() {
+            return Err(PrivacyError::EmptyValues);
+        }
+
+        if values.len() > 1 && values.contains(&PrivacyValue::None) {
+            return Err(PrivacyError::InvalidValue(
+                "none cannot be combined with other privacy values".to_string(),
+            ));
+        }
+
+        if values.len() > MAX_PRIVACY_VALUES {
+            return Err(PrivacyError::TooManyValues {
+                max: MAX_PRIVACY_VALUES,
+                actual: values.len(),
+            });
+        }
+
+        Ok(Self { values })
     }
 
     /// Create a Privacy header with a single value.
@@ -123,6 +181,21 @@ impl PrivacyHeader {
         Self {
             values: vec![value],
         }
+    }
+
+    /// Returns an iterator over privacy values.
+    pub fn values(&self) -> impl Iterator<Item = PrivacyValue> + '_ {
+        self.values.iter().copied()
+    }
+
+    /// Returns the number of values.
+    pub fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    /// Returns true if there are no values (should never happen after construction).
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
     }
 
     /// Returns true if this Privacy header contains the given value.
@@ -159,18 +232,29 @@ impl PrivacyHeader {
 
     /// Parse a Privacy header value string.
     ///
+    /// # Security
+    ///
+    /// Enforces input size limits and validates all values.
+    ///
     /// # Examples
     ///
     /// ```
     /// use sip_core::{PrivacyHeader, PrivacyValue};
     ///
     /// let header = PrivacyHeader::parse("id; critical").unwrap();
-    /// assert_eq!(header.values.len(), 2);
+    /// assert_eq!(header.len(), 2);
     /// assert!(header.contains(PrivacyValue::Id));
     /// assert!(header.contains(PrivacyValue::Critical));
     /// ```
-    #[allow(clippy::result_unit_err)]
-    pub fn parse(s: &str) -> Result<Self, ()> {
+    pub fn parse(s: &str) -> Result<Self, PrivacyError> {
+        // Check input size
+        if s.len() > MAX_PARSE_INPUT {
+            return Err(PrivacyError::InputTooLarge {
+                max: MAX_PARSE_INPUT,
+                actual: s.len(),
+            });
+        }
+
         let values: Result<Vec<_>, _> = s
             .split(';')
             .map(|part| part.trim())
@@ -178,7 +262,7 @@ impl PrivacyHeader {
             .map(PrivacyValue::from_str)
             .collect();
 
-        Ok(Self { values: values? })
+        Self::new(values?)
     }
 }
 
@@ -251,6 +335,10 @@ const REMOVABLE_HEADERS: &[&str] = &[
 /// - **id**: Anonymizes From and Contact headers
 /// - **critical**: Indicates privacy must be enforced (handled by caller)
 ///
+/// # Errors
+///
+/// Returns an error if header manipulation fails.
+///
 /// # Examples
 ///
 /// ```
@@ -261,18 +349,21 @@ const REMOVABLE_HEADERS: &[&str] = &[
 /// headers.push(SmolStr::new("From"), SmolStr::new("<sip:alice@example.com>")).unwrap();
 /// headers.push(SmolStr::new("Subject"), SmolStr::new("Confidential Call")).unwrap();
 ///
-/// let privacy = PrivacyHeader::new(vec![PrivacyValue::Header, PrivacyValue::Id]);
-/// enforce_privacy(&mut headers, &privacy);
+/// let privacy = PrivacyHeader::new(vec![PrivacyValue::Header, PrivacyValue::Id]).unwrap();
+/// enforce_privacy(&mut headers, &privacy).unwrap();
 ///
 /// // Subject should be removed
 /// assert!(headers.get("Subject").is_none());
 /// // From should be anonymized
 /// assert!(headers.get("From").unwrap().contains("anonymous"));
 /// ```
-pub fn enforce_privacy(headers: &mut crate::Headers, privacy: &PrivacyHeader) {
-    // If 'none' is present, no privacy enforcement
-    if privacy.is_none() {
-        return;
+pub fn enforce_privacy(
+    headers: &mut crate::Headers,
+    privacy: &PrivacyHeader,
+) -> Result<(), PrivacyError> {
+    // If only 'none' is present, no privacy enforcement
+    if privacy.len() == 1 && privacy.is_none() {
+        return Ok(());
     }
 
     // Remove headers if 'header' or 'user' privacy is requested
@@ -284,11 +375,13 @@ pub fn enforce_privacy(headers: &mut crate::Headers, privacy: &PrivacyHeader) {
 
     // Anonymize identity headers if 'id' or 'user' privacy is requested
     if privacy.requires_identity_anonymization() {
-        anonymize_identity_headers(headers);
+        anonymize_identity_headers(headers)?;
     }
 
     // Note: Session privacy (SDP removal) must be handled by the caller
     // as it requires modifying the body, not just headers
+
+    Ok(())
 }
 
 /// Anonymizes identity headers (From, Contact) per RFC 3323.
@@ -299,25 +392,25 @@ pub fn enforce_privacy(headers: &mut crate::Headers, privacy: &PrivacyHeader) {
 /// Per RFC 3325 §9.2, this also removes P-Asserted-Identity and
 /// P-Preferred-Identity headers at trust domain boundaries when
 /// identity privacy is requested.
-fn anonymize_identity_headers(headers: &mut crate::Headers) {
+fn anonymize_identity_headers(headers: &mut crate::Headers) -> Result<(), PrivacyError> {
     use smol_str::SmolStr;
 
     // Anonymize From header
     if let Some(from) = headers.get("From") {
-        let anonymized = anonymize_identity_header(from);
+        let anonymized = anonymize_identity_header(from)?;
         headers.remove("From");
         headers
             .push(SmolStr::new("From"), SmolStr::new(anonymized))
-            .unwrap();
+            .map_err(|e| PrivacyError::ParseError(format!("failed to set From: {}", e)))?;
     }
 
     // Anonymize Contact header
     if let Some(contact) = headers.get("Contact") {
-        let anonymized = anonymize_identity_header(contact);
+        let anonymized = anonymize_identity_header(contact)?;
         headers.remove("Contact");
         headers
             .push(SmolStr::new("Contact"), SmolStr::new(anonymized))
-            .unwrap();
+            .map_err(|e| PrivacyError::ParseError(format!("failed to set Contact: {}", e)))?;
     }
 
     // Remove P-Asserted-Identity per RFC 3325 §9.2
@@ -328,20 +421,31 @@ fn anonymize_identity_headers(headers: &mut crate::Headers) {
     // Remove P-Preferred-Identity per RFC 3325 §9.2
     // When Privacy:id is requested, P-Preferred-Identity SHOULD be removed
     headers.remove("P-Preferred-Identity");
+
+    Ok(())
 }
 
 /// Anonymizes a single identity header value.
 ///
 /// Replaces the URI with "anonymous@anonymous.invalid" while preserving
-/// display name (if "Anonymous"), tags, and parameters.
-fn anonymize_identity_header(header_value: &str) -> String {
+/// display name (if "Anonymous") and header parameters after the URI.
+fn anonymize_identity_header(header_value: &str) -> Result<String, PrivacyError> {
+    // Validate input size
+    if header_value.len() > 1024 {
+        return Err(PrivacyError::InputTooLarge {
+            max: 1024,
+            actual: header_value.len(),
+        });
+    }
+
     // Replace the URI with anonymous.invalid, preserving only header parameters.
     let (_, params) = split_header_params(header_value);
-    if params.is_empty() {
+    
+    Ok(if params.is_empty() {
         "\"Anonymous\" <sip:anonymous@anonymous.invalid>".to_string()
     } else {
         format!("\"Anonymous\" <sip:anonymous@anonymous.invalid>{}", params)
-    }
+    })
 }
 
 fn split_header_params(value: &str) -> (&str, &str) {
@@ -456,14 +560,14 @@ mod tests {
     #[test]
     fn privacy_header_single() {
         let header = PrivacyHeader::single(PrivacyValue::Id);
-        assert_eq!(header.values.len(), 1);
+        assert_eq!(header.len(), 1);
         assert!(header.contains(PrivacyValue::Id));
     }
 
     #[test]
     fn privacy_header_multiple() {
-        let header = PrivacyHeader::new(vec![PrivacyValue::Id, PrivacyValue::Critical]);
-        assert_eq!(header.values.len(), 2);
+        let header = PrivacyHeader::new(vec![PrivacyValue::Id, PrivacyValue::Critical]).unwrap();
+        assert_eq!(header.len(), 2);
         assert!(header.contains(PrivacyValue::Id));
         assert!(header.contains(PrivacyValue::Critical));
         assert!(header.is_critical());
@@ -478,7 +582,7 @@ mod tests {
 
     #[test]
     fn privacy_header_requirements() {
-        let header = PrivacyHeader::new(vec![PrivacyValue::Id, PrivacyValue::Critical]);
+        let header = PrivacyHeader::new(vec![PrivacyValue::Id, PrivacyValue::Critical]).unwrap();
         assert!(header.requires_identity_anonymization());
         assert!(!header.requires_header_privacy());
         assert!(!header.requires_session_privacy());
@@ -497,14 +601,14 @@ mod tests {
     #[test]
     fn privacy_header_parse_single() {
         let header = PrivacyHeader::parse("id").unwrap();
-        assert_eq!(header.values.len(), 1);
+        assert_eq!(header.len(), 1);
         assert!(header.contains(PrivacyValue::Id));
     }
 
     #[test]
     fn privacy_header_parse_multiple() {
         let header = PrivacyHeader::parse("id; critical").unwrap();
-        assert_eq!(header.values.len(), 2);
+        assert_eq!(header.len(), 2);
         assert!(header.contains(PrivacyValue::Id));
         assert!(header.contains(PrivacyValue::Critical));
     }
@@ -512,7 +616,7 @@ mod tests {
     #[test]
     fn privacy_header_parse_whitespace() {
         let header = PrivacyHeader::parse("  id  ;  critical  ").unwrap();
-        assert_eq!(header.values.len(), 2);
+        assert_eq!(header.len(), 2);
         assert!(header.contains(PrivacyValue::Id));
         assert!(header.contains(PrivacyValue::Critical));
     }
@@ -520,9 +624,15 @@ mod tests {
     #[test]
     fn privacy_header_parse_case_insensitive() {
         let header = PrivacyHeader::parse("ID; CRITICAL").unwrap();
-        assert_eq!(header.values.len(), 2);
+        assert_eq!(header.len(), 2);
         assert!(header.contains(PrivacyValue::Id));
         assert!(header.contains(PrivacyValue::Critical));
+    }
+
+    #[test]
+    fn privacy_header_rejects_none_with_others() {
+        let result = PrivacyHeader::parse("none; id");
+        assert!(result.is_err());
     }
 
     #[test]
@@ -536,20 +646,20 @@ mod tests {
         let header = PrivacyHeader::single(PrivacyValue::Id);
         assert_eq!(header.to_string(), "id");
 
-        let header = PrivacyHeader::new(vec![PrivacyValue::Id, PrivacyValue::Critical]);
+        let header = PrivacyHeader::new(vec![PrivacyValue::Id, PrivacyValue::Critical]).unwrap();
         assert_eq!(header.to_string(), "id; critical");
 
         let header = PrivacyHeader::new(vec![
             PrivacyValue::Header,
             PrivacyValue::Session,
             PrivacyValue::Critical,
-        ]);
+        ]).unwrap();
         assert_eq!(header.to_string(), "header; session; critical");
     }
 
     #[test]
     fn privacy_header_display_empty() {
-        let header = PrivacyHeader::new(vec![]);
+        let header = PrivacyHeader { values: vec![] };
         assert_eq!(header.to_string(), "");
     }
 
@@ -564,7 +674,7 @@ mod tests {
             .unwrap();
 
         let privacy = parse_privacy_header(&headers).unwrap();
-        assert_eq!(privacy.values.len(), 2);
+        assert_eq!(privacy.len(), 2);
         assert!(privacy.contains(PrivacyValue::Id));
         assert!(privacy.contains(PrivacyValue::Critical));
     }
@@ -594,7 +704,7 @@ mod tests {
             .unwrap();
 
         let privacy = PrivacyHeader::single(PrivacyValue::None);
-        enforce_privacy(&mut headers, &privacy);
+        enforce_privacy(&mut headers, &privacy).unwrap();
 
         // Nothing should be removed
         assert!(headers.get("From").is_some());
@@ -633,7 +743,7 @@ mod tests {
             .unwrap();
 
         let privacy = PrivacyHeader::single(PrivacyValue::Header);
-        enforce_privacy(&mut headers, &privacy);
+        enforce_privacy(&mut headers, &privacy).unwrap();
 
         // Removable headers should be gone
         assert!(headers.get("Subject").is_none());
@@ -666,7 +776,7 @@ mod tests {
             .unwrap();
 
         let privacy = PrivacyHeader::single(PrivacyValue::Id);
-        enforce_privacy(&mut headers, &privacy);
+        enforce_privacy(&mut headers, &privacy).unwrap();
 
         // From should be anonymized but preserve tag
         let from = headers.get("From").unwrap();
@@ -698,7 +808,7 @@ mod tests {
             .unwrap();
 
         let privacy = PrivacyHeader::single(PrivacyValue::User);
-        enforce_privacy(&mut headers, &privacy);
+        enforce_privacy(&mut headers, &privacy).unwrap();
 
         // Header privacy: Subject and User-Agent removed
         assert!(headers.get("Subject").is_none());
@@ -732,8 +842,8 @@ mod tests {
             PrivacyValue::Id,
             PrivacyValue::Header,
             PrivacyValue::Critical,
-        ]);
-        enforce_privacy(&mut headers, &privacy);
+        ]).unwrap();
+        enforce_privacy(&mut headers, &privacy).unwrap();
 
         // Both id and header privacy applied
         assert!(headers.get("Subject").is_none());
@@ -745,7 +855,7 @@ mod tests {
     #[test]
     fn anonymize_identity_preserves_tag() {
         let original = "<sip:alice@example.com>;tag=xyz789;expires=3600";
-        let anonymized = anonymize_identity_header(original);
+        let anonymized = anonymize_identity_header(original).unwrap();
 
         assert!(anonymized.contains("anonymous@anonymous.invalid"));
         assert!(anonymized.contains("tag=xyz789"));
@@ -755,7 +865,7 @@ mod tests {
     #[test]
     fn anonymize_identity_without_params() {
         let original = "<sip:alice@example.com>";
-        let anonymized = anonymize_identity_header(original);
+        let anonymized = anonymize_identity_header(original).unwrap();
 
         assert!(anonymized.contains("anonymous@anonymous.invalid"));
         assert_eq!(
@@ -767,7 +877,7 @@ mod tests {
     #[test]
     fn anonymize_identity_ignores_semicolon_in_quotes() {
         let original = "\"Bob;CEO\" <sip:alice@example.com>;tag=xyz";
-        let anonymized = anonymize_identity_header(original);
+        let anonymized = anonymize_identity_header(original).unwrap();
         assert!(anonymized.contains("anonymous@anonymous.invalid"));
         assert!(anonymized.contains("tag=xyz"));
         assert!(!anonymized.contains("alice@example.com"));
@@ -834,7 +944,7 @@ mod tests {
             .unwrap();
 
         let privacy = PrivacyHeader::single(PrivacyValue::Id);
-        enforce_privacy(&mut headers, &privacy);
+        enforce_privacy(&mut headers, &privacy).unwrap();
 
         // P-Asserted-Identity should be removed
         assert!(headers.get("P-Asserted-Identity").is_none());
@@ -881,8 +991,8 @@ mod tests {
             .push(SmolStr::new("Subject"), SmolStr::new("Test Call"))
             .unwrap();
 
-        let privacy = PrivacyHeader::new(vec![PrivacyValue::User]);
-        enforce_privacy(&mut headers, &privacy);
+        let privacy = PrivacyHeader::new(vec![PrivacyValue::User]).unwrap();
+        enforce_privacy(&mut headers, &privacy).unwrap();
 
         // P-Asserted-Identity should be removed
         assert!(headers.get("P-Asserted-Identity").is_none());
@@ -896,5 +1006,47 @@ mod tests {
         // From and Contact should be anonymized
         assert!(headers.get("From").unwrap().contains("anonymous"));
         assert!(headers.get("Contact").unwrap().contains("anonymous"));
+    }
+
+    // Security-focused tests
+
+    #[test]
+    fn reject_empty_values() {
+        let result = PrivacyHeader::new(vec![]);
+        assert!(matches!(result, Err(PrivacyError::EmptyValues)));
+    }
+
+    #[test]
+    fn reject_too_many_values() {
+        let values = vec![PrivacyValue::Id; MAX_PRIVACY_VALUES + 1];
+        let result = PrivacyHeader::new(values);
+        assert!(matches!(result, Err(PrivacyError::TooManyValues { .. })));
+    }
+
+    #[test]
+    fn reject_oversized_parse_input() {
+        let long_input = "id;".repeat(200);
+        let result = PrivacyHeader::parse(&long_input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn reject_oversized_anonymize_input() {
+        let huge = format!("<sip:alice@example.com>{}", ";param=value".repeat(200));
+        let result = anonymize_identity_header(&huge);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn fields_are_private() {
+        let header = PrivacyHeader::single(PrivacyValue::Id);
+        
+        // These should compile (read-only access)
+        let _ = header.contains(PrivacyValue::Id);
+        let _ = header.len();
+        let _ = header.values();
+        
+        // This should NOT compile (no direct field access):
+        // header.values.clear();  // ← Does not compile!
     }
 }

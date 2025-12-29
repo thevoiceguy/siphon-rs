@@ -1318,7 +1318,7 @@ impl UserAgentClient {
     pub fn add_privacy_header(request: &mut Request, privacy_values: Vec<sip_core::PrivacyValue>) {
         use sip_core::PrivacyHeader;
 
-        let privacy = PrivacyHeader::new(privacy_values);
+        let privacy = PrivacyHeader::new(privacy_values).expect("valid privacy values");
         request
             .headers_mut()
             .push(SmolStr::new("Privacy"), SmolStr::new(privacy.to_string()))
