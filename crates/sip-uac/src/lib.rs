@@ -3593,7 +3593,7 @@ mod tests {
         let mut bye = uac.create_bye(&dialog);
 
         // Add Reason header
-        let reason = ReasonHeader::q850(Q850Cause::NormalCallClearing);
+        let reason = ReasonHeader::q850(Q850Cause::NormalCallClearing).unwrap();
         UserAgentClient::add_reason_header(&mut bye, reason);
 
         // Verify Reason header
@@ -3637,7 +3637,7 @@ mod tests {
         };
 
         // Create BYE with reason
-        let reason = ReasonHeader::q850(Q850Cause::UserBusy);
+        let reason = ReasonHeader::q850(Q850Cause::UserBusy).unwrap();
         let bye = uac.create_bye_with_reason(&dialog, reason);
 
         // Verify BYE request
@@ -3687,7 +3687,7 @@ mod tests {
         };
 
         // Create BYE with SIP reason code
-        let reason = ReasonHeader::sip(480, None);
+        let reason = ReasonHeader::sip(480, None).unwrap();
         let bye = uac.create_bye_with_reason(&dialog, reason);
 
         // Verify method
@@ -3713,7 +3713,7 @@ mod tests {
         let mut invite = uac.create_invite(&remote_uri, None);
 
         // Add Reason to INVITE (unusual but possible for forked calls)
-        let reason = ReasonHeader::q850(Q850Cause::CallRejected);
+        let reason = ReasonHeader::q850(Q850Cause::CallRejected).unwrap();
         UserAgentClient::add_reason_header(&mut invite, reason);
 
         // Verify

@@ -987,12 +987,10 @@ l: 0\r\n\r\n",
             "sip:callee@example.com"
         );
 
-        let reason = parse_reason_header(header(resp.headers(), "Reason").unwrap());
-        assert_eq!(reason.protocol.as_str(), "Q.850");
-        assert_eq!(
-            reason.params.get("cause"),
-            Some(&Some(SmolStr::new("16".to_owned())))
-        );
+        let reason = parse_reason_header(header(resp.headers(), "Reason").unwrap())
+            .expect("reason");
+        assert_eq!(reason.protocol(), "Q.850");
+        assert_eq!(reason.get_param("cause").and_then(|v| v.as_ref()).map(|v| v.as_str()), Some("16"));
 
         let etag = parse_sip_etag(header(resp.headers(), "SIP-ETag").unwrap());
         assert_eq!(etag.value.as_str(), "abc123");

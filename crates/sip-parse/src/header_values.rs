@@ -299,25 +299,8 @@ pub fn parse_history_info(headers: &Headers) -> HistoryInfoHeader {
     })
 }
 
-pub fn parse_reason_header(value: &SmolStr) -> ReasonHeader {
-    let mut parts = value.split(';');
-    let protocol = SmolStr::new(parts.next().unwrap_or("").trim());
-    let mut params = BTreeMap::new();
-    for part in parts {
-        let part = part.trim();
-        if part.is_empty() {
-            continue;
-        }
-        if let Some((name, val)) = part.split_once('=') {
-            params.insert(
-                SmolStr::new(name.to_ascii_lowercase()),
-                Some(SmolStr::new(val.trim().trim_matches('"'))),
-            );
-        } else {
-            params.insert(SmolStr::new(part.to_ascii_lowercase()), None);
-        }
-    }
-    ReasonHeader { protocol, params }
+pub fn parse_reason_header(value: &SmolStr) -> Option<ReasonHeader> {
+    sip_core::reason::parse_reason_from_string(value.as_str()).ok()
 }
 
 pub fn parse_sip_etag(value: &SmolStr) -> SipETagHeader {

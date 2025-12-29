@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Update memory stores to implement both sync and async traits and add Tokio/async-trait dependencies where required.
 - Harden transport metrics labels with strict enums/validation and add a rate-limited tracing metrics implementation.
 - Strengthen SIP digest authentication defaults and validation (SHA-256 default, size/nonce bounds, replay window configuration, and parsing hardening) with new tests.
+- Harden Privacy header handling (reject `none` mixed with other values, enforce privacy correctly).
+- Normalize Reason header protocol/params and support quoted-string unescape in parsing.
+- Preserve PIDF document notes, unescape XML entities, and reject invalid basic status values in presence parsing.
+- Improve P-Asserted/P-Preferred-Identity parsing for comma-separated identities and parameters.
 
 ## [0.6.2] - sip-core
 

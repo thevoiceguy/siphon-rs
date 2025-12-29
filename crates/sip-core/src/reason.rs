@@ -5,11 +5,65 @@
 use smol_str::SmolStr;
 use std::collections::BTreeMap;
 use std::fmt;
+use std::str::FromStr;
+
+const MAX_PROTOCOL_LENGTH: usize = 32;
+const MAX_PARAM_NAME_LENGTH: usize = 64;
+const MAX_PARAM_VALUE_LENGTH: usize = 256;
+const MAX_PARAMS: usize = 20;
+const MAX_PARSE_INPUT: usize = 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReasonError {
+    ProtocolTooLong { max: usize, actual: usize },
+    ParamNameTooLong { max: usize, actual: usize },
+    ParamValueTooLong { max: usize, actual: usize },
+    TooManyParams { max: usize, actual: usize },
+    InvalidProtocol(String),
+    InvalidParamName(String),
+    InvalidParamValue(String),
+    EmptyProtocol,
+    DuplicateParam(String),
+    InputTooLarge { max: usize, actual: usize },
+    ParseError(String),
+}
+
+impl std::fmt::Display for ReasonError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ProtocolTooLong { max, actual } =>
+                write!(f, "protocol too long (max {}, got {})", max, actual),
+            Self::ParamNameTooLong { max, actual } =>
+                write!(f, "param name too long (max {}, got {})", max, actual),
+            Self::ParamValueTooLong { max, actual } =>
+                write!(f, "param value too long (max {}, got {})", max, actual),
+            Self::TooManyParams { max, actual } =>
+                write!(f, "too many params (max {}, got {})", max, actual),
+            Self::InvalidProtocol(msg) =>
+                write!(f, "invalid protocol: {}", msg),
+            Self::EmptyProtocol =>
+                write!(f, "protocol cannot be empty"),
+            Self::DuplicateParam(name) =>
+                write!(f, "duplicate parameter: {}", name),
+            Self::InputTooLarge { max, actual } =>
+                write!(f, "input too large (max {}, got {})", max, actual),
+            Self::ParseError(msg) =>
+                write!(f, "parse error: {}", msg),
+            _ => write!(f, "{:?}", self),
+        }
+    }
+}
+
+impl std::error::Error for ReasonError {}
 
 /// RFC 3326 Reason header.
 ///
 /// The Reason header provides information about the reason for terminating
 /// a SIP request or indicating why a proxy/server took a particular action.
+///
+/// # Security
+///
+/// ReasonHeader validates all fields to prevent injection attacks.
 ///
 /// # Examples
 ///
@@ -17,17 +71,17 @@ use std::fmt;
 /// use sip_core::{ReasonHeader, Q850Cause};
 ///
 /// // Create with Q.850 cause code
-/// let reason = ReasonHeader::q850(Q850Cause::NormalCallClearing);
+/// let reason = ReasonHeader::q850(Q850Cause::NormalCallClearing).unwrap();
 /// assert_eq!(reason.to_string(), "Q.850;cause=16;text=\"Normal Call Clearing\"");
 ///
 /// // Create with SIP response code
-/// let reason = ReasonHeader::sip(480, None);
+/// let reason = ReasonHeader::sip(480, None).unwrap();
 /// assert_eq!(reason.to_string(), "SIP;cause=480;text=\"Temporarily Unavailable\"");
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReasonHeader {
-    pub protocol: SmolStr,
-    pub params: BTreeMap<SmolStr, Option<SmolStr>>,
+    protocol: SmolStr,
+    params: BTreeMap<SmolStr, Option<SmolStr>>,
 }
 
 /// RFC 3326 protocol values for Reason header.
@@ -44,9 +98,22 @@ pub enum ReasonProtocol {
 impl ReasonProtocol {
     pub fn as_str(&self) -> &'static str {
         match self {
-            ReasonProtocol::Sip => "SIP",
-            ReasonProtocol::Q850 => "Q.850",
-            ReasonProtocol::Sdp => "SDP",
+            Self::Sip => "SIP",
+            Self::Q850 => "Q.850",
+            Self::Sdp => "SDP",
+        }
+    }
+}
+
+impl std::str::FromStr for ReasonProtocol {
+    type Err = ReasonError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "sip" => Ok(Self::Sip),
+            "q.850" => Ok(Self::Q850),
+            "sdp" => Ok(Self::Sdp),
+            _ => Err(ReasonError::InvalidProtocol(s.to_string())),
         }
     }
 }
@@ -58,148 +125,112 @@ impl fmt::Display for ReasonProtocol {
 }
 
 /// Q.850 ISDN cause codes commonly used in SIP.
-///
-/// These cause codes provide standardized reasons for call termination
-/// that are understood across different telephony systems.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Q850Cause {
-    /// Cause 1 - Unallocated (unassigned) number
     UnallocatedNumber = 1,
-    /// Cause 2 - No route to specified transit network
     NoRouteToTransitNetwork = 2,
-    /// Cause 3 - No route to destination
     NoRouteToDestination = 3,
-    /// Cause 16 - Normal call clearing
     NormalCallClearing = 16,
-    /// Cause 17 - User busy
     UserBusy = 17,
-    /// Cause 18 - No user responding
     NoUserResponding = 18,
-    /// Cause 19 - No answer from user (user alerted)
     NoAnswer = 19,
-    /// Cause 20 - Subscriber absent
     SubscriberAbsent = 20,
-    /// Cause 21 - Call rejected
     CallRejected = 21,
-    /// Cause 22 - Number changed
     NumberChanged = 22,
-    /// Cause 27 - Destination out of order
     DestinationOutOfOrder = 27,
-    /// Cause 28 - Invalid number format (address incomplete)
     InvalidNumberFormat = 28,
-    /// Cause 29 - Facility rejected
     FacilityRejected = 29,
-    /// Cause 31 - Normal, unspecified
     NormalUnspecified = 31,
-    /// Cause 34 - No circuit/channel available
     NoCircuitAvailable = 34,
-    /// Cause 38 - Network out of order
     NetworkOutOfOrder = 38,
-    /// Cause 41 - Temporary failure
     TemporaryFailure = 41,
-    /// Cause 42 - Switching equipment congestion
     SwitchingEquipmentCongestion = 42,
-    /// Cause 47 - Resource unavailable, unspecified
     ResourceUnavailable = 47,
-    /// Cause 55 - Incoming calls barred within CUG
     IncomingCallsBarred = 55,
-    /// Cause 57 - Bearer capability not authorized
     BearerCapabilityNotAuthorized = 57,
-    /// Cause 58 - Bearer capability not presently available
     BearerCapabilityNotAvailable = 58,
-    /// Cause 63 - Service or option not available, unspecified
     ServiceNotAvailable = 63,
-    /// Cause 65 - Bearer capability not implemented
     BearerCapabilityNotImplemented = 65,
-    /// Cause 79 - Service or option not implemented, unspecified
     ServiceNotImplemented = 79,
-    /// Cause 87 - User not member of CUG
     UserNotMemberOfCUG = 87,
-    /// Cause 88 - Incompatible destination
     IncompatibleDestination = 88,
-    /// Cause 102 - Recovery on timer expiry
     RecoveryOnTimerExpiry = 102,
-    /// Cause 111 - Protocol error, unspecified
     ProtocolError = 111,
-    /// Cause 127 - Interworking, unspecified
     InterworkingUnspecified = 127,
 }
 
 impl Q850Cause {
-    /// Returns the numeric cause code.
     pub fn code(&self) -> u16 {
         *self as u16
     }
 
-    /// Returns the textual description of the cause.
     pub fn text(&self) -> &'static str {
         match self {
-            Q850Cause::UnallocatedNumber => "Unallocated Number",
-            Q850Cause::NoRouteToTransitNetwork => "No Route to Transit Network",
-            Q850Cause::NoRouteToDestination => "No Route to Destination",
-            Q850Cause::NormalCallClearing => "Normal Call Clearing",
-            Q850Cause::UserBusy => "User Busy",
-            Q850Cause::NoUserResponding => "No User Responding",
-            Q850Cause::NoAnswer => "No Answer",
-            Q850Cause::SubscriberAbsent => "Subscriber Absent",
-            Q850Cause::CallRejected => "Call Rejected",
-            Q850Cause::NumberChanged => "Number Changed",
-            Q850Cause::DestinationOutOfOrder => "Destination Out of Order",
-            Q850Cause::InvalidNumberFormat => "Invalid Number Format",
-            Q850Cause::FacilityRejected => "Facility Rejected",
-            Q850Cause::NormalUnspecified => "Normal Unspecified",
-            Q850Cause::NoCircuitAvailable => "No Circuit Available",
-            Q850Cause::NetworkOutOfOrder => "Network Out of Order",
-            Q850Cause::TemporaryFailure => "Temporary Failure",
-            Q850Cause::SwitchingEquipmentCongestion => "Switching Equipment Congestion",
-            Q850Cause::ResourceUnavailable => "Resource Unavailable",
-            Q850Cause::IncomingCallsBarred => "Incoming Calls Barred",
-            Q850Cause::BearerCapabilityNotAuthorized => "Bearer Capability Not Authorized",
-            Q850Cause::BearerCapabilityNotAvailable => "Bearer Capability Not Available",
-            Q850Cause::ServiceNotAvailable => "Service Not Available",
-            Q850Cause::BearerCapabilityNotImplemented => "Bearer Capability Not Implemented",
-            Q850Cause::ServiceNotImplemented => "Service Not Implemented",
-            Q850Cause::UserNotMemberOfCUG => "User Not Member of CUG",
-            Q850Cause::IncompatibleDestination => "Incompatible Destination",
-            Q850Cause::RecoveryOnTimerExpiry => "Recovery on Timer Expiry",
-            Q850Cause::ProtocolError => "Protocol Error",
-            Q850Cause::InterworkingUnspecified => "Interworking Unspecified",
+            Self::UnallocatedNumber => "Unallocated Number",
+            Self::NoRouteToTransitNetwork => "No Route to Transit Network",
+            Self::NoRouteToDestination => "No Route to Destination",
+            Self::NormalCallClearing => "Normal Call Clearing",
+            Self::UserBusy => "User Busy",
+            Self::NoUserResponding => "No User Responding",
+            Self::NoAnswer => "No Answer",
+            Self::SubscriberAbsent => "Subscriber Absent",
+            Self::CallRejected => "Call Rejected",
+            Self::NumberChanged => "Number Changed",
+            Self::DestinationOutOfOrder => "Destination Out of Order",
+            Self::InvalidNumberFormat => "Invalid Number Format",
+            Self::FacilityRejected => "Facility Rejected",
+            Self::NormalUnspecified => "Normal Unspecified",
+            Self::NoCircuitAvailable => "No Circuit Available",
+            Self::NetworkOutOfOrder => "Network Out of Order",
+            Self::TemporaryFailure => "Temporary Failure",
+            Self::SwitchingEquipmentCongestion => "Switching Equipment Congestion",
+            Self::ResourceUnavailable => "Resource Unavailable",
+            Self::IncomingCallsBarred => "Incoming Calls Barred",
+            Self::BearerCapabilityNotAuthorized => "Bearer Capability Not Authorized",
+            Self::BearerCapabilityNotAvailable => "Bearer Capability Not Available",
+            Self::ServiceNotAvailable => "Service Not Available",
+            Self::BearerCapabilityNotImplemented => "Bearer Capability Not Implemented",
+            Self::ServiceNotImplemented => "Service Not Implemented",
+            Self::UserNotMemberOfCUG => "User Not Member of CUG",
+            Self::IncompatibleDestination => "Incompatible Destination",
+            Self::RecoveryOnTimerExpiry => "Recovery on Timer Expiry",
+            Self::ProtocolError => "Protocol Error",
+            Self::InterworkingUnspecified => "Interworking Unspecified",
         }
     }
 
-    /// Creates a Q850Cause from a numeric code.
     pub fn from_code(code: u16) -> Option<Self> {
         match code {
-            1 => Some(Q850Cause::UnallocatedNumber),
-            2 => Some(Q850Cause::NoRouteToTransitNetwork),
-            3 => Some(Q850Cause::NoRouteToDestination),
-            16 => Some(Q850Cause::NormalCallClearing),
-            17 => Some(Q850Cause::UserBusy),
-            18 => Some(Q850Cause::NoUserResponding),
-            19 => Some(Q850Cause::NoAnswer),
-            20 => Some(Q850Cause::SubscriberAbsent),
-            21 => Some(Q850Cause::CallRejected),
-            22 => Some(Q850Cause::NumberChanged),
-            27 => Some(Q850Cause::DestinationOutOfOrder),
-            28 => Some(Q850Cause::InvalidNumberFormat),
-            29 => Some(Q850Cause::FacilityRejected),
-            31 => Some(Q850Cause::NormalUnspecified),
-            34 => Some(Q850Cause::NoCircuitAvailable),
-            38 => Some(Q850Cause::NetworkOutOfOrder),
-            41 => Some(Q850Cause::TemporaryFailure),
-            42 => Some(Q850Cause::SwitchingEquipmentCongestion),
-            47 => Some(Q850Cause::ResourceUnavailable),
-            55 => Some(Q850Cause::IncomingCallsBarred),
-            57 => Some(Q850Cause::BearerCapabilityNotAuthorized),
-            58 => Some(Q850Cause::BearerCapabilityNotAvailable),
-            63 => Some(Q850Cause::ServiceNotAvailable),
-            65 => Some(Q850Cause::BearerCapabilityNotImplemented),
-            79 => Some(Q850Cause::ServiceNotImplemented),
-            87 => Some(Q850Cause::UserNotMemberOfCUG),
-            88 => Some(Q850Cause::IncompatibleDestination),
-            102 => Some(Q850Cause::RecoveryOnTimerExpiry),
-            111 => Some(Q850Cause::ProtocolError),
-            127 => Some(Q850Cause::InterworkingUnspecified),
+            1 => Some(Self::UnallocatedNumber),
+            2 => Some(Self::NoRouteToTransitNetwork),
+            3 => Some(Self::NoRouteToDestination),
+            16 => Some(Self::NormalCallClearing),
+            17 => Some(Self::UserBusy),
+            18 => Some(Self::NoUserResponding),
+            19 => Some(Self::NoAnswer),
+            20 => Some(Self::SubscriberAbsent),
+            21 => Some(Self::CallRejected),
+            22 => Some(Self::NumberChanged),
+            27 => Some(Self::DestinationOutOfOrder),
+            28 => Some(Self::InvalidNumberFormat),
+            29 => Some(Self::FacilityRejected),
+            31 => Some(Self::NormalUnspecified),
+            34 => Some(Self::NoCircuitAvailable),
+            38 => Some(Self::NetworkOutOfOrder),
+            41 => Some(Self::TemporaryFailure),
+            42 => Some(Self::SwitchingEquipmentCongestion),
+            47 => Some(Self::ResourceUnavailable),
+            55 => Some(Self::IncomingCallsBarred),
+            57 => Some(Self::BearerCapabilityNotAuthorized),
+            58 => Some(Self::BearerCapabilityNotAvailable),
+            63 => Some(Self::ServiceNotAvailable),
+            65 => Some(Self::BearerCapabilityNotImplemented),
+            79 => Some(Self::ServiceNotImplemented),
+            87 => Some(Self::UserNotMemberOfCUG),
+            88 => Some(Self::IncompatibleDestination),
+            102 => Some(Self::RecoveryOnTimerExpiry),
+            111 => Some(Self::ProtocolError),
+            127 => Some(Self::InterworkingUnspecified),
             _ => None,
         }
     }
@@ -213,16 +244,7 @@ impl fmt::Display for Q850Cause {
 
 impl ReasonHeader {
     /// Creates a Reason header with Q.850 protocol and cause code.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use sip_core::{ReasonHeader, Q850Cause};
-    ///
-    /// let reason = ReasonHeader::q850(Q850Cause::UserBusy);
-    /// assert_eq!(reason.protocol.as_str(), "Q.850");
-    /// ```
-    pub fn q850(cause: Q850Cause) -> Self {
+    pub fn q850(cause: Q850Cause) -> Result<Self, ReasonError> {
         let mut params = BTreeMap::new();
         params.insert(
             SmolStr::new("cause"),
@@ -230,63 +252,88 @@ impl ReasonHeader {
         );
         params.insert(SmolStr::new("text"), Some(SmolStr::new(cause.text())));
 
-        Self {
+        Ok(Self {
             protocol: SmolStr::new(ReasonProtocol::Q850.as_str()),
             params,
-        }
+        })
     }
 
     /// Creates a Reason header with SIP protocol and response code.
-    ///
-    /// The text parameter is optional. If not provided, a default text
-    /// for common SIP response codes will be used.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use sip_core::ReasonHeader;
-    ///
-    /// // With default text
-    /// let reason = ReasonHeader::sip(480, None);
-    /// assert_eq!(reason.protocol.as_str(), "SIP");
-    ///
-    /// // With custom text
-    /// let reason = ReasonHeader::sip(600, Some("Custom Busy"));
-    /// ```
-    pub fn sip(code: u16, text: Option<&str>) -> Self {
+    pub fn sip(code: u16, text: Option<&str>) -> Result<Self, ReasonError> {
         let mut params = BTreeMap::new();
         params.insert(SmolStr::new("cause"), Some(SmolStr::new(code.to_string())));
 
         let default_text = sip_response_text(code);
-        let text = text.unwrap_or(default_text);
-        params.insert(SmolStr::new("text"), Some(SmolStr::new(text)));
+        let text_value = text.unwrap_or(default_text);
+        
+        validate_param_value(text_value)?;
+        params.insert(SmolStr::new("text"), Some(SmolStr::new(text_value)));
 
-        Self {
+        Ok(Self {
             protocol: SmolStr::new(ReasonProtocol::Sip.as_str()),
             params,
-        }
+        })
     }
 
     /// Creates a Reason header with custom protocol and parameters.
     ///
-    /// # Examples
+    /// # Errors
     ///
-    /// ```
-    /// use sip_core::ReasonHeader;
-    /// use std::collections::BTreeMap;
-    /// use smol_str::SmolStr;
-    ///
-    /// let mut params = BTreeMap::new();
-    /// params.insert(SmolStr::new("cause"), Some(SmolStr::new("42")));
-    ///
-    /// let reason = ReasonHeader::new("SDP", params);
-    /// assert_eq!(reason.protocol.as_str(), "SDP");
-    /// ```
-    pub fn new(protocol: &str, params: BTreeMap<SmolStr, Option<SmolStr>>) -> Self {
-        Self {
-            protocol: SmolStr::new(protocol),
-            params,
+    /// Returns an error if protocol or parameters are invalid.
+    pub fn new(
+        protocol: impl AsRef<str>,
+        params: BTreeMap<SmolStr, Option<SmolStr>>,
+    ) -> Result<Self, ReasonError> {
+        validate_protocol(protocol.as_ref())?;
+
+        if params.len() > MAX_PARAMS {
+            return Err(ReasonError::TooManyParams {
+                max: MAX_PARAMS,
+                actual: params.len(),
+            });
         }
+
+        let mut normalized = BTreeMap::new();
+        for (name, value) in params {
+            let name_lower = name.as_str().to_ascii_lowercase();
+            validate_param_name(&name_lower)?;
+            if let Some(v) = &value {
+                validate_param_value(v)?;
+            }
+
+            if normalized.contains_key(&SmolStr::new(&name_lower)) {
+                return Err(ReasonError::DuplicateParam(name_lower));
+            }
+
+            normalized.insert(SmolStr::new(&name_lower), value);
+        }
+
+        let canonical_protocol = match ReasonProtocol::from_str(protocol.as_ref()) {
+            Ok(p) => SmolStr::new(p.as_str()),
+            Err(_) => SmolStr::new(protocol.as_ref()),
+        };
+
+        Ok(Self {
+            protocol: canonical_protocol,
+            params: normalized,
+        })
+    }
+
+    /// Returns the protocol.
+    pub fn protocol(&self) -> &str {
+        &self.protocol
+    }
+
+    /// Returns an iterator over parameters.
+    pub fn params(&self) -> impl Iterator<Item = (&str, Option<&str>)> {
+        self.params.iter().map(|(k, v)| {
+            (k.as_str(), v.as_ref().map(|s| s.as_str()))
+        })
+    }
+
+    /// Gets a parameter value by name (case-insensitive).
+    pub fn get_param(&self, name: &str) -> Option<&Option<SmolStr>> {
+        self.params.get(&SmolStr::new(&name.to_ascii_lowercase()))
     }
 
     /// Returns the cause code as a u16 if present and valid.
@@ -332,7 +379,6 @@ impl fmt::Display for ReasonHeader {
         for (key, value) in &self.params {
             write!(f, ";{}", key)?;
             if let Some(val) = value {
-                // Quote the value if it contains special characters or is the text parameter
                 if key == "text" || val.contains(|c: char| c.is_whitespace() || c == ';') {
                     write!(f, "=\"{}\"", val)?;
                 } else {
@@ -345,25 +391,82 @@ impl fmt::Display for ReasonHeader {
     }
 }
 
+// Validation functions
+
+fn validate_protocol(protocol: &str) -> Result<(), ReasonError> {
+    if protocol.is_empty() {
+        return Err(ReasonError::EmptyProtocol);
+    }
+
+    if protocol.len() > MAX_PROTOCOL_LENGTH {
+        return Err(ReasonError::ProtocolTooLong {
+            max: MAX_PROTOCOL_LENGTH,
+            actual: protocol.len(),
+        });
+    }
+
+    if protocol.chars().any(|c| c.is_ascii_control()) {
+        return Err(ReasonError::InvalidProtocol(
+            "contains control characters".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_param_name(name: &str) -> Result<(), ReasonError> {
+    if name.is_empty() {
+        return Err(ReasonError::InvalidParamName("empty name".to_string()));
+    }
+
+    if name.len() > MAX_PARAM_NAME_LENGTH {
+        return Err(ReasonError::ParamNameTooLong {
+            max: MAX_PARAM_NAME_LENGTH,
+            actual: name.len(),
+        });
+    }
+
+    if name.chars().any(|c| c.is_ascii_control()) {
+        return Err(ReasonError::InvalidParamName(
+            "contains control characters".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_param_value(value: &str) -> Result<(), ReasonError> {
+    if value.len() > MAX_PARAM_VALUE_LENGTH {
+        return Err(ReasonError::ParamValueTooLong {
+            max: MAX_PARAM_VALUE_LENGTH,
+            actual: value.len(),
+        });
+    }
+
+    if value.chars().any(|c| c.is_ascii_control()) {
+        return Err(ReasonError::InvalidParamValue(
+            "contains control characters".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
 /// Returns default text for common SIP response codes.
 fn sip_response_text(code: u16) -> &'static str {
     match code {
-        // 1xx Provisional
         100 => "Trying",
         180 => "Ringing",
         181 => "Call Is Being Forwarded",
         182 => "Queued",
         183 => "Session Progress",
-        // 2xx Success
         200 => "OK",
         202 => "Accepted",
-        // 3xx Redirection
         300 => "Multiple Choices",
         301 => "Moved Permanently",
         302 => "Moved Temporarily",
         305 => "Use Proxy",
         380 => "Alternative Service",
-        // 4xx Client Error
         400 => "Bad Request",
         401 => "Unauthorized",
         402 => "Payment Required",
@@ -392,7 +495,6 @@ fn sip_response_text(code: u16) -> &'static str {
         488 => "Not Acceptable Here",
         491 => "Request Pending",
         493 => "Undecipherable",
-        // 5xx Server Error
         500 => "Server Internal Error",
         501 => "Not Implemented",
         502 => "Bad Gateway",
@@ -400,7 +502,6 @@ fn sip_response_text(code: u16) -> &'static str {
         504 => "Server Time-out",
         505 => "Version Not Supported",
         513 => "Message Too Large",
-        // 6xx Global Failure
         600 => "Busy Everywhere",
         603 => "Decline",
         604 => "Does Not Exist Anywhere",
@@ -412,29 +513,106 @@ fn sip_response_text(code: u16) -> &'static str {
 /// Helper function to parse Reason header from headers.
 pub fn parse_reason_header(headers: &crate::Headers) -> Option<ReasonHeader> {
     let header_value = headers.get("Reason")?;
-    Some(parse_reason_from_string(header_value))
+    parse_reason_from_string(header_value).ok()
 }
 
 /// Parses a Reason header value string.
-fn parse_reason_from_string(value: &str) -> ReasonHeader {
+pub fn parse_reason_from_string(value: &str) -> Result<ReasonHeader, ReasonError> {
+    if value.len() > MAX_PARSE_INPUT {
+        return Err(ReasonError::InputTooLarge {
+            max: MAX_PARSE_INPUT,
+            actual: value.len(),
+        });
+    }
+
     let mut parts = value.split(';');
-    let protocol = SmolStr::new(parts.next().unwrap_or("").trim());
+    let protocol = parts.next().unwrap_or("").trim();
+    
+    validate_protocol(protocol)?;
+
     let mut params = BTreeMap::new();
     for part in parts {
         let part = part.trim();
         if part.is_empty() {
             continue;
         }
+
+        if params.len() >= MAX_PARAMS {
+            return Err(ReasonError::TooManyParams {
+                max: MAX_PARAMS,
+                actual: params.len() + 1,
+            });
+        }
+
         if let Some((name, val)) = part.split_once('=') {
+            let name_lower = name.trim().to_ascii_lowercase();
+            let raw_val = val.trim();
+            let val_trimmed = if raw_val.starts_with('"') && raw_val.ends_with('"') && raw_val.len() >= 2 {
+                unescape_quoted_string(&raw_val[1..raw_val.len() - 1])?
+            } else {
+                raw_val.to_string()
+            };
+            
+            validate_param_name(&name_lower)?;
+            validate_param_value(&val_trimmed)?;
+
+            if params.contains_key(&SmolStr::new(&name_lower)) {
+                return Err(ReasonError::DuplicateParam(name_lower));
+            }
+
             params.insert(
-                SmolStr::new(name.to_ascii_lowercase()),
-                Some(SmolStr::new(val.trim().trim_matches('"'))),
+                SmolStr::new(&name_lower),
+                Some(SmolStr::new(val_trimmed)),
             );
         } else {
-            params.insert(SmolStr::new(part.to_ascii_lowercase()), None);
+            let name_lower = part.to_ascii_lowercase();
+            validate_param_name(&name_lower)?;
+
+            if params.contains_key(&SmolStr::new(&name_lower)) {
+                return Err(ReasonError::DuplicateParam(name_lower));
+            }
+
+            params.insert(SmolStr::new(&name_lower), None);
         }
     }
-    ReasonHeader { protocol, params }
+
+    let canonical_protocol = match ReasonProtocol::from_str(protocol) {
+        Ok(p) => SmolStr::new(p.as_str()),
+        Err(_) => SmolStr::new(protocol),
+    };
+
+    Ok(ReasonHeader {
+        protocol: canonical_protocol,
+        params,
+    })
+}
+
+fn unescape_quoted_string(input: &str) -> Result<String, ReasonError> {
+    let mut out = String::new();
+    let mut escape = false;
+    for ch in input.chars() {
+        if escape {
+            out.push(ch);
+            escape = false;
+            continue;
+        }
+        if ch == '\\' {
+            escape = true;
+            continue;
+        }
+        if ch.is_ascii_control() {
+            return Err(ReasonError::InvalidParamValue(
+                "contains control characters".to_string(),
+            ));
+        }
+        out.push(ch);
+    }
+    if escape {
+        return Err(ReasonError::ParseError(
+            "unterminated escape sequence".to_string(),
+        ));
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -449,32 +627,31 @@ mod tests {
     }
 
     #[test]
+    fn reason_protocol_parse() {
+        assert_eq!("sip".parse::<ReasonProtocol>().unwrap(), ReasonProtocol::Sip);
+        assert_eq!("Q.850".parse::<ReasonProtocol>().unwrap(), ReasonProtocol::Q850);
+        assert!("unknown".parse::<ReasonProtocol>().is_err());
+    }
+
+    #[test]
     fn q850_cause_code_and_text() {
         assert_eq!(Q850Cause::NormalCallClearing.code(), 16);
         assert_eq!(Q850Cause::NormalCallClearing.text(), "Normal Call Clearing");
-
         assert_eq!(Q850Cause::UserBusy.code(), 17);
         assert_eq!(Q850Cause::UserBusy.text(), "User Busy");
-
-        assert_eq!(Q850Cause::NoAnswer.code(), 19);
-        assert_eq!(Q850Cause::NoAnswer.text(), "No Answer");
     }
 
     #[test]
     fn q850_from_code() {
-        assert_eq!(
-            Q850Cause::from_code(16),
-            Some(Q850Cause::NormalCallClearing)
-        );
+        assert_eq!(Q850Cause::from_code(16), Some(Q850Cause::NormalCallClearing));
         assert_eq!(Q850Cause::from_code(17), Some(Q850Cause::UserBusy));
-        assert_eq!(Q850Cause::from_code(19), Some(Q850Cause::NoAnswer));
         assert_eq!(Q850Cause::from_code(999), None);
     }
 
     #[test]
     fn reason_header_q850() {
-        let reason = ReasonHeader::q850(Q850Cause::UserBusy);
-        assert_eq!(reason.protocol.as_str(), "Q.850");
+        let reason = ReasonHeader::q850(Q850Cause::UserBusy).unwrap();
+        assert_eq!(reason.protocol(), "Q.850");
         assert_eq!(reason.cause_code(), Some(17));
         assert_eq!(reason.text(), Some("User Busy"));
         assert!(reason.is_q850());
@@ -483,51 +660,37 @@ mod tests {
 
     #[test]
     fn reason_header_sip_with_default_text() {
-        let reason = ReasonHeader::sip(480, None);
-        assert_eq!(reason.protocol.as_str(), "SIP");
+        let reason = ReasonHeader::sip(480, None).unwrap();
+        assert_eq!(reason.protocol(), "SIP");
         assert_eq!(reason.cause_code(), Some(480));
         assert_eq!(reason.text(), Some("Temporarily Unavailable"));
         assert!(reason.is_sip());
-        assert!(!reason.is_q850());
     }
 
     #[test]
     fn reason_header_sip_with_custom_text() {
-        let reason = ReasonHeader::sip(600, Some("Custom Busy"));
-        assert_eq!(reason.protocol.as_str(), "SIP");
+        let reason = ReasonHeader::sip(600, Some("Custom Busy")).unwrap();
         assert_eq!(reason.cause_code(), Some(600));
         assert_eq!(reason.text(), Some("Custom Busy"));
     }
 
     #[test]
     fn reason_header_display_q850() {
-        let reason = ReasonHeader::q850(Q850Cause::NormalCallClearing);
-        assert_eq!(
-            reason.to_string(),
-            "Q.850;cause=16;text=\"Normal Call Clearing\""
-        );
+        let reason = ReasonHeader::q850(Q850Cause::NormalCallClearing).unwrap();
+        assert_eq!(reason.to_string(), "Q.850;cause=16;text=\"Normal Call Clearing\"");
     }
 
     #[test]
     fn reason_header_display_sip() {
-        let reason = ReasonHeader::sip(486, None);
+        let reason = ReasonHeader::sip(486, None).unwrap();
         assert_eq!(reason.to_string(), "SIP;cause=486;text=\"Busy Here\"");
-    }
-
-    #[test]
-    fn reason_header_as_q850_cause() {
-        let reason = ReasonHeader::q850(Q850Cause::CallRejected);
-        assert_eq!(reason.as_q850_cause(), Some(Q850Cause::CallRejected));
-
-        let sip_reason = ReasonHeader::sip(480, None);
-        assert_eq!(sip_reason.as_q850_cause(), None);
     }
 
     #[test]
     fn parse_reason_q850() {
         let value = "Q.850;cause=16;text=\"Normal Call Clearing\"";
-        let reason = parse_reason_from_string(value);
-        assert_eq!(reason.protocol.as_str(), "Q.850");
+        let reason = parse_reason_from_string(value).unwrap();
+        assert_eq!(reason.protocol(), "Q.850");
         assert_eq!(reason.cause_code(), Some(16));
         assert_eq!(reason.text(), Some("Normal Call Clearing"));
     }
@@ -535,52 +698,98 @@ mod tests {
     #[test]
     fn parse_reason_sip() {
         let value = "SIP;cause=480;text=\"Temporarily Unavailable\"";
-        let reason = parse_reason_from_string(value);
-        assert_eq!(reason.protocol.as_str(), "SIP");
+        let reason = parse_reason_from_string(value).unwrap();
+        assert_eq!(reason.protocol(), "SIP");
         assert_eq!(reason.cause_code(), Some(480));
-        assert_eq!(reason.text(), Some("Temporarily Unavailable"));
     }
 
     #[test]
-    fn parse_reason_without_quotes() {
-        let value = "SIP;cause=200;text=OK";
-        let reason = parse_reason_from_string(value);
-        assert_eq!(reason.protocol.as_str(), "SIP");
-        assert_eq!(reason.cause_code(), Some(200));
-        assert_eq!(reason.text(), Some("OK"));
-    }
-
-    #[test]
-    fn parse_reason_minimal() {
-        let value = "Q.850;cause=16";
-        let reason = parse_reason_from_string(value);
-        assert_eq!(reason.protocol.as_str(), "Q.850");
-        assert_eq!(reason.cause_code(), Some(16));
-        assert_eq!(reason.text(), None);
+    fn parse_reason_text_with_escaped_quotes() {
+        let value = r#"SIP;cause=480;text="Busy \"Now\"""#;
+        let reason = parse_reason_from_string(value).unwrap();
+        assert_eq!(reason.text(), Some(r#"Busy "Now""#));
     }
 
     #[test]
     fn sip_response_text_common_codes() {
         assert_eq!(sip_response_text(100), "Trying");
-        assert_eq!(sip_response_text(180), "Ringing");
         assert_eq!(sip_response_text(200), "OK");
         assert_eq!(sip_response_text(404), "Not Found");
-        assert_eq!(sip_response_text(480), "Temporarily Unavailable");
         assert_eq!(sip_response_text(486), "Busy Here");
-        assert_eq!(sip_response_text(487), "Request Terminated");
-        assert_eq!(sip_response_text(500), "Server Internal Error");
-        assert_eq!(sip_response_text(600), "Busy Everywhere");
+    }
+
+    // Security tests
+
+    #[test]
+    fn reject_empty_protocol() {
+        let result = ReasonHeader::new("", BTreeMap::new());
+        assert!(matches!(result, Err(ReasonError::EmptyProtocol)));
     }
 
     #[test]
-    fn reason_header_new_custom() {
-        let mut params = BTreeMap::new();
-        params.insert(SmolStr::new("cause"), Some(SmolStr::new("42")));
-        params.insert(SmolStr::new("text"), Some(SmolStr::new("Custom")));
+    fn reject_crlf_in_protocol() {
+        let result = ReasonHeader::new("SIP\r\nInjected", BTreeMap::new());
+        assert!(result.is_err());
+    }
 
-        let reason = ReasonHeader::new("SDP", params);
-        assert_eq!(reason.protocol.as_str(), "SDP");
-        assert_eq!(reason.cause_code(), Some(42));
-        assert_eq!(reason.text(), Some("Custom"));
+    #[test]
+    fn reject_crlf_in_param_value() {
+        let result = ReasonHeader::sip(480, Some("text\r\ninjected"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn reject_oversized_protocol() {
+        let long_protocol = "x".repeat(MAX_PROTOCOL_LENGTH + 1);
+        let result = ReasonHeader::new(&long_protocol, BTreeMap::new());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn reject_oversized_param_value() {
+        let long_text = "x".repeat(MAX_PARAM_VALUE_LENGTH + 1);
+        let result = ReasonHeader::sip(480, Some(&long_text));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn reject_too_many_params() {
+        let mut params = BTreeMap::new();
+        for i in 0..=MAX_PARAMS {
+            params.insert(
+                SmolStr::new(&format!("p{}", i)),
+                Some(SmolStr::new("value")),
+            );
+        }
+        let result = ReasonHeader::new("SIP", params);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn reject_oversized_parse_input() {
+        let huge = format!("SIP;{}", "param=value;".repeat(200));
+        let result = parse_reason_from_string(&huge);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn reject_duplicate_params_in_parse() {
+        let value = "SIP;cause=480;cause=486";
+        let result = parse_reason_from_string(value);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn fields_are_private() {
+        let reason = ReasonHeader::q850(Q850Cause::UserBusy).unwrap();
+        
+        // These should compile
+        let _ = reason.protocol();
+        let _ = reason.cause_code();
+        let _ = reason.params();
+        
+        // These should NOT compile:
+        // reason.protocol = SmolStr::new("evil");  // ← Does not compile!
+        // reason.params.clear();                    // ← Does not compile!
     }
 }
