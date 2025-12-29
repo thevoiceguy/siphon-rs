@@ -129,11 +129,11 @@ pub fn parse_sdp(body: &Bytes) -> Option<SdpSession> {
 }
 
 pub fn parse_allow_header(value: &SmolStr) -> AllowHeader {
-    TokenList(parse_token_list(value))
+    TokenList::from_tokens(parse_token_list(value)).unwrap_or_default()
 }
 
 pub fn parse_supported_header(value: &SmolStr) -> SupportedHeader {
-    TokenList(parse_token_list(value))
+    TokenList::from_tokens(parse_token_list(value)).unwrap_or_default()
 }
 
 pub fn parse_authorization_header(value: &SmolStr) -> Option<AuthorizationHeader> {

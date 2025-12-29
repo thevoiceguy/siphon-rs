@@ -134,7 +134,7 @@ pub use sip_etag::{SipETagHeader, SipIfMatchHeader};
 pub use sipfrag::{SipFrag, StartLine};
 pub use subject::SubjectHeader;
 pub use tel_uri::TelUri;
-pub use token_list::{AllowHeader, SupportedHeader, TokenList};
+pub use token_list::{AllowHeader, ProxyRequireHeader, RequireHeader, SupportedHeader, TokenList, UnsupportedHeader};
 pub use uri::{SipUri, Uri};
 pub use version::SipVersion;
 pub use via::ViaHeader;
