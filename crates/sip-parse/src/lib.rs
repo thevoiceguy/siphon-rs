@@ -942,9 +942,9 @@ l: 0\r\n\r\n",
         assert!(routes[0].inner().params_map().is_empty());
 
         let rack = parse_rack_header(header(resp.headers(), "RAck").unwrap()).expect("rack");
-        assert_eq!(rack.rseq, 2000);
+        assert_eq!(rack.rseq(), 2000);
         let rseq = parse_rseq_header(header(resp.headers(), "RSeq").unwrap()).expect("rseq");
-        assert_eq!(rseq.sequence, 2000);
+        assert_eq!(rseq.sequence(), 2000);
 
         let session_expires =
             parse_session_expires(header(resp.headers(), "Session-Expires").unwrap()).expect("se");
@@ -1444,9 +1444,9 @@ body",
             let header_value = format!("{rseq} {cseq} {}", token);
             let rack = parse_rack_header(&SmolStr::new(header_value)).expect("rack");
             let expected_method = super::detect_method(token).unwrap();
-            prop_assert_eq!(rack.rseq, rseq);
-            prop_assert_eq!(rack.cseq_number, cseq);
-            prop_assert_eq!(rack.cseq_method, expected_method);
+            prop_assert_eq!(rack.rseq(), rseq);
+            prop_assert_eq!(rack.cseq_number(), cseq);
+            prop_assert_eq!(rack.cseq_method(), &expected_method);
         }
 
         #[test]

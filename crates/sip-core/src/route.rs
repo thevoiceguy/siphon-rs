@@ -231,7 +231,7 @@ impl RouteHeader {
     /// ```
     /// use sip_core::RouteHeader;
     ///
-    /// let route = RouteHeader::parse("<sip:proxy.example.com;lr;transport=tcp>").unwrap();
+    /// let route = RouteHeader::parse("<sip:proxy.example.com>;lr;transport=tcp").unwrap();
     /// assert_eq!(route.param_count(), 2); // lr + transport
     /// ```
     pub fn param_count(&self) -> usize {
@@ -248,7 +248,7 @@ impl RouteHeader {
     /// ```
     /// use sip_core::RouteHeader;
     ///
-    /// let route = RouteHeader::parse("<sip:proxy.example.com;lr;transport=tcp>").unwrap();
+    /// let route = RouteHeader::parse("<sip:proxy.example.com>;lr;transport=tcp").unwrap();
     ///
     /// // Parameter without value
     /// assert_eq!(route.get_param("lr"), Some(&None));

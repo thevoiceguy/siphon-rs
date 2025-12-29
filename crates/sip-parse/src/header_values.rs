@@ -163,21 +163,11 @@ pub fn parse_subject_header(value: &SmolStr) -> SubjectHeader {
 }
 
 pub fn parse_rseq_header(value: &SmolStr) -> Option<RSeqHeader> {
-    let seq = value.trim().parse().ok()?;
-    Some(RSeqHeader { sequence: seq })
+    RSeqHeader::parse(value.as_str()).ok()
 }
 
 pub fn parse_rack_header(value: &SmolStr) -> Option<RAckHeader> {
-    let mut parts = value.split_whitespace();
-    let rseq = parts.next()?.parse().ok()?;
-    let cseq_number = parts.next()?.parse().ok()?;
-    let cseq_method = parts.next()?.to_uppercase();
-    let method = crate::detect_method(&cseq_method)?;
-    Some(RAckHeader {
-        rseq,
-        cseq_number,
-        cseq_method: method,
-    })
+    RAckHeader::parse(value.as_str()).ok()
 }
 
 pub fn parse_session_expires(value: &SmolStr) -> Option<SessionExpires> {
