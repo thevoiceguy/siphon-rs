@@ -32,6 +32,115 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::info;
 
+// Security constants for DoS prevention and input validation
+const MAX_REASON_PHRASE_LENGTH: usize = 128;
+const MAX_SIP_ETAG_LENGTH: usize = 256;
+const MAX_BODY_LENGTH: usize = 1_048_576; // 1 MB max body
+const MAX_USER_AGENT_LENGTH: usize = 256;
+
+/// Error type for UAS operations
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UasError {
+    /// Reason phrase contains control characters
+    ReasonPhraseContainsControlChars,
+    /// Reason phrase exceeds maximum length
+    ReasonPhraseTooLong { max: usize, actual: usize },
+    /// SIP-ETag contains control characters
+    SipETagContainsControlChars,
+    /// SIP-ETag exceeds maximum length
+    SipETagTooLong { max: usize, actual: usize },
+    /// Body exceeds maximum length
+    BodyTooLong { max: usize, actual: usize },
+    /// User-Agent contains control characters
+    UserAgentContainsControlChars,
+    /// User-Agent exceeds maximum length
+    UserAgentTooLong { max: usize, actual: usize },
+}
+
+impl std::fmt::Display for UasError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UasError::ReasonPhraseContainsControlChars => {
+                write!(f, "Reason phrase contains control characters")
+            }
+            UasError::ReasonPhraseTooLong { max, actual } => {
+                write!(
+                    f,
+                    "Reason phrase too long (max: {}, actual: {})",
+                    max, actual
+                )
+            }
+            UasError::SipETagContainsControlChars => {
+                write!(f, "SIP-ETag contains control characters")
+            }
+            UasError::SipETagTooLong { max, actual } => {
+                write!(f, "SIP-ETag too long (max: {}, actual: {})", max, actual)
+            }
+            UasError::BodyTooLong { max, actual } => {
+                write!(f, "Body too long (max: {}, actual: {})", max, actual)
+            }
+            UasError::UserAgentContainsControlChars => {
+                write!(f, "User-Agent contains control characters")
+            }
+            UasError::UserAgentTooLong { max, actual } => {
+                write!(f, "User-Agent too long (max: {}, actual: {})", max, actual)
+            }
+        }
+    }
+}
+
+impl std::error::Error for UasError {}
+
+// Validation functions
+fn validate_reason_phrase(phrase: &str) -> std::result::Result<(), UasError> {
+    if phrase.len() > MAX_REASON_PHRASE_LENGTH {
+        return Err(UasError::ReasonPhraseTooLong {
+            max: MAX_REASON_PHRASE_LENGTH,
+            actual: phrase.len(),
+        });
+    }
+    if phrase.chars().any(|c| c.is_control()) {
+        return Err(UasError::ReasonPhraseContainsControlChars);
+    }
+    Ok(())
+}
+
+fn validate_sip_etag(etag: &str) -> std::result::Result<(), UasError> {
+    if etag.len() > MAX_SIP_ETAG_LENGTH {
+        return Err(UasError::SipETagTooLong {
+            max: MAX_SIP_ETAG_LENGTH,
+            actual: etag.len(),
+        });
+    }
+    if etag.chars().any(|c| c.is_control()) {
+        return Err(UasError::SipETagContainsControlChars);
+    }
+    Ok(())
+}
+
+fn validate_body(body: &str) -> std::result::Result<(), UasError> {
+    if body.len() > MAX_BODY_LENGTH {
+        return Err(UasError::BodyTooLong {
+            max: MAX_BODY_LENGTH,
+            actual: body.len(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_user_agent(agent: &str) -> std::result::Result<(), UasError> {
+    if agent.len() > MAX_USER_AGENT_LENGTH {
+        return Err(UasError::UserAgentTooLong {
+            max: MAX_USER_AGENT_LENGTH,
+            actual: agent.len(),
+        });
+    }
+    if agent.chars().any(|c| c.is_control()) {
+        return Err(UasError::UserAgentContainsControlChars);
+    }
+    Ok(())
+}
+
 /// Trait implemented by SIP applications that consume transactions.
 pub trait TransactionUser: Send + Sync {
     fn on_request(&self, request: &Request) -> Result<Response>;
@@ -153,7 +262,16 @@ impl UserAgentServer {
     ///
     /// # Returns
     /// A 200 OK response
-    pub fn create_ok(&self, request: &Request, body: Option<&str>) -> Response {
+    pub fn create_ok(
+        &self,
+        request: &Request,
+        body: Option<&str>,
+    ) -> std::result::Result<Response, UasError> {
+        // Validate body if provided
+        if let Some(body_content) = body {
+            validate_body(body_content)?;
+        }
+
         let mut response = Self::create_response(request, 200, "OK");
 
         // Add Contact header
@@ -195,7 +313,7 @@ impl UserAgentServer {
             .expect("valid response");
         }
 
-        response
+        Ok(response)
     }
 
     /// Creates a 200 OK response for MESSAGE requests.
@@ -207,7 +325,16 @@ impl UserAgentServer {
     /// Creates a 200 OK response for PUBLISH requests (RFC 3903).
     ///
     /// Optionally sets a SIP-ETag header if provided.
-    pub fn accept_publish(&self, request: &Request, sip_etag: Option<&str>) -> Response {
+    pub fn accept_publish(
+        &self,
+        request: &Request,
+        sip_etag: Option<&str>,
+    ) -> std::result::Result<Response, UasError> {
+        // Validate SIP-ETag if provided
+        if let Some(etag) = sip_etag {
+            validate_sip_etag(etag)?;
+        }
+
         let mut response = Self::create_response(request, 200, "OK");
         if let Some(etag) = sip_etag {
             response
@@ -215,7 +342,7 @@ impl UserAgentServer {
                 .push(SmolStr::new("SIP-ETag"), SmolStr::new(etag))
                 .unwrap();
         }
-        response
+        Ok(response)
     }
 
     /// Creates an error response for MESSAGE or PUBLISH.
@@ -368,6 +495,9 @@ impl UserAgentServer {
         // Extract remote URI from From header
         let remote_uri = extract_from_uri(request)?;
 
+        // Unwrap response Result
+        let response = response?;
+
         // Create dialog
         let dialog = Dialog::new_uas(request, &response, self.local_uri.clone(), remote_uri)
             .ok_or_else(|| anyhow!("Failed to create dialog"))?;
@@ -423,7 +553,8 @@ impl UserAgentServer {
         );
 
         // Create 200 OK response
-        Ok(self.create_ok(request, None))
+        self.create_ok(request, None)
+            .map_err(|e| anyhow::anyhow!("{}", e))
     }
 
     /// Handles an INFO request within a dialog (RFC 2976).
@@ -479,7 +610,8 @@ impl UserAgentServer {
         );
 
         // Create 200 OK response
-        Ok(self.create_ok(request, None))
+        self.create_ok(request, None)
+            .map_err(|e| anyhow::anyhow!("{}", e))
     }
 
     /// Handles a CANCEL request.
@@ -606,7 +738,10 @@ impl UserAgentServer {
         subscription: &mut Subscription,
         status_code: u16,
         reason_phrase: &str,
-    ) -> Request {
+    ) -> std::result::Result<Request, UasError> {
+        // Validate reason phrase for CRLF injection and length
+        validate_reason_phrase(reason_phrase)?;
+
         let mut headers = Headers::new();
 
         // Via
@@ -713,12 +848,12 @@ impl UserAgentServer {
             .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
             .unwrap();
 
-        Request::new(
+        Ok(Request::new(
             RequestLine::new(Method::Notify, subscription.contact().clone()),
             headers,
             Bytes::from(sipfrag_body.as_bytes().to_vec()),
         )
-        .expect("valid request")
+        .expect("valid request"))
     }
 
     /// Handles a REFER request for call transfer (RFC 3515).
@@ -808,9 +943,17 @@ impl UserAgentServer {
         code: u16,
         reason: &str,
         sdp_body: Option<&str>,
-    ) -> Response {
+    ) -> std::result::Result<Response, UasError> {
         if !(100..200).contains(&code) {
             panic!("Reliable provisional must be 1xx response, got {}", code);
+        }
+
+        // Validate reason phrase
+        validate_reason_phrase(reason)?;
+
+        // Validate body if provided
+        if let Some(body_content) = sdp_body {
+            validate_body(body_content)?;
         }
 
         let mut response = Self::create_response(request, code, reason);
@@ -881,7 +1024,7 @@ impl UserAgentServer {
             .expect("valid response");
         }
 
-        response
+        Ok(response)
     }
 
     /// Handles a PRACK request (RFC 3262).
@@ -924,7 +1067,8 @@ impl UserAgentServer {
         );
 
         // Create 200 OK response
-        Ok(self.create_ok(request, None))
+        self.create_ok(request, None)
+            .map_err(|e| anyhow::anyhow!("{}", e))
     }
 
     /// Adds a tag to the To header if not already present.
