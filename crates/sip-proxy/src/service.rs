@@ -97,6 +97,16 @@ impl ProxyService {
         mpsc::UnboundedReceiver<sip_core::Response>,
         Vec<(SmolStr, Request)>,
     )> {
+        use crate::stateful::ProxyError;
+
+        // Validate target list size
+        if targets.len() > crate::stateful::MAX_TARGETS_PER_REQUEST {
+            return Err(anyhow!(ProxyError::TooManyTargets {
+                max: crate::stateful::MAX_TARGETS_PER_REQUEST,
+                actual: targets.len(),
+            }));
+        }
+
         let call_id = original
             .headers()
             .get_smol("Call-ID")
@@ -104,14 +114,17 @@ impl ProxyService {
             .ok_or_else(|| anyhow!("Missing Call-ID header"))?;
         let client_branch = extract_top_via_branch(&original)?;
 
-        let (context, response_rx) = self.proxy.start_context(
-            original.clone(),
-            call_id.clone(),
-            SmolStr::new(client_branch),
-            SmolStr::new(proxy_host),
-            SmolStr::new(transport),
-            fork_mode,
-        );
+        let (context, response_rx) = self
+            .proxy
+            .start_context(
+                original.clone(),
+                call_id.clone(),
+                SmolStr::new(client_branch),
+                SmolStr::new(proxy_host),
+                SmolStr::new(transport),
+                fork_mode,
+            )
+            .map_err(|e| anyhow!(e))?;
 
         let mut forwarded = Vec::new();
         let mut ordered_targets = targets;
@@ -137,16 +150,16 @@ impl ProxyService {
                 add_record_route,
                 proxy_uri,
             ) {
-                let branch_info = BranchInfo {
-                    branch_id: branch.clone(),
-                    target: target.uri.clone(),
-                    created_at: std::time::Instant::now(),
-                    state: BranchState::Trying,
-                    best_response: None,
-                };
+                let branch_info = BranchInfo::new(
+                    branch.clone(),
+                    target.uri.clone(),
+                    std::time::Instant::now(),
+                    BranchState::Trying,
+                )
+                .map_err(|e| anyhow!(e))?;
                 forwarded.push((branch.clone(), request.clone()));
                 // Track branch in context
-                context.add_branch(branch_info).await;
+                context.add_branch(branch_info).await.map_err(|e| anyhow!(e))?;
             }
         }
 

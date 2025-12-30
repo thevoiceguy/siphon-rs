@@ -162,14 +162,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create proxy context for parallel forking
     println!("Step 3: Creating proxy context (Parallel fork mode)");
-    let (context, _response_rx) = proxy.start_context(
-        invite.clone(),
-        "call-12345".into(),
-        "z9hG4bKclient123".into(),
-        "proxy.example.com".into(),
-        "UDP".into(),
-        ForkMode::Parallel,
-    );
+    let (context, _response_rx) = proxy
+        .start_context(
+            invite.clone(),
+            "call-12345".into(),
+            "z9hG4bKclient123".into(),
+            "proxy.example.com".into(),
+            "UDP".into(),
+            ForkMode::Parallel,
+        )
+        .expect("should create context");
     println!(
         "  ✓ Context created with {} pending branches\n",
         targets.len()
@@ -202,8 +204,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             target.uri().clone(),
             std::time::Instant::now(),
             BranchState::Trying,
-        );
-        context.add_branch(branch_info).await;
+        )
+        .expect("should create branch");
+        context
+            .add_branch(branch_info)
+            .await
+            .expect("should add branch");
         branch_ids.push(branch_id);
     }
     println!("  ✓ {} branches created\n", branch_ids.len());

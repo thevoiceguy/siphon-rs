@@ -38,6 +38,65 @@ use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, info, warn};
 
+// Security constants for DoS prevention
+const MAX_BRANCH_ID_LENGTH: usize = 128;
+const MAX_BRANCHES_PER_CONTEXT: usize = 50;
+const MAX_PROXY_CONTEXTS: usize = 10_000;
+pub(crate) const MAX_TARGETS_PER_REQUEST: usize = 100;
+
+/// Proxy validation errors
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProxyError {
+    /// Branch ID too long (DoS prevention)
+    BranchIdTooLong { max: usize, actual: usize },
+    /// Branch ID contains control characters (CRLF injection)
+    BranchIdContainsControlChars,
+    /// Too many branches (DoS prevention)
+    TooManyBranches { max: usize },
+    /// Too many proxy contexts (DoS prevention)
+    TooManyContexts { max: usize },
+    /// Too many targets (DoS prevention)
+    TooManyTargets { max: usize, actual: usize },
+}
+
+impl std::fmt::Display for ProxyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProxyError::BranchIdTooLong { max, actual } => {
+                write!(f, "branch ID length {} exceeds max {}", actual, max)
+            }
+            ProxyError::BranchIdContainsControlChars => {
+                write!(f, "branch ID contains control characters (CRLF injection)")
+            }
+            ProxyError::TooManyBranches { max } => {
+                write!(f, "too many branches (max {})", max)
+            }
+            ProxyError::TooManyContexts { max } => {
+                write!(f, "too many proxy contexts (max {})", max)
+            }
+            ProxyError::TooManyTargets { max, actual } => {
+                write!(f, "too many targets {} (max {})", actual, max)
+            }
+        }
+    }
+}
+
+impl std::error::Error for ProxyError {}
+
+/// Validates a branch ID for length and control characters
+fn validate_branch_id(branch_id: &str) -> Result<(), ProxyError> {
+    if branch_id.len() > MAX_BRANCH_ID_LENGTH {
+        return Err(ProxyError::BranchIdTooLong {
+            max: MAX_BRANCH_ID_LENGTH,
+            actual: branch_id.len(),
+        });
+    }
+    if branch_id.chars().any(|c| c.is_control()) {
+        return Err(ProxyError::BranchIdContainsControlChars);
+    }
+    Ok(())
+}
+
 /// Target for forwarding a request
 #[derive(Debug, Clone)]
 pub struct ProxyTarget {
@@ -109,20 +168,22 @@ pub struct BranchInfo {
 }
 
 impl BranchInfo {
-    /// Creates a new BranchInfo.
+    /// Creates a new BranchInfo with validation.
     pub fn new(
         branch_id: impl Into<SmolStr>,
         target: SipUri,
         created_at: Instant,
         state: BranchState,
-    ) -> Self {
-        Self {
-            branch_id: branch_id.into(),
+    ) -> Result<Self, ProxyError> {
+        let branch_id = branch_id.into();
+        validate_branch_id(&branch_id)?;
+        Ok(Self {
+            branch_id,
             target,
             created_at,
             state,
             best_response: None,
-        }
+        })
     }
 
     /// Returns the branch ID.
@@ -247,12 +308,19 @@ impl ProxyContext {
     }
 
     /// Add a branch that was created for forwarding
-    pub async fn add_branch(&self, branch_info: BranchInfo) {
+    pub async fn add_branch(&self, branch_info: BranchInfo) -> Result<(), ProxyError> {
         let mut branches = self.branches.write().await;
-        let mut count = self.outstanding_count.write().await;
 
+        if branches.len() >= MAX_BRANCHES_PER_CONTEXT {
+            return Err(ProxyError::TooManyBranches {
+                max: MAX_BRANCHES_PER_CONTEXT,
+            });
+        }
+
+        let mut count = self.outstanding_count.write().await;
         branches.insert(branch_info.branch_id.clone(), branch_info);
         *count += 1;
+        Ok(())
     }
 
     /// Process a response received on a branch
@@ -499,7 +567,13 @@ impl StatefulProxy {
         proxy_host: SmolStr,
         transport: SmolStr,
         fork_mode: ForkMode,
-    ) -> (Arc<ProxyContext>, mpsc::UnboundedReceiver<Response>) {
+    ) -> Result<(Arc<ProxyContext>, mpsc::UnboundedReceiver<Response>), ProxyError> {
+        if self.contexts.len() >= MAX_PROXY_CONTEXTS {
+            return Err(ProxyError::TooManyContexts {
+                max: MAX_PROXY_CONTEXTS,
+            });
+        }
+
         let (response_tx, response_rx) = mpsc::unbounded_channel();
 
         let context = Arc::new(ProxyContext::new(
@@ -514,7 +588,7 @@ impl StatefulProxy {
 
         self.contexts.insert(client_branch, context.clone());
 
-        (context, response_rx)
+        Ok((context, response_rx))
     }
 
     /// Find a proxy context by client branch
@@ -666,14 +740,16 @@ mod tests {
         let proxy = StatefulProxy::new();
         let request = make_request();
 
-        let (context, _rx) = proxy.start_context(
-            request,
-            "test-call-123".into(),
-            "z9hG4bKclient".into(),
-            "proxy.example.com".into(),
-            "UDP".into(),
-            ForkMode::Parallel,
-        );
+        let (context, _rx) = proxy
+            .start_context(
+                request,
+                "test-call-123".into(),
+                "z9hG4bKclient".into(),
+                "proxy.example.com".into(),
+                "UDP".into(),
+                ForkMode::Parallel,
+            )
+            .expect("should create context");
 
         assert_eq!(context.call_id(), "test-call-123");
         assert_eq!(context.fork_mode(), ForkMode::Parallel);
@@ -684,24 +760,26 @@ mod tests {
         let proxy = StatefulProxy::new();
         let request = make_request();
 
-        let (context, _rx) = proxy.start_context(
-            request,
-            "test-call-123".into(),
-            "z9hG4bKclient".into(),
-            "proxy.example.com".into(),
-            "UDP".into(),
-            ForkMode::Parallel,
-        );
+        let (context, _rx) = proxy
+            .start_context(
+                request,
+                "test-call-123".into(),
+                "z9hG4bKclient".into(),
+                "proxy.example.com".into(),
+                "UDP".into(),
+                ForkMode::Parallel,
+            )
+            .expect("should create context");
 
-        let branch = BranchInfo {
-            branch_id: "z9hG4bKbranch1".into(),
-            target: SipUri::parse("sip:target1@example.com").unwrap(),
-            created_at: Instant::now(),
-            state: BranchState::Trying,
-            best_response: None,
-        };
+        let branch = BranchInfo::new(
+            "z9hG4bKbranch1",
+            SipUri::parse("sip:target1@example.com").unwrap(),
+            Instant::now(),
+            BranchState::Trying,
+        )
+        .expect("should create branch");
 
-        context.add_branch(branch).await;
+        context.add_branch(branch).await.expect("should add branch");
 
         let branches = context.get_branch_ids().await;
         assert_eq!(branches.len(), 1);
@@ -751,14 +829,16 @@ mod tests {
     async fn prepares_ack_with_best_response_context() {
         let proxy = StatefulProxy::new();
         let invite = make_request();
-        let (context, _) = proxy.start_context(
-            invite,
-            "test-call-123".into(),
-            "z9hG4bKclient".into(),
-            "proxy.example.com".into(),
-            "UDP".into(),
-            ForkMode::None,
-        );
+        let (context, _) = proxy
+            .start_context(
+                invite,
+                "test-call-123".into(),
+                "z9hG4bKclient".into(),
+                "proxy.example.com".into(),
+                "UDP".into(),
+                ForkMode::None,
+            )
+            .expect("should create context");
 
         // Simulate a 200 OK winning response
         let resp = make_response(200);
@@ -814,24 +894,29 @@ mod tests {
             .expect("valid request")
         };
 
-        let (context, _) = proxy.start_context(
-            invite.clone(),
-            "call-123".into(),
-            "z9hG4bKclient".into(),
-            "proxy.example.com".into(),
-            "UDP".into(),
-            ForkMode::Parallel,
-        );
+        let (context, _) = proxy
+            .start_context(
+                invite.clone(),
+                "call-123".into(),
+                "z9hG4bKclient".into(),
+                "proxy.example.com".into(),
+                "UDP".into(),
+                ForkMode::Parallel,
+            )
+            .expect("should create context");
 
         let target = SipUri::parse("sip:target@example.com").unwrap();
-        let branch_info = BranchInfo {
-            branch_id: "z9hG4bKbranch1".into(),
-            target: target.clone(),
-            created_at: Instant::now(),
-            state: BranchState::Proceeding,
-            best_response: None,
-        };
-        context.add_branch(branch_info).await;
+        let branch_info = BranchInfo::new(
+            "z9hG4bKbranch1",
+            target.clone(),
+            Instant::now(),
+            BranchState::Proceeding,
+        )
+        .expect("should create branch");
+        context
+            .add_branch(branch_info)
+            .await
+            .expect("should add branch");
 
         // Template CANCEL (matches INVITE headers)
         let cancel_template = {
@@ -866,5 +951,184 @@ mod tests {
 
         // Request-URI targets branch destination
         assert_eq!(cancel.uri().as_sip().unwrap().as_str(), target.as_str());
+    }
+
+    // ===========================================
+    // Security tests: CRLF injection prevention
+    // ===========================================
+
+    #[test]
+    fn rejects_branch_id_with_crlf() {
+        let result = BranchInfo::new(
+            "z9hG4bK\r\nbranch",
+            SipUri::parse("sip:target@example.com").unwrap(),
+            Instant::now(),
+            BranchState::Trying,
+        );
+        assert!(matches!(result, Err(ProxyError::BranchIdContainsControlChars)));
+    }
+
+    #[test]
+    fn rejects_branch_id_with_newline() {
+        let result = BranchInfo::new(
+            "z9hG4bK\nbranch",
+            SipUri::parse("sip:target@example.com").unwrap(),
+            Instant::now(),
+            BranchState::Trying,
+        );
+        assert!(matches!(result, Err(ProxyError::BranchIdContainsControlChars)));
+    }
+
+    #[test]
+    fn rejects_branch_id_with_tab() {
+        let result = BranchInfo::new(
+            "z9hG4bK\tbranch",
+            SipUri::parse("sip:target@example.com").unwrap(),
+            Instant::now(),
+            BranchState::Trying,
+        );
+        assert!(matches!(result, Err(ProxyError::BranchIdContainsControlChars)));
+    }
+
+    // ===========================================
+    // Security tests: Bounds checking
+    // ===========================================
+
+    #[test]
+    fn rejects_oversized_branch_id() {
+        let long_branch = "z".repeat(MAX_BRANCH_ID_LENGTH + 1);
+        let result = BranchInfo::new(
+            long_branch,
+            SipUri::parse("sip:target@example.com").unwrap(),
+            Instant::now(),
+            BranchState::Trying,
+        );
+        assert!(matches!(
+            result,
+            Err(ProxyError::BranchIdTooLong { max: 128, .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn rejects_too_many_branches_per_context() {
+        let proxy = StatefulProxy::new();
+        let request = make_request();
+        let (context, _rx) = proxy
+            .start_context(
+                request,
+                "test-call".into(),
+                "z9hG4bKclient".into(),
+                "proxy.example.com".into(),
+                "UDP".into(),
+                ForkMode::Parallel,
+            )
+            .expect("should create context");
+
+        // Add MAX_BRANCHES_PER_CONTEXT branches
+        for i in 0..MAX_BRANCHES_PER_CONTEXT {
+            let branch_info = BranchInfo::new(
+                format!("z9hG4bKbranch{}", i),
+                SipUri::parse("sip:target@example.com").unwrap(),
+                Instant::now(),
+                BranchState::Trying,
+            )
+            .expect("should create branch");
+            context
+                .add_branch(branch_info)
+                .await
+                .expect("should add branch");
+        }
+
+        // Try to add one more - should fail
+        let overflow_branch = BranchInfo::new(
+            "z9hG4bKoverflow",
+            SipUri::parse("sip:target@example.com").unwrap(),
+            Instant::now(),
+            BranchState::Trying,
+        )
+        .expect("should create branch");
+
+        let result = context.add_branch(overflow_branch).await;
+        assert!(matches!(
+            result,
+            Err(ProxyError::TooManyBranches { max: 50 })
+        ));
+    }
+
+    #[test]
+    fn rejects_too_many_proxy_contexts() {
+        let proxy = StatefulProxy::new();
+
+        // Fill up to MAX_PROXY_CONTEXTS
+        for i in 0..MAX_PROXY_CONTEXTS {
+            let request = {
+                let mut headers = Headers::new();
+                headers.push("Call-ID", format!("call-{}", i)).unwrap();
+                headers
+                    .push("Via", format!("SIP/2.0/UDP client;branch=z9hG4bKclient{}", i))
+                    .unwrap();
+                headers.push("Max-Forwards", "70").unwrap();
+
+                Request::new(
+                    RequestLine::new(
+                        Method::Invite,
+                        SipUri::parse("sip:bob@example.com").unwrap(),
+                    ),
+                    headers,
+                    Bytes::new(),
+                )
+                .expect("valid request")
+            };
+
+            proxy
+                .start_context(
+                    request,
+                    format!("call-{}", i).into(),
+                    format!("z9hG4bKclient{}", i).into(),
+                    "proxy.example.com".into(),
+                    "UDP".into(),
+                    ForkMode::None,
+                )
+                .expect("should create context");
+        }
+
+        // Try to add one more - should fail
+        let overflow_request = make_request();
+        let result = proxy.start_context(
+            overflow_request,
+            "overflow-call".into(),
+            "z9hG4bKoverflow".into(),
+            "proxy.example.com".into(),
+            "UDP".into(),
+            ForkMode::None,
+        );
+
+        assert!(matches!(
+            result,
+            Err(ProxyError::TooManyContexts { max: 10_000 })
+        ));
+    }
+
+    #[test]
+    fn accepts_max_length_branch_id() {
+        let max_branch = "z".repeat(MAX_BRANCH_ID_LENGTH);
+        let result = BranchInfo::new(
+            max_branch,
+            SipUri::parse("sip:target@example.com").unwrap(),
+            Instant::now(),
+            BranchState::Trying,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn accepts_valid_branch_id() {
+        let result = BranchInfo::new(
+            "z9hG4bKbranch-valid123",
+            SipUri::parse("sip:target@example.com").unwrap(),
+            Instant::now(),
+            BranchState::Trying,
+        );
+        assert!(result.is_ok());
     }
 }
