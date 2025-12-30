@@ -29,8 +29,8 @@ RFC 2976 defines:
 |-----------|--------|----------|-------------|
 | **Method Definition** | ✅ Complete | `sip-core/src/method.rs:10` | Method::Info enum variant |
 | **Method Parsing** | ✅ Complete | `sip-parse/src/lib.rs` | Parser recognizes "INFO" |
-| **UAC create_info()** | ✅ Complete | `sip-uac/src/lib.rs:388-458` | Creates INFO requests |
-| **UAS handle_info()** | ✅ Complete | `sip-uas/src/lib.rs:328-388` | Handles INFO requests |
+| **UAC create_info()** | ✅ Complete | `sip-uac/src/lib.rs:1385-1463` | Creates INFO requests |
+| **UAS handle_info()** | ✅ Complete | `sip-uas/src/lib.rs:565-620` | Handles INFO requests |
 | **UAC Tests** | ✅ Complete | `sip-uac/src/lib.rs:1374-1479` | 2 comprehensive tests |
 | **UAS Tests** | ✅ Complete | `sip-uas/src/lib.rs:1530-1757` | 4 comprehensive tests |
 | **Documentation** | ✅ Complete | Inline docs + this document | Usage examples and API docs |
@@ -41,7 +41,7 @@ RFC 2976 defines:
 
 ### UAC (User Agent Client) - `create_info()`
 
-**Location:** `crates/sip-uac/src/lib.rs:388-458`
+**Location:** `crates/sip-uac/src/lib.rs:1385-1463`
 
 #### Signature
 
@@ -51,7 +51,7 @@ pub fn create_info(
     dialog: &Dialog,
     content_type: &str,
     body: &str,
-) -> Request
+) -> Result<Request, UacError>
 ```
 
 #### Parameters
@@ -62,12 +62,13 @@ pub fn create_info(
 
 #### Returns
 
-A complete INFO request ready to send, with:
-- Properly incremented CSeq
-- Dialog tags (From/To)
-- Call-ID from dialog
-- Remote target as Request-URI
-- Content-Type and Content-Length headers
+- `Ok(Request)`: A complete INFO request ready to send, with:
+  - Properly incremented CSeq
+  - Dialog tags (From/To)
+  - Call-ID from dialog
+  - Remote target as Request-URI
+  - Content-Type and Content-Length headers
+- `Err(UacError)`: Validation failure (e.g., content type length/control chars, body too large)
 
 #### Example Usage
 
@@ -78,7 +79,7 @@ let uac = UserAgentClient::new(local_uri, contact_uri);
 
 // Send DTMF digit "1" with 100ms duration
 let dtmf_body = "Signal=1\r\nDuration=100\r\n";
-let info = uac.create_info(&dialog, "application/dtmf-relay", dtmf_body);
+let info = uac.create_info(&dialog, "application/dtmf-relay", dtmf_body)?;
 
 // Send via transaction layer
 transaction_manager.send_request(info)?;
@@ -86,7 +87,7 @@ transaction_manager.send_request(info)?;
 
 ### UAS (User Agent Server) - `handle_info()`
 
-**Location:** `crates/sip-uas/src/lib.rs:328-388`
+**Location:** `crates/sip-uas/src/lib.rs:565-620`
 
 #### Signature
 
@@ -117,6 +118,7 @@ pub fn handle_info(
 #### Example Usage
 
 ```rust
+use sip_parse::header;
 use sip_uas::UserAgentServer;
 
 let uas = UserAgentServer::new(local_uri, contact_uri);
@@ -125,8 +127,8 @@ let uas = UserAgentServer::new(local_uri, contact_uri);
 match uas.handle_info(&info_request, &dialog) {
     Ok(response) => {
         // Extract and process payload
-        let content_type = header(&info_request.headers, "Content-Type");
-        let body = String::from_utf8_lossy(&info_request.body);
+        let content_type = header(info_request.headers(), "Content-Type");
+        let body = String::from_utf8_lossy(info_request.body());
 
         match content_type.map(|s| s.as_str()) {
             Some("application/dtmf-relay") => {
@@ -166,7 +168,7 @@ Send DTMF digits during an active call using INFO requests.
 ```rust
 // User presses digit "5" for 200ms
 let dtmf_body = "Signal=5\r\nDuration=200\r\n";
-let info = uac.create_info(&dialog, "application/dtmf-relay", dtmf_body);
+let info = uac.create_info(&dialog, "application/dtmf-relay", dtmf_body)?;
 
 // Send INFO request
 transaction_manager.send_request(info)?;
@@ -177,10 +179,12 @@ transaction_manager.send_request(info)?;
 #### UAS Side (Receiving DTMF)
 
 ```rust
+use sip_parse::header;
+
 match uas.handle_info(&info_request, &dialog) {
     Ok(response) => {
-        if let Some("application/dtmf-relay") = header(&info_request.headers, "Content-Type").map(|s| s.as_str()) {
-            let body = String::from_utf8_lossy(&info_request.body);
+        if let Some("application/dtmf-relay") = header(info_request.headers(), "Content-Type").map(|s| s.as_str()) {
+            let body = String::from_utf8_lossy(info_request.body());
 
             // Parse DTMF payload
             let mut signal = None;
@@ -216,19 +220,20 @@ Exchange application-specific data during a call.
 ```rust
 // Send mute command
 let json_body = r#"{"action":"mute","value":true}"#;
-let info = uac.create_info(&dialog, "application/json", json_body);
+let info = uac.create_info(&dialog, "application/json", json_body)?;
 transaction_manager.send_request(info)?;
 ```
 
 #### UAS Side (Receiving JSON)
 
 ```rust
+use sip_parse::header;
 use serde_json::Value;
 
 match uas.handle_info(&info_request, &dialog) {
     Ok(response) => {
-        if let Some("application/json") = header(&info_request.headers, "Content-Type").map(|s| s.as_str()) {
-            let body = String::from_utf8_lossy(&info_request.body);
+        if let Some("application/json") = header(info_request.headers(), "Content-Type").map(|s| s.as_str()) {
+            let body = String::from_utf8_lossy(info_request.body());
 
             if let Ok(data) = serde_json::from_str::<Value>(&body) {
                 match data["action"].as_str() {
@@ -259,7 +264,7 @@ Send flash hook events for call transfer or hold operations.
 ```rust
 // Send flash hook event
 let flash_body = "FlashHook\r\n";
-let info = uac.create_info(&dialog, "application/hook-flash", flash_body);
+let info = uac.create_info(&dialog, "application/hook-flash", flash_body)?;
 transaction_manager.send_request(info)?;
 ```
 
@@ -270,7 +275,7 @@ Send status updates or notifications during an active call.
 ```rust
 // Send recording notification
 let notification = "Recording started at 2025-01-20T10:30:00Z";
-let info = uac.create_info(&dialog, "text/plain", notification);
+let info = uac.create_info(&dialog, "text/plain", notification)?;
 transaction_manager.send_request(info)?;
 ```
 
@@ -296,7 +301,7 @@ Applications can define custom Content-Types for proprietary signaling:
 ```rust
 // Custom video control commands
 let video_cmd = r#"<command>start-screen-share</command>"#;
-let info = uac.create_info(&dialog, "application/x-myapp-video+xml", video_cmd);
+let info = uac.create_info(&dialog, "application/x-myapp-video+xml", video_cmd)?;
 ```
 
 ---
@@ -305,7 +310,7 @@ let info = uac.create_info(&dialog, "application/x-myapp-video+xml", video_cmd);
 
 ### UAC Tests
 
-**Location:** `crates/sip-uac/src/lib.rs:1374-1479`
+**Location:** `crates/sip-uac/src/lib.rs:3561-3669`
 
 | Test | Purpose |
 |------|---------|
@@ -324,7 +329,7 @@ let info = uac.create_info(&dialog, "application/x-myapp-video+xml", video_cmd);
 
 ### UAS Tests
 
-**Location:** `crates/sip-uas/src/lib.rs:1530-1757`
+**Location:** `crates/sip-uas/src/lib.rs:2560-2847`
 
 | Test | Purpose |
 |------|---------|
@@ -379,8 +384,8 @@ test result: ok. 28 passed; 0 failed
 
 | File | Lines | Changes |
 |------|-------|---------|
-| `sip-uac/src/lib.rs` | 388-458, 1374-1479 | Added create_info() method and 2 tests |
-| `sip-uas/src/lib.rs` | 328-388, 1530-1757 | Added handle_info() method and 4 tests |
+| `sip-uac/src/lib.rs` | 1385-1463, 3561-3669 | Added create_info() method and 2 tests |
+| `sip-uas/src/lib.rs` | 565-620, 2560-2847 | Added handle_info() method and 4 tests |
 
 ### No Changes Required
 
@@ -403,7 +408,7 @@ let uac = UserAgentClient::new(local_uri, contact_uri);
 
 // Send INFO with DTMF
 let dtmf = "Signal=3\r\nDuration=150\r\n";
-let info_request = uac.create_info(&dialog, "application/dtmf-relay", dtmf);
+let info_request = uac.create_info(&dialog, "application/dtmf-relay", dtmf)?;
 
 // Send via transaction layer
 let info_transaction = transaction_manager.send_request(info_request)?;
@@ -421,14 +426,16 @@ match info_transaction.wait_for_response().await? {
 
 ```rust
 // UAS Side
+use sip_parse::header;
+
 let uas = UserAgentServer::new(local_uri, contact_uri);
 
 // Handle incoming INFO
 match uas.handle_info(&info_request, &dialog) {
     Ok(response) => {
         // Process INFO payload (extract DTMF, etc.)
-        let content_type = header(&info_request.headers, "Content-Type");
-        let body = String::from_utf8_lossy(&info_request.body);
+        let content_type = header(info_request.headers(), "Content-Type");
+        let body = String::from_utf8_lossy(info_request.body());
 
         process_info_payload(content_type, &body);
 
@@ -499,7 +506,7 @@ match uas.handle_info(&info_request, &dialog) {
 
 ### Current Limitations
 
-1. **No Content-Type Validation**: Methods accept any content_type string without validation
+1. **No Semantic Content-Type Validation**: Only basic length/control-char checks are performed
 2. **No Payload Parsing**: Applications must parse INFO bodies themselves
 3. **No DTMF Helper Types**: No dedicated DTMF types/parsers (applications parse manually)
 
