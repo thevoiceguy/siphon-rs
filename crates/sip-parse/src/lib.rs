@@ -1083,8 +1083,8 @@ l: 0\r\n\r\n",
         assert_eq!(mime.param("charset"), Some("utf-8"));
 
         let sdp = parse_sdp(resp.body()).expect("sdp");
-        assert_eq!(sdp.version, 0);
-        assert_eq!(sdp.session_name, "call");
+        assert_eq!(sdp.version(), 0);
+        assert_eq!(sdp.session_name(), "call");
     }
 
     #[test]

@@ -55,9 +55,9 @@
 //!                 m=audio 49170 RTP/AVP 0\r\n";
 //!
 //! let session = SdpSession::parse(sdp_text).unwrap();
-//! assert_eq!(session.version, 0);
-//! assert_eq!(session.session_name, "Example Session");
-//! assert_eq!(session.media.len(), 1);
+//! assert_eq!(session.version(), 0);
+//! assert_eq!(session.session_name(), "Example Session");
+//! assert_eq!(session.media().len(), 1);
 //!
 //! // Generate SDP
 //! let generated = session.to_string();
@@ -293,62 +293,94 @@ fn validate_capability_number(cap_num: u8) -> Result<(), SdpError> {
 pub struct SdpSession {
     // Required session-level fields
     /// Protocol version (v=), currently always 0
-    pub version: u32,
+    version: u32,
     /// Session originator and identifier (o=)
-    pub origin: Origin,
+    pub(crate) origin: Origin,
     /// Session name (s=)
-    pub session_name: String,
+    session_name: String,
 
     // Optional session-level fields
     /// Session information (i=)
-    pub session_info: Option<String>,
+    session_info: Option<String>,
     /// URI of additional information (u=)
-    pub uri: Option<String>,
+    uri: Option<String>,
     /// Email addresses (e=, multiple allowed)
-    pub emails: Vec<String>,
+    emails: Vec<String>,
     /// Phone numbers (p=, multiple allowed)
-    pub phones: Vec<String>,
+    phones: Vec<String>,
     /// Connection information (c=)
-    pub connection: Option<Connection>,
+    pub(crate) connection: Option<Connection>,
     /// Bandwidth information (b=, multiple allowed)
-    pub bandwidth: Vec<Bandwidth>,
+    pub(crate) bandwidth: Vec<Bandwidth>,
     /// Timing information (t=, at least one required)
-    pub timing: Vec<Timing>,
+    pub(crate) timing: Vec<Timing>,
     /// Repeat times (r=)
-    pub repeat_times: Vec<RepeatTime>,
+    repeat_times: Vec<RepeatTime>,
     /// Time zone adjustments (z=)
-    pub time_zones: Vec<TimeZone>,
+    time_zones: Vec<TimeZone>,
     /// Encryption key (k=)
-    pub encryption_key: Option<EncryptionKey>,
+    pub(crate) encryption_key: Option<EncryptionKey>,
     /// Session-level attributes (a=)
-    pub attributes: Vec<Attribute>,
+    attributes: Vec<Attribute>,
     /// Media groups (a=group:, RFC 3388)
-    pub groups: Vec<MediaGroup>,
+    groups: Vec<MediaGroup>,
     /// Capability set (a=sqn/cdsc/cpar, RFC 3407)
-    pub capability_set: Option<SdpCapabilitySet>,
+    pub(crate) capability_set: Option<SdpCapabilitySet>,
 
     // Media descriptions
     /// Media descriptions (m=, zero or more)
-    pub media: Vec<MediaDescription>,
+    pub(crate) media: Vec<MediaDescription>,
 }
 
 /// Origin line (o=) components.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Origin {
-    pub username: String,
-    pub sess_id: String,
-    pub sess_version: String,
-    pub nettype: String,
-    pub addrtype: String,
-    pub unicast_address: String,
+    pub(crate) username: String,
+    pub(crate) sess_id: String,
+    pub(crate) sess_version: String,
+    pub(crate) nettype: String,
+    pub(crate) addrtype: String,
+    pub(crate) unicast_address: String,
+}
+
+impl Origin {
+    /// Returns the username.
+    pub fn username(&self) -> &str {
+        &self.username
+    }
+
+    /// Returns the session ID.
+    pub fn sess_id(&self) -> &str {
+        &self.sess_id
+    }
+
+    /// Returns the session version.
+    pub fn sess_version(&self) -> &str {
+        &self.sess_version
+    }
+
+    /// Returns the network type.
+    pub fn nettype(&self) -> &str {
+        &self.nettype
+    }
+
+    /// Returns the address type.
+    pub fn addrtype(&self) -> &str {
+        &self.addrtype
+    }
+
+    /// Returns the unicast address.
+    pub fn unicast_address(&self) -> &str {
+        &self.unicast_address
+    }
 }
 
 /// Connection line (c=) components.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Connection {
-    pub nettype: String,
-    pub addrtype: String,
-    pub connection_address: String,
+    pub(crate) nettype: String,
+    pub(crate) addrtype: String,
+    pub(crate) connection_address: String,
 }
 
 /// Bandwidth modifier type.
@@ -422,12 +454,12 @@ impl fmt::Display for BandwidthType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bandwidth {
     /// Bandwidth modifier type (e.g., "AS", "CT", "RS", "RR", "TIAS")
-    pub bwtype: String,
+    bwtype: String,
     /// Bandwidth value
     ///
     /// - For AS, CT: kilobits per second (kbps)
     /// - For RS, RR, TIAS: bits per second (bps)
-    pub bandwidth: u64,
+    bandwidth: u64,
 }
 
 impl Bandwidth {
@@ -489,30 +521,30 @@ impl Bandwidth {
 /// Timing line (t=) components.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Timing {
-    pub start_time: u64,
-    pub stop_time: u64,
+    start_time: u64,
+    stop_time: u64,
 }
 
 /// Repeat time line (r=) components.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepeatTime {
-    pub repeat_interval: String,
-    pub active_duration: String,
-    pub offsets: Vec<String>,
+    repeat_interval: String,
+    active_duration: String,
+    offsets: Vec<String>,
 }
 
 /// Time zone adjustment (z=) components.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimeZone {
-    pub adjustment_time: u64,
-    pub offset: String,
+    adjustment_time: u64,
+    offset: String,
 }
 
 /// Encryption key (k=) components.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncryptionKey {
-    pub method: String,
-    pub key: Option<String>,
+    method: String,
+    key: Option<String>,
 }
 
 /// Generic attribute (a=).
@@ -522,41 +554,41 @@ pub struct EncryptionKey {
 /// - Value: `a=rtpmap:99 h263/90000` (has value)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Attribute {
-    pub name: String,
-    pub value: Option<String>,
+    pub(crate) name: String,
+    pub(crate) value: Option<String>,
 }
 
 /// Media description (m=) with associated fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediaDescription {
     /// Media type (audio, video, text, application, message)
-    pub media: String,
+    pub(crate) media: String,
     /// Transport port
-    pub port: u16,
+    pub(crate) port: u16,
     /// Number of ports (for m=video 49170/2)
-    pub port_count: Option<u16>,
+    pub(crate) port_count: Option<u16>,
     /// Transport protocol (RTP/AVP, RTP/SAVP, udp, etc.)
-    pub proto: String,
+    pub(crate) proto: String,
     /// Format list (payload types for RTP, etc.)
-    pub fmt: Vec<String>,
+    pub(crate) fmt: Vec<String>,
 
     // Media-level optional fields
     /// Media title (i=)
-    pub title: Option<String>,
+    pub(crate) title: Option<String>,
     /// Connection information (c=)
-    pub connection: Option<Connection>,
+    pub(crate) connection: Option<Connection>,
     /// Bandwidth information (b=, multiple allowed)
-    pub bandwidth: Vec<Bandwidth>,
+    pub(crate) bandwidth: Vec<Bandwidth>,
     /// Encryption key (k=)
-    pub encryption_key: Option<EncryptionKey>,
+    pub(crate) encryption_key: Option<EncryptionKey>,
     /// Media-level attributes (a=)
-    pub attributes: Vec<Attribute>,
+    pub(crate) attributes: Vec<Attribute>,
     /// Media identification tag (a=mid:, RFC 3388)
-    pub mid: Option<String>,
+    pub(crate) mid: Option<String>,
     /// RTCP port and address (a=rtcp:, RFC 3605)
-    pub rtcp: Option<RtcpAttribute>,
+    pub(crate) rtcp: Option<RtcpAttribute>,
     /// Capability set (a=sqn/cdsc/cpar, RFC 3407)
-    pub capability_set: Option<SdpCapabilitySet>,
+    pub(crate) capability_set: Option<SdpCapabilitySet>,
 }
 
 /// Direction attribute values.
@@ -596,13 +628,13 @@ impl Direction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RtcpAttribute {
     /// RTCP port number
-    pub port: u16,
+    pub(crate) port: u16,
     /// Network type (e.g., "IN"), optional
-    pub nettype: Option<String>,
+    nettype: Option<String>,
     /// Address type (e.g., "IP4", "IP6"), optional
-    pub addrtype: Option<String>,
+    addrtype: Option<String>,
     /// Connection address, optional
-    pub connection_address: Option<String>,
+    connection_address: Option<String>,
 }
 
 impl RtcpAttribute {
@@ -682,17 +714,17 @@ impl std::fmt::Display for RtcpAttribute {
 /// RTP map attribute (a=rtpmap).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RtpMap {
-    pub payload_type: u8,
-    pub encoding_name: String,
-    pub clock_rate: u32,
-    pub encoding_params: Option<String>,
+    pub(crate) payload_type: u8,
+    pub(crate) encoding_name: String,
+    pub(crate) clock_rate: u32,
+    pub(crate) encoding_params: Option<String>,
 }
 
 /// Format parameters attribute (a=fmtp).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fmtp {
-    pub format: String,
-    pub params: String,
+    format: String,
+    params: String,
 }
 
 /// Group semantics for media line grouping (RFC 3388, RFC 3524).
@@ -746,9 +778,9 @@ impl fmt::Display for GroupSemantics {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediaGroup {
     /// Semantics of the group (LS, FID, etc.)
-    pub semantics: GroupSemantics,
+    semantics: GroupSemantics,
     /// Media identification tags (references to a=mid: values)
-    pub mids: Vec<String>,
+    mids: Vec<String>,
 }
 
 impl MediaGroup {
@@ -804,13 +836,13 @@ impl fmt::Display for MediaGroup {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapabilityDescription {
     /// Capability number (1-255, increments by format count)
-    pub cap_num: u8,
+    cap_num: u8,
     /// Media type (audio, video, etc.)
-    pub media: String,
+    pub(crate) media: String,
     /// Transport protocol
-    pub transport: String,
+    transport: String,
     /// Format list (payload types, etc.)
-    pub formats: Vec<String>,
+    formats: Vec<String>,
 }
 
 impl CapabilityDescription {
@@ -895,9 +927,9 @@ impl CapabilityParameterType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapabilityParameter {
     /// Parameter type (general, min, or max)
-    pub param_type: CapabilityParameterType,
+    param_type: CapabilityParameterType,
     /// Parameter content (e.g., "a=fmtp:96 0-16,32-35")
-    pub value: String,
+    value: String,
 }
 
 impl CapabilityParameter {
@@ -922,11 +954,11 @@ impl fmt::Display for CapabilityParameter {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SdpCapabilitySet {
     /// Sequence number (0-255, increments modulo 256)
-    pub sequence_number: u8,
+    sequence_number: u8,
     /// Capability descriptions
-    pub descriptions: Vec<CapabilityDescription>,
+    descriptions: Vec<CapabilityDescription>,
     /// Capability parameters
-    pub parameters: Vec<CapabilityParameter>,
+    parameters: Vec<CapabilityParameter>,
 }
 
 impl SdpCapabilitySet {
@@ -1127,9 +1159,9 @@ impl fmt::Display for PreconditionDirection {
 /// Example: a=curr:qos e2e sendrecv
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CurrentStatus {
-    pub precondition_type: PreconditionType,
-    pub status_type: StatusType,
-    pub direction: PreconditionDirection,
+    pub(crate) precondition_type: PreconditionType,
+    pub(crate) status_type: StatusType,
+    pub(crate) direction: PreconditionDirection,
 }
 
 impl CurrentStatus {
@@ -1176,10 +1208,10 @@ impl fmt::Display for CurrentStatus {
 /// Example: a=des:qos mandatory e2e sendrecv
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DesiredStatus {
-    pub precondition_type: PreconditionType,
-    pub strength: StrengthTag,
-    pub status_type: StatusType,
-    pub direction: PreconditionDirection,
+    pub(crate) precondition_type: PreconditionType,
+    pub(crate) strength: StrengthTag,
+    pub(crate) status_type: StatusType,
+    pub(crate) direction: PreconditionDirection,
 }
 
 impl DesiredStatus {
@@ -1229,9 +1261,9 @@ impl fmt::Display for DesiredStatus {
 /// Example: a=conf:qos e2e recv
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfirmStatus {
-    pub precondition_type: PreconditionType,
-    pub status_type: StatusType,
-    pub direction: PreconditionDirection,
+    pub(crate) precondition_type: PreconditionType,
+    pub(crate) status_type: StatusType,
+    pub(crate) direction: PreconditionDirection,
 }
 
 impl ConfirmStatus {
@@ -1851,6 +1883,93 @@ impl SdpSession {
 
         true
     }
+
+    // Accessor methods for private fields
+
+    /// Returns the protocol version.
+    pub fn version(&self) -> u32 {
+        self.version
+    }
+
+    /// Returns a reference to the origin.
+    pub fn origin(&self) -> &Origin {
+        &self.origin
+    }
+
+    /// Returns the session name.
+    pub fn session_name(&self) -> &str {
+        &self.session_name
+    }
+
+    /// Returns the session information.
+    pub fn session_info(&self) -> Option<&str> {
+        self.session_info.as_deref()
+    }
+
+    /// Returns the URI.
+    pub fn uri(&self) -> Option<&str> {
+        self.uri.as_deref()
+    }
+
+    /// Returns the email addresses.
+    pub fn emails(&self) -> &[String] {
+        &self.emails
+    }
+
+    /// Returns the phone numbers.
+    pub fn phones(&self) -> &[String] {
+        &self.phones
+    }
+
+    /// Returns the connection information.
+    pub fn connection(&self) -> Option<&Connection> {
+        self.connection.as_ref()
+    }
+
+    /// Returns the bandwidth specifications.
+    pub fn bandwidth(&self) -> &[Bandwidth] {
+        &self.bandwidth
+    }
+
+    /// Returns the timing information.
+    pub fn timing(&self) -> &[Timing] {
+        &self.timing
+    }
+
+    /// Returns the repeat times.
+    pub fn repeat_times(&self) -> &[RepeatTime] {
+        &self.repeat_times
+    }
+
+    /// Returns the time zone adjustments.
+    pub fn time_zones(&self) -> &[TimeZone] {
+        &self.time_zones
+    }
+
+    /// Returns the encryption key.
+    pub fn encryption_key(&self) -> Option<&EncryptionKey> {
+        self.encryption_key.as_ref()
+    }
+
+    /// Returns the session-level attributes.
+    pub fn attributes(&self) -> &[Attribute] {
+        &self.attributes
+    }
+
+    /// Returns the media groups.
+    pub fn groups(&self) -> &[MediaGroup] {
+        &self.groups
+    }
+
+    /// Returns the capability set.
+    pub fn capability_set(&self) -> Option<&SdpCapabilitySet> {
+        self.capability_set.as_ref()
+    }
+
+    /// Returns the media descriptions.
+    pub fn media(&self) -> &[MediaDescription] {
+        &self.media
+    }
 }
 
 /// Checks if a current direction meets the desired direction requirement.
@@ -2021,6 +2140,73 @@ impl MediaDescription {
         }
 
         Ok(desc)
+    }
+
+    // Accessor methods for private fields
+
+    /// Returns the media type.
+    pub fn media(&self) -> &str {
+        &self.media
+    }
+
+    /// Returns the transport port.
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    /// Returns the number of ports.
+    pub fn port_count(&self) -> Option<u16> {
+        self.port_count
+    }
+
+    /// Returns the transport protocol.
+    pub fn proto(&self) -> &str {
+        &self.proto
+    }
+
+    /// Returns the format list.
+    pub fn fmt(&self) -> &[String] {
+        &self.fmt
+    }
+
+    /// Returns the media title.
+    pub fn title(&self) -> Option<&str> {
+        self.title.as_deref()
+    }
+
+    /// Returns the connection information.
+    pub fn connection(&self) -> Option<&Connection> {
+        self.connection.as_ref()
+    }
+
+    /// Returns the bandwidth specifications.
+    pub fn bandwidth(&self) -> &[Bandwidth] {
+        &self.bandwidth
+    }
+
+    /// Returns the encryption key.
+    pub fn encryption_key(&self) -> Option<&EncryptionKey> {
+        self.encryption_key.as_ref()
+    }
+
+    /// Returns the media-level attributes.
+    pub fn attributes(&self) -> &[Attribute] {
+        &self.attributes
+    }
+
+    /// Returns the media identification tag.
+    pub fn mid(&self) -> Option<&str> {
+        self.mid.as_deref()
+    }
+
+    /// Returns the RTCP port and address.
+    pub fn rtcp(&self) -> Option<&RtcpAttribute> {
+        self.rtcp.as_ref()
+    }
+
+    /// Returns the capability set.
+    pub fn capability_set(&self) -> Option<&SdpCapabilitySet> {
+        self.capability_set.as_ref()
     }
 }
 
@@ -2201,6 +2387,28 @@ impl RtpMap {
             )
         }
     }
+
+    // Accessor methods for private fields
+
+    /// Returns the payload type.
+    pub fn payload_type(&self) -> u8 {
+        self.payload_type
+    }
+
+    /// Returns the encoding name.
+    pub fn encoding_name(&self) -> &str {
+        &self.encoding_name
+    }
+
+    /// Returns the clock rate.
+    pub fn clock_rate(&self) -> u32 {
+        self.clock_rate
+    }
+
+    /// Returns the encoding parameters.
+    pub fn encoding_params(&self) -> Option<&str> {
+        self.encoding_params.as_deref()
+    }
 }
 
 impl Fmtp {
@@ -2227,6 +2435,18 @@ impl Fmtp {
     /// Formats as attribute value.
     pub fn to_value(&self) -> String {
         format!("{} {}", self.format, self.params)
+    }
+
+    // Accessor methods for private fields
+
+    /// Returns the format.
+    pub fn format(&self) -> &str {
+        &self.format
+    }
+
+    /// Returns the format parameters.
+    pub fn params(&self) -> &str {
+        &self.params
     }
 }
 

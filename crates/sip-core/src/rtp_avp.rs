@@ -23,15 +23,42 @@ const MAX_ENCODING_NAME_LENGTH: usize = 32;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StaticPayloadType {
     /// Payload type number (0-95)
-    pub payload_type: u8,
+    payload_type: u8,
     /// Encoding name (e.g., "PCMU", "GSM", "H261")
-    pub encoding_name: &'static str,
+    encoding_name: &'static str,
     /// Clock rate in Hz
-    pub clock_rate: u32,
+    clock_rate: u32,
     /// Number of channels (for audio) or None (for video)
-    pub channels: Option<u8>,
+    channels: Option<u8>,
     /// Media type ("audio" or "video")
-    pub media_type: &'static str,
+    media_type: &'static str,
+}
+
+impl StaticPayloadType {
+    /// Returns the payload type number.
+    pub const fn payload_type(&self) -> u8 {
+        self.payload_type
+    }
+
+    /// Returns the encoding name.
+    pub const fn encoding_name(&self) -> &'static str {
+        self.encoding_name
+    }
+
+    /// Returns the clock rate in Hz.
+    pub const fn clock_rate(&self) -> u32 {
+        self.clock_rate
+    }
+
+    /// Returns the number of channels (for audio) or None (for video).
+    pub const fn channels(&self) -> Option<u8> {
+        self.channels
+    }
+
+    /// Returns the media type ("audio" or "video").
+    pub const fn media_type(&self) -> &'static str {
+        self.media_type
+    }
 }
 
 impl fmt::Display for StaticPayloadType {
@@ -39,9 +66,9 @@ impl fmt::Display for StaticPayloadType {
         write!(
             f,
             "PT {} {} {}/{}",
-            self.payload_type, self.encoding_name, self.media_type, self.clock_rate
+            self.payload_type(), self.encoding_name(), self.media_type(), self.clock_rate()
         )?;
-        if let Some(ch) = self.channels {
+        if let Some(ch) = self.channels() {
             write!(f, "/{}", ch)?;
         }
         Ok(())
@@ -423,8 +450,8 @@ pub const STATIC_PAYLOAD_TYPES: [Option<&'static StaticPayloadType>; 128] = [
 /// use sip_core::rtp_avp::get_static_payload_type;
 ///
 /// let pcmu = get_static_payload_type(0).unwrap();
-/// assert_eq!(pcmu.encoding_name, "PCMU");
-/// assert_eq!(pcmu.clock_rate, 8000);
+/// assert_eq!(pcmu.encoding_name(), "PCMU");
+/// assert_eq!(pcmu.clock_rate(), 8000);
 ///
 /// // Dynamic payload types return None
 /// assert!(get_static_payload_type(96).is_none());
@@ -474,7 +501,7 @@ pub fn get_payload_type(encoding_name: &str) -> Option<u8> {
         .enumerate()
         .find_map(|(pt, opt_info)| {
             opt_info.and_then(|info| {
-                if info.encoding_name.to_uppercase() == name_upper {
+                if info.encoding_name().to_uppercase() == name_upper {
                     Some(pt as u8)
                 } else {
                     None
@@ -515,7 +542,7 @@ pub fn get_payload_type_with_rate(encoding_name: &str, clock_rate: u32) -> Optio
         .enumerate()
         .find_map(|(pt, opt_info)| {
             opt_info.and_then(|info| {
-                if info.encoding_name.to_uppercase() == name_upper && info.clock_rate == clock_rate
+                if info.encoding_name().to_uppercase() == name_upper && info.clock_rate() == clock_rate
                 {
                     Some(pt as u8)
                 } else {
@@ -550,29 +577,29 @@ mod tests {
     #[test]
     fn test_get_static_payload_type_pcmu() {
         let pt = get_static_payload_type(0).unwrap();
-        assert_eq!(pt.payload_type, 0);
-        assert_eq!(pt.encoding_name, "PCMU");
-        assert_eq!(pt.clock_rate, 8000);
-        assert_eq!(pt.channels, Some(1));
-        assert_eq!(pt.media_type, "audio");
+        assert_eq!(pt.payload_type(), 0);
+        assert_eq!(pt.encoding_name(), "PCMU");
+        assert_eq!(pt.clock_rate(), 8000);
+        assert_eq!(pt.channels(), Some(1));
+        assert_eq!(pt.media_type(), "audio");
     }
 
     #[test]
     fn test_get_static_payload_type_g729() {
         let pt = get_static_payload_type(18).unwrap();
-        assert_eq!(pt.payload_type, 18);
-        assert_eq!(pt.encoding_name, "G729");
-        assert_eq!(pt.clock_rate, 8000);
+        assert_eq!(pt.payload_type(), 18);
+        assert_eq!(pt.encoding_name(), "G729");
+        assert_eq!(pt.clock_rate(), 8000);
     }
 
     #[test]
     fn test_get_static_payload_type_h261() {
         let pt = get_static_payload_type(31).unwrap();
-        assert_eq!(pt.payload_type, 31);
-        assert_eq!(pt.encoding_name, "H261");
-        assert_eq!(pt.clock_rate, 90000);
-        assert_eq!(pt.media_type, "video");
-        assert_eq!(pt.channels, None);
+        assert_eq!(pt.payload_type(), 31);
+        assert_eq!(pt.encoding_name(), "H261");
+        assert_eq!(pt.clock_rate(), 90000);
+        assert_eq!(pt.media_type(), "video");
+        assert_eq!(pt.channels(), None);
     }
 
     #[test]
@@ -695,8 +722,8 @@ mod tests {
         let pcmu = get_static_payload_type(0).unwrap();
 
         // Can read fields
-        let _ = pcmu.payload_type;
-        let _ = pcmu.encoding_name;
+        let _ = pcmu.payload_type();
+        let _ = pcmu.encoding_name();
 
         // Cannot mutate (these would not compile):
         // pcmu.payload_type = 99;  // ← Does not compile! (const data)

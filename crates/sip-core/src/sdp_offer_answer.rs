@@ -310,14 +310,14 @@ impl CodecInfo {
 
     /// Check if this codec matches an RtpMap
     pub fn matches(&self, rtpmap: &RtpMap) -> bool {
-        if !self.name.eq_ignore_ascii_case(&rtpmap.encoding_name) {
+        if !self.name.eq_ignore_ascii_case(&rtpmap.encoding_name()) {
             return false;
         }
-        if self.clock_rate != rtpmap.clock_rate {
+        if self.clock_rate() != rtpmap.clock_rate() {
             return false;
         }
 
-        match (self.channels, rtpmap.encoding_params.as_deref()) {
+        match (self.channels, rtpmap.encoding_params().as_deref()) {
             (Some(codec_channels), Some(params)) => {
                 params.parse::<u16>().ok() == Some(codec_channels)
             }
@@ -453,10 +453,10 @@ impl OfferAnswerEngine {
         options: AnswerOptions,
     ) -> Result<SdpSession, NegotiationError> {
         // Validate offer size
-        if offer.media.len() > MAX_MEDIA_STREAMS {
+        if offer.media().len() > MAX_MEDIA_STREAMS {
             return Err(NegotiationError::TooManyMediaStreams {
                 max: MAX_MEDIA_STREAMS,
-                actual: offer.media.len(),
+                actual: offer.media().len(),
             });
         }
 
@@ -470,7 +470,7 @@ impl OfferAnswerEngine {
             unicast_address: options.local_address().to_string(),
         };
 
-        let mut answer = SdpSession::new(answer_origin, offer.session_name.clone());
+        let mut answer = SdpSession::new(answer_origin, offer.session_name().to_string());
 
         // Copy timing from offer (RFC 3264: t= line must match)
         answer.timing = offer.timing.clone();
@@ -485,7 +485,7 @@ impl OfferAnswerEngine {
         // Process each media stream in order - use getter
         let mut current_port = options.base_port();
 
-        for (idx, offer_media) in offer.media.iter().enumerate() {
+        for (idx, offer_media) in offer.media().iter().enumerate() {
             // Check if this media should be rejected - use getter
             let should_reject = options.reject_media().contains(&idx);
 
@@ -522,7 +522,7 @@ impl OfferAnswerEngine {
         let offer_rtpmaps = self.extract_rtpmaps(offer_media);
 
         // Select supported codecs - use getters
-        let supported_codecs = match offer_media.media.as_str() {
+        let supported_codecs = match offer_media.media() {
             "audio" => options.audio_codecs(),
             "video" => options.video_codecs(),
             _ => {
@@ -585,38 +585,38 @@ impl OfferAnswerEngine {
         self.handle_preconditions(offer_media, options, &mut attributes);
 
         Ok(MediaDescription {
-            media: offer_media.media.clone(),
+            media: offer_media.media().to_string(),
             port,
             port_count: None,
-            proto: offer_media.proto.clone(),
+            proto: offer_media.proto().to_string(),
             fmt,
             title: None,
             connection: None, // Use session-level
             bandwidth: Vec::new(),
             encryption_key: None,
             attributes,
-            mid: offer_media.mid.clone(),
-            rtcp: offer_media.rtcp.clone(),
-            capability_set: offer_media.capability_set.clone(),
+            mid: offer_media.mid().map(String::from),
+            rtcp: offer_media.rtcp().cloned(),
+            capability_set: offer_media.capability_set().cloned(),
         })
     }
 
     /// Creates a rejected media description (port 0).
     fn create_rejected_media(&self, offer_media: &MediaDescription) -> MediaDescription {
         MediaDescription {
-            media: offer_media.media.clone(),
+            media: offer_media.media().to_string(),
             port: 0,
             port_count: None,
-            proto: offer_media.proto.clone(),
-            fmt: offer_media.fmt.clone(),
+            proto: offer_media.proto().to_string(),
+            fmt: offer_media.fmt().to_vec(),
             title: None,
             connection: None,
             bandwidth: Vec::new(),
             encryption_key: None,
             attributes: Vec::new(),
-            mid: offer_media.mid.clone(),
+            mid: offer_media.mid().map(String::from),
             rtcp: None,
-            capability_set: offer_media.capability_set.clone(),
+            capability_set: offer_media.capability_set().cloned(),
         }
     }
 
@@ -624,18 +624,18 @@ impl OfferAnswerEngine {
     fn extract_rtpmaps(&self, media: &MediaDescription) -> HashMap<String, RtpMap> {
         let mut rtpmaps = HashMap::new();
 
-        for attr in &media.attributes {
+        for attr in media.attributes() {
             if attr.name == "rtpmap" {
                 if let Some(ref value) = attr.value {
                     if let Some(rtpmap) = RtpMap::parse(value) {
-                        rtpmaps.insert(rtpmap.payload_type.to_string(), rtpmap);
+                        rtpmaps.insert(rtpmap.payload_type().to_string(), rtpmap);
                     }
                 }
             }
         }
 
         // Add static payload types if not explicitly mapped
-        for fmt in &media.fmt {
+        for fmt in media.fmt() {
             if !rtpmaps.contains_key(fmt) {
                 if let Some(rtpmap) = self.get_static_payload_rtpmap(fmt) {
                     rtpmaps.insert(fmt.clone(), rtpmap);
@@ -691,11 +691,11 @@ impl OfferAnswerEngine {
 
     /// Finds fmtp attribute value for a specific payload type.
     fn find_fmtp_for_payload(&self, media: &MediaDescription, payload: &str) -> Option<String> {
-        for attr in &media.attributes {
+        for attr in media.attributes() {
             if attr.name == "fmtp" {
                 if let Some(ref value) = attr.value {
                     if let Some(fmtp) = Fmtp::parse(value) {
-                        if fmtp.format == payload {
+                        if fmtp.format() == payload {
                             return Some(value.clone());
                         }
                     }
@@ -707,7 +707,7 @@ impl OfferAnswerEngine {
 
     /// Gets direction attribute from media description.
     fn get_media_direction(&self, media: &MediaDescription) -> Direction {
-        for attr in &media.attributes {
+        for attr in media.attributes() {
             if attr.value.is_none() {
                 if let Some(dir) = Direction::parse(&attr.name) {
                     return dir;
@@ -731,7 +731,7 @@ impl OfferAnswerEngine {
     pub fn create_hold_offer(&self, session: &SdpSession) -> SdpSession {
         let mut hold_session = session.clone();
 
-        if let Ok(version) = hold_session.origin.sess_version.parse::<u64>() {
+        if let Ok(version) = hold_session.origin().sess_version().parse::<u64>() {
             hold_session.origin.sess_version = (version + 1).to_string();
         }
 
@@ -939,10 +939,10 @@ mod tests {
             .generate_answer(&offer, AnswerOptions::default())
             .unwrap();
 
-        assert_eq!(answer.media.len(), 1);
-        assert_eq!(answer.media[0].media, "audio");
-        assert_ne!(answer.media[0].port, 0);
-        assert!(!answer.media[0].fmt.is_empty());
+        assert_eq!(answer.media().len(), 1);
+        assert_eq!(answer.media()[0].media, "audio");
+        assert_ne!(answer.media()[0].port, 0);
+        assert!(!answer.media()[0].fmt.is_empty());
     }
 
     #[test]
@@ -969,9 +969,9 @@ mod tests {
         let engine = OfferAnswerEngine::new();
         let answer = engine.generate_answer(&offer, options).unwrap();
 
-        assert_eq!(answer.media[0].fmt.len(), 2);
-        assert!(answer.media[0].fmt.contains(&"0".to_string()));
-        assert!(answer.media[0].fmt.contains(&"8".to_string()));
+        assert_eq!(answer.media()[0].fmt.len(), 2);
+        assert!(answer.media()[0].fmt.contains(&"0".to_string()));
+        assert!(answer.media()[0].fmt.contains(&"8".to_string()));
     }
 
     #[test]
@@ -992,9 +992,9 @@ mod tests {
         let engine = OfferAnswerEngine::new();
         let answer = engine.generate_answer(&offer, options).unwrap();
 
-        assert_eq!(answer.media.len(), 2);
-        assert_ne!(answer.media[0].port, 0);
-        assert_eq!(answer.media[1].port, 0);
+        assert_eq!(answer.media().len(), 2);
+        assert_ne!(answer.media()[0].port, 0);
+        assert_eq!(answer.media()[1].port, 0);
     }
 
     #[test]
@@ -1013,7 +1013,7 @@ mod tests {
             .generate_answer(&offer, AnswerOptions::default())
             .unwrap();
 
-        let answer_dir = engine.get_media_direction(&answer.media[0]);
+        let answer_dir = engine.get_media_direction(&answer.media()[0]);
         assert_eq!(answer_dir, Direction::RecvOnly);
     }
 
@@ -1031,7 +1031,7 @@ mod tests {
         let engine = OfferAnswerEngine::new();
         let hold_offer = engine.create_hold_offer(&active_session);
 
-        let hold_dir = engine.get_media_direction(&hold_offer.media[0]);
+        let hold_dir = engine.get_media_direction(&hold_offer.media()[0]);
         assert_eq!(hold_dir, Direction::SendOnly);
         assert_eq!(hold_offer.origin.sess_version, "1");
     }
@@ -1050,7 +1050,7 @@ mod tests {
         let engine = OfferAnswerEngine::new();
         let resume_offer = engine.create_resume_offer(&held_session);
 
-        let resume_dir = engine.get_media_direction(&resume_offer.media[0]);
+        let resume_dir = engine.get_media_direction(&resume_offer.media()[0]);
         assert_eq!(resume_dir, Direction::SendRecv);
         assert_eq!(resume_offer.origin.sess_version, "2");
     }
@@ -1070,9 +1070,9 @@ mod tests {
             .generate_answer(&offer, AnswerOptions::default())
             .unwrap();
 
-        assert_eq!(answer.media[0].fmt.len(), 2);
-        assert!(answer.media[0].fmt.contains(&"0".to_string()));
-        assert!(answer.media[0].fmt.contains(&"8".to_string()));
+        assert_eq!(answer.media()[0].fmt.len(), 2);
+        assert!(answer.media()[0].fmt.contains(&"0".to_string()));
+        assert!(answer.media()[0].fmt.contains(&"8".to_string()));
     }
 
     #[test]
@@ -1092,7 +1092,7 @@ mod tests {
             .generate_answer(&offer, AnswerOptions::default())
             .unwrap();
 
-        let has_fmtp = answer.media[0]
+        let has_fmtp = answer.media()[0]
             .attributes
             .iter()
             .any(|attr| attr.name == "fmtp" && attr.value.as_ref().unwrap().starts_with("101"));

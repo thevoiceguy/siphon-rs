@@ -440,17 +440,17 @@ impl Default for RejectContact {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RequestDisposition {
     /// Proxy or redirect mode
-    pub proxy: Option<ProxyDirective>,
+    proxy: Option<ProxyDirective>,
     /// Forking behavior
-    pub fork: Option<ForkDirective>,
+    fork: Option<ForkDirective>,
     /// Cancellation behavior
-    pub cancel: Option<CancelDirective>,
+    cancel: Option<CancelDirective>,
     /// Recursion behavior (follow 3xx)
-    pub recurse: Option<RecurseDirective>,
+    recurse: Option<RecurseDirective>,
     /// Parallel or sequential forking
-    pub parallel: Option<ParallelDirective>,
+    parallel: Option<ParallelDirective>,
     /// Queuing behavior when busy
-    pub queue: Option<QueueDirective>,
+    queue: Option<QueueDirective>,
 }
 
 impl RequestDisposition {
@@ -500,6 +500,36 @@ impl RequestDisposition {
     pub fn with_queue(mut self, directive: QueueDirective) -> Self {
         self.queue = Some(directive);
         self
+    }
+
+    /// Returns the proxy directive.
+    pub fn proxy(&self) -> Option<ProxyDirective> {
+        self.proxy
+    }
+
+    /// Returns the fork directive.
+    pub fn fork(&self) -> Option<ForkDirective> {
+        self.fork
+    }
+
+    /// Returns the cancel directive.
+    pub fn cancel(&self) -> Option<CancelDirective> {
+        self.cancel
+    }
+
+    /// Returns the recurse directive.
+    pub fn recurse(&self) -> Option<RecurseDirective> {
+        self.recurse
+    }
+
+    /// Returns the parallel directive.
+    pub fn parallel(&self) -> Option<ParallelDirective> {
+        self.parallel
+    }
+
+    /// Returns the queue directive.
+    pub fn queue(&self) -> Option<QueueDirective> {
+        self.queue
     }
 
     /// Returns true if all directives are None.
@@ -693,13 +723,13 @@ impl QueueDirective {
 #[derive(Debug, Clone)]
 pub struct ScoredContact {
     /// Contact URI
-    pub uri: SmolStr,
+    uri: SmolStr,
     /// Callee preference (q-value from Contact)
-    pub callee_q: f64,
+    callee_q: f64,
     /// Caller preference score (Qa, 0.0 to 1.0)
-    pub caller_qa: f64,
+    caller_qa: f64,
     /// Whether contact has explicit feature parameters
-    pub has_explicit_features: bool,
+    has_explicit_features: bool,
 }
 
 impl ScoredContact {
@@ -729,6 +759,26 @@ impl ScoredContact {
         }
         self.caller_qa = qa.clamp(0.0, 1.0);
         Ok(self)
+    }
+
+    /// Returns the contact URI.
+    pub fn uri(&self) -> &str {
+        &self.uri
+    }
+
+    /// Returns the callee q-value.
+    pub fn callee_q(&self) -> f64 {
+        self.callee_q
+    }
+
+    /// Returns the caller preference score (Qa).
+    pub fn caller_qa(&self) -> f64 {
+        self.caller_qa
+    }
+
+    /// Returns whether this contact has explicit feature parameters.
+    pub fn has_explicit_features(&self) -> bool {
+        self.has_explicit_features
     }
 }
 
@@ -762,7 +812,7 @@ pub fn score_contacts(
     }
     if contacts
         .iter()
-        .any(|contact| !contact.callee_q.is_finite() || !contact.caller_qa.is_finite())
+        .any(|contact| !contact.callee_q().is_finite() || !contact.caller_qa().is_finite())
     {
         return Err(CallerPrefsError::InvalidQValue);
     }
@@ -807,12 +857,12 @@ pub fn score_contacts(
 
     // Sort by callee q-value (descending), then by caller Qa (descending)
     scored.sort_by(|a, b| {
-        b.callee_q
-            .partial_cmp(&a.callee_q)
+        b.callee_q()
+            .partial_cmp(&a.callee_q())
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| {
-                b.caller_qa
-                    .partial_cmp(&a.caller_qa)
+                b.caller_qa()
+                    .partial_cmp(&a.caller_qa())
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
     });
@@ -934,9 +984,9 @@ mod tests {
     fn request_disposition_parse() {
         let rd = RequestDisposition::parse("proxy, recurse, parallel").unwrap();
 
-        assert_eq!(rd.proxy, Some(ProxyDirective::Proxy));
-        assert_eq!(rd.recurse, Some(RecurseDirective::Recurse));
-        assert_eq!(rd.parallel, Some(ParallelDirective::Parallel));
+        assert_eq!(rd.proxy(), Some(ProxyDirective::Proxy));
+        assert_eq!(rd.recurse(), Some(RecurseDirective::Recurse));
+        assert_eq!(rd.parallel(), Some(ParallelDirective::Parallel));
     }
 
     #[test]
@@ -958,9 +1008,9 @@ mod tests {
             .with_caller_qa(0.9)
             .unwrap();
 
-        assert_eq!(contact.callee_q, 0.8);
-        assert_eq!(contact.caller_qa, 0.9);
-        assert!(contact.has_explicit_features);
+        assert_eq!(contact.callee_q(), 0.8);
+        assert_eq!(contact.caller_qa(), 0.9);
+        assert!(contact.has_explicit_features());
     }
 
     #[test]
@@ -988,10 +1038,10 @@ mod tests {
 
         // c1 should score higher (has audio)
         assert_eq!(scored.len(), 2);
-        assert_eq!(scored[0].uri, "sip:c1@example.com");
-        assert_eq!(scored[0].caller_qa, 1.0);
-        assert_eq!(scored[1].uri, "sip:c2@example.com");
-        assert_eq!(scored[1].caller_qa, 0.0);
+        assert_eq!(scored[0].uri(), "sip:c1@example.com");
+        assert_eq!(scored[0].caller_qa(), 1.0);
+        assert_eq!(scored[1].uri(), "sip:c2@example.com");
+        assert_eq!(scored[1].caller_qa(), 0.0);
     }
 
     #[test]
@@ -1019,7 +1069,7 @@ mod tests {
 
         // c2 should be rejected
         assert_eq!(scored.len(), 1);
-        assert_eq!(scored[0].uri, "sip:c1@example.com");
+        assert_eq!(scored[0].uri(), "sip:c1@example.com");
     }
 
     #[test]
@@ -1048,7 +1098,7 @@ mod tests {
 
         // Only c2 should remain (has required video)
         assert_eq!(scored.len(), 1);
-        assert_eq!(scored[0].uri, "sip:c2@example.com");
+        assert_eq!(scored[0].uri(), "sip:c2@example.com");
     }
 
     #[test]
@@ -1083,9 +1133,9 @@ mod tests {
         // c2 should be first (highest callee_q)
         // c1 and c3 both have callee_q=0.5, but c1 and c3 have Qa=1.0, c2 has Qa=0.0
         assert_eq!(scored.len(), 3);
-        assert_eq!(scored[0].uri, "sip:c2@example.com"); // q=1.0
-        assert_eq!(scored[1].uri, "sip:c1@example.com"); // q=0.5, Qa=1.0
-        assert_eq!(scored[2].uri, "sip:c3@example.com"); // q=0.5, Qa=1.0
+        assert_eq!(scored[0].uri(), "sip:c2@example.com"); // q=1.0
+        assert_eq!(scored[1].uri(), "sip:c1@example.com"); // q=0.5, Qa=1.0
+        assert_eq!(scored[2].uri(), "sip:c3@example.com"); // q=0.5, Qa=1.0
     }
 
     #[test]
