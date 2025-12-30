@@ -1137,7 +1137,9 @@ impl RequestHandler for InviteHandler {
             uas.rseq_manager = services.rseq_mgr.clone();
             uas.prack_validator = services.prack_validator.clone();
 
-            let ok = uas.create_ok(request, sdp_body.as_deref());
+            let ok = uas
+                .create_ok(request, sdp_body.as_deref())
+                .expect("valid 200 OK response");
             dialog.update_from_response(&ok);
 
             if services.config.features.enable_session_timers {

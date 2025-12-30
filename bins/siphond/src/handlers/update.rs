@@ -105,7 +105,9 @@ impl RequestHandler for UpdateHandler {
         uas.rseq_manager = services.rseq_mgr.clone();
         uas.prack_validator = services.prack_validator.clone();
 
-        let response = uas.create_ok(request, sdp_body.as_deref());
+        let response = uas
+            .create_ok(request, sdp_body.as_deref())
+            .expect("valid 200 OK response");
         dialog.update_from_response(&response);
         let _ = services.dialog_mgr.insert(dialog);
 

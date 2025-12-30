@@ -98,6 +98,7 @@ impl ReferTransferTransactionUser {
             let mut subscription = self.subscription.lock().await;
             self.uas
                 .create_notify_sipfrag(&mut subscription, status_code, reason)
+                .expect("valid notify sipfrag")
         };
 
         let tu = Arc::new(ReferNotifyTransactionUser);
@@ -320,7 +321,9 @@ impl ReferHandler {
             warn!("Transaction manager not available, cannot send REFER NOTIFY");
             return;
         };
-        let notify = uas.create_notify_sipfrag(subscription, status, reason);
+        let notify = uas
+            .create_notify_sipfrag(subscription, status, reason)
+            .expect("valid notify sipfrag");
         let tu = Arc::new(ReferNotifyTransactionUser);
         if let Err(e) = transaction_mgr
             .start_client_transaction(notify, ctx.clone(), tu)
