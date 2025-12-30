@@ -182,15 +182,23 @@ mod tests {
     fn serializes_simple_audio_sdp() {
         let sdp = SessionDescription::builder()
             .origin("alice", "123456", "192.168.1.100")
+            .unwrap()
             .session_name("Test Call")
+            .unwrap()
             .connection("192.168.1.100")
+            .unwrap()
             .media(
                 MediaDescription::audio(8000)
                     .add_format(0)
+                    .unwrap()
                     .add_format(8)
+                    .unwrap()
                     .add_rtpmap(0, "PCMU", 8000, None)
-                    .add_rtpmap(8, "PCMA", 8000, None),
+                    .unwrap()
+                    .add_rtpmap(8, "PCMA", 8000, None)
+                    .unwrap(),
             )
+            .unwrap()
             .build();
 
         let result = serialize_sdp(&sdp);
@@ -209,20 +217,31 @@ mod tests {
     fn serializes_audio_video_sdp() {
         let sdp = SessionDescription::builder()
             .origin("bob", "654321", "10.0.0.1")
+            .unwrap()
             .session_name("Video Conference")
+            .unwrap()
             .connection("10.0.0.1")
+            .unwrap()
             .media(
                 MediaDescription::audio(9000)
                     .add_format(0)
+                    .unwrap()
                     .add_rtpmap(0, "PCMU", 8000, None)
-                    .direction("sendrecv"),
+                    .unwrap()
+                    .direction("sendrecv")
+                    .unwrap(),
             )
+            .unwrap()
             .media(
                 MediaDescription::video(9002)
                     .add_format(96)
+                    .unwrap()
                     .add_rtpmap(96, "H264", 90000, None)
-                    .direction("sendrecv"),
+                    .unwrap()
+                    .direction("sendrecv")
+                    .unwrap(),
             )
+            .unwrap()
             .build();
 
         let result = serialize_sdp(&sdp);
@@ -236,11 +255,17 @@ mod tests {
     fn serializes_optional_fields() {
         let sdp = SessionDescription::builder()
             .origin("charlie", "111", "172.16.0.1")
+            .unwrap()
             .session_name("Full Session")
+            .unwrap()
             .session_info("Test session")
+            .unwrap()
             .connection("172.16.0.1")
+            .unwrap()
             .attribute("sendrecv", None)
-            .media(MediaDescription::audio(5004).add_format(0))
+            .unwrap()
+            .media(MediaDescription::audio(5004).add_format(0).unwrap())
+            .unwrap()
             .build();
 
         let result = serialize_sdp(&sdp);

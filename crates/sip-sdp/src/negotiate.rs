@@ -134,24 +134,26 @@ impl Direction {
 ///
 /// // Remote offer with PCMU and PCMA
 /// let offer = SessionDescription::builder()
-///     .origin("alice", "123", "192.168.1.100")
-///     .session_name("Call")
-///     .connection("192.168.1.100")
+///     .origin("alice", "123", "192.168.1.100").unwrap()
+///     .session_name("Call").unwrap()
+///     .connection("192.168.1.100").unwrap()
 ///     .media(MediaDescription::audio(8000)
-///         .add_format(0)  // PCMU
-///         .add_format(8)  // PCMA
-///         .add_rtpmap(0, "PCMU", 8000, None)
-///         .add_rtpmap(8, "PCMA", 8000, None))
+///         .add_format(0).unwrap()  // PCMU
+///         .add_format(8).unwrap()  // PCMA
+///         .add_rtpmap(0, "PCMU", 8000, None).unwrap()
+///         .add_rtpmap(8, "PCMA", 8000, None).unwrap())
+///     .unwrap()
 ///     .build();
 ///
 /// // Local capabilities (only support PCMU)
 /// let local_caps = SessionDescription::builder()
-///     .origin("bob", "456", "10.0.0.1")
-///     .session_name("Server")
-///     .connection("10.0.0.1")
+///     .origin("bob", "456", "10.0.0.1").unwrap()
+///     .session_name("Server").unwrap()
+///     .connection("10.0.0.1").unwrap()
 ///     .media(MediaDescription::audio(9000)
-///         .add_format(0)  // PCMU only
-///         .add_rtpmap(0, "PCMU", 8000, None))
+///         .add_format(0).unwrap()  // PCMU only
+///         .add_rtpmap(0, "PCMU", 8000, None).unwrap())
+///     .unwrap()
 ///     .build();
 ///
 /// // Negotiate answer
@@ -173,21 +175,28 @@ pub fn negotiate_answer(
             &generate_session_id(),
             local_addr,
         )
+        .map_err(|e| NegotiationError::InvalidSdp(e.to_string()))?
         .session_name(&local_capabilities.session_name)
+        .map_err(|e| NegotiationError::InvalidSdp(e.to_string()))?
         .connection(local_addr)
+        .map_err(|e| NegotiationError::InvalidSdp(e.to_string()))?
         .time(0, 0);
 
     // Process each media stream in the offer
     for offer_media in &offer.media {
         match negotiate_media(offer_media, local_capabilities) {
             Ok(answer_media) => {
-                answer_builder = answer_builder.media(answer_media);
+                answer_builder = answer_builder
+                    .media(answer_media)
+                    .map_err(|e| NegotiationError::InvalidSdp(e.to_string()))?;
             }
             Err(NegotiationError::NoCommonCodec(_))
             | Err(NegotiationError::MissingMediaStream(_)) => {
                 // No common codec or unsupported media type - include rejected media (port 0)
-                let rejected = create_rejected_media(offer_media);
-                answer_builder = answer_builder.media(rejected);
+                let rejected = create_rejected_media(offer_media)?;
+                answer_builder = answer_builder
+                    .media(rejected)
+                    .map_err(|e| NegotiationError::InvalidSdp(e.to_string()))?;
             }
             Err(e) => return Err(e),
         }
@@ -235,24 +244,30 @@ fn negotiate_media(
 
     // Add negotiated formats
     for negotiated in &common_formats {
-        answer_media = answer_media.add_format_token(negotiated.offered_format.as_str());
+        answer_media = answer_media
+            .add_format_token(negotiated.offered_format.as_str())
+            .map_err(|e| NegotiationError::InvalidSdp(e.to_string()))?;
         if let Some(rtpmap) = &negotiated.rtpmap {
-            answer_media = answer_media.add_rtpmap(
-                rtpmap.payload_type,
-                &rtpmap.encoding_name,
-                rtpmap.clock_rate,
-                rtpmap.encoding_params.as_ref().map(|s| s.as_str()),
-            );
+            answer_media = answer_media
+                .add_rtpmap(
+                    rtpmap.payload_type,
+                    &rtpmap.encoding_name,
+                    rtpmap.clock_rate,
+                    rtpmap.encoding_params.as_ref().map(|s| s.as_str()),
+                )
+                .map_err(|e| NegotiationError::InvalidSdp(e.to_string()))?;
         }
     }
 
     // Set negotiated direction
-    answer_media = answer_media.direction(match answer_dir {
-        Direction::SendRecv => "sendrecv",
-        Direction::SendOnly => "sendonly",
-        Direction::RecvOnly => "recvonly",
-        Direction::Inactive => "inactive",
-    });
+    answer_media = answer_media
+        .direction(match answer_dir {
+            Direction::SendRecv => "sendrecv",
+            Direction::SendOnly => "sendonly",
+            Direction::RecvOnly => "recvonly",
+            Direction::Inactive => "inactive",
+        })
+        .map_err(|e| NegotiationError::InvalidSdp(e.to_string()))?;
 
     // Copy connection if present
     if let Some(ref conn) = local_media.connection {
@@ -324,7 +339,9 @@ fn find_common_formats(
 }
 
 /// Create a rejected media stream (port 0)
-fn create_rejected_media(offer_media: &MediaDescription) -> MediaDescription {
+fn create_rejected_media(
+    offer_media: &MediaDescription,
+) -> Result<MediaDescription, NegotiationError> {
     let mut rejected = MediaDescription {
         media_type: offer_media.media_type.clone(),
         port: 0,
@@ -339,9 +356,11 @@ fn create_rejected_media(offer_media: &MediaDescription) -> MediaDescription {
         rtpmaps: HashMap::new(),
     };
     if rejected.formats.is_empty() {
-        rejected = rejected.add_format_token("0");
+        rejected = rejected
+            .add_format_token("0")
+            .map_err(|e| NegotiationError::InvalidSdp(e.to_string()))?;
     }
-    rejected
+    Ok(rejected)
 }
 
 /// Extract direction from attributes
@@ -449,29 +468,45 @@ mod tests {
         // Offer: audio with PCMU and PCMA
         let offer = SessionDescription::builder()
             .origin("alice", "123", "192.168.1.100")
+            .unwrap()
             .session_name("Call")
+            .unwrap()
             .connection("192.168.1.100")
+            .unwrap()
             .media(
                 MediaDescription::audio(8000)
                     .add_format(0)
+                    .unwrap()
                     .add_format(8)
+                    .unwrap()
                     .add_rtpmap(0, "PCMU", 8000, None)
+                    .unwrap()
                     .add_rtpmap(8, "PCMA", 8000, None)
-                    .direction("sendrecv"),
+                    .unwrap()
+                    .direction("sendrecv")
+                    .unwrap(),
             )
+            .unwrap()
             .build();
 
         // Local capabilities: support PCMU only
         let local_caps = SessionDescription::builder()
             .origin("bob", "456", "10.0.0.1")
+            .unwrap()
             .session_name("Server")
+            .unwrap()
             .connection("10.0.0.1")
+            .unwrap()
             .media(
                 MediaDescription::audio(9000)
                     .add_format(0)
+                    .unwrap()
                     .add_rtpmap(0, "PCMU", 8000, None)
-                    .direction("sendrecv"),
+                    .unwrap()
+                    .direction("sendrecv")
+                    .unwrap(),
             )
+            .unwrap()
             .build();
 
         let answer = negotiate_answer(&offer, "10.0.0.1", &local_caps).unwrap();
@@ -493,25 +528,37 @@ mod tests {
         // Offer: video with H264
         let offer = SessionDescription::builder()
             .origin("alice", "123", "192.168.1.100")
+            .unwrap()
             .session_name("Call")
+            .unwrap()
             .connection("192.168.1.100")
+            .unwrap()
             .media(
                 MediaDescription::video(8002)
                     .add_format(96)
-                    .add_rtpmap(96, "H264", 90000, None),
+                    .unwrap()
+                    .add_rtpmap(96, "H264", 90000, None)
+                    .unwrap(),
             )
+            .unwrap()
             .build();
 
         // Local capabilities: no video support
         let local_caps = SessionDescription::builder()
             .origin("bob", "456", "10.0.0.1")
+            .unwrap()
             .session_name("Server")
+            .unwrap()
             .connection("10.0.0.1")
+            .unwrap()
             .media(
                 MediaDescription::audio(9000)
                     .add_format(0)
-                    .add_rtpmap(0, "PCMU", 8000, None),
+                    .unwrap()
+                    .add_rtpmap(0, "PCMU", 8000, None)
+                    .unwrap(),
             )
+            .unwrap()
             .build();
 
         let answer = negotiate_answer(&offer, "10.0.0.1", &local_caps).unwrap();
@@ -535,26 +582,40 @@ mod tests {
     fn negotiates_dynamic_payload_by_codec() {
         let offer = SessionDescription::builder()
             .origin("alice", "123", "192.168.1.100")
+            .unwrap()
             .session_name("Call")
+            .unwrap()
             .connection("192.168.1.100")
+            .unwrap()
             .media(
                 MediaDescription::audio(8000)
                     .add_format(96)
+                    .unwrap()
                     .add_rtpmap(96, "opus", 48000, Some("2"))
-                    .direction("sendrecv"),
+                    .unwrap()
+                    .direction("sendrecv")
+                    .unwrap(),
             )
+            .unwrap()
             .build();
 
         let local_caps = SessionDescription::builder()
             .origin("bob", "456", "10.0.0.1")
+            .unwrap()
             .session_name("Server")
+            .unwrap()
             .connection("10.0.0.1")
+            .unwrap()
             .media(
                 MediaDescription::audio(9000)
                     .add_format(111)
+                    .unwrap()
                     .add_rtpmap(111, "opus", 48000, Some("2"))
-                    .direction("sendrecv"),
+                    .unwrap()
+                    .direction("sendrecv")
+                    .unwrap(),
             )
+            .unwrap()
             .build();
 
         let answer = negotiate_answer(&offer, "10.0.0.1", &local_caps).unwrap();

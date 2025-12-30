@@ -58,15 +58,23 @@ impl SdpAnswerGenerator for SimpleSdpGenerator {
 
         let answer = SessionDescription::builder()
             .origin("example", &session_id, "127.0.0.1")
+            .unwrap()
             .session_name("Example Call")
+            .unwrap()
             .connection("127.0.0.1")
+            .unwrap()
             .media(
                 MediaDescription::audio(8000)
                     .add_format(0)
+                    .unwrap()
                     .add_format(8)
+                    .unwrap()
                     .add_rtpmap(0, "PCMU", 8000, None)
-                    .add_rtpmap(8, "PCMA", 8000, None),
+                    .unwrap()
+                    .add_rtpmap(8, "PCMA", 8000, None)
+                    .unwrap(),
             )
+            .unwrap()
             .build();
 
         println!("Generated SDP answer for dialog {}", dialog.id().call_id());

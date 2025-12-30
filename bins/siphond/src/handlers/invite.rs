@@ -361,7 +361,7 @@ impl InviteHandler {
         }
 
         // Parse callee's contact URI
-        let callee_contact_str = bindings[0].contact.as_str();
+        let callee_contact_str = bindings[0].contact().as_ref();
         let callee_contact = sip_core::SipUri::parse(callee_contact_str)
             .map_err(|_| anyhow!("Invalid contact URI: {}", callee_contact_str))?;
 
@@ -924,7 +924,7 @@ impl InviteHandler {
         }
 
         // Use first (highest priority) binding
-        let contact_str = bindings[0].contact.as_str();
+        let contact_str = bindings[0].contact().as_ref();
         info!(call_id, contact = %contact_str, "Found registered contact, forwarding");
 
         // Parse contact URI

@@ -16,14 +16,15 @@
 //!
 //! // Create an audio-only SDP offer
 //! let sdp = SessionDescription::builder()
-//!     .origin("alice", "123456", "192.168.1.100")
-//!     .session_name("VoIP Call")
-//!     .connection("192.168.1.100")
+//!     .origin("alice", "123456", "192.168.1.100").unwrap()
+//!     .session_name("VoIP Call").unwrap()
+//!     .connection("192.168.1.100").unwrap()
 //!     .media(MediaDescription::audio(8000)
-//!         .add_format(0)  // PCMU
-//!         .add_format(8)  // PCMA
-//!         .add_rtpmap(0, "PCMU", 8000, None)
-//!         .add_rtpmap(8, "PCMA", 8000, None))
+//!         .add_format(0).unwrap()  // PCMU
+//!         .add_format(8).unwrap()  // PCMA
+//!         .add_rtpmap(0, "PCMU", 8000, None).unwrap()
+//!         .add_rtpmap(8, "PCMA", 8000, None).unwrap())
+//!     .unwrap()
 //!     .build();
 //! ```
 
@@ -35,6 +36,161 @@ pub mod serialize;
 
 use smol_str::SmolStr;
 use std::collections::HashMap;
+
+// Security constants for DoS prevention and input validation
+const MAX_USERNAME_LENGTH: usize = 256;
+const MAX_SESSION_ID_LENGTH: usize = 256;
+const MAX_SESSION_NAME_LENGTH: usize = 512;
+const MAX_ADDRESS_LENGTH: usize = 256;
+const MAX_URI_LENGTH: usize = 2048;
+const MAX_EMAIL_LENGTH: usize = 256;
+const MAX_PHONE_LENGTH: usize = 64;
+const MAX_ENCODING_NAME_LENGTH: usize = 64;
+const MAX_ATTRIBUTE_NAME_LENGTH: usize = 128;
+const MAX_ATTRIBUTE_VALUE_LENGTH: usize = 1024;
+const MAX_BANDWIDTH_TYPE_LENGTH: usize = 32;
+
+// Collection limits (DoS prevention)
+const MAX_MEDIA_DESCRIPTIONS: usize = 20;
+const MAX_ATTRIBUTES_PER_DESCRIPTION: usize = 50;
+const MAX_FORMATS_PER_MEDIA: usize = 50;
+const MAX_BANDWIDTH_ENTRIES: usize = 10;
+const MAX_TIME_DESCRIPTIONS: usize = 10;
+const MAX_TIME_ZONES: usize = 10;
+const MAX_RTPMAPS: usize = 50;
+
+// Value limits
+const MAX_PORT: u16 = 65535;
+const MIN_CLOCK_RATE: u32 = 1000; // 1 kHz minimum
+const MAX_CLOCK_RATE: u32 = 1_000_000_000; // 1 GHz maximum
+const MAX_PAYLOAD_TYPE: u8 = 127; // RTP payload type range
+
+/// SDP validation errors
+#[derive(Debug, Clone, PartialEq)]
+pub enum SdpError {
+    /// Field too long (DoS prevention)
+    FieldTooLong {
+        field: &'static str,
+        max: usize,
+        actual: usize,
+    },
+    /// Field contains control characters (CRLF injection)
+    FieldContainsControlChars { field: &'static str },
+    /// Too many items in collection (DoS prevention)
+    TooManyItems {
+        collection: &'static str,
+        max: usize,
+        actual: usize,
+    },
+    /// Port out of range
+    InvalidPort { port: u16 },
+    /// Clock rate out of range
+    InvalidClockRate { rate: u32, min: u32, max: u32 },
+    /// Payload type out of range
+    InvalidPayloadType { payload_type: u8, max: u8 },
+    /// Bandwidth value out of range
+    InvalidBandwidth { bandwidth: u32 },
+    /// Empty required field
+    EmptyField { field: &'static str },
+}
+
+impl std::fmt::Display for SdpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SdpError::FieldTooLong { field, max, actual } => {
+                write!(f, "{} length {} exceeds max {}", field, actual, max)
+            }
+            SdpError::FieldContainsControlChars { field } => {
+                write!(f, "{} contains control characters (CRLF injection)", field)
+            }
+            SdpError::TooManyItems {
+                collection,
+                max,
+                actual,
+            } => {
+                write!(
+                    f,
+                    "too many items in {} ({} exceeds max {})",
+                    collection, actual, max
+                )
+            }
+            SdpError::InvalidPort { port } => {
+                write!(f, "invalid port {}", port)
+            }
+            SdpError::InvalidClockRate { rate, min, max } => {
+                write!(
+                    f,
+                    "clock rate {} out of range ({}-{})",
+                    rate, min, max
+                )
+            }
+            SdpError::InvalidPayloadType { payload_type, max } => {
+                write!(f, "payload type {} exceeds max {}", payload_type, max)
+            }
+            SdpError::InvalidBandwidth { bandwidth } => {
+                write!(f, "invalid bandwidth {}", bandwidth)
+            }
+            SdpError::EmptyField { field } => {
+                write!(f, "{} cannot be empty", field)
+            }
+        }
+    }
+}
+
+impl std::error::Error for SdpError {}
+
+/// Validates a string field for length and control characters
+fn validate_field(
+    value: &str,
+    field: &'static str,
+    max_length: usize,
+) -> Result<(), SdpError> {
+    if value.is_empty() {
+        return Err(SdpError::EmptyField { field });
+    }
+    if value.len() > max_length {
+        return Err(SdpError::FieldTooLong {
+            field,
+            max: max_length,
+            actual: value.len(),
+        });
+    }
+    if value.chars().any(|c| c.is_control()) {
+        return Err(SdpError::FieldContainsControlChars { field });
+    }
+    Ok(())
+}
+
+/// Validates a port number
+fn validate_port(port: u16) -> Result<(), SdpError> {
+    if port > MAX_PORT {
+        return Err(SdpError::InvalidPort { port });
+    }
+    Ok(())
+}
+
+/// Validates a clock rate
+fn validate_clock_rate(rate: u32) -> Result<(), SdpError> {
+    if rate < MIN_CLOCK_RATE || rate > MAX_CLOCK_RATE {
+        return Err(SdpError::InvalidClockRate {
+            rate,
+            min: MIN_CLOCK_RATE,
+            max: MAX_CLOCK_RATE,
+        });
+    }
+    Ok(())
+}
+
+/// Validates a payload type
+fn validate_payload_type(payload_type: u8) -> Result<(), SdpError> {
+    if payload_type > MAX_PAYLOAD_TYPE {
+        return Err(SdpError::InvalidPayloadType {
+            payload_type,
+            max: MAX_PAYLOAD_TYPE,
+        });
+    }
+    Ok(())
+}
 
 /// Complete SDP Session Description per RFC 4566
 #[derive(Debug, Clone, PartialEq)]
@@ -306,12 +462,13 @@ impl SessionDescription {
     /// use sip_sdp::{SessionDescription, MediaDescription};
     ///
     /// let sdp = SessionDescription::builder()
-    ///     .origin("alice", "123456", "192.168.1.100")
-    ///     .session_name("VoIP Call")
-    ///     .connection("192.168.1.100")
+    ///     .origin("alice", "123456", "192.168.1.100").unwrap()
+    ///     .session_name("VoIP Call").unwrap()
+    ///     .connection("192.168.1.100").unwrap()
     ///     .media(MediaDescription::audio(8000)
-    ///         .add_format(0)
-    ///         .add_rtpmap(0, "PCMU", 8000, None))
+    ///         .add_format(0).unwrap()
+    ///         .add_rtpmap(0, "PCMU", 8000, None).unwrap())
+    ///     .unwrap()
     ///     .build();
     ///
     /// let sdp_text = sdp.serialize();
@@ -331,11 +488,11 @@ impl SessionDescription {
     /// use sip_sdp::{SessionDescription, MediaDescription, MediaType};
     ///
     /// let sdp = SessionDescription::builder()
-    ///     .origin("bob", "456", "10.0.0.1")
-    ///     .session_name("Conference")
-    ///     .connection("10.0.0.1")
-    ///     .media(MediaDescription::audio(9000).add_format(0))
-    ///     .media(MediaDescription::video(9002).add_format(96))
+    ///     .origin("bob", "456", "10.0.0.1").unwrap()
+    ///     .session_name("Conference").unwrap()
+    ///     .connection("10.0.0.1").unwrap()
+    ///     .media(MediaDescription::audio(9000).add_format(0).unwrap()).unwrap()
+    ///     .media(MediaDescription::video(9002).add_format(96).unwrap()).unwrap()
     ///     .build();
     ///
     /// let audio = sdp.find_media(MediaType::Audio).unwrap();
@@ -354,11 +511,11 @@ impl SessionDescription {
     /// use sip_sdp::{SessionDescription, MediaDescription, MediaType};
     ///
     /// let sdp = SessionDescription::builder()
-    ///     .origin("charlie", "789", "172.16.0.1")
-    ///     .session_name("Multi-Audio")
-    ///     .connection("172.16.0.1")
-    ///     .media(MediaDescription::audio(5000).add_format(0))
-    ///     .media(MediaDescription::audio(5002).add_format(8))
+    ///     .origin("charlie", "789", "172.16.0.1").unwrap()
+    ///     .session_name("Multi-Audio").unwrap()
+    ///     .connection("172.16.0.1").unwrap()
+    ///     .media(MediaDescription::audio(5000).add_format(0).unwrap()).unwrap()
+    ///     .media(MediaDescription::audio(5002).add_format(8).unwrap()).unwrap()
     ///     .build();
     ///
     /// let all_audio = sdp.find_all_media(MediaType::Audio);
@@ -415,26 +572,66 @@ impl MediaDescription {
         }
     }
 
-    /// Adds a format (payload type)
-    pub fn add_format(mut self, payload_type: u8) -> Self {
+    /// Adds a format (payload type) with validation
+    pub fn add_format(mut self, payload_type: u8) -> Result<Self, SdpError> {
+        validate_payload_type(payload_type)?;
+
+        if self.formats.len() >= MAX_FORMATS_PER_MEDIA {
+            return Err(SdpError::TooManyItems {
+                collection: "formats",
+                max: MAX_FORMATS_PER_MEDIA,
+                actual: self.formats.len() + 1,
+            });
+        }
+
         self.formats.push(SmolStr::new(payload_type.to_string()));
-        self
+        Ok(self)
     }
 
-    /// Adds a format token (non-RTP or custom)
-    pub fn add_format_token(mut self, token: &str) -> Self {
+    /// Adds a format token (non-RTP or custom) with validation
+    pub fn add_format_token(mut self, token: &str) -> Result<Self, SdpError> {
+        validate_field(token, "format_token", MAX_ENCODING_NAME_LENGTH)?;
+
+        if self.formats.len() >= MAX_FORMATS_PER_MEDIA {
+            return Err(SdpError::TooManyItems {
+                collection: "formats",
+                max: MAX_FORMATS_PER_MEDIA,
+                actual: self.formats.len() + 1,
+            });
+        }
+
         self.formats.push(SmolStr::new(token));
-        self
+        Ok(self)
     }
 
-    /// Adds an RTP map
+    /// Adds an RTP map with validation
     pub fn add_rtpmap(
         mut self,
         payload_type: u8,
         encoding_name: &str,
         clock_rate: u32,
         encoding_params: Option<&str>,
-    ) -> Self {
+    ) -> Result<Self, SdpError> {
+        validate_payload_type(payload_type)?;
+        validate_field(encoding_name, "encoding_name", MAX_ENCODING_NAME_LENGTH)?;
+        validate_clock_rate(clock_rate)?;
+
+        if self.rtpmaps.len() >= MAX_RTPMAPS {
+            return Err(SdpError::TooManyItems {
+                collection: "rtpmaps",
+                max: MAX_RTPMAPS,
+                actual: self.rtpmaps.len() + 1,
+            });
+        }
+
+        if self.attributes.len() >= MAX_ATTRIBUTES_PER_DESCRIPTION {
+            return Err(SdpError::TooManyItems {
+                collection: "attributes",
+                max: MAX_ATTRIBUTES_PER_DESCRIPTION,
+                actual: self.attributes.len() + 1,
+            });
+        }
+
         let rtpmap = RtpMap {
             payload_type,
             encoding_name: SmolStr::new(encoding_name),
@@ -458,48 +655,82 @@ impl MediaDescription {
         });
 
         self.rtpmaps.insert(payload_type, rtpmap);
-        self
+        Ok(self)
     }
 
-    /// Adds a property attribute
-    pub fn add_property(mut self, name: &str) -> Self {
+    /// Adds a property attribute with validation
+    pub fn add_property(mut self, name: &str) -> Result<Self, SdpError> {
+        validate_field(name, "attribute_name", MAX_ATTRIBUTE_NAME_LENGTH)?;
+
+        if self.attributes.len() >= MAX_ATTRIBUTES_PER_DESCRIPTION {
+            return Err(SdpError::TooManyItems {
+                collection: "attributes",
+                max: MAX_ATTRIBUTES_PER_DESCRIPTION,
+                actual: self.attributes.len() + 1,
+            });
+        }
+
         self.attributes
             .push(Attribute::Property(SmolStr::new(name)));
-        self
+        Ok(self)
     }
 
-    /// Adds a value attribute
-    pub fn add_attribute(mut self, name: &str, value: &str) -> Self {
+    /// Adds a value attribute with validation
+    pub fn add_attribute(mut self, name: &str, value: &str) -> Result<Self, SdpError> {
+        validate_field(name, "attribute_name", MAX_ATTRIBUTE_NAME_LENGTH)?;
+        validate_field(value, "attribute_value", MAX_ATTRIBUTE_VALUE_LENGTH)?;
+
+        if self.attributes.len() >= MAX_ATTRIBUTES_PER_DESCRIPTION {
+            return Err(SdpError::TooManyItems {
+                collection: "attributes",
+                max: MAX_ATTRIBUTES_PER_DESCRIPTION,
+                actual: self.attributes.len() + 1,
+            });
+        }
+
         self.attributes.push(Attribute::Value {
             name: SmolStr::new(name),
             value: SmolStr::new(value),
         });
-        self
+        Ok(self)
     }
 
-    /// Sets the connection for this media
-    pub fn connection(mut self, addr: &str) -> Self {
-        self.connection = Some(Connection {
+    /// Sets the connection for this media with validation
+    pub fn connection(mut self, addr: &str) -> Result<Self, SdpError> {
+        self.connection = Some(Connection::new(addr)?);
+        Ok(self)
+    }
+
+    /// Sets the media direction (sendrecv, sendonly, recvonly, inactive)
+    pub fn direction(self, dir: &str) -> Result<Self, SdpError> {
+        self.add_property(dir)
+    }
+}
+
+impl Origin {
+    /// Creates a new origin line with validation
+    pub fn new(username: &str, session_id: &str, addr: &str) -> Result<Self, SdpError> {
+        validate_field(username, "username", MAX_USERNAME_LENGTH)?;
+        validate_field(session_id, "session_id", MAX_SESSION_ID_LENGTH)?;
+        validate_field(addr, "address", MAX_ADDRESS_LENGTH)?;
+
+        Ok(Self {
+            username: SmolStr::new(username),
+            session_id: SmolStr::new(session_id),
+            session_version: SmolStr::new("0"),
             net_type: NetType::Internet,
             addr_type: if addr.contains(':') {
                 AddrType::IPv6
             } else {
                 AddrType::IPv4
             },
-            connection_address: SmolStr::new(addr),
-        });
-        self
+            unicast_address: SmolStr::new(addr),
+        })
     }
 
-    /// Sets the media direction (sendrecv, sendonly, recvonly, inactive)
-    pub fn direction(self, dir: &str) -> Self {
-        self.add_property(dir)
-    }
-}
-
-impl Origin {
-    /// Creates a new origin line
-    pub fn new(username: &str, session_id: &str, addr: &str) -> Self {
+    /// Creates a new origin line without validation (for internal/trusted use)
+    #[cfg(test)]
+    pub(crate) fn test(username: &str, session_id: &str, addr: &str) -> Self {
         Self {
             username: SmolStr::new(username),
             session_id: SmolStr::new(session_id),
@@ -516,8 +747,24 @@ impl Origin {
 }
 
 impl Connection {
-    /// Creates a new connection line
-    pub fn new(addr: &str) -> Self {
+    /// Creates a new connection line with validation
+    pub fn new(addr: &str) -> Result<Self, SdpError> {
+        validate_field(addr, "address", MAX_ADDRESS_LENGTH)?;
+
+        Ok(Self {
+            net_type: NetType::Internet,
+            addr_type: if addr.contains(':') {
+                AddrType::IPv6
+            } else {
+                AddrType::IPv4
+            },
+            connection_address: SmolStr::new(addr),
+        })
+    }
+
+    /// Creates a new connection line without validation (for internal/trusted use)
+    #[cfg(test)]
+    pub(crate) fn test(addr: &str) -> Self {
         Self {
             net_type: NetType::Internet,
             addr_type: if addr.contains(':') {
@@ -581,9 +828,13 @@ mod tests {
     fn builds_audio_media() {
         let media = MediaDescription::audio(8000)
             .add_format(0)
+            .unwrap()
             .add_format(8)
+            .unwrap()
             .add_rtpmap(0, "PCMU", 8000, None)
-            .add_rtpmap(8, "PCMA", 8000, None);
+            .unwrap()
+            .add_rtpmap(8, "PCMA", 8000, None)
+            .unwrap();
 
         assert_eq!(media.media_type, MediaType::Audio);
         assert_eq!(media.port, 8000);
@@ -598,12 +849,289 @@ mod tests {
     fn builds_basic_sdp() {
         let sdp = SessionDescription::builder()
             .origin("alice", "123456", "192.168.1.100")
+            .unwrap()
             .session_name("Test Call")
+            .unwrap()
             .connection("192.168.1.100")
+            .unwrap()
             .build();
 
         assert_eq!(sdp.version, 0);
         assert_eq!(sdp.origin.username.as_str(), "alice");
         assert_eq!(sdp.session_name.as_str(), "Test Call");
+    }
+
+    // Security tests: CRLF injection prevention
+    #[test]
+    fn rejects_crlf_in_username() {
+        let result = Origin::new("alice\r\ninjected", "123", "192.168.1.100");
+        assert!(matches!(result, Err(SdpError::FieldContainsControlChars { .. })));
+    }
+
+    #[test]
+    fn rejects_crlf_in_session_id() {
+        let result = Origin::new("alice", "123\r\n456", "192.168.1.100");
+        assert!(matches!(result, Err(SdpError::FieldContainsControlChars { .. })));
+    }
+
+    #[test]
+    fn rejects_crlf_in_address() {
+        let result = Origin::new("alice", "123", "192.168.1.100\r\n");
+        assert!(matches!(result, Err(SdpError::FieldContainsControlChars { .. })));
+    }
+
+    #[test]
+    fn rejects_crlf_in_session_name() {
+        let result = SessionDescription::builder()
+            .origin("alice", "123", "192.168.1.100")
+            .unwrap()
+            .session_name("Test\r\nCall");
+        assert!(matches!(result, Err(SdpError::FieldContainsControlChars { .. })));
+    }
+
+    #[test]
+    fn rejects_crlf_in_attribute_name() {
+        let result = SessionDescription::builder()
+            .origin("alice", "123", "192.168.1.100")
+            .unwrap()
+            .session_name("Test")
+            .unwrap()
+            .attribute("send\r\nrecv", None);
+        assert!(matches!(result, Err(SdpError::FieldContainsControlChars { .. })));
+    }
+
+    #[test]
+    fn rejects_crlf_in_attribute_value() {
+        let result = SessionDescription::builder()
+            .origin("alice", "123", "192.168.1.100")
+            .unwrap()
+            .session_name("Test")
+            .unwrap()
+            .attribute("fmtp", Some("101\r\n0-16"));
+        assert!(matches!(result, Err(SdpError::FieldContainsControlChars { .. })));
+    }
+
+    // Security tests: Field length limits
+    #[test]
+    fn rejects_oversized_username() {
+        let long_username = "x".repeat(MAX_USERNAME_LENGTH + 1);
+        let result = Origin::new(&long_username, "123", "192.168.1.100");
+        assert!(matches!(result, Err(SdpError::FieldTooLong { .. })));
+    }
+
+    #[test]
+    fn rejects_oversized_session_id() {
+        let long_id = "x".repeat(MAX_SESSION_ID_LENGTH + 1);
+        let result = Origin::new("alice", &long_id, "192.168.1.100");
+        assert!(matches!(result, Err(SdpError::FieldTooLong { .. })));
+    }
+
+    #[test]
+    fn rejects_oversized_address() {
+        let long_addr = "x".repeat(MAX_ADDRESS_LENGTH + 1);
+        let result = Origin::new("alice", "123", &long_addr);
+        assert!(matches!(result, Err(SdpError::FieldTooLong { .. })));
+    }
+
+    #[test]
+    fn rejects_oversized_session_name() {
+        let long_name = "x".repeat(MAX_SESSION_NAME_LENGTH + 1);
+        let result = SessionDescription::builder()
+            .origin("alice", "123", "192.168.1.100")
+            .unwrap()
+            .session_name(&long_name);
+        assert!(matches!(result, Err(SdpError::FieldTooLong { .. })));
+    }
+
+    #[test]
+    fn rejects_oversized_attribute_name() {
+        let long_name = "x".repeat(MAX_ATTRIBUTE_NAME_LENGTH + 1);
+        let result = SessionDescription::builder()
+            .origin("alice", "123", "192.168.1.100")
+            .unwrap()
+            .session_name("Test")
+            .unwrap()
+            .attribute(&long_name, None);
+        assert!(matches!(result, Err(SdpError::FieldTooLong { .. })));
+    }
+
+    #[test]
+    fn rejects_oversized_attribute_value() {
+        let long_value = "x".repeat(MAX_ATTRIBUTE_VALUE_LENGTH + 1);
+        let result = SessionDescription::builder()
+            .origin("alice", "123", "192.168.1.100")
+            .unwrap()
+            .session_name("Test")
+            .unwrap()
+            .attribute("test", Some(&long_value));
+        assert!(matches!(result, Err(SdpError::FieldTooLong { .. })));
+    }
+
+    #[test]
+    fn rejects_oversized_encoding_name() {
+        let long_name = "x".repeat(MAX_ENCODING_NAME_LENGTH + 1);
+        let result = MediaDescription::audio(8000).add_rtpmap(96, &long_name, 48000, None);
+        assert!(matches!(result, Err(SdpError::FieldTooLong { .. })));
+    }
+
+    // Security tests: Collection bounds
+    #[test]
+    fn rejects_too_many_media_descriptions() {
+        let mut builder = SessionDescription::builder()
+            .origin("alice", "123", "192.168.1.100")
+            .unwrap()
+            .session_name("Test")
+            .unwrap();
+
+        // Add MAX_MEDIA_DESCRIPTIONS media descriptions
+        for i in 0..MAX_MEDIA_DESCRIPTIONS {
+            builder = builder
+                .media(MediaDescription::audio(8000 + i as u16))
+                .unwrap();
+        }
+
+        // Try to add one more - should fail
+        let result = builder.media(MediaDescription::audio(9000));
+        assert!(matches!(result, Err(SdpError::TooManyItems { .. })));
+    }
+
+    #[test]
+    fn rejects_too_many_attributes() {
+        let mut builder = SessionDescription::builder()
+            .origin("alice", "123", "192.168.1.100")
+            .unwrap()
+            .session_name("Test")
+            .unwrap();
+
+        // Add MAX_ATTRIBUTES_PER_DESCRIPTION attributes
+        for i in 0..MAX_ATTRIBUTES_PER_DESCRIPTION {
+            builder = builder.attribute(&format!("attr{}", i), None).unwrap();
+        }
+
+        // Try to add one more - should fail
+        let result = builder.attribute("overflow", None);
+        assert!(matches!(result, Err(SdpError::TooManyItems { .. })));
+    }
+
+    #[test]
+    fn rejects_too_many_formats() {
+        let mut media = MediaDescription::audio(8000);
+
+        // Add MAX_FORMATS_PER_MEDIA formats
+        for i in 0..MAX_FORMATS_PER_MEDIA {
+            let pt = i as u8;
+            if pt > 127 {
+                break;
+            }
+            media = media.add_format(pt).unwrap();
+        }
+
+        // Try to add one more - should fail
+        let result = media.add_format(100);
+        assert!(matches!(result, Err(SdpError::TooManyItems { .. })));
+    }
+
+    #[test]
+    fn rejects_too_many_rtpmaps() {
+        let mut media = MediaDescription::audio(8000);
+
+        // Add MAX_RTPMAPS rtpmaps using payload types 0-49
+        for i in 0..MAX_RTPMAPS {
+            let pt = i as u8;
+            media = media
+                .add_format(pt)
+                .unwrap()
+                .add_rtpmap(pt, "codec", 8000, None)
+                .unwrap();
+        }
+
+        // Try to add one more - should fail
+        let result = media.add_rtpmap(127, "overflow", 8000, None);
+        assert!(matches!(result, Err(SdpError::TooManyItems { .. })));
+    }
+
+    #[test]
+    fn rejects_too_many_time_zones() {
+        let mut builder = SessionDescription::builder()
+            .origin("alice", "123", "192.168.1.100")
+            .unwrap()
+            .session_name("Test")
+            .unwrap();
+
+        // Add MAX_TIME_ZONES time zones
+        for i in 0..MAX_TIME_ZONES {
+            builder = builder
+                .time_zone_adjustment(&format!("{}", i * 3600), "1h")
+                .unwrap();
+        }
+
+        // Try to add one more - should fail
+        let result = builder.time_zone_adjustment("36000", "1h");
+        assert!(matches!(result, Err(SdpError::TooManyItems { .. })));
+    }
+
+    #[test]
+    fn rejects_too_many_time_descriptions() {
+        let mut builder = SessionDescription::builder()
+            .origin("alice", "123", "192.168.1.100")
+            .unwrap()
+            .session_name("Test")
+            .unwrap()
+            .time(0, 0);
+
+        // Add MAX_TIME_DESCRIPTIONS - 1 more time descriptions (already added one with .time())
+        for _ in 1..MAX_TIME_DESCRIPTIONS {
+            builder = builder.add_time(0, 0).unwrap();
+        }
+
+        // Try to add one more - should fail
+        let result = builder.add_time(0, 0);
+        assert!(matches!(result, Err(SdpError::TooManyItems { .. })));
+    }
+
+    // Security tests: Value range validation
+    #[test]
+    fn rejects_invalid_payload_type() {
+        let result = MediaDescription::audio(8000).add_format(128);
+        assert!(matches!(result, Err(SdpError::InvalidPayloadType { .. })));
+    }
+
+    #[test]
+    fn rejects_clock_rate_too_low() {
+        let result = MediaDescription::audio(8000).add_rtpmap(96, "codec", 999, None);
+        assert!(matches!(result, Err(SdpError::InvalidClockRate { .. })));
+    }
+
+    #[test]
+    fn rejects_clock_rate_too_high() {
+        let result = MediaDescription::audio(8000).add_rtpmap(96, "codec", 1_000_000_001, None);
+        assert!(matches!(result, Err(SdpError::InvalidClockRate { .. })));
+    }
+
+    #[test]
+    fn accepts_valid_clock_rates() {
+        // Min valid clock rate
+        let result = MediaDescription::audio(8000).add_rtpmap(96, "codec", MIN_CLOCK_RATE, None);
+        assert!(result.is_ok());
+
+        // Max valid clock rate
+        let result = MediaDescription::audio(8000).add_rtpmap(96, "codec", MAX_CLOCK_RATE, None);
+        assert!(result.is_ok());
+
+        // Common clock rates
+        let result = MediaDescription::audio(8000).add_rtpmap(0, "PCMU", 8000, None);
+        assert!(result.is_ok());
+
+        let result = MediaDescription::audio(8000).add_rtpmap(96, "opus", 48000, None);
+        assert!(result.is_ok());
+
+        let result = MediaDescription::video(8002).add_rtpmap(97, "H264", 90000, None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn accepts_max_valid_payload_type() {
+        let result = MediaDescription::audio(8000).add_format(127);
+        assert!(result.is_ok());
     }
 }

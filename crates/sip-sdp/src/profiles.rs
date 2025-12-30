@@ -97,39 +97,53 @@ impl MediaProfileBuilder {
         let session_id = generate_session_id();
         let mut builder = SessionDescription::builder()
             .origin(username, &session_id, addr)
+            .expect("valid origin")
             .session_name("siphon")
+            .expect("valid session name")
             .connection(addr)
+            .expect("valid connection")
             .time(0, 0);
 
-        let mut audio = MediaDescription::audio(audio_port).direction(self.direction);
+        let mut audio = MediaDescription::audio(audio_port)
+            .direction(self.direction)
+            .expect("valid direction");
         for (pt, name, rate) in &self.audio_codecs {
             audio = audio
                 .add_format(*pt)
-                .add_rtpmap(*pt, name.as_str(), *rate, None);
+                .expect("valid format")
+                .add_rtpmap(*pt, name.as_str(), *rate, None)
+                .expect("valid rtpmap");
         }
         if self.include_telephone_event {
             audio = audio
                 .add_format(101)
+                .expect("valid format")
                 .add_rtpmap(101, "telephone-event", 8000, None)
-                .add_attribute("fmtp", "101 0-16");
+                .expect("valid rtpmap")
+                .add_attribute("fmtp", "101 0-16")
+                .expect("valid attribute");
         }
         if self.rtcp_mux {
-            audio = audio.add_property("rtcp-mux");
+            audio = audio.add_property("rtcp-mux").expect("valid property");
         }
-        builder = builder.media(audio);
+        builder = builder.media(audio).expect("valid media");
 
         if self.enable_video {
             let vport = video_port.unwrap_or(audio_port + 2);
-            let mut video = MediaDescription::video(vport).direction(self.direction);
+            let mut video = MediaDescription::video(vport)
+                .direction(self.direction)
+                .expect("valid direction");
             for (pt, name, rate) in &self.video_codecs {
                 video = video
                     .add_format(*pt)
-                    .add_rtpmap(*pt, name.as_str(), *rate, None);
+                    .expect("valid format")
+                    .add_rtpmap(*pt, name.as_str(), *rate, None)
+                    .expect("valid rtpmap");
             }
             if self.rtcp_mux {
-                video = video.add_property("rtcp-mux");
+                video = video.add_property("rtcp-mux").expect("valid property");
             }
-            builder = builder.media(video);
+            builder = builder.media(video).expect("valid media");
         }
 
         builder.build()
@@ -194,20 +208,32 @@ fn create_audio_only(username: &str, addr: &str, port: u16) -> SessionDescriptio
 
     SessionDescription::builder()
         .origin(username, &session_id, addr)
+        .expect("valid origin")
         .session_name("VoIP Audio Call")
+        .expect("valid session name")
         .connection(addr)
+        .expect("valid connection")
         .time(0, 0)
         .media(
             MediaDescription::audio(port)
-                .add_format(0) // PCMU
-                .add_format(8) // PCMA
-                .add_format(101) // telephone-event
+                .add_format(0)
+                .expect("valid format") // PCMU
+                .add_format(8)
+                .expect("valid format") // PCMA
+                .add_format(101)
+                .expect("valid format") // telephone-event
                 .add_rtpmap(0, "PCMU", 8000, None)
+                .expect("valid rtpmap")
                 .add_rtpmap(8, "PCMA", 8000, None)
+                .expect("valid rtpmap")
                 .add_rtpmap(101, "telephone-event", 8000, None)
+                .expect("valid rtpmap")
                 .add_attribute("fmtp", "101 0-16")
-                .direction("sendrecv"),
+                .expect("valid attribute")
+                .direction("sendrecv")
+                .expect("valid direction"),
         )
+        .expect("valid media")
         .build()
 }
 
@@ -222,32 +248,54 @@ fn create_audio_video(
 
     SessionDescription::builder()
         .origin(username, &session_id, addr)
+        .expect("valid origin")
         .session_name("Audio/Video Conference")
+        .expect("valid session name")
         .connection(addr)
+        .expect("valid connection")
         .time(0, 0)
         .media(
             MediaDescription::audio(audio_port)
-                .add_format(0) // PCMU
-                .add_format(8) // PCMA
-                .add_format(101) // telephone-event
+                .add_format(0)
+                .expect("valid format") // PCMU
+                .add_format(8)
+                .expect("valid format") // PCMA
+                .add_format(101)
+                .expect("valid format") // telephone-event
                 .add_rtpmap(0, "PCMU", 8000, None)
+                .expect("valid rtpmap")
                 .add_rtpmap(8, "PCMA", 8000, None)
+                .expect("valid rtpmap")
                 .add_rtpmap(101, "telephone-event", 8000, None)
+                .expect("valid rtpmap")
                 .add_attribute("fmtp", "101 0-16")
-                .direction("sendrecv"),
+                .expect("valid attribute")
+                .direction("sendrecv")
+                .expect("valid direction"),
         )
+        .expect("valid media")
         .media(
             MediaDescription::video(video_port)
-                .add_format(96) // H264
-                .add_format(97) // VP8
+                .add_format(96)
+                .expect("valid format") // H264
+                .add_format(97)
+                .expect("valid format") // VP8
                 .add_rtpmap(96, "H264", 90000, None)
+                .expect("valid rtpmap")
                 .add_rtpmap(97, "VP8", 90000, None)
+                .expect("valid rtpmap")
                 .add_attribute("rtcp-fb", "96 nack")
+                .expect("valid attribute")
                 .add_attribute("rtcp-fb", "96 nack pli")
+                .expect("valid attribute")
                 .add_attribute("rtcp-fb", "97 nack")
+                .expect("valid attribute")
                 .add_attribute("rtcp-fb", "97 nack pli")
-                .direction("sendrecv"),
+                .expect("valid attribute")
+                .direction("sendrecv")
+                .expect("valid direction"),
         )
+        .expect("valid media")
         .build()
 }
 
