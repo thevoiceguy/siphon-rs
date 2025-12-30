@@ -122,6 +122,8 @@ impl TransportMetrics for TracingTransportMetrics {
 ///
 /// The default configuration samples every 10th event and enforces a 5ms
 /// minimum interval between emissions.
+///
+/// Fields are private to protect rate limiting configuration and internal state.
 #[derive(Debug)]
 pub struct RateLimitedTracingTransportMetrics {
     min_interval: Duration,
@@ -138,6 +140,16 @@ impl RateLimitedTracingTransportMetrics {
             last_emit_ns: AtomicU64::new(0),
             counter: AtomicU64::new(0),
         }
+    }
+
+    /// Returns the minimum interval between emissions.
+    pub fn min_interval(&self) -> Duration {
+        self.min_interval
+    }
+
+    /// Returns the sampling rate (emit every Nth event).
+    pub fn sample_every(&self) -> NonZeroU64 {
+        self.sample_every
     }
 
     fn should_emit(&self) -> bool {
