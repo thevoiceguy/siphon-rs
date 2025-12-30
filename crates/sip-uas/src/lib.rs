@@ -1416,7 +1416,7 @@ mod tests {
         )
         .expect("valid request");
 
-        let response = uas.create_ok(&request, None);
+        let response = uas.create_ok(&request, None).expect("valid 200 OK");
 
         assert_eq!(response.code(), 200);
         assert_eq!(response.reason(), "OK");
@@ -1468,7 +1468,7 @@ mod tests {
         .expect("valid request");
 
         let sdp = "v=0\r\no=- 123 456 IN IP4 192.168.1.100\r\n";
-        let response = uas.create_ok(&request, Some(sdp));
+        let response = uas.create_ok(&request, Some(sdp)).expect("valid 200 OK");
 
         assert_eq!(response.body().len(), sdp.len());
         assert_eq!(
@@ -1982,7 +1982,9 @@ mod tests {
         );
 
         // Test with 100 Trying (should be active)
-        let notify_100 = uas.create_notify_sipfrag(&mut subscription, 100, "Trying");
+        let notify_100 = uas
+            .create_notify_sipfrag(&mut subscription, 100, "Trying")
+            .expect("valid notify");
 
         assert_eq!(notify_100.method(), &Method::Notify);
         assert!(notify_100.headers().get("Event").is_some());
@@ -2002,7 +2004,9 @@ mod tests {
         assert!(body.contains("SIP/2.0 100 Trying"));
 
         // Test with 200 OK (should be terminated with noresource)
-        let notify_200 = uas.create_notify_sipfrag(&mut subscription, 200, "OK");
+        let notify_200 = uas
+            .create_notify_sipfrag(&mut subscription, 200, "OK")
+            .expect("valid notify");
 
         assert_eq!(
             notify_200.headers().get("Subscription-State").unwrap(),
@@ -2013,7 +2017,9 @@ mod tests {
         assert!(body.contains("SIP/2.0 200 OK"));
 
         // Test with 603 Decline (should be terminated with rejected)
-        let notify_603 = uas.create_notify_sipfrag(&mut subscription, 603, "Decline");
+        let notify_603 = uas
+            .create_notify_sipfrag(&mut subscription, 603, "Decline")
+            .expect("valid notify");
 
         assert_eq!(
             notify_603.headers().get("Subscription-State").unwrap(),
@@ -2139,7 +2145,9 @@ mod tests {
         );
 
         // Create reliable provisional response (180 Ringing)
-        let response = uas.create_reliable_provisional(&request, &dialog, 180, "Ringing", None);
+        let response = uas
+            .create_reliable_provisional(&request, &dialog, 180, "Ringing", None)
+            .expect("valid reliable provisional");
 
         // Verify response
         assert_eq!(response.code(), 180);
@@ -2229,8 +2237,9 @@ mod tests {
             false,  // is_uac
         );
 
-        let _provisional =
-            uas.create_reliable_provisional(&invite_request, &dialog, 180, "Ringing", None);
+        let _provisional = uas
+            .create_reliable_provisional(&invite_request, &dialog, 180, "Ringing", None)
+            .expect("valid reliable provisional");
 
         // Create PRACK request
         let mut headers = Headers::new();
