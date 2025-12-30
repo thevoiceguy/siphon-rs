@@ -36,6 +36,9 @@ use tracing::info;
 const MAX_REASON_PHRASE_LENGTH: usize = 128;
 const MAX_SIP_ETAG_LENGTH: usize = 256;
 const MAX_BODY_LENGTH: usize = 1_048_576; // 1 MB max body
+
+// Prepared for future integrated.rs hardening (UASConfig.user_agent field)
+#[allow(dead_code)]
 const MAX_USER_AGENT_LENGTH: usize = 256;
 
 /// Error type for UAS operations
@@ -128,6 +131,8 @@ fn validate_body(body: &str) -> std::result::Result<(), UasError> {
     Ok(())
 }
 
+// Prepared for future integrated.rs hardening (UASConfig.user_agent field)
+#[allow(dead_code)]
 fn validate_user_agent(agent: &str) -> std::result::Result<(), UasError> {
     if agent.len() > MAX_USER_AGENT_LENGTH {
         return Err(UasError::UserAgentTooLong {

@@ -42,25 +42,19 @@ const MAX_USERNAME_LENGTH: usize = 256;
 const MAX_SESSION_ID_LENGTH: usize = 256;
 const MAX_SESSION_NAME_LENGTH: usize = 512;
 const MAX_ADDRESS_LENGTH: usize = 256;
-const MAX_URI_LENGTH: usize = 2048;
-const MAX_EMAIL_LENGTH: usize = 256;
-const MAX_PHONE_LENGTH: usize = 64;
 const MAX_ENCODING_NAME_LENGTH: usize = 64;
 const MAX_ATTRIBUTE_NAME_LENGTH: usize = 128;
 const MAX_ATTRIBUTE_VALUE_LENGTH: usize = 1024;
-const MAX_BANDWIDTH_TYPE_LENGTH: usize = 32;
 
 // Collection limits (DoS prevention)
 const MAX_MEDIA_DESCRIPTIONS: usize = 20;
 const MAX_ATTRIBUTES_PER_DESCRIPTION: usize = 50;
 const MAX_FORMATS_PER_MEDIA: usize = 50;
-const MAX_BANDWIDTH_ENTRIES: usize = 10;
 const MAX_TIME_DESCRIPTIONS: usize = 10;
 const MAX_TIME_ZONES: usize = 10;
 const MAX_RTPMAPS: usize = 50;
 
-// Value limits
-const MAX_PORT: u16 = 65535;
+// Value limits (removed unused MAX_PORT - ports are just u16, no additional validation needed)
 const MIN_CLOCK_RATE: u32 = 1000; // 1 kHz minimum
 const MAX_CLOCK_RATE: u32 = 1_000_000_000; // 1 GHz maximum
 const MAX_PAYLOAD_TYPE: u8 = 127; // RTP payload type range
@@ -82,14 +76,10 @@ pub enum SdpError {
         max: usize,
         actual: usize,
     },
-    /// Port out of range
-    InvalidPort { port: u16 },
     /// Clock rate out of range
     InvalidClockRate { rate: u32, min: u32, max: u32 },
     /// Payload type out of range
     InvalidPayloadType { payload_type: u8, max: u8 },
-    /// Bandwidth value out of range
-    InvalidBandwidth { bandwidth: u32 },
     /// Empty required field
     EmptyField { field: &'static str },
 }
@@ -114,9 +104,6 @@ impl std::fmt::Display for SdpError {
                     collection, actual, max
                 )
             }
-            SdpError::InvalidPort { port } => {
-                write!(f, "invalid port {}", port)
-            }
             SdpError::InvalidClockRate { rate, min, max } => {
                 write!(
                     f,
@@ -126,9 +113,6 @@ impl std::fmt::Display for SdpError {
             }
             SdpError::InvalidPayloadType { payload_type, max } => {
                 write!(f, "payload type {} exceeds max {}", payload_type, max)
-            }
-            SdpError::InvalidBandwidth { bandwidth } => {
-                write!(f, "invalid bandwidth {}", bandwidth)
             }
             SdpError::EmptyField { field } => {
                 write!(f, "{} cannot be empty", field)
@@ -157,14 +141,6 @@ fn validate_field(
     }
     if value.chars().any(|c| c.is_control()) {
         return Err(SdpError::FieldContainsControlChars { field });
-    }
-    Ok(())
-}
-
-/// Validates a port number
-fn validate_port(port: u16) -> Result<(), SdpError> {
-    if port > MAX_PORT {
-        return Err(SdpError::InvalidPort { port });
     }
     Ok(())
 }
@@ -727,23 +703,6 @@ impl Origin {
             unicast_address: SmolStr::new(addr),
         })
     }
-
-    /// Creates a new origin line without validation (for internal/trusted use)
-    #[cfg(test)]
-    pub(crate) fn test(username: &str, session_id: &str, addr: &str) -> Self {
-        Self {
-            username: SmolStr::new(username),
-            session_id: SmolStr::new(session_id),
-            session_version: SmolStr::new("0"),
-            net_type: NetType::Internet,
-            addr_type: if addr.contains(':') {
-                AddrType::IPv6
-            } else {
-                AddrType::IPv4
-            },
-            unicast_address: SmolStr::new(addr),
-        }
-    }
 }
 
 impl Connection {
@@ -760,20 +719,6 @@ impl Connection {
             },
             connection_address: SmolStr::new(addr),
         })
-    }
-
-    /// Creates a new connection line without validation (for internal/trusted use)
-    #[cfg(test)]
-    pub(crate) fn test(addr: &str) -> Self {
-        Self {
-            net_type: NetType::Internet,
-            addr_type: if addr.contains(':') {
-                AddrType::IPv6
-            } else {
-                AddrType::IPv4
-            },
-            connection_address: SmolStr::new(addr),
-        }
     }
 }
 
