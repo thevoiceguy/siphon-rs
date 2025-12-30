@@ -379,7 +379,7 @@ impl UserAgentServer {
         );
 
         // Store in dialog manager
-        self.dialog_manager.insert(dialog.clone());
+        let _ = self.dialog_manager.insert(dialog.clone());
 
         Ok((response, dialog))
     }
@@ -587,7 +587,7 @@ impl UserAgentServer {
         );
 
         // Store in subscription manager
-        self.subscription_manager.insert(subscription.clone());
+        let _ = self.subscription_manager.insert(subscription.clone());
 
         Ok((response, subscription))
     }
@@ -654,7 +654,7 @@ impl UserAgentServer {
 
         // Call-ID
         headers
-            .push(SmolStr::new("Call-ID"), subscription.id().call_id().clone())
+            .push(SmolStr::new("Call-ID"), subscription.id().call_id())
             .unwrap();
 
         // CSeq
@@ -676,7 +676,7 @@ impl UserAgentServer {
 
         // Event (should be "refer")
         headers
-            .push(SmolStr::new("Event"), subscription.id().event().clone())
+            .push(SmolStr::new("Event"), subscription.id().event())
             .unwrap();
 
         // Subscription-State (terminated after final response)

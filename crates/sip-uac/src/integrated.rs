@@ -411,13 +411,13 @@ fn apply_in_dialog_response(
 ) -> Result<()> {
     if (200..300).contains(&response.code()) {
         dialog.update_from_response(response);
-        dialog_manager.insert(dialog.clone());
+        let _ = dialog_manager.insert(dialog.clone());
         return Ok(());
     }
 
     if matches!(response.code(), 408 | 481) {
         dialog.terminate();
-        dialog_manager.insert(dialog.clone());
+        let _ = dialog_manager.insert(dialog.clone());
         return Err(anyhow!(
             "Received {} for in-dialog {}",
             response.code(),
@@ -1518,7 +1518,7 @@ impl IntegratedUAC {
         drop(helper);
 
         let target_uri = prepare_in_dialog_request(dialog, &mut request);
-        self.dialog_manager.insert(dialog.clone());
+        let _ = self.dialog_manager.insert(dialog.clone());
         let dns_target = self.resolve_target(&RequestTarget::Uri(target_uri)).await?;
 
         // Auto-fill Via/Contact using resolved transport
@@ -1655,7 +1655,7 @@ impl IntegratedUAC {
         mut request: Request,
     ) -> Result<Response> {
         let target_uri = prepare_in_dialog_request(dialog, &mut request);
-        self.dialog_manager.insert(dialog.clone());
+        let _ = self.dialog_manager.insert(dialog.clone());
         let dns_target = self.resolve_target(&RequestTarget::Uri(target_uri)).await?;
 
         self.auto_fill_headers(&mut request, Some(dns_target.transport()))
@@ -1673,7 +1673,7 @@ impl IntegratedUAC {
         mut request: Request,
     ) -> Result<Response> {
         let target_uri = prepare_in_dialog_request(dialog, &mut request);
-        self.dialog_manager.insert(dialog.clone());
+        let _ = self.dialog_manager.insert(dialog.clone());
         let dns_target = self.resolve_target(&RequestTarget::Uri(target_uri)).await?;
 
         self.auto_fill_headers(&mut request, Some(dns_target.transport()))

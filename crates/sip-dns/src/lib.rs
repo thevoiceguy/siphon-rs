@@ -266,6 +266,17 @@ fn validate_hostname(hostname: &str) -> Result<(), DnsError> {
     Ok(())
 }
 
+fn enforce_target_limit(targets: Vec<DnsTarget>) -> Result<Vec<DnsTarget>> {
+    if targets.len() > MAX_TARGETS_PER_QUERY {
+        return Err(DnsError::TooManyTargets {
+            max: MAX_TARGETS_PER_QUERY,
+            actual: targets.len(),
+        }
+        .into());
+    }
+    Ok(targets)
+}
+
 /// Result of NAPTR record parsing (RFC 3263 §4.1).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct NaptrRecord {
@@ -373,7 +384,7 @@ impl SipResolver {
             let port = uri
                 .port()
                 .unwrap_or(if uri.is_sips() { 5061 } else { 5060 });
-            return Ok(vec![DnsTarget::unchecked_new(
+            return enforce_target_limit(vec![DnsTarget::unchecked_new(
                 host,
                 port,
                 Self::default_transport(uri),
@@ -383,10 +394,12 @@ impl SipResolver {
         // RFC 3263 §4: If explicit port, skip SRV, do A/AAAA
         if let Some(port) = uri.port() {
             let ips = self.lookup_a_aaaa(host).await?;
-            return Ok(ips
+            return enforce_target_limit(
+                ips
                 .into_iter()
                 .map(|ip| DnsTarget::unchecked_new(ip.to_string(), port, Self::default_transport(uri)))
-                .collect());
+                .collect(),
+            );
         }
 
         // RFC 3263 §4.1: Perform NAPTR lookup
@@ -442,7 +455,7 @@ impl SipResolver {
         if all_targets.is_empty() {
             Err(anyhow!("No DNS targets found for {}", host))
         } else {
-            Ok(all_targets)
+            enforce_target_limit(all_targets)
         }
     }
 
@@ -696,7 +709,7 @@ impl StaticResolver {
 #[async_trait::async_trait]
 impl Resolver for StaticResolver {
     async fn resolve(&self, _uri: &SipUri) -> Result<Vec<DnsTarget>> {
-        Ok(self.targets.clone())
+        enforce_target_limit(self.targets.clone())
     }
 }
 
@@ -1107,7 +1120,7 @@ impl<D: DhcpProvider, R: Resolver> DhcpResolver<D, R> {
         if all_targets.is_empty() {
             Err(anyhow!("No targets resolved from DHCP servers"))
         } else {
-            Ok(all_targets)
+            enforce_target_limit(all_targets)
         }
     }
 }
@@ -1191,13 +1204,13 @@ impl<D: DhcpProvider, R: Resolver> Resolver for HybridResolver<D, R> {
                 }
 
                 if !all_targets.is_empty() {
-                    return Ok(all_targets);
+                    return enforce_target_limit(all_targets);
                 }
             }
         }
 
         // Fallback to DNS (RFC 3263)
-        self.dns_resolver.resolve(uri).await
+        enforce_target_limit(self.dns_resolver.resolve(uri).await?)
     }
 }
 

@@ -11,6 +11,7 @@ use anyhow::{anyhow, Result};
 use dashmap::DashMap;
 use sip_core::{Headers, Method, Request, Response};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tracing::debug;
 
 // Security: PRACK validator limits (DoS prevention)
@@ -109,12 +110,16 @@ struct PendingReliable {
 
     /// Whether PRACK has been received for this response
     pracked: bool,
+    /// When this provisional was registered
+    created_at: Instant,
 }
 
 /// PRACK validator for ensuring proper RAck/RSeq sequencing
 pub struct PrackValidator {
     /// Dialog ID → list of pending reliable provisionals
     pending: Arc<DashMap<String, Vec<PendingReliable>>>,
+    /// Dialog ID → last cleanup time
+    last_cleanup: Arc<DashMap<String, Instant>>,
 }
 
 impl PrackValidator {
@@ -122,6 +127,27 @@ impl PrackValidator {
     pub fn new() -> Self {
         Self {
             pending: Arc::new(DashMap::new()),
+            last_cleanup: Arc::new(DashMap::new()),
+        }
+    }
+
+    fn cleanup_pending(&self, dialog_id: &str) {
+        let now = Instant::now();
+        let do_cleanup = self
+            .last_cleanup
+            .get(dialog_id)
+            .map(|last| now.duration_since(*last.value()) >= Duration::from_secs(PENDING_PRACK_CLEANUP_INTERVAL_SECS))
+            .unwrap_or(true);
+
+        if !do_cleanup {
+            return;
+        }
+
+        self.last_cleanup.insert(dialog_id.to_string(), now);
+
+        if let Some(mut pending_list) = self.pending.get_mut(dialog_id) {
+            let timeout = Duration::from_secs(PENDING_PRACK_TIMEOUT_SECS);
+            pending_list.retain(|p| !p.pracked && now.duration_since(p.created_at) <= timeout);
         }
     }
 
@@ -147,12 +173,16 @@ impl PrackValidator {
             method,
             code,
             pracked: false,
+            created_at: Instant::now(),
         };
 
-        self.pending
-            .entry(dialog_id.to_string())
-            .or_default()
-            .push(pending);
+        self.cleanup_pending(dialog_id);
+        let mut pending_list = self.pending.entry(dialog_id.to_string()).or_default();
+        if pending_list.len() >= MAX_PENDING_PRACK_PER_DIALOG {
+            let overflow = pending_list.len() + 1 - MAX_PENDING_PRACK_PER_DIALOG;
+            pending_list.drain(0..overflow);
+        }
+        pending_list.push(pending);
     }
 
     /// Validate an incoming PRACK request
@@ -167,6 +197,7 @@ impl PrackValidator {
     /// 4. RAck method must match the provisional's method
     /// 5. PRACK must not be received twice for same RSeq
     pub fn validate_prack(&self, dialog_id: &str, prack: &Request) -> Result<RAck> {
+        self.cleanup_pending(dialog_id);
         // Extract RAck header
         let rack_value = prack
             .headers()
@@ -245,6 +276,7 @@ impl PrackValidator {
 
     /// Get all pending (not yet PRACKed) reliable provisionals for a dialog
     pub fn get_pending(&self, dialog_id: &str) -> Vec<(u32, u16)> {
+        self.cleanup_pending(dialog_id);
         if let Some(pending_list) = self.pending.get(dialog_id) {
             pending_list
                 .iter()
@@ -259,6 +291,7 @@ impl PrackValidator {
     /// Remove all tracking for a dialog (call when dialog terminates)
     pub fn remove_dialog(&self, dialog_id: &str) {
         self.pending.remove(dialog_id);
+        self.last_cleanup.remove(dialog_id);
     }
 
     /// Remove a specific PRACKed reliable provisional (cleanup after 200 OK)

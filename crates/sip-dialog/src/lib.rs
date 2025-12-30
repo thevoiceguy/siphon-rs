@@ -325,6 +325,7 @@ impl Dialog {
         // Build route set from Record-Route (stored in reverse for requests)
         // Note: Validation errors are converted to None to maintain Option signature
         let route_set = build_route_set(resp.headers()).ok()?;
+        validate_route_set(&route_set).ok()?;
 
         // Parse CSeq from request
         let local_cseq = parse_cseq_number(req.headers())?;
@@ -384,6 +385,7 @@ impl Dialog {
         // Build route set from Record-Route (from initial request for UAS)
         // Note: Validation errors are converted to None to maintain Option signature
         let route_set = build_route_set(req.headers()).ok()?;
+        validate_route_set(&route_set).ok()?;
 
         // Parse CSeq from request (this is remote CSeq since they sent it)
         let remote_cseq = parse_cseq_number(req.headers())?;
@@ -627,10 +629,10 @@ impl Dialog {
             self.last_ack_cseq = Some(cseq);
         } else {
             // Non-ACK requests must have strictly increasing CSeq
-            if cseq <= self.remote_cseq {
-                return Err(DialogError::InvalidCSeq);
+            validate_cseq(cseq)?;
+            if self.remote_cseq > 0 {
+                validate_cseq_increment(self.remote_cseq, cseq)?;
             }
-
             self.remote_cseq = cseq;
         }
 
@@ -690,6 +692,22 @@ impl DialogManager {
             return Err(DialogError::TooManyDialogs {
                 max: MAX_CONFIRMED_DIALOGS,
             });
+        }
+        if dialog.state == DialogStateType::Early {
+            let early_count = self
+                .dialogs
+                .iter()
+                .filter(|entry| {
+                    entry.value().state == DialogStateType::Early
+                        && entry.key().call_id == dialog.id.call_id
+                        && entry.key() != &dialog.id
+                })
+                .count();
+            if early_count >= MAX_EARLY_DIALOGS_PER_CALL_ID {
+                return Err(DialogError::TooManyDialogs {
+                    max: MAX_EARLY_DIALOGS_PER_CALL_ID,
+                });
+            }
         }
         self.dialogs.insert(dialog.id.clone(), dialog);
         self.metrics.record_created();
@@ -888,7 +906,7 @@ pub enum SubscriptionError {
         max: usize,
         actual: usize,
     },
-    /// Event package name exceeds maximum length
+    /// Event value exceeds maximum length
     EventTooLong { max: usize, actual: usize },
 
     // CSeq validation errors
@@ -922,7 +940,7 @@ impl std::fmt::Display for SubscriptionError {
                 write!(f, "{} too long: {} bytes (max: {})", field, actual, max)
             }
             SubscriptionError::EventTooLong { max, actual } => {
-                write!(f, "Event package too long: {} bytes (max: {})", actual, max)
+                write!(f, "Event value too long: {} bytes (max: {})", actual, max)
             }
             SubscriptionError::CSeqTooLarge { max, actual } => {
                 write!(f, "CSeq too large: {} (max: {})", actual, max)
@@ -1058,21 +1076,38 @@ fn validate_route_set(route_set: &[SipUri]) -> Result<(), DialogError> {
 
 /// Validates event package name for subscriptions.
 fn validate_event_package(event: &str) -> Result<(), SubscriptionError> {
-    if event.is_empty() {
+    let mut parts = event.split(';');
+    let event_package = parts.next().unwrap_or_default().trim();
+    if event_package.is_empty() {
         return Err(SubscriptionError::InvalidCallId(
             "event package empty".to_string(),
         ));
     }
-    if event.len() > MAX_EVENT_PACKAGE_LENGTH {
+    if event_package.len() > MAX_EVENT_PACKAGE_LENGTH {
         return Err(SubscriptionError::EventTooLong {
             max: MAX_EVENT_PACKAGE_LENGTH,
-            actual: event.len(),
+            actual: event_package.len(),
         });
     }
-    if event.chars().any(|c| c.is_control()) {
+    if event_package.chars().any(|c| c.is_control()) {
         return Err(SubscriptionError::ContainsControlCharacters {
             field: "event_package",
         });
+    }
+    for param in parts {
+        let trimmed = param.trim();
+        if trimmed.len() >= 3 && trimmed[..3].eq_ignore_ascii_case("id=") {
+            let id = trimmed[3..].trim().trim_matches('"');
+            if id.len() > MAX_EVENT_ID_LENGTH {
+                return Err(SubscriptionError::EventTooLong {
+                    max: MAX_EVENT_ID_LENGTH,
+                    actual: id.len(),
+                });
+            }
+            if id.chars().any(|c| c.is_control()) {
+                return Err(SubscriptionError::ContainsControlCharacters { field: "event_id" });
+            }
+        }
     }
     Ok(())
 }
@@ -1414,6 +1449,7 @@ impl Subscription {
         let id = SubscriptionId::from_request_response(request, response)?;
         let contact = extract_contact_uri(response.headers())?;
         let local_cseq = parse_cseq_number(request.headers())?;
+        validate_subscription_cseq(local_cseq).ok()?;
 
         // Parse expires from response or request
         let expires = if let Some(exp_str) = header(response.headers(), "Expires") {
@@ -1447,6 +1483,7 @@ impl Subscription {
         let contact = extract_contact_uri(response.headers())?;
         let remote_cseq = 0;
         let local_cseq = parse_cseq_number(request.headers())?;
+        validate_subscription_cseq(local_cseq).ok()?;
 
         // Parse expires from response
         let expires = if let Some(exp_str) = header(response.headers(), "Expires") {
@@ -1922,7 +1959,7 @@ mod tests {
         let id = dialog.id.clone();
 
         // Insert dialog
-        manager.insert(dialog.clone());
+        manager.insert(dialog.clone()).unwrap();
         assert_eq!(manager.count(), 1);
 
         // Retrieve dialog
@@ -1984,8 +2021,8 @@ mod tests {
 
         dialog2.terminate();
 
-        manager.insert(dialog1);
-        manager.insert(dialog2);
+        manager.insert(dialog1).unwrap();
+        manager.insert(dialog2).unwrap();
 
         assert_eq!(manager.count(), 2);
 

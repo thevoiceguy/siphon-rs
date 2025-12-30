@@ -107,7 +107,7 @@ impl RequestHandler for UpdateHandler {
 
         let response = uas.create_ok(request, sdp_body.as_deref());
         dialog.update_from_response(&response);
-        services.dialog_mgr.insert(dialog);
+        let _ = services.dialog_mgr.insert(dialog);
 
         info!(call_id, "UPDATE accepted");
         handle.send_final(response).await;

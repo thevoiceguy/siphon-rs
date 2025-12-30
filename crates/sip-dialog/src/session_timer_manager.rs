@@ -119,9 +119,12 @@ impl SessionTimerManager {
     pub fn start_timer(&self, dialog_id: DialogId, session_expires: Duration, is_refresher: bool) {
         // Cancel existing timer if present
         self.stop_timer(&dialog_id);
+        if self.tasks.len() >= MAX_SESSION_TIMERS {
+            return;
+        }
 
         let expiry_time = Instant::now() + session_expires;
-        let (cancel_tx, mut cancel_rx) = mpsc::channel(1);
+        let (cancel_tx, mut cancel_rx) = mpsc::channel(SESSION_TIMER_CHANNEL_BOUND);
 
         let task = SessionTimerTask {
             expiry_time,

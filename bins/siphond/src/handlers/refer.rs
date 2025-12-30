@@ -446,7 +446,7 @@ impl RequestHandler for ReferHandler {
                     }
                 };
 
-                services.subscription_mgr.insert(subscription.clone());
+                let _ = services.subscription_mgr.insert(subscription.clone());
 
                 Self::send_notify(&uas, &mut subscription, 100, "Trying", services, _ctx).await;
 

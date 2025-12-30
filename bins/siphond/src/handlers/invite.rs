@@ -653,7 +653,7 @@ impl InviteHandler {
                             .update_uac_dialog(outgoing_call_id, uac_dialog.clone());
 
                         // Also store in dialog manager for easy lookup
-                        services.dialog_mgr.insert(uac_dialog);
+                        let _ = services.dialog_mgr.insert(uac_dialog);
                     } else {
                         tracing::warn!(
                             outgoing_call_id,
@@ -707,7 +707,7 @@ impl InviteHandler {
                                 .update_uas_dialog(outgoing_call_id, uas_dialog.clone());
 
                             // Also store in dialog manager
-                            services.dialog_mgr.insert(uas_dialog);
+                            let _ = services.dialog_mgr.insert(uas_dialog);
                         } else {
                             tracing::warn!(
                                 outgoing_call_id,
@@ -1151,7 +1151,7 @@ impl RequestHandler for InviteHandler {
                     );
                 }
             }
-            services.dialog_mgr.insert(dialog);
+            let _ = services.dialog_mgr.insert(dialog);
             handle.send_final(ok).await;
             return Ok(());
         }
@@ -1253,7 +1253,7 @@ impl RequestHandler for InviteHandler {
                 if let Some(early_dialog) =
                     Dialog::new_uas(request, &ringing, uas.local_uri.clone(), remote_uri)
                 {
-                    services.dialog_mgr.insert(early_dialog.clone());
+                    let _ = services.dialog_mgr.insert(early_dialog.clone());
 
                     let rseq = services.rseq_mgr.next_rseq(&early_dialog.id());
                     reliable_info = Some((Self::dialog_id_key(&early_dialog.id()), rseq));
@@ -1391,7 +1391,7 @@ impl RequestHandler for InviteHandler {
                 );
 
                 // Store dialog in manager
-                services.dialog_mgr.insert(dialog);
+                let _ = services.dialog_mgr.insert(dialog);
 
                 // Send 200 OK
                 handle.send_final(response).await;

@@ -293,7 +293,7 @@ impl RequestHandler for SubscribeHandler {
                 }
 
                 // Store subscription in manager
-                services.subscription_mgr.insert(subscription.clone());
+                let _ = services.subscription_mgr.insert(subscription.clone());
 
                 // Send 200 OK
                 handle.send_final(response).await;

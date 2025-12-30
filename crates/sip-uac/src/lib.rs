@@ -791,7 +791,7 @@ impl UserAgentClient {
 
         // Call-ID
         headers
-            .push(SmolStr::new("Call-ID"), dialog.id().call_id().clone())
+            .push(SmolStr::new("Call-ID"), dialog.id().call_id())
             .unwrap();
 
         // CSeq (next local CSeq)
@@ -871,7 +871,7 @@ impl UserAgentClient {
 
         // Call-ID
         headers
-            .push(SmolStr::new("Call-ID"), dialog.id().call_id().clone())
+            .push(SmolStr::new("Call-ID"), dialog.id().call_id())
             .unwrap();
 
         // CSeq (next local CSeq)
@@ -983,7 +983,7 @@ impl UserAgentClient {
 
         // Call-ID
         headers
-            .push(SmolStr::new("Call-ID"), dialog.id().call_id().clone())
+            .push(SmolStr::new("Call-ID"), dialog.id().call_id())
             .unwrap();
 
         // CSeq (next local CSeq)
@@ -1259,7 +1259,7 @@ impl UserAgentClient {
 
         // Call-ID
         headers
-            .push(SmolStr::new("Call-ID"), dialog.id().call_id().clone())
+            .push(SmolStr::new("Call-ID"), dialog.id().call_id())
             .unwrap();
 
         // CSeq (next local CSeq)
@@ -1662,7 +1662,7 @@ impl UserAgentClient {
 
         // Call-ID
         headers
-            .push(SmolStr::new("Call-ID"), dialog.id().call_id().clone())
+            .push(SmolStr::new("Call-ID"), dialog.id().call_id())
             .unwrap();
 
         // CSeq (next local CSeq for PRACK)
@@ -1737,11 +1737,11 @@ impl UserAgentClient {
         // Store in dialog manager or update existing dialog
         if let Some(mut existing) = self.dialog_manager.get(dialog.id()) {
             existing.update_from_response(response);
-            self.dialog_manager.insert(existing.clone());
+            let _ = self.dialog_manager.insert(existing.clone());
             return Some(existing);
         }
 
-        self.dialog_manager.insert(dialog.clone());
+        let _ = self.dialog_manager.insert(dialog.clone());
 
         Some(dialog)
     }
@@ -1860,7 +1860,7 @@ impl UserAgentClient {
         );
 
         // Store in subscription manager
-        self.subscription_manager.insert(subscription.clone());
+        let _ = self.subscription_manager.insert(subscription.clone());
 
         Some(subscription)
     }
@@ -1911,7 +1911,7 @@ impl UserAgentClient {
 
         // Call-ID
         headers
-            .push(SmolStr::new("Call-ID"), subscription.id().call_id().clone())
+            .push(SmolStr::new("Call-ID"), subscription.id().call_id())
             .unwrap();
 
         // CSeq (use subscription's CSeq)
@@ -1933,7 +1933,7 @@ impl UserAgentClient {
 
         // Event
         headers
-            .push(SmolStr::new("Event"), subscription.id().event().clone())
+            .push(SmolStr::new("Event"), subscription.id().event())
             .unwrap();
 
         // Subscription-State
@@ -2116,7 +2116,7 @@ impl UserAgentClient {
 
         // Call-ID
         headers
-            .push(SmolStr::new("Call-ID"), subscription.id().call_id().clone())
+            .push(SmolStr::new("Call-ID"), subscription.id().call_id())
             .unwrap();
 
         // CSeq (use subscription's CSeq)
@@ -2224,7 +2224,7 @@ impl UserAgentClient {
 
         // Call-ID (same as dialog)
         headers
-            .push(SmolStr::new("Call-ID"), dialog.id().call_id().clone())
+            .push(SmolStr::new("Call-ID"), dialog.id().call_id())
             .unwrap();
 
         // CSeq (next in dialog)
@@ -2332,7 +2332,7 @@ impl UserAgentClient {
 
         // Call-ID (same as dialog)
         headers
-            .push(SmolStr::new("Call-ID"), dialog.id().call_id().clone())
+            .push(SmolStr::new("Call-ID"), dialog.id().call_id())
             .unwrap();
 
         // CSeq (next in dialog)
