@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Security hardening: sip-uas crate** - CRLF injection and DoS prevention:
+  * Added `UasError` enum with 7 detailed error variants
+  * MAX_REASON_PHRASE_LENGTH = 128 bytes (CRLF injection prevention)
+  * MAX_SIP_ETAG_LENGTH = 256 bytes (header injection prevention)
+  * MAX_BODY_LENGTH = 1 MB (DoS prevention)
+  * Control character validation in reason_phrase and sip_etag
+  * `create_ok()` now returns `Result<Response, UasError>`
+  * `create_reliable_provisional()` now returns `Result<Response, UasError>`
+  * `accept_publish()` now returns `Result<Response, UasError>`
+  * `create_notify_sipfrag()` now returns `Result<Request, UasError>`
+  * Fixed 6 compilation errors in siphond handlers (adapt to Result API)
+  * Fixed 7 test call sites to unwrap Result types
+  * All 28 sip-uas tests passing
+
+- **Refactor: clean up unused validation constants** - Remove incomplete security features:
+  * Removed 7 unused constants from sip-sdp (MAX_URI_LENGTH, MAX_EMAIL_LENGTH, MAX_PHONE_LENGTH, MAX_BANDWIDTH_TYPE_LENGTH, MAX_BANDWIDTH_ENTRIES, MAX_PORT)
+  * Removed 2 unused error variants (InvalidPort, InvalidBandwidth)
+  * Removed unused validate_port() function
+  * Removed unused test helpers (Origin::test, Connection::test)
+  * Marked sip-uas future constants with #[allow(dead_code)] (prepared for integrated.rs)
+  * Zero build warnings (was 13 warnings)
+
+- **Docs: fix sip-ratelimit doctest** - Update module example after API hardening to unwrap Result from RateLimitConfig::new() before chaining methods. All doctests passing.
+
 - Add async trait support for registrar/auth storage (`AsyncLocationStore`, `AsyncCredentialStore`) with adapters for sync/async interop.
 - Extend `BasicRegistrar` and `DigestAuthenticator` with async handlers to enable non-blocking storage backends.
 - Update memory stores to implement both sync and async traits and add Tokio/async-trait dependencies where required.
