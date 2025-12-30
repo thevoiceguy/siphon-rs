@@ -981,10 +981,10 @@ impl InviteHandler {
                         .tls_client_config
                         .get()
                         .ok_or_else(|| anyhow!("TLS client config not available"))?;
-                    let tls = sip_transport::TlsConfig {
-                        server_name: contact_uri.host().to_string(),
-                        client_config: config.clone(),
-                    };
+                    let tls = sip_transport::TlsConfig::new(
+                        contact_uri.host().to_string(),
+                        config.clone(),
+                    );
                     sip_transport::send_tls(&target_addr, &payload, &tls).await?;
                     info!(call_id, "INVITE forwarded via TLS successfully");
                 }

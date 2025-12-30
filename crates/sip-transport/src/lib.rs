@@ -216,12 +216,60 @@ impl From<TransportKind> for TransportLabel {
 }
 
 /// Bundle representing a packet received by a transport listener.
+/// Fields are private to protect transport metadata.
 #[derive(Debug, Clone)]
 pub struct InboundPacket {
-    pub transport: TransportKind,
-    pub peer: SocketAddr,
-    pub payload: Bytes,
-    pub stream: Option<mpsc::Sender<Bytes>>,
+    transport: TransportKind,
+    peer: SocketAddr,
+    payload: Bytes,
+    stream: Option<mpsc::Sender<Bytes>>,
+}
+
+impl InboundPacket {
+    /// Creates a new inbound packet.
+    pub fn new(
+        transport: TransportKind,
+        peer: SocketAddr,
+        payload: Bytes,
+        stream: Option<mpsc::Sender<Bytes>>,
+    ) -> Self {
+        Self {
+            transport,
+            peer,
+            payload,
+            stream,
+        }
+    }
+
+    /// Returns the transport kind.
+    pub fn transport(&self) -> TransportKind {
+        self.transport
+    }
+
+    /// Returns the peer socket address.
+    pub fn peer(&self) -> SocketAddr {
+        self.peer
+    }
+
+    /// Returns the payload bytes.
+    pub fn payload(&self) -> &Bytes {
+        &self.payload
+    }
+
+    /// Returns the stream sender if available.
+    pub fn stream(&self) -> Option<&mpsc::Sender<Bytes>> {
+        self.stream.as_ref()
+    }
+
+    /// Consumes the packet and returns the payload.
+    pub fn into_payload(self) -> Bytes {
+        self.payload
+    }
+
+    /// Consumes the packet and returns all components.
+    pub fn into_parts(self) -> (TransportKind, SocketAddr, Bytes, Option<mpsc::Sender<Bytes>>) {
+        (self.transport, self.peer, self.payload, self.stream)
+    }
 }
 
 /// Runs a UDP receive loop and forwards packets to the provided channel.
@@ -366,9 +414,31 @@ pub async fn send_stream(
 
 #[cfg(feature = "tls")]
 /// TLS client configuration used for outbound SIPS traffic.
+/// Fields are private to protect TLS configuration.
 pub struct TlsConfig {
-    pub server_name: String,
-    pub client_config: std::sync::Arc<tokio_rustls::rustls::ClientConfig>,
+    server_name: String,
+    client_config: std::sync::Arc<tokio_rustls::rustls::ClientConfig>,
+}
+
+#[cfg(feature = "tls")]
+impl TlsConfig {
+    /// Creates a new TLS configuration.
+    pub fn new(server_name: String, client_config: std::sync::Arc<tokio_rustls::rustls::ClientConfig>) -> Self {
+        Self {
+            server_name,
+            client_config,
+        }
+    }
+
+    /// Returns the server name.
+    pub fn server_name(&self) -> &str {
+        &self.server_name
+    }
+
+    /// Returns the client configuration.
+    pub fn client_config(&self) -> &std::sync::Arc<tokio_rustls::rustls::ClientConfig> {
+        &self.client_config
+    }
 }
 
 #[cfg(feature = "ws")]
@@ -738,9 +808,22 @@ pub trait TransportPolicy: Send + Sync {
 }
 
 /// Default policy that prefers TLS for SIPS and falls back to TCP when payloads exceed a UDP MTU.
+/// Fields are private to protect transport policy configuration.
 #[derive(Debug, Clone)]
 pub struct DefaultTransportPolicy {
-    pub udp_mtu: usize,
+    udp_mtu: usize,
+}
+
+impl DefaultTransportPolicy {
+    /// Creates a new transport policy with the specified UDP MTU.
+    pub fn new(udp_mtu: usize) -> Self {
+        Self { udp_mtu }
+    }
+
+    /// Returns the UDP MTU threshold.
+    pub fn udp_mtu(&self) -> usize {
+        self.udp_mtu
+    }
 }
 
 impl Default for DefaultTransportPolicy {

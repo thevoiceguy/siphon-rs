@@ -185,10 +185,10 @@ pub async fn forward_request(
                     .tls_client_config
                     .get()
                     .ok_or_else(|| anyhow!("TLS client config not available"))?;
-                let tls = sip_transport::TlsConfig {
-                    server_name: target_uri.host().to_string(),
-                    client_config: config.clone(),
-                };
+                let tls = sip_transport::TlsConfig::new(
+                    target_uri.host().to_string(),
+                    config.clone(),
+                );
                 sip_transport::send_tls(&target_addr, &payload, &tls).await?;
             }
             #[cfg(not(feature = "tls"))]

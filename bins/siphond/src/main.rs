@@ -442,15 +442,15 @@ async fn handle_packet(
     use sip_transaction::{branch_from_via, request_branch_id, TransactionKey, TransportContext};
 
     // Try parsing as a request
-    if let Some(req) = parse_request(&packet.payload) {
+    if let Some(req) = parse_request(&packet.payload()) {
         let ws_override = if matches!(
-            packet.transport,
+            packet.transport(),
             sip_transport::TransportKind::Ws | sip_transport::TransportKind::Wss
         ) {
             header(req.headers(), "Route").and_then(|route| {
                 let raw = route.trim_matches('<').trim_matches('>');
                 SipUri::parse(raw).ok().map(|uri| {
-                    let scheme = if matches!(packet.transport, sip_transport::TransportKind::Wss) {
+                    let scheme = if matches!(packet.transport(), sip_transport::TransportKind::Wss) {
                         "wss"
                     } else {
                         "ws"
@@ -464,9 +464,9 @@ async fn handle_packet(
         };
 
         let ctx = TransportContext::new(
-            map_transport(packet.transport),
-            packet.peer,
-            packet.stream.clone(),
+            map_transport(packet.transport()),
+            packet.peer(),
+            packet.stream().cloned(),
         )
         .with_ws_uri(ws_override)
         .with_udp_socket(services.udp_socket.get().cloned());
@@ -564,7 +564,7 @@ async fn handle_packet(
     }
 
     // Try parsing as a response
-    if let Some(response) = parse_response(&packet.payload) {
+    if let Some(response) = parse_response(&packet.payload()) {
         // Check if this response belongs to a B2BUA call leg
         if services.config.enable_b2bua() {
             if let Some(call_id_header) = response.headers().get("Call-ID") {
@@ -719,19 +719,19 @@ async fn handle_packet(
 
     // Check for SIP keep-alive packets (RFC 5626)
     // Keep-alives are CRLF sequences: single CRLF (2 bytes) or double CRLF (4 bytes)
-    if is_keepalive(&packet.payload) {
+    if is_keepalive(&packet.payload()) {
         tracing::trace!(
-            peer = %packet.peer,
-            transport = ?packet.transport,
+            peer = %packet.peer(),
+            transport = ?packet.transport(),
             "SIP keep-alive packet received (silently ignored per RFC 5626)"
         );
         return;
     }
 
     tracing::warn!(
-        peer = %packet.peer,
-        transport = ?packet.transport,
-        len = packet.payload.len(),
+        peer = %packet.peer(),
+        transport = ?packet.transport(),
+        len = packet.payload().len(),
         "Unparsable packet received"
     );
 }

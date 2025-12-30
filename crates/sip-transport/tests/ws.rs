@@ -38,8 +38,8 @@ async fn ws_roundtrip_delivers_packet() {
         .expect("packet recv timeout")
         .expect("packet recv");
 
-    assert_eq!(packet.transport, TransportKind::Ws);
-    assert_eq!(packet.payload, payload);
+    assert_eq!(packet.transport(), TransportKind::Ws);
+    assert_eq!(packet.payload(), payload);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
