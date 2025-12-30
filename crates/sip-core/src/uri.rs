@@ -332,10 +332,10 @@ impl SipUri {
                 let v = v.trim();
                 validate_param_name(k)?;
                 validate_param_value(v)?;
-                params.insert(SmolStr::new(k), Some(SmolStr::new(v)));
+                params.insert(SmolStr::new(k.to_ascii_lowercase()), Some(SmolStr::new(v)));
             } else {
                 validate_param_name(param)?;
-                params.insert(SmolStr::new(param), None);
+                params.insert(SmolStr::new(param.to_ascii_lowercase()), None);
             }
         }
 
@@ -386,7 +386,7 @@ impl SipUri {
                     let v = v.trim();
                     validate_header_name(k)?;
                     validate_header_value(v)?;
-                    headers.insert(SmolStr::new(k), SmolStr::new(v));
+                    headers.insert(SmolStr::new(k.to_ascii_lowercase()), SmolStr::new(v));
                 }
             }
         }
@@ -485,6 +485,7 @@ impl SipUri {
 
         let name = name.into();
         validate_param_name(&name)?;
+        let name = SmolStr::new(name.to_ascii_lowercase());
 
         let value = match value {
             Some(v) => {

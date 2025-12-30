@@ -352,7 +352,7 @@ impl ViaHeader {
     /// assert_eq!(via.sent_by(), "host:5060");
     /// ```
     pub fn parse(input: &str) -> Result<Self, ViaError> {
-        if input.chars().any(|c| c.is_control()) {
+        if input.chars().any(|c| c.is_control() && c != '\t') {
             return Err(ViaError::InvalidFormat(
                 "contains control characters".to_string(),
             ));
@@ -429,10 +429,24 @@ impl ViaHeader {
                 let v = v.trim();
                 validate_param_name(k)?;
                 validate_param_value(v)?;
-                params.insert(SmolStr::new(k.to_ascii_lowercase()), Some(SmolStr::new(v)));
+                let key = SmolStr::new(k.to_ascii_lowercase());
+                if params.contains_key(&key) {
+                    return Err(ViaError::InvalidParameter(format!(
+                        "duplicate parameter: {}",
+                        k
+                    )));
+                }
+                params.insert(key, Some(SmolStr::new(v)));
             } else {
                 validate_param_name(param)?;
-                params.insert(SmolStr::new(param.to_ascii_lowercase()), None);
+                let key = SmolStr::new(param.to_ascii_lowercase());
+                if params.contains_key(&key) {
+                    return Err(ViaError::InvalidParameter(format!(
+                        "duplicate parameter: {}",
+                        param
+                    )));
+                }
+                params.insert(key, None);
             }
         }
 
@@ -479,13 +493,18 @@ impl ViaHeader {
         name: impl Into<SmolStr>,
         value: Option<impl Into<SmolStr>>,
     ) -> Result<Self, ViaError> {
-        if self.params.len() >= MAX_PARAMS {
-            return Err(ViaError::TooManyParameters { max: MAX_PARAMS });
-        }
-
         let name = name.into();
         validate_param_name(&name)?;
         let name = SmolStr::new(name.to_ascii_lowercase());
+        if self.params.contains_key(&name) {
+            return Err(ViaError::InvalidParameter(format!(
+                "duplicate parameter: {}",
+                name
+            )));
+        }
+        if self.params.len() >= MAX_PARAMS {
+            return Err(ViaError::TooManyParameters { max: MAX_PARAMS });
+        }
 
         let value = match value {
             Some(v) => {
@@ -506,13 +525,18 @@ impl ViaHeader {
         name: impl Into<SmolStr>,
         value: Option<impl Into<SmolStr>>,
     ) -> Result<(), ViaError> {
-        if self.params.len() >= MAX_PARAMS {
-            return Err(ViaError::TooManyParameters { max: MAX_PARAMS });
-        }
-
         let name = name.into();
         validate_param_name(&name)?;
         let name = SmolStr::new(name.to_ascii_lowercase());
+        if self.params.contains_key(&name) {
+            return Err(ViaError::InvalidParameter(format!(
+                "duplicate parameter: {}",
+                name
+            )));
+        }
+        if self.params.len() >= MAX_PARAMS {
+            return Err(ViaError::TooManyParameters { max: MAX_PARAMS });
+        }
 
         let value = match value {
             Some(v) => {
@@ -564,6 +588,13 @@ mod tests {
     }
 
     #[test]
+    fn via_parse_with_tab_lws() {
+        let via = ViaHeader::parse("SIP/2.0/UDP\thost:5060;branch=z9hG4bK776").unwrap();
+        assert_eq!(via.transport(), "UDP");
+        assert_eq!(via.sent_by(), "host:5060");
+    }
+
+    #[test]
     fn via_parse_with_ipv6() {
         let via = ViaHeader::parse("SIP/2.0/TCP [2001:db8::1]:5060").unwrap();
         assert_eq!(via.transport(), "TCP");
@@ -577,6 +608,11 @@ mod tests {
         assert!(via.param("branch").is_some());
         assert!(via.param("received").is_some());
         assert!(via.param("rport").is_some());
+    }
+
+    #[test]
+    fn via_rejects_duplicate_params() {
+        assert!(ViaHeader::parse("SIP/2.0/UDP host:5060;branch=1;branch=2").is_err());
     }
 
     #[test]

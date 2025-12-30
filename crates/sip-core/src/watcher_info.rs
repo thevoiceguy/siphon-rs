@@ -19,6 +19,8 @@
 use smol_str::SmolStr;
 use std::fmt;
 
+use crate::Uri;
+
 // Security: Input size limits
 const MAX_URI_LENGTH: usize = 512;
 const MAX_ID_LENGTH: usize = 128;
@@ -113,7 +115,9 @@ fn validate_uri(uri: &str) -> Result<(), WatcherinfoError> {
         ));
     }
 
-    Ok(())
+    Uri::parse(uri)
+        .map(|_| ())
+        .map_err(|e| WatcherinfoError::InvalidUri(e.to_string()))
 }
 
 /// Validates an ID.
@@ -796,16 +800,68 @@ fn extract_attribute(
     })?;
     let tag_str = &tag_content[..tag_end];
 
-    let attr_start = match tag_str.find(&format!("{}=\"", attr_name)) {
-        Some(start) => start,
-        None => return Ok(None),
-    };
-    let value_start = attr_start + attr_name.len() + 2;
-    let value_end = tag_str[value_start..].find('"').ok_or_else(|| {
-        WatcherinfoError::XmlParseError("unterminated attribute".to_string())
-    })?;
-    let value = &tag_str[value_start..value_start + value_end];
-    xml_unescape(value).map(Some)
+    let mut search_idx = 0;
+    while let Some(found) = tag_str[search_idx..].find(attr_name) {
+        let attr_start = search_idx + found;
+        let before_ok = attr_start == 0
+            || tag_str[..attr_start]
+                .chars()
+                .last()
+                .map(|c| c.is_whitespace() || c == '<')
+                .unwrap_or(true);
+        let after_idx = attr_start + attr_name.len();
+        let after_char = tag_str[after_idx..].chars().next();
+        if !before_ok || matches!(after_char, Some(c) if !c.is_whitespace() && c != '=') {
+            search_idx = attr_start + 1;
+            continue;
+        }
+
+        let mut idx = after_idx;
+        while idx < tag_str.len() {
+            let ch = tag_str[idx..].chars().next().unwrap();
+            if !ch.is_whitespace() {
+                break;
+            }
+            idx += ch.len_utf8();
+        }
+
+        if idx >= tag_str.len() || !tag_str[idx..].starts_with('=') {
+            search_idx = attr_start + 1;
+            continue;
+        }
+        idx += 1;
+
+        while idx < tag_str.len() {
+            let ch = tag_str[idx..].chars().next().unwrap();
+            if !ch.is_whitespace() {
+                break;
+            }
+            idx += ch.len_utf8();
+        }
+
+        if idx >= tag_str.len() {
+            return Err(WatcherinfoError::XmlParseError(
+                "unterminated attribute".to_string(),
+            ));
+        }
+
+        let quote = tag_str[idx..].chars().next().unwrap();
+        if quote != '"' && quote != '\'' {
+            return Err(WatcherinfoError::XmlParseError(
+                "unterminated attribute".to_string(),
+            ));
+        }
+        idx += quote.len_utf8();
+
+        let rest = &tag_str[idx..];
+        let end_rel = rest.find(quote).ok_or_else(|| {
+            WatcherinfoError::XmlParseError("unterminated attribute".to_string())
+        })?;
+        let value = &rest[..end_rel];
+        return xml_unescape(value).map(Some);
+    }
+
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -913,6 +969,12 @@ mod tests {
     }
 
     #[test]
+    fn watcher_rejects_invalid_uri_format() {
+        let watcher = Watcher::new("w1", WatcherStatus::Active, WatcherEvent::Approved).unwrap();
+        assert!(watcher.with_uri("not a uri").is_err());
+    }
+
+    #[test]
     fn watcher_rejects_control_chars_in_display_name() {
         let watcher = Watcher::new("w1", WatcherStatus::Active, WatcherEvent::Approved).unwrap();
         assert!(watcher.with_display_name("Name\x00").is_err());
@@ -955,6 +1017,21 @@ mod tests {
 <watcherinfo xmlns="urn:ietf:params:xml:ns:watcherinfo" version="0" state="full">
   <watcher-list resource="sip:alice@example.com" package="presence">
     <watcher id="w1" status="active" event="approved">sip:bob@example.com</watcher>
+  </watcher-list>
+</watcherinfo>"#;
+
+        let doc = parse_watcherinfo(xml).unwrap();
+        assert_eq!(doc.version(), 0);
+        assert_eq!(doc.state(), "full");
+        assert_eq!(doc.watcher_lists().len(), 1);
+    }
+
+    #[test]
+    fn parse_watcherinfo_single_quotes() {
+        let xml = r#"<?xml version='1.0'?>
+<watcherinfo xmlns='urn:ietf:params:xml:ns:watcherinfo' version = '0' state = 'full'>
+  <watcher-list resource = 'sip:alice@example.com' package = 'presence'>
+    <watcher id = 'w1' status = 'active' event = 'approved'>sip:bob@example.com</watcher>
   </watcher-list>
 </watcherinfo>"#;
 

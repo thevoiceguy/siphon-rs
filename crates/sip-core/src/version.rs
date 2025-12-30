@@ -104,7 +104,7 @@ impl SipVersion {
     /// ```
     pub fn parse(input: &str) -> Result<Self, VersionError> {
         // Check for control characters (security)
-        if input.chars().any(|c| c.is_control()) {
+        if input.chars().any(|c| c.is_control() && c != '\t') {
             return Err(VersionError::InvalidFormat(
                 "contains control characters".to_string(),
             ));
@@ -226,6 +226,7 @@ mod tests {
     #[test]
     fn version_parse_with_whitespace() {
         assert_eq!(SipVersion::parse("  SIP/2.0  ").unwrap(), SipVersion::V2);
+        assert_eq!(SipVersion::parse("\tSIP/2.0\t").unwrap(), SipVersion::V2);
     }
 
     #[test]
