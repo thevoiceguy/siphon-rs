@@ -35,6 +35,138 @@ use smol_str::SmolStr;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tracing::info;
+
+// Security constants for DoS prevention and input validation
+const MAX_DISPLAY_NAME_LENGTH: usize = 100;
+const MAX_EVENT_NAME_LENGTH: usize = 64;
+const MAX_CONTENT_TYPE_LENGTH: usize = 128;
+const MAX_BODY_LENGTH: usize = 1_048_576; // 1 MB max body
+const MAX_REGISTRAR_CALL_IDS: usize = 100; // Max registrars to track
+const MAX_EARLY_DIALOGS: usize = 100; // Max early dialogs per INVITE (forking limit)
+const MAX_AUTH_PARAMS: usize = 20; // Max parameters in WWW-Authenticate
+
+/// Error type for UAC operations
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UacError {
+    /// Display name contains control characters
+    DisplayNameContainsControlChars,
+    /// Display name exceeds maximum length
+    DisplayNameTooLong { max: usize, actual: usize },
+    /// Event name contains control characters
+    EventNameContainsControlChars,
+    /// Event name exceeds maximum length
+    EventNameTooLong { max: usize, actual: usize },
+    /// Content type contains control characters
+    ContentTypeContainsControlChars,
+    /// Content type exceeds maximum length
+    ContentTypeTooLong { max: usize, actual: usize },
+    /// Body exceeds maximum length
+    BodyTooLong { max: usize, actual: usize },
+    /// Too many registrars tracked
+    TooManyRegistrars { max: usize },
+    /// Too many early dialogs (forking limit exceeded)
+    TooManyEarlyDialogs { max: usize },
+    /// Too many authentication parameters
+    TooManyAuthParams { max: usize },
+}
+
+impl std::fmt::Display for UacError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UacError::DisplayNameContainsControlChars => {
+                write!(f, "Display name contains control characters")
+            }
+            UacError::DisplayNameTooLong { max, actual } => {
+                write!(
+                    f,
+                    "Display name too long (max: {}, actual: {})",
+                    max, actual
+                )
+            }
+            UacError::EventNameContainsControlChars => {
+                write!(f, "Event name contains control characters")
+            }
+            UacError::EventNameTooLong { max, actual } => {
+                write!(f, "Event name too long (max: {}, actual: {})", max, actual)
+            }
+            UacError::ContentTypeContainsControlChars => {
+                write!(f, "Content type contains control characters")
+            }
+            UacError::ContentTypeTooLong { max, actual } => {
+                write!(
+                    f,
+                    "Content type too long (max: {}, actual: {})",
+                    max, actual
+                )
+            }
+            UacError::BodyTooLong { max, actual } => {
+                write!(f, "Body too long (max: {}, actual: {})", max, actual)
+            }
+            UacError::TooManyRegistrars { max } => {
+                write!(f, "Too many registrars tracked (max: {})", max)
+            }
+            UacError::TooManyEarlyDialogs { max } => {
+                write!(f, "Too many early dialogs - forking limit exceeded (max: {})", max)
+            }
+            UacError::TooManyAuthParams { max } => {
+                write!(f, "Too many auth parameters (max: {})", max)
+            }
+        }
+    }
+}
+
+impl std::error::Error for UacError {}
+
+// Validation functions
+fn validate_display_name(name: &str) -> std::result::Result<(), UacError> {
+    if name.len() > MAX_DISPLAY_NAME_LENGTH {
+        return Err(UacError::DisplayNameTooLong {
+            max: MAX_DISPLAY_NAME_LENGTH,
+            actual: name.len(),
+        });
+    }
+    if name.chars().any(|c| c.is_control()) {
+        return Err(UacError::DisplayNameContainsControlChars);
+    }
+    Ok(())
+}
+
+fn validate_event_name(event: &str) -> std::result::Result<(), UacError> {
+    if event.len() > MAX_EVENT_NAME_LENGTH {
+        return Err(UacError::EventNameTooLong {
+            max: MAX_EVENT_NAME_LENGTH,
+            actual: event.len(),
+        });
+    }
+    if event.chars().any(|c| c.is_control()) {
+        return Err(UacError::EventNameContainsControlChars);
+    }
+    Ok(())
+}
+
+fn validate_content_type(content_type: &str) -> std::result::Result<(), UacError> {
+    if content_type.len() > MAX_CONTENT_TYPE_LENGTH {
+        return Err(UacError::ContentTypeTooLong {
+            max: MAX_CONTENT_TYPE_LENGTH,
+            actual: content_type.len(),
+        });
+    }
+    if content_type.chars().any(|c| c.is_control()) {
+        return Err(UacError::ContentTypeContainsControlChars);
+    }
+    Ok(())
+}
+
+fn validate_body(body: &str) -> std::result::Result<(), UacError> {
+    if body.len() > MAX_BODY_LENGTH {
+        return Err(UacError::BodyTooLong {
+            max: MAX_BODY_LENGTH,
+            actual: body.len(),
+        });
+    }
+    Ok(())
+}
+
 ///
 /// **Note**: This is the low-level helper for request generation. For production
 /// use with automatic transaction management, DNS resolution, and authentication,
@@ -49,8 +181,8 @@ pub struct UserAgentClient {
     /// Local Contact URI
     pub contact_uri: SipUri,
 
-    /// Display name for From header
-    pub display_name: Option<String>,
+    /// Display name for From header (private, use set_display_name)
+    display_name: Option<String>,
 
     /// Optional override for From URI (used in B2BUA scenarios)
     pub from_uri_override: Option<SipUri>,
@@ -94,10 +226,28 @@ impl UserAgentClient {
         }
     }
 
-    /// Sets display name for From header.
-    pub fn with_display_name(mut self, name: String) -> Self {
+    /// Sets display name for From header with validation.
+    pub fn with_display_name(mut self, name: String) -> std::result::Result<Self, UacError> {
+        validate_display_name(&name)?;
         self.display_name = Some(name);
-        self
+        Ok(self)
+    }
+
+    /// Sets display name for From header (convenience method that takes &str).
+    pub fn set_display_name(&mut self, name: &str) -> std::result::Result<(), UacError> {
+        validate_display_name(name)?;
+        self.display_name = Some(name.to_string());
+        Ok(())
+    }
+
+    /// Gets the display name.
+    pub fn display_name(&self) -> Option<&str> {
+        self.display_name.as_deref()
+    }
+
+    /// Clears the display name.
+    pub fn clear_display_name(&mut self) {
+        self.display_name = None;
     }
 
     /// Configures digest authentication credentials.
@@ -1053,7 +1203,12 @@ impl UserAgentClient {
         event: &str,
         content_type: &str,
         body: &str,
-    ) -> Request {
+    ) -> std::result::Result<Request, UacError> {
+        // Validate inputs
+        validate_event_name(event)?;
+        validate_content_type(content_type)?;
+        validate_body(body)?;
+
         let mut headers = Headers::new();
 
         let branch = generate_branch();
@@ -1103,12 +1258,12 @@ impl UserAgentClient {
             )
             .unwrap();
 
-        Request::new(
+        Ok(Request::new(
             RequestLine::new(Method::Publish, target.clone()),
             headers,
             body_bytes,
         )
-        .expect("valid PUBLISH request")
+        .expect("valid PUBLISH request"))
     }
 
     /// Creates a session refresh request for RFC 4028 session timers.
@@ -1227,7 +1382,16 @@ impl UserAgentClient {
     /// let json_body = r#"{"action":"mute","value":true}"#;
     /// let info = uac.create_info(&dialog, "application/json", json_body);
     /// ```ignore
-    pub fn create_info(&self, dialog: &Dialog, content_type: &str, body: &str) -> Request {
+    pub fn create_info(
+        &self,
+        dialog: &Dialog,
+        content_type: &str,
+        body: &str,
+    ) -> std::result::Result<Request, UacError> {
+        // Validate inputs
+        validate_content_type(content_type)?;
+        validate_body(body)?;
+
         let mut headers = Headers::new();
 
         // Via
@@ -1290,12 +1454,12 @@ impl UserAgentClient {
         // Request-URI is the remote target
         let request_uri = dialog.remote_target().clone();
 
-        Request::new(
+        Ok(Request::new(
             RequestLine::new(Method::Info, request_uri),
             headers,
             Bytes::from(body.as_bytes().to_vec()),
         )
-        .expect("valid INFO request")
+        .expect("valid INFO request"))
     }
 
     /// Adds a Privacy header to a request (RFC 3323).
@@ -2551,6 +2715,18 @@ impl UserAgentClient {
             return call_id.clone();
         }
 
+        // Enforce maximum registrar tracking limit (DoS prevention)
+        if map.len() >= MAX_REGISTRAR_CALL_IDS {
+            // Map is full - generate new Call-ID without caching
+            // This prevents memory exhaustion while maintaining functionality
+            tracing::warn!(
+                registrar = %registrar_uri.as_str(),
+                max = MAX_REGISTRAR_CALL_IDS,
+                "Max registrar Call-ID tracking limit reached, not caching"
+            );
+            return SmolStr::new(generate_call_id());
+        }
+
         let call_id = SmolStr::new(generate_call_id());
         map.insert(key, call_id.clone());
         call_id
@@ -2635,7 +2811,16 @@ fn parse_www_authenticate(value: &SmolStr) -> Result<std::collections::HashMap<S
         .ok_or_else(|| anyhow!("Not a Digest challenge"))?;
     let params = header[digest_pos + "Digest".len()..].trim_start();
 
+    let mut param_count = 0;
     for param in split_auth_params(params) {
+        // Enforce maximum auth parameters limit (DoS prevention)
+        if param_count >= MAX_AUTH_PARAMS {
+            return Err(anyhow!(
+                "Too many authentication parameters (max: {})",
+                MAX_AUTH_PARAMS
+            ));
+        }
+
         let trimmed = param.trim();
         let trimmed = trimmed
             .strip_prefix("Digest")
@@ -2653,6 +2838,7 @@ fn parse_www_authenticate(value: &SmolStr) -> Result<std::collections::HashMap<S
             };
 
             map.insert(key, value);
+            param_count += 1;
         }
     }
 
@@ -2737,6 +2923,7 @@ fn extract_to_uri(response: &Response) -> Option<SipUri> {
 mod tests {
     use super::*;
     use sip_core::{StatusLine, Uri};
+    use sip_dialog::{Dialog, DialogId, DialogStateType};
 
     #[test]
     fn creates_register_request() {
@@ -2815,7 +3002,8 @@ mod tests {
         let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
 
         let uac = UserAgentClient::new(local_uri, contact_uri)
-            .with_display_name("Alice Smith".to_string());
+            .with_display_name("Alice Smith".to_string())
+            .unwrap();
 
         let from = uac.format_from_header();
         assert!(from.contains("\"Alice Smith\""));
@@ -3277,7 +3465,8 @@ mod tests {
         let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
 
         let uac = UserAgentClient::new(local_uri.clone(), contact_uri.clone())
-            .with_display_name("Alice".to_string());
+            .with_display_name("Alice".to_string())
+            .unwrap();
 
         // Create original INVITE request
         let remote_uri = SipUri::parse("sip:bob@example.com").unwrap();
@@ -3399,7 +3588,7 @@ mod tests {
 
         // Create INFO with DTMF payload
         let dtmf_body = "Signal=1\r\nDuration=100\r\n";
-        let info = uac.create_info(&dialog, "application/dtmf-relay", dtmf_body);
+        let info = uac.create_info(&dialog, "application/dtmf-relay", dtmf_body).unwrap();
 
         // Verify INFO request
         assert_eq!(info.method(), &Method::Info);
@@ -3460,7 +3649,7 @@ mod tests {
 
         // Create INFO with JSON payload
         let json_body = r#"{"action":"mute","value":true}"#;
-        let info = uac.create_info(&dialog, "application/json", json_body);
+        let info = uac.create_info(&dialog, "application/json", json_body).unwrap();
 
         // Verify method
         assert_eq!(info.method(), &Method::Info);
@@ -4345,4 +4534,210 @@ mod tests {
         assert!(header.contains("\"Bob Smith\""));
         assert!(header.contains(override_uri.as_str()));
     }
+
+    // Security tests for input validation and DoS prevention
+    #[test]
+    fn rejects_display_name_with_control_chars() {
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+
+        // Try to set display name with CRLF injection
+        let result = UserAgentClient::new(local_uri, contact_uri)
+            .with_display_name("Alice\r\nInjected: evil".to_string());
+
+        assert!(result.is_err());
+        match result {
+            Err(UacError::DisplayNameContainsControlChars) => {},
+            _ => panic!("Expected DisplayNameContainsControlChars error"),
+        }
+    }
+
+    #[test]
+    fn rejects_oversized_display_name() {
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+
+        // Create display name exceeding MAX_DISPLAY_NAME_LENGTH (100)
+        let long_name = "A".repeat(101);
+        let result = UserAgentClient::new(local_uri, contact_uri).with_display_name(long_name);
+
+        assert!(result.is_err());
+        match result {
+            Err(UacError::DisplayNameTooLong { max, actual }) => {
+                assert_eq!(max, 100);
+                assert_eq!(actual, 101);
+            }
+            _ => panic!("Expected DisplayNameTooLong error"),
+        }
+    }
+
+    #[test]
+    fn rejects_publish_with_control_chars_in_event() {
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+
+        let target = SipUri::parse("sip:presence@example.com").unwrap();
+        let result = uac.create_publish(
+            &target,
+            "presence\r\nInjected: evil",
+            "application/pidf+xml",
+            "<presence/>",
+        );
+
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            UacError::EventNameContainsControlChars
+        );
+    }
+
+    #[test]
+    fn rejects_publish_with_oversized_event() {
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+
+        let target = SipUri::parse("sip:presence@example.com").unwrap();
+        let long_event = "x".repeat(65); // MAX_EVENT_NAME_LENGTH is 64
+        let result = uac.create_publish(&target, &long_event, "application/pidf+xml", "<presence/>");
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            UacError::EventNameTooLong { max, actual } => {
+                assert_eq!(max, 64);
+                assert_eq!(actual, 65);
+            }
+            _ => panic!("Expected EventNameTooLong error"),
+        }
+    }
+
+    #[test]
+    fn rejects_info_with_control_chars_in_content_type() {
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+        let uac = UserAgentClient::new(local_uri.clone(), contact_uri);
+
+        let remote_uri = SipUri::parse("sip:bob@example.com").unwrap();
+        let dialog_id = DialogId::unchecked_new("call-id", "local-tag", "remote-tag");
+        let dialog = Dialog::unchecked_new(
+            dialog_id,
+            DialogStateType::Confirmed,
+            local_uri.clone(),
+            remote_uri.clone(),
+            SipUri::parse("sip:bob@192.168.1.200:5060").unwrap(),
+            1,  // local_cseq
+            0,  // remote_cseq
+            None,  // last_ack_cseq
+            vec![],  // route_set
+            false,  // secure
+            None,  // session_expires
+            None,  // refresher
+            true,  // is_uac
+        );
+
+        let result = uac.create_info(&dialog, "application/json\r\nInjected: evil", "{}");
+
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            UacError::ContentTypeContainsControlChars
+        );
+    }
+
+    #[test]
+    fn rejects_info_with_oversized_content_type() {
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+        let uac = UserAgentClient::new(local_uri.clone(), contact_uri);
+
+        let remote_uri = SipUri::parse("sip:bob@example.com").unwrap();
+        let dialog_id = DialogId::unchecked_new("call-id", "local-tag", "remote-tag");
+        let dialog = Dialog::unchecked_new(
+            dialog_id,
+            DialogStateType::Confirmed,
+            local_uri.clone(),
+            remote_uri.clone(),
+            SipUri::parse("sip:bob@192.168.1.200:5060").unwrap(),
+            1,  // local_cseq
+            0,  // remote_cseq
+            None,  // last_ack_cseq
+            vec![],  // route_set
+            false,  // secure
+            None,  // session_expires
+            None,  // refresher
+            true,  // is_uac
+        );
+
+        let long_content_type = "application/".to_string() + &"x".repeat(120); // MAX is 128
+        let result = uac.create_info(&dialog, &long_content_type, "{}");
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            UacError::ContentTypeTooLong { max, actual } => {
+                assert_eq!(max, 128);
+                assert_eq!(actual, 132); // "application/" + 120 = 132
+            }
+            _ => panic!("Expected ContentTypeTooLong error"),
+        }
+    }
+
+    #[test]
+    fn rejects_info_with_oversized_body() {
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+        let uac = UserAgentClient::new(local_uri.clone(), contact_uri);
+
+        let remote_uri = SipUri::parse("sip:bob@example.com").unwrap();
+        let dialog_id = DialogId::unchecked_new("call-id", "local-tag", "remote-tag");
+        let dialog = Dialog::unchecked_new(
+            dialog_id,
+            DialogStateType::Confirmed,
+            local_uri.clone(),
+            remote_uri.clone(),
+            SipUri::parse("sip:bob@192.168.1.200:5060").unwrap(),
+            1,  // local_cseq
+            0,  // remote_cseq
+            None,  // last_ack_cseq
+            vec![],  // route_set
+            false,  // secure
+            None,  // session_expires
+            None,  // refresher
+            true,  // is_uac
+        );
+
+        // Create body exceeding MAX_BODY_LENGTH (1 MB)
+        let huge_body = "x".repeat(1_048_577);
+        let result = uac.create_info(&dialog, "application/json", &huge_body);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            UacError::BodyTooLong { max, actual } => {
+                assert_eq!(max, 1_048_576);
+                assert_eq!(actual, 1_048_577);
+            }
+            _ => panic!("Expected BodyTooLong error"),
+        }
+    }
+
+    #[test]
+    fn parse_www_authenticate_enforces_max_params() {
+        use smol_str::SmolStr;
+
+        // Create WWW-Authenticate header with 21 parameters (MAX is 20)
+        let mut params = vec![r#"realm="example.com""#.to_string()];
+        for i in 0..20 {
+            params.push(format!(r#"param{}="value{}""#, i, i));
+        }
+        let header = format!("Digest {}", params.join(", "));
+        let header_smol = SmolStr::new(&header);
+
+        let result = parse_www_authenticate(&header_smol);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Too many authentication parameters"));
+    }
 }
+

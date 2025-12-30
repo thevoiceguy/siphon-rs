@@ -1721,7 +1721,7 @@ impl IntegratedUAC {
         body: &str,
     ) -> Result<Response> {
         let helper = self.helper.lock().await;
-        let request = helper.create_info(dialog, content_type, body);
+        let request = helper.create_info(dialog, content_type, body)?;
         drop(helper);
 
         self.send_in_dialog_non_invite(dialog, request).await
@@ -2127,21 +2127,31 @@ impl ClientTransactionUser for InviteTransactionUser {
                 let mut early_dialogs = self.early_dialogs.lock().await;
 
                 if early_dialogs.contains_key(&to_tag) {
+                    // Update existing early dialog (no bounds check needed)
                     debug!(
                         "Updated existing early dialog from {}: to-tag={}",
                         response.code(),
                         to_tag
                     );
+                    early_dialogs.insert(to_tag, dialog);
                 } else {
-                    debug!(
-                        "Created new early dialog from {}: to-tag={} (forking detected: {} endpoints)",
-                        response.code(),
-                        to_tag,
-                        early_dialogs.len() + 1
-                    );
+                    // New early dialog - enforce forking limit
+                    if early_dialogs.len() >= crate::MAX_EARLY_DIALOGS {
+                        warn!(
+                            "Max early dialogs limit reached ({}), ignoring new early dialog: to-tag={}",
+                            crate::MAX_EARLY_DIALOGS,
+                            to_tag
+                        );
+                    } else {
+                        debug!(
+                            "Created new early dialog from {}: to-tag={} (forking detected: {} endpoints)",
+                            response.code(),
+                            to_tag,
+                            early_dialogs.len() + 1
+                        );
+                        early_dialogs.insert(to_tag, dialog);
+                    }
                 }
-
-                early_dialogs.insert(to_tag, dialog);
             }
         }
 
@@ -2777,7 +2787,7 @@ impl IntegratedUACBuilder {
         }
 
         if let Some(display_name) = self.display_name {
-            helper = helper.with_display_name(display_name);
+            helper = helper.with_display_name(display_name)?;
         }
 
         let dialog_manager = helper.dialog_manager.clone();

@@ -35,7 +35,8 @@ fn main() {
     let alice_contact = SipUri::parse("sip:alice@192.168.1.100:5060").expect("valid Alice contact");
 
     let alice_uac = UserAgentClient::new(alice_uri.clone(), alice_contact.clone())
-        .with_display_name("Alice Smith".to_string());
+        .with_display_name("Alice Smith".to_string())
+        .expect("valid display name");
 
     let bob_uri = SipUri::parse("sip:bob@example.com").expect("valid Bob URI");
     let invite_request = alice_uac.create_invite(

@@ -32,7 +32,8 @@ fn main() {
     let alice_contact = SipUri::parse("sip:alice@192.168.1.100:5060").expect("valid contact");
 
     let alice_uac = UserAgentClient::new(alice_uri.clone(), alice_contact.clone())
-        .with_display_name("Alice Smith".to_string());
+        .with_display_name("Alice Smith".to_string())
+        .expect("valid display name");
 
     // Bob's phone number as tel URI
     let bob_tel_uri = TelUri::parse("tel:+1-555-123-4567").expect("valid tel URI");

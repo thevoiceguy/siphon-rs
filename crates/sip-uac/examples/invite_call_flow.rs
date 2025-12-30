@@ -19,8 +19,9 @@ fn main() {
     let local_uri = SipUri::parse("sip:alice@example.com").expect("valid local URI");
     let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").expect("valid contact URI");
 
-    let uac =
-        UserAgentClient::new(local_uri, contact_uri).with_display_name("Alice Smith".to_string());
+    let uac = UserAgentClient::new(local_uri, contact_uri)
+        .with_display_name("Alice Smith".to_string())
+        .expect("valid display name");
 
     println!("Created UAC for Alice Smith <sip:alice@example.com>");
 

@@ -36,7 +36,8 @@ fn main() {
     let bob_contact = SipUri::parse("sip:bob@192.168.1.200:5060").expect("valid contact URI");
 
     let bob_uac = UserAgentClient::new(bob_uri.clone(), bob_contact.clone())
-        .with_display_name("Bob Jones".to_string());
+        .with_display_name("Bob Jones".to_string())
+        .expect("valid display name");
 
     // Bob has a dialog with Alice (from the original INVITE)
     // In a real application, this would be created from the INVITE/200 OK exchange

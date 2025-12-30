@@ -87,7 +87,8 @@ fn main() {
     println!();
 
     let bob_uac = UserAgentClient::new(bob_uri.clone(), bob_contact.clone())
-        .with_display_name("Bob Jones".to_string());
+        .with_display_name("Bob Jones".to_string())
+        .expect("valid display name");
 
     // Mock Call B dialog from Bob's perspective
     let dialog_b_id = DialogId::unchecked_new("call-bob-charlie-456", "bob-tag-333", "charlie-tag-444");
