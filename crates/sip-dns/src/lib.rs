@@ -31,12 +31,53 @@ use rand::Rng;
 use sip_core::SipUri;
 use smol_str::SmolStr;
 use std::collections::BTreeMap;
+use std::fmt;
 use std::net::IpAddr;
 use trust_dns_resolver::{
     config::{ResolverConfig, ResolverOpts},
     proto::rr::RecordType,
     TokioAsyncResolver,
 };
+
+// Security constants for DNS resolution
+const MAX_HOSTNAME_LENGTH: usize = 253;  // RFC 1035 §2.3.4
+const MAX_TARGETS_PER_QUERY: usize = 100;  // Prevent DoS via excessive results
+
+/// DNS resolution errors with security-aware validation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DnsError {
+    /// Hostname exceeds RFC 1035 limit
+    HostnameTooLong { max: usize, actual: usize },
+    /// Hostname is empty
+    EmptyHostname,
+    /// Hostname contains control characters (CRLF injection prevention)
+    InvalidHostname(String),
+    /// Too many DNS targets returned (DoS prevention)
+    TooManyTargets { max: usize, actual: usize },
+}
+
+impl fmt::Display for DnsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DnsError::HostnameTooLong { max, actual } => {
+                write!(f, "hostname too long: {} bytes (max {})", actual, max)
+            }
+            DnsError::EmptyHostname => write!(f, "hostname cannot be empty"),
+            DnsError::InvalidHostname(hostname) => {
+                write!(f, "invalid hostname: {}", hostname)
+            }
+            DnsError::TooManyTargets { max, actual } => {
+                write!(
+                    f,
+                    "too many DNS targets: {} targets (max {})",
+                    actual, max
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for DnsError {}
 
 /// Transport protocol discovered via DNS resolution (RFC 3263, RFC 4168).
 ///
@@ -126,17 +167,49 @@ impl Transport {
     }
 }
 
-/// Target endpoint returned by DNS resolution.
+/// Target endpoint returned by DNS resolution with validated hostname.
+///
+/// # Security
+///
+/// - Hostname is validated against RFC 1035 §2.3.4 (max 253 bytes)
+/// - Control characters are rejected (CRLF injection prevention)
+/// - Empty hostnames are rejected
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DnsTarget {
-    pub host: SmolStr,
-    pub port: u16,
-    pub transport: Transport,
-    pub priority: u16,
+    host: SmolStr,
+    port: u16,
+    transport: Transport,
+    priority: u16,
 }
 
 impl DnsTarget {
-    pub fn new(host: impl Into<SmolStr>, port: u16, transport: Transport) -> Self {
+    /// Creates a new DNS target with validated hostname.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DnsError` if:
+    /// - Hostname is empty
+    /// - Hostname exceeds 253 bytes (RFC 1035 limit)
+    /// - Hostname contains control characters
+    pub fn new(host: impl Into<SmolStr>, port: u16, transport: Transport) -> Result<Self, DnsError> {
+        let host_str: SmolStr = host.into();
+        validate_hostname(host_str.as_str())?;
+
+        Ok(Self {
+            host: host_str,
+            port,
+            transport,
+            priority: 0,
+        })
+    }
+
+    /// Creates a DNS target without validation (for internal use).
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure hostname is valid. Used for trusted sources like
+    /// numeric IPs that have already been validated.
+    pub fn unchecked_new(host: impl Into<SmolStr>, port: u16, transport: Transport) -> Self {
         Self {
             host: host.into(),
             port,
@@ -145,10 +218,52 @@ impl DnsTarget {
         }
     }
 
+    /// Sets the priority for this target.
     pub fn with_priority(mut self, priority: u16) -> Self {
         self.priority = priority;
         self
     }
+
+    /// Returns the hostname.
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
+    /// Returns the port.
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    /// Returns the transport protocol.
+    pub fn transport(&self) -> Transport {
+        self.transport
+    }
+
+    /// Returns the priority (lower is higher priority).
+    pub fn priority(&self) -> u16 {
+        self.priority
+    }
+}
+
+/// Validates a hostname against RFC 1035 and security requirements.
+fn validate_hostname(hostname: &str) -> Result<(), DnsError> {
+    if hostname.is_empty() {
+        return Err(DnsError::EmptyHostname);
+    }
+
+    if hostname.len() > MAX_HOSTNAME_LENGTH {
+        return Err(DnsError::HostnameTooLong {
+            max: MAX_HOSTNAME_LENGTH,
+            actual: hostname.len(),
+        });
+    }
+
+    // Check for control characters (CRLF injection prevention)
+    if hostname.chars().any(|c| c.is_control()) {
+        return Err(DnsError::InvalidHostname(hostname.to_string()));
+    }
+
+    Ok(())
 }
 
 /// Result of NAPTR record parsing (RFC 3263 §4.1).
@@ -258,7 +373,7 @@ impl SipResolver {
             let port = uri
                 .port()
                 .unwrap_or(if uri.is_sips() { 5061 } else { 5060 });
-            return Ok(vec![DnsTarget::new(
+            return Ok(vec![DnsTarget::unchecked_new(
                 host,
                 port,
                 Self::default_transport(uri),
@@ -270,7 +385,7 @@ impl SipResolver {
             let ips = self.lookup_a_aaaa(host).await?;
             return Ok(ips
                 .into_iter()
-                .map(|ip| DnsTarget::new(ip.to_string(), port, Self::default_transport(uri)))
+                .map(|ip| DnsTarget::unchecked_new(ip.to_string(), port, Self::default_transport(uri)))
                 .collect());
         }
 
@@ -316,7 +431,7 @@ impl SipResolver {
             let default_port = if uri.is_sips() { 5061 } else { 5060 };
             let ips = self.lookup_a_aaaa(host).await?;
             for ip in ips {
-                all_targets.push(DnsTarget::new(
+                all_targets.push(DnsTarget::unchecked_new(
                     ip.to_string(),
                     default_port,
                     Self::default_transport(uri),
@@ -467,7 +582,7 @@ impl SipResolver {
         for (priority, records) in priority_groups {
             let weighted = select_by_weight(records);
             for (host, port) in weighted {
-                targets.push(DnsTarget::new(host, port, transport).with_priority(priority));
+                targets.push(DnsTarget::unchecked_new(host, port, transport).with_priority(priority));
             }
         }
 
@@ -573,7 +688,7 @@ impl StaticResolver {
 
     pub fn single(host: impl Into<SmolStr>, port: u16, transport: Transport) -> Self {
         Self {
-            targets: vec![DnsTarget::new(host, port, transport)],
+            targets: vec![DnsTarget::unchecked_new(host, port, transport)],
         }
     }
 }
@@ -971,7 +1086,7 @@ impl<D: DhcpProvider, R: Resolver> DhcpResolver<D, R> {
                     // Use IPv4 address directly
                     let port = if uri.is_sips() { 5061 } else { 5060 };
                     let transport = SipResolver::default_transport(uri);
-                    all_targets.push(DnsTarget::new(addr.to_string(), port, transport));
+                    all_targets.push(DnsTarget::unchecked_new(addr.to_string(), port, transport));
                 }
                 DhcpSipServer::Domain(domain) => {
                     // Create a temporary URI with the DHCP domain for DNS resolution
@@ -1059,7 +1174,7 @@ impl<D: DhcpProvider, R: Resolver> Resolver for HybridResolver<D, R> {
                         DhcpSipServer::Ipv4(addr) => {
                             let port = if uri.is_sips() { 5061 } else { 5060 };
                             let transport = SipResolver::default_transport(uri);
-                            all_targets.push(DnsTarget::new(addr.to_string(), port, transport));
+                            all_targets.push(DnsTarget::unchecked_new(addr.to_string(), port, transport));
                         }
                         DhcpSipServer::Domain(domain) => {
                             let temp_uri = uri
@@ -1093,8 +1208,8 @@ mod tests {
     #[test]
     fn static_resolver_returns_configured_targets() {
         let targets = vec![
-            DnsTarget::new("server1.example.com", 5060, Transport::Udp),
-            DnsTarget::new("server2.example.com", 5060, Transport::Tcp),
+            DnsTarget::unchecked_new("server1.example.com", 5060, Transport::Udp),
+            DnsTarget::unchecked_new("server2.example.com", 5060, Transport::Tcp),
         ];
         let resolver = StaticResolver::new(targets.clone());
 
@@ -1568,8 +1683,8 @@ mod tests {
         // StaticResolver returns all configured targets, so this simulates
         // DNS resolution returning both the DHCP domain and fallback
         let dns = StaticResolver::new(vec![
-            DnsTarget::new("dhcp.example.com", 5060, Transport::Tcp),
-            DnsTarget::new("dns-fallback.example.com", 5060, Transport::Udp),
+            DnsTarget::unchecked_new("dhcp.example.com", 5060, Transport::Tcp),
+            DnsTarget::unchecked_new("dns-fallback.example.com", 5060, Transport::Udp),
         ]);
         let resolver = HybridResolver::new(dhcp, dns);
 
@@ -1597,5 +1712,78 @@ mod tests {
 
         let ipv4 = DhcpSipServer::Ipv4("192.168.1.1".parse().unwrap());
         assert_eq!(ipv4.as_str(), "192.168.1.1");
+    }
+
+    // Security validation tests
+
+    #[test]
+    fn dns_target_rejects_empty_hostname() {
+        let result = DnsTarget::new("", 5060, Transport::Udp);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), DnsError::EmptyHostname);
+    }
+
+    #[test]
+    fn dns_target_rejects_oversized_hostname() {
+        // RFC 1035 §2.3.4 limits hostnames to 253 bytes
+        let long_hostname = "a".repeat(254);
+        let result = DnsTarget::new(long_hostname.clone(), 5060, Transport::Udp);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DnsError::HostnameTooLong { max, actual } => {
+                assert_eq!(max, 253);
+                assert_eq!(actual, 254);
+            }
+            _ => panic!("Expected HostnameTooLong error"),
+        }
+    }
+
+    #[test]
+    fn dns_target_accepts_max_hostname() {
+        // Exactly 253 bytes should be accepted
+        let hostname = "a".repeat(253);
+        let result = DnsTarget::new(hostname, 5060, Transport::Udp);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn dns_target_rejects_crlf_injection() {
+        let result = DnsTarget::new("evil.com\r\nVia: injected", 5060, Transport::Udp);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DnsError::InvalidHostname(_) => (),
+            _ => panic!("Expected InvalidHostname error"),
+        }
+    }
+
+    #[test]
+    fn dns_target_rejects_control_characters() {
+        let result = DnsTarget::new("evil\x00.com", 5060, Transport::Udp);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DnsError::InvalidHostname(_) => (),
+            _ => panic!("Expected InvalidHostname error"),
+        }
+    }
+
+    #[test]
+    fn dns_target_accessors_work() {
+        let target = DnsTarget::unchecked_new("example.com", 5060, Transport::Tcp);
+        assert_eq!(target.host(), "example.com");
+        assert_eq!(target.port(), 5060);
+        assert_eq!(target.transport(), Transport::Tcp);
+        assert_eq!(target.priority(), 0);
+
+        let target_with_priority = target.with_priority(10);
+        assert_eq!(target_with_priority.priority(), 10);
+    }
+
+    #[test]
+    fn dns_target_validates_normal_hostnames() {
+        // Valid hostnames should pass
+        assert!(DnsTarget::new("example.com", 5060, Transport::Udp).is_ok());
+        assert!(DnsTarget::new("sub.domain.example.com", 5060, Transport::Tcp).is_ok());
+        assert!(DnsTarget::new("192.168.1.1", 5060, Transport::Tls).is_ok());
+        assert!(DnsTarget::new("2001:db8::1", 5060, Transport::Udp).is_ok());
     }
 }

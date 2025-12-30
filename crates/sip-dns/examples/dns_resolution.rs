@@ -25,7 +25,7 @@ async fn main() -> anyhow::Result<()> {
     let resolver = SipResolver::from_system()?.disable_naptr();
     let targets = resolver.resolve(&uri).await.unwrap_or_else(|e| {
         println!("   Note: DNS lookup failed (expected in example): {}", e);
-        vec![DnsTarget::new("secure.example.com", 5061, Transport::Tls)]
+        vec![DnsTarget::unchecked_new("secure.example.com", 5061, Transport::Tls)]
     });
     print_targets(&targets);
 
@@ -34,15 +34,15 @@ async fn main() -> anyhow::Result<()> {
     let uri = SipUri::parse("sip:server.example.com;transport=tcp").unwrap();
     let targets = resolver.resolve(&uri).await.unwrap_or_else(|e| {
         println!("   Note: DNS lookup failed (expected in example): {}", e);
-        vec![DnsTarget::new("server.example.com", 5060, Transport::Tcp)]
+        vec![DnsTarget::unchecked_new("server.example.com", 5060, Transport::Tcp)]
     });
     print_targets(&targets);
 
     // Example 4: Static resolver for testing/development
     println!("\n4. Using StaticResolver for testing:");
     let static_targets = vec![
-        DnsTarget::new("primary.example.com", 5060, Transport::Tcp).with_priority(10),
-        DnsTarget::new("backup.example.com", 5060, Transport::Tcp).with_priority(20),
+        DnsTarget::unchecked_new("primary.example.com", 5060, Transport::Tcp).with_priority(10),
+        DnsTarget::unchecked_new("backup.example.com", 5060, Transport::Tcp).with_priority(20),
     ];
     let static_resolver = StaticResolver::new(static_targets);
     let uri = SipUri::parse("sip:test@example.com").unwrap();
@@ -52,9 +52,9 @@ async fn main() -> anyhow::Result<()> {
     // Example 5: Failover scenario
     println!("\n5. Failover scenario with multiple targets:");
     let failover_targets = vec![
-        DnsTarget::new("sip1.example.com", 5060, Transport::Tls).with_priority(10),
-        DnsTarget::new("sip2.example.com", 5060, Transport::Tcp).with_priority(20),
-        DnsTarget::new("sip3.example.com", 5060, Transport::Udp).with_priority(30),
+        DnsTarget::unchecked_new("sip1.example.com", 5060, Transport::Tls).with_priority(10),
+        DnsTarget::unchecked_new("sip2.example.com", 5060, Transport::Tcp).with_priority(20),
+        DnsTarget::unchecked_new("sip3.example.com", 5060, Transport::Udp).with_priority(30),
     ];
     let failover_resolver = StaticResolver::new(failover_targets);
     let targets = failover_resolver.resolve(&uri).await?;
@@ -77,10 +77,10 @@ fn print_targets(targets: &[DnsTarget]) {
         println!(
             "   [{}] {}:{} ({:?}) priority={}",
             i + 1,
-            target.host,
-            target.port,
-            target.transport,
-            target.priority
+            target.host(),
+            target.port(),
+            target.transport(),
+            target.priority()
         );
     }
 }

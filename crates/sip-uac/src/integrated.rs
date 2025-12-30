@@ -265,11 +265,11 @@ impl RequestTarget {
         match self {
             RequestTarget::Uri(uri) => Some(uri.clone()),
             RequestTarget::Resolved(dns) => {
-                let scheme = match dns.transport {
+                let scheme = match dns.transport() {
                     sip_dns::Transport::Tls => "sips",
                     _ => "sip",
                 };
-                SipUri::parse(&format!("{}:{}:{}", scheme, dns.host, dns.port)).ok()
+                SipUri::parse(&format!("{}:{}:{}", scheme, dns.host(), dns.port())).ok()
             }
         }
     }
@@ -566,7 +566,7 @@ impl CallHandle {
                         let mut opts = helper.create_options(&uri);
                         drop(helper);
                         let _ = uac
-                            .auto_fill_headers(&mut opts, Some(resolved.transport))
+                            .auto_fill_headers(&mut opts, Some(resolved.transport()))
                             .await;
                         let _ = uac.send_non_invite_request(opts, resolved.clone()).await;
                     }
@@ -792,7 +792,7 @@ impl IntegratedUAC {
 
         // Resolve target and fill transport-aware headers
         let dns_target = self.resolve_target(&target).await?;
-        self.auto_fill_headers(&mut request, Some(dns_target.transport))
+        self.auto_fill_headers(&mut request, Some(dns_target.transport()))
             .await;
 
         // Resolve target and send
@@ -805,11 +805,11 @@ impl IntegratedUAC {
             RequestTarget::Uri(uri) => Ok(uri.clone()),
             RequestTarget::Resolved(dns) => {
                 // Reconstruct URI from DNS target
-                let scheme = match dns.transport {
+                let scheme = match dns.transport() {
                     sip_dns::Transport::Tls => "sips",
                     _ => "sip",
                 };
-                SipUri::parse(&format!("{}:{}:{}", scheme, dns.host, dns.port))
+                SipUri::parse(&format!("{}:{}:{}", scheme, dns.host(), dns.port()))
                     .map_err(|_| anyhow!("Failed to reconstruct URI from DNS target"))
             }
         }
@@ -968,12 +968,11 @@ impl IntegratedUAC {
             RequestTarget::Uri(uri) if !self.config.auto_dns_resolution => {
                 // No auto resolution - create simple target
                 let port = uri.port().unwrap_or(5060);
-                Ok(DnsTarget {
-                    host: SmolStr::new(uri.host()),
+                Ok(sip_dns::DnsTarget::unchecked_new(
+                    uri.host(),
                     port,
-                    transport: sip_dns::Transport::Udp,
-                    priority: 0,
-                })
+                    sip_dns::Transport::Udp,
+                ))
             }
             RequestTarget::Uri(uri) => {
                 // Auto-resolve via DNS
@@ -1075,7 +1074,7 @@ impl IntegratedUAC {
 
         // Auto-fill headers again (CSeq was incremented)
         let mut auth_request = auth_request;
-        self.auto_fill_headers(&mut auth_request, Some(dns_target.transport))
+        self.auto_fill_headers(&mut auth_request, Some(dns_target.transport()))
             .await;
 
         // Send authenticated request (non-recursive - don't retry again)
@@ -1110,7 +1109,7 @@ impl IntegratedUAC {
     async fn create_transport_context(&self, dns_target: &DnsTarget) -> Result<TransportContext> {
         use sip_transaction::TransportKind;
 
-        let transport = match dns_target.transport {
+        let transport = match dns_target.transport() {
             sip_dns::Transport::Udp => TransportKind::Udp,
             sip_dns::Transport::Tcp => TransportKind::Tcp,
             sip_dns::Transport::Tls => TransportKind::Tls,
@@ -1121,7 +1120,7 @@ impl IntegratedUAC {
         };
 
         // Parse host to SocketAddr, falling back to OS DNS resolution for SRV hostnames
-        let addr_str = format!("{}:{}", dns_target.host, dns_target.port);
+        let addr_str = format!("{}:{}", dns_target.host(), dns_target.port());
         let peer = match addr_str.parse() {
             Ok(addr) => addr,
             Err(_) => {
@@ -1137,7 +1136,7 @@ impl IntegratedUAC {
 
         // Use hostname (from DNS target) for SNI when TLS/WSS is selected
         let server_name = if matches!(transport, TransportKind::Tls | TransportKind::Wss) {
-            Some(dns_target.host.to_string())
+            Some(dns_target.host().to_string())
         } else {
             None
         };
@@ -1163,7 +1162,7 @@ impl IntegratedUAC {
                 };
                 Some(format!(
                     "{}://{}:{}{}",
-                    scheme, dns_target.host, dns_target.port, normalized_path
+                    scheme, dns_target.host(), dns_target.port(), normalized_path
                 ))
             }
         } else {
@@ -1266,7 +1265,7 @@ impl IntegratedUAC {
         let dns_target = self.resolve_target(&target).await?;
 
         // Auto-fill Via/Contact using resolved transport
-        self.auto_fill_headers(&mut request, Some(dns_target.transport))
+        self.auto_fill_headers(&mut request, Some(dns_target.transport()))
             .await;
 
         // Create channels for responses
@@ -1374,7 +1373,7 @@ impl IntegratedUAC {
         let dns_target = self.resolve_target(&target).await?;
 
         // Auto-fill Via with resolved transport
-        self.auto_fill_headers(&mut request, Some(dns_target.transport))
+        self.auto_fill_headers(&mut request, Some(dns_target.transport()))
             .await;
 
         // Send and wait for response
@@ -1407,7 +1406,7 @@ impl IntegratedUAC {
 
         // Resolve target and send
         let dns_target = self.resolve_target(&target).await?;
-        self.auto_fill_headers(&mut request, Some(dns_target.transport))
+        self.auto_fill_headers(&mut request, Some(dns_target.transport()))
             .await;
         let response = self
             .send_non_invite_request(request.clone(), dns_target)
@@ -1447,7 +1446,7 @@ impl IntegratedUAC {
         // Use subscription contact for DNS resolution
         let target = RequestTarget::Uri(subscription.contact().clone());
         let dns_target = self.resolve_target(&target).await?;
-        self.auto_fill_headers(&mut request, Some(dns_target.transport))
+        self.auto_fill_headers(&mut request, Some(dns_target.transport()))
             .await;
 
         // Send and wait for response
@@ -1466,7 +1465,7 @@ impl IntegratedUAC {
         drop(helper);
 
         // Auto-fill headers
-        self.auto_fill_headers(&mut request, Some(dns_target.transport))
+        self.auto_fill_headers(&mut request, Some(dns_target.transport()))
             .await;
 
         // Send and wait for response
@@ -1484,7 +1483,7 @@ impl IntegratedUAC {
             let uri = self.extract_uri(&target)?;
             let mut req = helper.create_options(&uri);
             drop(helper);
-            self.auto_fill_headers(&mut req, Some(dns_target.transport))
+            self.auto_fill_headers(&mut req, Some(dns_target.transport()))
                 .await;
             let _ = self.send_non_invite_request(req, dns_target).await?;
         } else {
@@ -1523,7 +1522,7 @@ impl IntegratedUAC {
         let dns_target = self.resolve_target(&RequestTarget::Uri(target_uri)).await?;
 
         // Auto-fill Via/Contact using resolved transport
-        self.auto_fill_headers(&mut request, Some(dns_target.transport))
+        self.auto_fill_headers(&mut request, Some(dns_target.transport()))
             .await;
 
         self.start_dialog_invite_transaction(dialog.clone(), request, dns_target)
@@ -1659,7 +1658,7 @@ impl IntegratedUAC {
         self.dialog_manager.insert(dialog.clone());
         let dns_target = self.resolve_target(&RequestTarget::Uri(target_uri)).await?;
 
-        self.auto_fill_headers(&mut request, Some(dns_target.transport))
+        self.auto_fill_headers(&mut request, Some(dns_target.transport()))
             .await;
 
         let response = self.send_non_invite_request(request, dns_target).await?;
@@ -1677,7 +1676,7 @@ impl IntegratedUAC {
         self.dialog_manager.insert(dialog.clone());
         let dns_target = self.resolve_target(&RequestTarget::Uri(target_uri)).await?;
 
-        self.auto_fill_headers(&mut request, Some(dns_target.transport))
+        self.auto_fill_headers(&mut request, Some(dns_target.transport()))
             .await;
 
         let handle = self
