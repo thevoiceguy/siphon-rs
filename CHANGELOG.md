@@ -18,6 +18,103 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Improve P-Asserted/P-Preferred-Identity parsing for comma-separated identities and parameters.
 - Harden reginfo (RFC 3680) XML generation with validation, private fields, and escaping.
 
+## [0.6.26] - sip-core - 2025-12-29
+
+### Breaking Changes
+- **BREAKING**: `AuthorizationHeader` fields are now private with accessor methods (`scheme()`, `params()`)
+- **BREAKING**: `parse_params()` in `route.rs` now returns `Option<BTreeMap>` instead of `BTreeMap`
+
+### Security
+- **AuthorizationHeader (RFC 7235) Complete Rewrite**:
+  * Private fields (`scheme`, `params`) - prevents validation bypass
+  * MAX_SCHEME_LENGTH = 64 bytes
+  * MAX_AUTH_PARAMS = 30 parameters
+  * MAX_PARAM_NAME_LENGTH = 64 bytes
+  * MAX_PARAM_VALUE_LENGTH = 256 bytes
+  * Control character blocking in scheme and parameters
+  * Token character validation per RFC 7235
+  * Duplicate parameter detection via `add_param()` (rejects)
+  * Parser-specific `add_param_overwrite()` for last-value-wins behavior
+  * Added `AuthorizationError` enum with 6 detailed error variants
+  * 22 comprehensive tests for encapsulation and validation
+
+- **Parameter Bounds in parse_params()**:
+  * MAX_PARAMS = 64 limit enforced
+  * Returns `None` if parameter count exceeds limit
+  * Prevents DoS attacks via unbounded parameter collections
+  * Applied to Route, Service-Route, Path header parsing
+
+### Added
+- `AuthorizationHeader::new()` - Create with validation
+- `AuthorizationHeader::from_raw()` - Parser constructor with full validation
+- `AuthorizationHeader::add_param()` - Rejects duplicates (for application code)
+- `AuthorizationHeader::add_param_overwrite()` - Allows overwrite (for parsers)
+- `AuthorizationHeader::scheme()` - Public getter
+- `AuthorizationHeader::params()` - Public getter
+- Module-level security constants for validation limits
+
+### Changed
+- AuthorizationHeader implementation: 21 lines → 565 lines with comprehensive validation
+- `parse_params()` return type changed to `Option<BTreeMap>` for bounds checking
+- All AuthorizationHeader construction now validates inputs at parse time (fail-fast)
+
+### Fixed
+- Prevented validation bypass via direct field access
+- Prevented DoS attacks via excessive parameters
+
+## [0.3.1] - sip-parse - 2025-12-29
+
+### Breaking Changes
+- **BREAKING**: `split_quoted_commas()` signature changed to take `max_parts: usize` parameter
+- **BREAKING**: `parse_service_route()` now returns `Result<ServiceRouteHeader, RouteError>`
+- **BREAKING**: `parse_path()` now returns `Result<PathHeader, RouteError>`
+- **BREAKING**: `parse_history_info()` now returns `Result<HistoryInfoHeader, HistoryInfoError>`
+- **BREAKING**: `parse_geolocation_header()` signature unchanged but uses new bounded split_quoted_commas
+- **BREAKING**: `parse_name_addr_list()` now returns `Option<Vec<NameAddr>>`
+- **BREAKING**: Removed `parse_token_list()` - replaced with `TokenList::parse()`
+
+### Security
+- **Parameterized Collection Bounds**:
+  * `split_quoted_commas()` now takes `max_parts` parameter
+  * Type-specific limits: MAX_ROUTES, MAX_GEO_VALUES, MAX_HISTORY_ENTRIES, MAX_PARAMS
+  * Returns `None` if bounds exceeded
+  * Added unbalanced quote detection (returns `None`)
+  * Prevents DoS attacks via excessive comma-separated values
+
+- **parse_params() Bounds**:
+  * MAX_PARAMS = 64 limit enforced
+  * Returns `None` if parameter count exceeds limit
+  * Prevents DoS via unbounded parameter collections
+
+- **parse_name_addr_list() Bounds**:
+  * MAX_ROUTES limit enforced with early exit
+  * Returns `None` if limit exceeded
+  * Prevents DoS via unbounded name-addr lists
+
+- **Token Validation**:
+  * RFC 3261 token character validation
+  * MAX_TOKENS = 64 limit enforced
+  * Validates character set: alphanum + `-` `.` `!` `%` `*` `_` `+` `` ` `` `'` `~`
+  * Rejects empty tokens and invalid characters
+
+### Added
+- `TokenList::parse()` method replacing standalone `parse_token_list()` function
+- Quote balance validation in `split_quoted_commas()`
+- Comprehensive error messages in Result types (RouteError, HistoryInfoError, GeolocationError)
+
+### Changed
+- `parse_service_route()` returns Result for proper error handling
+- `parse_path()` returns Result for proper error handling
+- `parse_history_info()` returns Result for proper error handling
+- `parse_allow_header()` and `parse_supported_header()` use `TokenList::parse()`
+- `split_quoted_commas()` is now parameterized and more flexible
+- Better error propagation instead of silent fallbacks to defaults
+
+### Fixed
+- Prevented DoS attacks via memory exhaustion
+- Added parse-time validation (fail-fast design)
+- Enforced RFC-compliant input validation
+
 ## [0.6.2] - sip-core
 
 ### Breaking Changes
