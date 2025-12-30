@@ -1990,11 +1990,7 @@ mod tests {
     #[test]
     fn registrar_challenges_when_auth_configured() {
         let store = MemoryLocationStore::new();
-        let creds = Credentials {
-            username: "alice".into(),
-            password: "secret".into(),
-            realm: "example.com".into(),
-        };
+        let creds = Credentials::new("alice", "secret", "example.com");
         let auth =
             DigestAuthenticator::new("example.com", MemoryCredentialStore::with(vec![creds]));
         let registrar = BasicRegistrar::new(store, Some(auth));
@@ -2090,11 +2086,7 @@ mod tests {
     #[test]
     fn registrar_returns_401_for_unknown_user() {
         let store = MemoryLocationStore::new();
-        let creds = Credentials {
-            username: "alice".into(),
-            password: "secret".into(),
-            realm: "example.com".into(),
-        };
+        let creds = Credentials::new("alice", "secret", "example.com");
         let auth =
             DigestAuthenticator::new("example.com", MemoryCredentialStore::with(vec![creds]));
         let registrar = BasicRegistrar::new(store, Some(auth));
@@ -2104,7 +2096,7 @@ mod tests {
             .authenticator
             .as_ref()
             .unwrap()
-            .nonce_manager
+            .nonce_manager()
             .generate();
 
         let mut headers = Headers::new();
@@ -2124,8 +2116,8 @@ mod tests {
         headers.push(
             "Authorization",            format!(
                 "Digest username=\"bob\", realm=\"example.com\", nonce=\"{}\", uri=\"sip:example.com\", response=\"invalid\", opaque=\"{}\"",
-                nonce.value,
-                registrar.authenticator.as_ref().unwrap().opaque
+                nonce.value(),
+                registrar.authenticator.as_ref().unwrap().opaque()
             )
         ).unwrap();
 
@@ -2151,11 +2143,7 @@ mod tests {
     #[test]
     fn registrar_returns_401_for_malformed_auth_header() {
         let store = MemoryLocationStore::new();
-        let creds = Credentials {
-            username: "alice".into(),
-            password: "secret".into(),
-            realm: "example.com".into(),
-        };
+        let creds = Credentials::new("alice", "secret", "example.com");
         let auth =
             DigestAuthenticator::new("example.com", MemoryCredentialStore::with(vec![creds]));
         let registrar = BasicRegistrar::new(store, Some(auth));
@@ -2201,11 +2189,7 @@ mod tests {
     #[test]
     fn registrar_returns_401_for_invalid_nonce_count() {
         let store = MemoryLocationStore::new();
-        let creds = Credentials {
-            username: "alice".into(),
-            password: "secret".into(),
-            realm: "example.com".into(),
-        };
+        let creds = Credentials::new("alice", "secret", "example.com");
         let auth =
             DigestAuthenticator::new("example.com", MemoryCredentialStore::with(vec![creds]));
         let registrar = BasicRegistrar::new(store, Some(auth));
@@ -2214,7 +2198,7 @@ mod tests {
             .authenticator
             .as_ref()
             .unwrap()
-            .nonce_manager
+            .nonce_manager()
             .generate();
 
         let mut headers = Headers::new();
@@ -2235,8 +2219,8 @@ mod tests {
         headers.push(
             "Authorization",            format!(
                 "Digest username=\"alice\", realm=\"example.com\", nonce=\"{}\", uri=\"sip:example.com\", response=\"test\", nc=INVALID, cnonce=\"abc\", qop=auth, opaque=\"{}\"",
-                nonce.value,
-                registrar.authenticator.as_ref().unwrap().opaque
+                nonce.value(),
+                registrar.authenticator.as_ref().unwrap().opaque()
             )
         ).unwrap();
 

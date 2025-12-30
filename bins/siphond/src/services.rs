@@ -105,11 +105,11 @@ impl ServiceRegistry {
                         Ok(users) => {
                             let count = users.len();
                             for (username, password) in users {
-                                cred_store.add(sip_auth::Credentials {
-                                    username: smol_str::SmolStr::new(username),
-                                    password: smol_str::SmolStr::new(password),
-                                    realm: smol_str::SmolStr::new(&config.auth.realm),
-                                });
+                                cred_store.add(sip_auth::Credentials::new(
+                                    username,
+                                    password,
+                                    &config.auth.realm,
+                                ));
                             }
                             tracing::info!(
                                 file = %users_file.display(),

@@ -47,12 +47,48 @@ use std::time::{Duration, Instant};
 use tokio::{runtime::Handle, task};
 use tracing::{info, warn};
 
-/// Credentials used for SIP authentication.
+/// Credentials used for SIP authentication with private fields for security.
 #[derive(Debug, Clone)]
 pub struct Credentials {
-    pub username: SmolStr,
-    pub password: SmolStr,
-    pub realm: SmolStr,
+    username: SmolStr,
+    password: SmolStr,
+    realm: SmolStr,
+}
+
+impl Credentials {
+    /// Creates new credentials with the given username, password, and realm.
+    pub fn new(username: impl Into<SmolStr>, password: impl Into<SmolStr>, realm: impl Into<SmolStr>) -> Self {
+        Self {
+            username: username.into(),
+            password: password.into(),
+            realm: realm.into(),
+        }
+    }
+
+    /// Creates credentials without validation (for internal use and tests).
+    #[cfg(test)]
+    pub fn unchecked_new(username: impl Into<SmolStr>, password: impl Into<SmolStr>, realm: impl Into<SmolStr>) -> Self {
+        Self {
+            username: username.into(),
+            password: password.into(),
+            realm: realm.into(),
+        }
+    }
+
+    /// Returns the username.
+    pub fn username(&self) -> &str {
+        &self.username
+    }
+
+    /// Returns the password.
+    pub fn password(&self) -> &str {
+        &self.password
+    }
+
+    /// Returns the realm.
+    pub fn realm(&self) -> &str {
+        &self.realm
+    }
 }
 
 /// Authentication backend responsible for challenges and verification.
@@ -253,14 +289,15 @@ fn validate_param(name: &str, value: &str, max_len: usize) -> Result<()> {
 }
 
 /// Nonce with expiry tracking and usage tracking for replay protection.
+/// All fields are private to prevent bypassing TTL validation and replay protection.
 #[derive(Debug, Clone)]
 pub struct Nonce {
-    pub value: SmolStr,
-    pub created_at: Instant,
-    pub ttl: Duration,
-    pub last_nc: u32, // Last nonce-count seen (for replay protection)
-    pub last_request_hash: Option<String>, // Hash of last request (method:uri:body) for retransmission detection
-    pub last_used: Instant, // Timestamp of last successful authentication (for request age validation)
+    value: SmolStr,
+    created_at: Instant,
+    ttl: Duration,
+    last_nc: u32, // Last nonce-count seen (for replay protection)
+    last_request_hash: Option<String>, // Hash of last request (method:uri:body) for retransmission detection
+    last_used: Instant, // Timestamp of last successful authentication (for request age validation)
 }
 
 impl Nonce {
@@ -345,6 +382,36 @@ impl Nonce {
             false
         }
     }
+
+    /// Returns the nonce value.
+    pub fn value(&self) -> &str {
+        &self.value
+    }
+
+    /// Returns when the nonce was created.
+    pub fn created_at(&self) -> Instant {
+        self.created_at
+    }
+
+    /// Returns the nonce time-to-live.
+    pub fn ttl(&self) -> Duration {
+        self.ttl
+    }
+
+    /// Returns the last nonce-count seen.
+    pub fn last_nc(&self) -> u32 {
+        self.last_nc
+    }
+
+    /// Returns the last request hash.
+    pub fn last_request_hash(&self) -> Option<&str> {
+        self.last_request_hash.as_deref()
+    }
+
+    /// Returns when the nonce was last used.
+    pub fn last_used(&self) -> Instant {
+        self.last_used
+    }
 }
 
 /// Nonce manager with automatic cleanup and size limits.
@@ -388,7 +455,7 @@ impl NonceManager {
         }
 
         let nonce = Nonce::new(self.ttl);
-        self.nonces.insert(nonce.value.clone(), nonce.clone());
+        self.nonces.insert(SmolStr::new(nonce.value()), nonce.clone());
         nonce
     }
 
@@ -537,15 +604,58 @@ struct DigestParams {
 }
 
 /// Digest authenticator implementing RFC 7616 (MD5, SHA-256, SHA-512).
+/// All fields are private to protect sensitive authentication state.
 pub struct DigestAuthenticator<S> {
-    pub realm: SmolStr,
-    pub algorithm: DigestAlgorithm,
-    pub qop: Qop,
-    pub store: S,
-    pub nonce_manager: NonceManager,
-    pub proxy_auth: bool,
-    pub opaque: SmolStr, // Opaque session token for additional security
-    pub rate_limiter: Option<RateLimiter>, // Optional rate limiting
+    realm: SmolStr,
+    algorithm: DigestAlgorithm,
+    qop: Qop,
+    store: S,
+    nonce_manager: NonceManager,
+    proxy_auth: bool,
+    opaque: SmolStr, // Opaque session token for additional security
+    rate_limiter: Option<RateLimiter>, // Optional rate limiting
+}
+
+impl<S> DigestAuthenticator<S> {
+    /// Returns the authentication realm.
+    pub fn realm(&self) -> &str {
+        &self.realm
+    }
+
+    /// Returns the digest algorithm.
+    pub fn algorithm(&self) -> DigestAlgorithm {
+        self.algorithm
+    }
+
+    /// Returns the quality of protection (qop).
+    pub fn qop(&self) -> Qop {
+        self.qop
+    }
+
+    /// Returns a reference to the credential store.
+    pub fn store(&self) -> &S {
+        &self.store
+    }
+
+    /// Returns a reference to the nonce manager.
+    pub fn nonce_manager(&self) -> &NonceManager {
+        &self.nonce_manager
+    }
+
+    /// Returns whether proxy authentication is enabled.
+    pub fn proxy_auth(&self) -> bool {
+        self.proxy_auth
+    }
+
+    /// Returns the opaque token.
+    pub fn opaque(&self) -> &str {
+        &self.opaque
+    }
+
+    /// Returns a reference to the rate limiter if configured.
+    pub fn rate_limiter(&self) -> Option<&RateLimiter> {
+        self.rate_limiter.as_ref()
+    }
 }
 
 impl<S> DigestAuthenticator<S> {
@@ -780,13 +890,13 @@ impl<S> DigestAuthenticator<S> {
 
     fn build_challenge(&self) -> Headers {
         let mut hdrs = Headers::new();
-        let nonce = self.nonce_manager.generate();
+        let nonce = self.nonce_manager().generate();
         let mut value = String::new();
         let _ = write!(
             value,
             "Digest realm=\"{}\", nonce=\"{}\", algorithm={}, qop=\"{}\", opaque=\"{}\"",
             self.realm,
-            nonce.value,
+            nonce.value(),
             self.algorithm.as_str(),
             self.qop.as_str(),
             self.opaque
@@ -911,7 +1021,7 @@ impl<S: CredentialStore> Authenticator for DigestAuthenticator<S> {
 
         let response_calc = self.compute_response(
             params.username.as_str(),
-            creds.password.as_str(),
+            creds.password(),
             request.method(),
             params.uri.as_str(),
             params.nonce.as_str(),
@@ -948,7 +1058,7 @@ impl<S: AsyncCredentialStore> DigestAuthenticator<S> {
 
         let response_calc = self.compute_response(
             params.username.as_str(),
-            creds.password.as_str(),
+            creds.password(),
             request.method(),
             params.uri.as_str(),
             params.nonce.as_str(),
@@ -978,10 +1088,28 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 /// Client-side authentication helper for generating Authorization headers.
+/// All fields are private to protect sensitive credential data.
 pub struct DigestClient {
-    pub username: SmolStr,
-    pub password: SmolStr,
-    pub nc: u32,
+    username: SmolStr,
+    password: SmolStr,
+    nc: u32,
+}
+
+impl DigestClient {
+    /// Returns the username.
+    pub fn username(&self) -> &str {
+        &self.username
+    }
+
+    /// Returns the password.
+    pub fn password(&self) -> &str {
+        &self.password
+    }
+
+    /// Returns the current nonce count.
+    pub fn nc(&self) -> u32 {
+        self.nc
+    }
 }
 
 /// Ensures To header has a tag parameter (RFC 3261 §8.2.6.2)
@@ -1135,7 +1263,7 @@ mod tests {
     fn nonce_manager_generate_and_verify() {
         let manager = NonceManager::new(Duration::from_secs(60));
         let nonce = manager.generate();
-        assert!(manager.verify(&nonce.value));
+        assert!(manager.verify(&nonce.value()));
         assert!(!manager.verify("invalid-nonce"));
     }
 
@@ -1216,18 +1344,18 @@ mod tests {
         let auth =
             DigestAuthenticator::new("example.com", store).with_algorithm(DigestAlgorithm::Md5);
 
-        let nonce = auth.nonce_manager.generate();
+        let nonce = auth.nonce_manager().generate();
         let method = Method::Invite;
         let uri = "sip:bob@example.com";
         let nc = "00000001";
         let cnonce = "abc123";
 
         let response = auth.compute_response(
-            creds.username.as_str(),
-            creds.password.as_str(),
+            creds.username(),
+            creds.password(),
             &method,
             uri,
-            &nonce.value,
+            &nonce.value(),
             Some(nc),
             Some(cnonce),
             Some(Qop::Auth),
@@ -1239,7 +1367,7 @@ mod tests {
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
-                creds.username, creds.realm, nonce.value, uri, response, cnonce, nc, auth.opaque
+                creds.username(), creds.realm(), nonce.value(), uri, response, cnonce, nc, auth.opaque
             )),
         ).unwrap();
 
@@ -1264,18 +1392,18 @@ mod tests {
         let auth =
             DigestAuthenticator::new("example.com", store).with_algorithm(DigestAlgorithm::Sha256);
 
-        let nonce = auth.nonce_manager.generate();
+        let nonce = auth.nonce_manager().generate();
         let method = Method::Register;
         let uri = "sip:example.com";
         let nc = "00000001";
         let cnonce = "xyz";
 
         let response = auth.compute_response(
-            creds.username.as_str(),
-            creds.password.as_str(),
+            creds.username(),
+            creds.password(),
             &method,
             uri,
-            &nonce.value,
+            &nonce.value(),
             Some(nc),
             Some(cnonce),
             Some(Qop::Auth),
@@ -1287,7 +1415,7 @@ mod tests {
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=SHA-256, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
-                creds.username, creds.realm, nonce.value, uri, response, cnonce, nc, auth.opaque
+                creds.username(), creds.realm(), nonce.value(), uri, response, cnonce, nc, auth.opaque
             )),
         ).unwrap();
 
@@ -1312,18 +1440,18 @@ mod tests {
         let auth =
             DigestAuthenticator::new("test.com", store).with_algorithm(DigestAlgorithm::Sha512);
 
-        let nonce = auth.nonce_manager.generate();
+        let nonce = auth.nonce_manager().generate();
         let method = Method::Invite;
         let uri = "sip:alice@test.com";
         let nc = "00000001";
         let cnonce = "nonce123";
 
         let response = auth.compute_response(
-            creds.username.as_str(),
-            creds.password.as_str(),
+            creds.username(),
+            creds.password(),
             &method,
             uri,
-            &nonce.value,
+            &nonce.value(),
             Some(nc),
             Some(cnonce),
             Some(Qop::Auth),
@@ -1335,7 +1463,7 @@ mod tests {
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=SHA-512, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
-                creds.username, creds.realm, nonce.value, uri, response, cnonce, nc, auth.opaque
+                creds.username(), creds.realm(), nonce.value(), uri, response, cnonce, nc, auth.opaque
             )),
         ).unwrap();
 
@@ -1392,7 +1520,7 @@ mod tests {
         let auth =
             DigestAuthenticator::new("example.com", store).with_algorithm(DigestAlgorithm::Md5);
 
-        let nonce = auth.nonce_manager.generate();
+        let nonce = auth.nonce_manager().generate();
         let mut headers = Headers::new();
         headers.push(
             SmolStr::new("Authorization"),
@@ -1426,7 +1554,7 @@ mod tests {
         let auth =
             DigestAuthenticator::new("example.com", store).with_algorithm(DigestAlgorithm::Md5);
 
-        let nonce = auth.nonce_manager.generate();
+        let nonce = auth.nonce_manager().generate();
         let method = Method::Invite;
         let auth_uri = "sip:alice@example.com";
         let request_uri = "sip:bob@example.com";
@@ -1434,11 +1562,11 @@ mod tests {
         let cnonce = "abc123";
 
         let response = auth.compute_response(
-            creds.username.as_str(),
-            creds.password.as_str(),
+            creds.username(),
+            creds.password(),
             &method,
             auth_uri,
-            &nonce.value,
+            &nonce.value(),
             Some(nc),
             Some(cnonce),
             Some(Qop::Auth),
@@ -1450,7 +1578,7 @@ mod tests {
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
-                creds.username, creds.realm, nonce.value, auth_uri, response, cnonce, nc, auth.opaque
+                creds.username(), creds.realm(), nonce.value(), auth_uri, response, cnonce, nc, auth.opaque
             )),
         ).unwrap();
 
@@ -1475,16 +1603,16 @@ mod tests {
         let auth =
             DigestAuthenticator::new("example.com", store).with_algorithm(DigestAlgorithm::Md5);
 
-        let nonce = auth.nonce_manager.generate();
+        let nonce = auth.nonce_manager().generate();
         let method = Method::Invite;
         let uri = "sip:bob@example.com";
 
         let response = auth.compute_response(
-            creds.username.as_str(),
-            creds.password.as_str(),
+            creds.username(),
+            creds.password(),
             &method,
             uri,
-            &nonce.value,
+            &nonce.value(),
             None,
             None,
             None,
@@ -1496,7 +1624,7 @@ mod tests {
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, opaque=\"{}\"",
-                creds.username, creds.realm, nonce.value, uri, response, auth.opaque
+                creds.username(), creds.realm(), nonce.value(), uri, response, auth.opaque
             )),
         ).unwrap();
 
@@ -1578,7 +1706,7 @@ mod tests {
             .with_algorithm(DigestAlgorithm::Sha256);
 
         // Generate nonce from server
-        let nonce = server_auth.nonce_manager.generate();
+        let nonce = server_auth.nonce_manager().generate();
 
         // Client generates authorization
         let mut client = DigestClient::new("testuser", "testpass");
@@ -1587,10 +1715,10 @@ mod tests {
             &Method::Invite,
             uri,
             "sip.example.com",
-            &nonce.value,
+            &nonce.value(),
             DigestAlgorithm::Sha256,
             Some(Qop::Auth),
-            Some(&server_auth.opaque),
+            Some(&server_auth.opaque()),
             b"",
         );
 
@@ -1623,7 +1751,7 @@ mod tests {
             .with_algorithm(DigestAlgorithm::Md5)
             .with_qop(Qop::AuthInt);
 
-        let nonce = auth.nonce_manager.generate();
+        let nonce = auth.nonce_manager().generate();
         let method = Method::Invite;
         let uri = "sip:bob@example.com";
         let body = b"v=0\r\no=- 123 456 IN IP4 192.168.1.1\r\n";
@@ -1631,11 +1759,11 @@ mod tests {
         let cnonce = "xyz";
 
         let response = auth.compute_response(
-            creds.username.as_str(),
-            creds.password.as_str(),
+            creds.username(),
+            creds.password(),
             &method,
             uri,
-            &nonce.value,
+            &nonce.value(),
             Some(nc),
             Some(cnonce),
             Some(Qop::AuthInt),
@@ -1647,7 +1775,7 @@ mod tests {
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth-int, opaque=\"{}\"",
-                creds.username, creds.realm, nonce.value, uri, response, cnonce, nc, auth.opaque
+                creds.username(), creds.realm(), nonce.value(), uri, response, cnonce, nc, auth.opaque
             )),
         ).unwrap();
 
@@ -1672,18 +1800,18 @@ mod tests {
         let auth =
             DigestAuthenticator::new("example.com", store).with_algorithm(DigestAlgorithm::Md5);
 
-        let nonce = auth.nonce_manager.generate();
+        let nonce = auth.nonce_manager().generate();
         let method = Method::Invite;
         let uri = "sip:bob@example.com";
         let nc = "00000001";
         let cnonce = "abc123";
 
         let response = auth.compute_response(
-            creds.username.as_str(),
-            creds.password.as_str(),
+            creds.username(),
+            creds.password(),
             &method,
             uri,
-            &nonce.value,
+            &nonce.value(),
             Some(nc),
             Some(cnonce),
             Some(Qop::Auth),
@@ -1696,7 +1824,7 @@ mod tests {
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
-                creds.username, creds.realm, nonce.value, uri, response, cnonce, nc, auth.opaque
+                creds.username(), creds.realm(), nonce.value(), uri, response, cnonce, nc, auth.opaque
             )),
         ).unwrap();
 
@@ -1734,7 +1862,7 @@ mod tests {
         let auth =
             DigestAuthenticator::new("example.com", store).with_algorithm(DigestAlgorithm::Md5);
 
-        let nonce = auth.nonce_manager.generate();
+        let nonce = auth.nonce_manager().generate();
         let method = Method::Invite;
         let uri = "sip:bob@example.com";
 
@@ -1743,11 +1871,11 @@ mod tests {
         let cnonce = "abc123";
 
         let response2 = auth.compute_response(
-            creds.username.as_str(),
-            creds.password.as_str(),
+            creds.username(),
+            creds.password(),
             &method,
             uri,
-            &nonce.value,
+            &nonce.value(),
             Some(nc2),
             Some(cnonce),
             Some(Qop::Auth),
@@ -1759,7 +1887,7 @@ mod tests {
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
-                creds.username, creds.realm, nonce.value, uri, response2, cnonce, nc2, auth.opaque
+                creds.username(), creds.realm(), nonce.value(), uri, response2, cnonce, nc2, auth.opaque
             )),
         );
 
@@ -1778,11 +1906,11 @@ mod tests {
         // Replay attack with nc=00000001 (going backwards) should be rejected
         let nc1 = "00000001";
         let response1 = auth.compute_response(
-            creds.username.as_str(),
-            creds.password.as_str(),
+            creds.username(),
+            creds.password(),
             &method,
             uri,
-            &nonce.value,
+            &nonce.value(),
             Some(nc1),
             Some(cnonce),
             Some(Qop::Auth),
@@ -1794,7 +1922,7 @@ mod tests {
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
-                creds.username, creds.realm, nonce.value, uri, response1, cnonce, nc1, auth.opaque
+                creds.username(), creds.realm(), nonce.value(), uri, response1, cnonce, nc1, auth.opaque
             )),
         );
 
@@ -1824,7 +1952,7 @@ mod tests {
         let auth =
             DigestAuthenticator::new("example.com", store).with_algorithm(DigestAlgorithm::Md5);
 
-        let nonce = auth.nonce_manager.generate();
+        let nonce = auth.nonce_manager().generate();
         let method = Method::Invite;
         let uri1 = "sip:bob@example.com";
         let uri2 = "sip:charlie@example.com"; // Different URI
@@ -1833,11 +1961,11 @@ mod tests {
 
         // First request to uri1
         let response1 = auth.compute_response(
-            creds.username.as_str(),
-            creds.password.as_str(),
+            creds.username(),
+            creds.password(),
             &method,
             uri1,
-            &nonce.value,
+            &nonce.value(),
             Some(nc),
             Some(cnonce),
             Some(Qop::Auth),
@@ -1849,7 +1977,7 @@ mod tests {
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
-                creds.username, creds.realm, nonce.value, uri1, response1, cnonce, nc, auth.opaque
+                creds.username(), creds.realm(), nonce.value(), uri1, response1, cnonce, nc, auth.opaque
             )),
         );
 
@@ -1867,11 +1995,11 @@ mod tests {
 
         // Second request to uri2 with same nc (replay attack with different request)
         let response2 = auth.compute_response(
-            creds.username.as_str(),
-            creds.password.as_str(),
+            creds.username(),
+            creds.password(),
             &method,
             uri2,
-            &nonce.value,
+            &nonce.value(),
             Some(nc),
             Some(cnonce),
             Some(Qop::Auth),
@@ -1883,7 +2011,7 @@ mod tests {
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
-                creds.username, creds.realm, nonce.value, uri2, response2, cnonce, nc, auth.opaque
+                creds.username(), creds.realm(), nonce.value(), uri2, response2, cnonce, nc, auth.opaque
             )),
         );
 
@@ -1911,7 +2039,7 @@ mod tests {
         let auth =
             DigestAuthenticator::new("example.com", store).with_algorithm(DigestAlgorithm::Md5);
 
-        let nonce = auth.nonce_manager.generate();
+        let nonce = auth.nonce_manager().generate();
         let method = Method::Invite;
         let uri = "sip:bob@example.com";
         let nc = "00000001";
@@ -1921,11 +2049,11 @@ mod tests {
 
         // First request with body1
         let response1 = auth.compute_response(
-            creds.username.as_str(),
-            creds.password.as_str(),
+            creds.username(),
+            creds.password(),
             &method,
             uri,
-            &nonce.value,
+            &nonce.value(),
             Some(nc),
             Some(cnonce),
             Some(Qop::Auth),
@@ -1937,7 +2065,7 @@ mod tests {
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
-                creds.username, creds.realm, nonce.value, uri, response1, cnonce, nc, auth.opaque
+                creds.username(), creds.realm(), nonce.value(), uri, response1, cnonce, nc, auth.opaque
             )),
         );
 
@@ -1955,11 +2083,11 @@ mod tests {
 
         // Second request with body2 and same nc (replay attack with different body)
         let response2 = auth.compute_response(
-            creds.username.as_str(),
-            creds.password.as_str(),
+            creds.username(),
+            creds.password(),
             &method,
             uri,
-            &nonce.value,
+            &nonce.value(),
             Some(nc),
             Some(cnonce),
             Some(Qop::Auth),
@@ -1971,7 +2099,7 @@ mod tests {
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
-                creds.username, creds.realm, nonce.value, uri, response2, cnonce, nc, auth.opaque
+                creds.username(), creds.realm(), nonce.value(), uri, response2, cnonce, nc, auth.opaque
             )),
         );
 
@@ -1999,7 +2127,7 @@ mod tests {
         let auth =
             DigestAuthenticator::new("example.com", store).with_algorithm(DigestAlgorithm::Md5);
 
-        let nonce = auth.nonce_manager.generate();
+        let nonce = auth.nonce_manager().generate();
         let method = Method::Invite;
         let uri = "sip:bob@example.com";
         let nc = "00000001";
@@ -2008,11 +2136,11 @@ mod tests {
         let body2 = b"SDP body B"; // same length, different content
 
         let response = auth.compute_response(
-            creds.username.as_str(),
-            creds.password.as_str(),
+            creds.username(),
+            creds.password(),
             &method,
             uri,
-            &nonce.value,
+            &nonce.value(),
             Some(nc),
             Some(cnonce),
             Some(Qop::Auth),
@@ -2021,7 +2149,7 @@ mod tests {
 
         let auth_header = SmolStr::new(format!(
             "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth, opaque=\"{}\"",
-            creds.username, creds.realm, nonce.value, uri, response, cnonce, nc, auth.opaque
+            creds.username(), creds.realm(), nonce.value(), uri, response, cnonce, nc, auth.opaque
         ));
 
         // First request with body1
@@ -2064,18 +2192,18 @@ mod tests {
         let auth =
             DigestAuthenticator::new("example.com", store).with_algorithm(DigestAlgorithm::Md5);
 
-        let nonce = auth.nonce_manager.generate();
+        let nonce = auth.nonce_manager().generate();
         let method = Method::Invite;
         let uri = "sip:bob@example.com";
         let nc = "00000001";
         let cnonce = "abc123";
 
         let response = auth.compute_response(
-            creds.username.as_str(),
-            creds.password.as_str(),
+            creds.username(),
+            creds.password(),
             &method,
             uri,
-            &nonce.value,
+            &nonce.value(),
             Some(nc),
             Some(cnonce),
             Some(Qop::Auth),
@@ -2088,7 +2216,7 @@ mod tests {
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth",
-                creds.username, creds.realm, nonce.value, uri, response, cnonce, nc
+                creds.username(), creds.realm(), nonce.value(), uri, response, cnonce, nc
             )),
         ).unwrap();
 
@@ -2113,18 +2241,18 @@ mod tests {
         let auth =
             DigestAuthenticator::new("example.com", store).with_algorithm(DigestAlgorithm::Md5);
 
-        let nonce = auth.nonce_manager.generate();
+        let nonce = auth.nonce_manager().generate();
         let method = Method::Invite;
         let uri = "sip:bob@example.com";
         let nc = "00000001";
         let cnonce = "abc123";
 
         let response = auth.compute_response(
-            creds.username.as_str(),
-            creds.password.as_str(),
+            creds.username(),
+            creds.password(),
             &method,
             uri,
-            &nonce.value,
+            &nonce.value(),
             Some(nc),
             Some(cnonce),
             Some(Qop::Auth),
@@ -2137,7 +2265,7 @@ mod tests {
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=MD5, cnonce=\"{}\", nc={}, qop=auth, opaque=\"wrong-opaque\"",
-                creds.username, creds.realm, nonce.value, uri, response, cnonce, nc
+                creds.username(), creds.realm(), nonce.value(), uri, response, cnonce, nc
             )),
         ).unwrap();
 
@@ -2176,14 +2304,14 @@ mod tests {
         };
         let store = MemoryCredentialStore::with(vec![creds]);
         let auth = DigestAuthenticator::new("example.com", store);
-        let nonce = auth.nonce_manager.generate();
+        let nonce = auth.nonce_manager().generate();
 
         let mut headers = Headers::new();
         headers.push(
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"alice\", realm=\"example.com\", nonce=\"{}\", uri=\"sip:test\", response=\"xyz\", nc=F0000000, cnonce=\"abc\", qop=auth, opaque=\"{}\"",
-                nonce.value, auth.opaque
+                nonce.value(), auth.opaque
             )),
         ).unwrap();
 
@@ -2231,17 +2359,17 @@ mod tests {
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
         let auth = DigestAuthenticator::new("example.com", store);
-        let nonce = auth.nonce_manager.generate();
+        let nonce = auth.nonce_manager().generate();
 
         let method = Method::Invite;
         let uri = "sip:test";
 
         let response1 = auth.compute_response(
-            creds.username.as_str(),
-            creds.password.as_str(),
+            creds.username(),
+            creds.password(),
             &method,
             uri,
-            &nonce.value,
+            &nonce.value(),
             Some("00000001"),
             Some("abc"),
             Some(Qop::Auth),
@@ -2253,7 +2381,7 @@ mod tests {
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=SHA-256, cnonce=\"abc\", nc=00000001, qop=auth, opaque=\"{}\"",
-                creds.username, creds.realm, nonce.value, uri, response1, auth.opaque
+                creds.username(), creds.realm(), nonce.value(), uri, response1, auth.opaque
             )),
         );
 
@@ -2267,11 +2395,11 @@ mod tests {
         assert!(auth.verify(&request1, request1.headers()).unwrap());
 
         let response2 = auth.compute_response(
-            creds.username.as_str(),
-            creds.password.as_str(),
+            creds.username(),
+            creds.password(),
             &method,
             uri,
-            &nonce.value,
+            &nonce.value(),
             Some("00005000"),
             Some("def"),
             Some(Qop::Auth),
@@ -2283,7 +2411,7 @@ mod tests {
             SmolStr::new("Authorization"),
             SmolStr::new(format!(
                 "Digest username=\"{}\", realm=\"{}\", nonce=\"{}\", uri=\"{}\", response=\"{}\", algorithm=SHA-256, cnonce=\"def\", nc=00005000, qop=auth, opaque=\"{}\"",
-                creds.username, creds.realm, nonce.value, uri, response2, auth.opaque
+                creds.username(), creds.realm(), nonce.value(), uri, response2, auth.opaque
             )),
         );
 
@@ -2335,7 +2463,7 @@ mod tests {
         let mut nonce_values = Vec::new();
         for _ in 0..10 {
             let nonce = manager.generate();
-            nonce_values.push(nonce.value.clone());
+            nonce_values.push(SmolStr::new(nonce.value()));
             std::thread::sleep(std::time::Duration::from_millis(1)); // Ensure different timestamps
         }
 
@@ -2347,6 +2475,6 @@ mod tests {
         assert!(!manager.verify(&nonce_values[0]));
         // Last nonces should still be valid
         assert!(manager.verify(&nonce_values[9]));
-        assert!(manager.verify(&new_nonce.value));
+        assert!(manager.verify(&new_nonce.value()));
     }
 }
