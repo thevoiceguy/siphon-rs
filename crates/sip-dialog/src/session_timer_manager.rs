@@ -47,6 +47,10 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::{sleep, Instant};
 
+// Security: Session timer limits (DoS prevention)
+const MAX_SESSION_TIMERS: usize = 10_000;
+const SESSION_TIMER_CHANNEL_BOUND: usize = 1_000;
+
 /// RFC 4028 minimum session expiration (90 seconds).
 pub const MIN_SESSION_EXPIRES: Duration = Duration::from_secs(90);
 

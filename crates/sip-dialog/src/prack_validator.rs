@@ -13,6 +13,11 @@ use sip_core::{Headers, Method, Request, Response};
 use std::sync::Arc;
 use tracing::debug;
 
+// Security: PRACK validator limits (DoS prevention)
+const MAX_PENDING_PRACK_PER_DIALOG: usize = 10;
+const PENDING_PRACK_CLEANUP_INTERVAL_SECS: u64 = 300; // 5 minutes
+const PENDING_PRACK_TIMEOUT_SECS: u64 = 300; // 5 minutes
+
 /// Parse Method from string
 fn parse_method(s: &str) -> Option<Method> {
     match s.to_uppercase().as_str() {
