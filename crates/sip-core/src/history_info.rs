@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 const MAX_PARAM_NAME_LENGTH: usize = 64;
 const MAX_PARAM_VALUE_LENGTH: usize = 256;
 const MAX_PARAMS: usize = 20;
-const MAX_ENTRIES: usize = 50;
+pub const MAX_ENTRIES: usize = 50;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HistoryInfoError {
@@ -17,6 +17,7 @@ pub enum HistoryInfoError {
     ParamValueTooLong { max: usize, actual: usize },
     TooManyParams { max: usize, actual: usize },
     TooManyEntries { max: usize, actual: usize },
+    InvalidEntry(String),
     InvalidParamName(String),
     InvalidParamValue(String),
     DuplicateParam(String),
@@ -38,6 +39,7 @@ impl std::fmt::Display for HistoryInfoError {
             Self::TooManyEntries { max, actual } => {
                 write!(f, "too many entries (max {}, got {})", max, actual)
             }
+            Self::InvalidEntry(msg) => write!(f, "invalid entry: {}", msg),
             Self::InvalidParamName(msg) => write!(f, "invalid param name: {}", msg),
             Self::InvalidParamValue(msg) => write!(f, "invalid param value: {}", msg),
             Self::DuplicateParam(name) => write!(f, "duplicate parameter: {}", name),

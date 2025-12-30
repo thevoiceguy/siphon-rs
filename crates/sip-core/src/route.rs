@@ -328,7 +328,8 @@ fn parse_name_addr(input: &str) -> Result<NameAddr, RouteError> {
         Some((start, end)) => {
             let display = input[..start].trim();
             let uri = input[start + 1..end].trim();
-            let params = parse_params(input[end + 1..].trim());
+            let params = parse_params(input[end + 1..].trim())
+                .ok_or_else(|| RouteError::ParseError("too many parameters".to_string()))?;
             let uri =
                 Uri::parse(uri).map_err(|_| RouteError::ParseError("invalid uri".to_string()))?;
             NameAddr::new(
@@ -345,19 +346,32 @@ fn parse_name_addr(input: &str) -> Result<NameAddr, RouteError> {
         None => {
             let (uri_part, param_part) = input.split_once(';').unwrap_or((input, ""));
             let uri = Uri::parse(uri_part.trim()).map_err(|_| RouteError::MissingUri)?;
-            NameAddr::new(None, uri, parse_params(param_part))
+            let params = parse_params(param_part)
+                .ok_or_else(|| RouteError::ParseError("too many parameters".to_string()))?;
+            NameAddr::new(None, uri, params)
                 .map_err(|err| RouteError::InvalidNameAddr(err.to_string()))
         }
     }
 }
 
-fn parse_params(input: &str) -> BTreeMap<SmolStr, Option<SmolStr>> {
+/// Maximum number of parameters to prevent DoS attacks
+const MAX_PARAMS: usize = 64;
+
+/// Parses parameters with bounds checking to prevent memory exhaustion.
+/// Returns None if there are too many parameters (>64).
+fn parse_params(input: &str) -> Option<BTreeMap<SmolStr, Option<SmolStr>>> {
     let mut params = BTreeMap::new();
     for raw in input.split(';') {
         let raw = raw.trim();
         if raw.is_empty() {
             continue;
         }
+
+        // Security: Reject if too many parameters (DoS prevention)
+        if params.len() >= MAX_PARAMS {
+            return None;
+        }
+
         if let Some((name, value)) = raw.split_once('=') {
             params.insert(
                 SmolStr::new(name.trim().to_ascii_lowercase()),
@@ -367,7 +381,7 @@ fn parse_params(input: &str) -> BTreeMap<SmolStr, Option<SmolStr>> {
             params.insert(SmolStr::new(raw.to_ascii_lowercase()), None);
         }
     }
-    params
+    Some(params)
 }
 
 fn find_unquoted_angle_brackets(input: &str) -> Result<Option<(usize, usize)>, RouteError> {

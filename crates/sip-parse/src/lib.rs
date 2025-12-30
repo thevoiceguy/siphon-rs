@@ -973,18 +973,18 @@ l: 0\r\n\r\n",
                 .expect("subscription-state");
         assert!(matches!(sub_state.state(), SubscriptionState::Active));
 
-        let service_route = parse_service_route(resp.headers());
+        let service_route = parse_service_route(resp.headers()).expect("service-route");
         assert_eq!(service_route.routes().len(), 1);
         assert_eq!(
             service_route.routes()[0].uri().as_str(),
             "sip:service.example.com"
         );
 
-        let path = parse_path(resp.headers());
+        let path = parse_path(resp.headers()).expect("path");
         assert_eq!(path.routes().len(), 1);
         assert_eq!(path.routes()[0].uri().as_str(), "sip:path.example.com");
 
-        let history = parse_history_info(resp.headers());
+        let history = parse_history_info(resp.headers()).expect("history-info");
         assert_eq!(history.len(), 1);
         assert_eq!(
             history.get(0).unwrap().uri().as_str(),
@@ -1106,7 +1106,7 @@ Content-Length: 0\r\n\r\n",
             "Digest username=\"alice\", realm=\"example.com\", uri=\"sip:example.com\"".to_owned(),
         );
         let auth = parse_authorization_header(&auth_value).expect("auth");
-        assert_eq!(auth.scheme.as_str(), "Digest");
+        assert_eq!(auth.scheme(), "Digest");
         assert_eq!(auth.param("username").map(|v| v.as_str()), Some("alice"));
         let proxy = parse_proxy_authorization_header(&auth_value).expect("proxy");
         assert_eq!(
@@ -1491,7 +1491,7 @@ body",
                 .join(", ");
             let mut headers = Headers::new();
             headers.push(SmolStr::new("History-Info"), SmolStr::new(header_value)).unwrap();
-            let parsed = parse_history_info(&headers);
+            let parsed = parse_history_info(&headers).expect("history-info");
             prop_assert_eq!(parsed.len(), entries.len());
             for (entry, (user, index)) in parsed.entries().zip(entries.iter()) {
                 prop_assert!(entry.uri().as_str().contains(user));

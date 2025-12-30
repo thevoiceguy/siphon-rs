@@ -579,7 +579,7 @@ impl<S> DigestAuthenticator<S> {
             None => return Ok(None),
         };
 
-        if !parsed.scheme.eq_ignore_ascii_case("Digest") {
+        if !parsed.scheme().eq_ignore_ascii_case("Digest") {
             return Ok(None);
         }
 
@@ -2153,27 +2153,18 @@ mod tests {
 
     #[test]
     fn reject_oversized_username() {
-        let store = MemoryCredentialStore::new();
-        let auth = DigestAuthenticator::new("example.com", store);
-
+        // With the new security hardening, oversized parameter values (>256 chars)
+        // are rejected at parse time by AuthorizationHeader::from_raw()
+        // This is better than rejecting during verification - fail fast!
         let long_username = "a".repeat(300);
-        let mut headers = Headers::new();
-        headers.push(
-            SmolStr::new("Authorization"),
-            SmolStr::new(format!(
-                "Digest username=\"{}\", realm=\"example.com\", nonce=\"abc\", uri=\"sip:test\", response=\"xyz\", algorithm=SHA-256, cnonce=\"abc\", nc=00000001, qop=auth, opaque=\"test\"",
-                long_username
-            )),
-        ).unwrap();
+        let auth_header_value = SmolStr::new(format!(
+            "Digest username=\"{}\", realm=\"example.com\", nonce=\"abc\", uri=\"sip:test\", response=\"xyz\", algorithm=SHA-256, cnonce=\"abc\", nc=00000001, qop=auth, opaque=\"test\"",
+            long_username
+        ));
 
-        let request = Request::new(
-            RequestLine::new(Method::Invite, SipUri::parse("sip:test").unwrap()),
-            headers,
-            Bytes::new(),
-        )
-        .expect("valid request");
-
-        assert!(auth.verify(&request, request.headers()).is_err());
+        // Parser should reject this because username is > MAX_PARAM_VALUE_LENGTH (256)
+        let parsed = parse_authorization_header(&auth_header_value);
+        assert!(parsed.is_none(), "Parser should reject oversized username parameter");
     }
 
     #[test]

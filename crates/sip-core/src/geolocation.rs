@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 const MAX_PARAM_NAME_LENGTH: usize = 64;
 const MAX_PARAM_VALUE_LENGTH: usize = 256;
 const MAX_PARAMS: usize = 20;
-const MAX_GEO_VALUES: usize = 10;
+pub const MAX_GEO_VALUES: usize = 10;
 const MAX_ERROR_CODE_LENGTH: usize = 16;
 const MAX_ERROR_DESCRIPTION_LENGTH: usize = 512;
 

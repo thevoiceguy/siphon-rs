@@ -309,7 +309,14 @@ impl UserAgentClient {
         }
 
         // Parse Service-Route headers from response
-        let service_route = parse_service_route(register_response.headers());
+        let service_route = match parse_service_route(register_response.headers()) {
+            Ok(service_route) => service_route,
+            Err(err) => {
+                info!("Invalid Service-Route header, clearing stored routes: {}", err);
+                self.service_route = None;
+                return;
+            }
+        };
 
         // Per RFC 3608: If the response contains Service-Route header(s), store them.
         // If the response does not contain Service-Route header(s), clear any stored routes.

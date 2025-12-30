@@ -5,9 +5,10 @@
 use std::collections::BTreeMap;
 
 use bytes::Bytes;
-use sip_core::geolocation::GeolocationError;
+use sip_core::geolocation::{GeolocationError, MAX_GEO_VALUES};
+use sip_core::history_info::{HistoryInfoError, MAX_ENTRIES as MAX_HISTORY_ENTRIES};
 use sip_core::{
-    p_headers::PHeaderError, service_route::MAX_ROUTES, AllowHeader, AuthorizationHeader,
+    p_headers::PHeaderError, service_route::{MAX_ROUTES, RouteError}, AllowHeader, AuthorizationHeader,
     ContactHeader, DateHeader, EventHeader, FromHeader, GeolocationErrorHeader, GeolocationHeader,
     GeolocationRoutingHeader, GeolocationValue, Headers, HistoryInfoEntry, HistoryInfoHeader,
     MimeType, MinSessionExpires, NameAddr, NameAddrHeader, PAccessNetworkInfo,
@@ -57,34 +58,51 @@ pub fn parse_call_info_headers(headers: &Headers) -> Vec<NameAddrHeader> {
         .collect()
 }
 
-pub fn parse_service_route(headers: &Headers) -> ServiceRouteHeader {
+pub fn parse_service_route(headers: &Headers) -> Result<ServiceRouteHeader, RouteError> {
     let mut routes = Vec::new();
     for value in headers.get_all_smol("Service-Route") {
-        for part in split_quoted_commas(value.as_str()) {
-            if let Some(name_addr) = parse_name_addr(&SmolStr::new(part.trim())) {
+        let parts = split_quoted_commas(value.as_str(), MAX_ROUTES).ok_or_else(|| {
+            RouteError::ValidationError("too many Service-Route values".to_string())
+        })?;
+        for part in parts {
+            let trimmed = part.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let value = SmolStr::new(trimmed);
+            if let Some(name_addr) = parse_name_addr(&value) {
                 routes.push(name_addr);
+            } else {
+                return Err(RouteError::ValidationError(
+                    "invalid Service-Route name-addr".to_string(),
+                ));
             }
         }
     }
-    if routes.len() > MAX_ROUTES {
-        routes.truncate(MAX_ROUTES);
-    }
-    ServiceRouteHeader::new(routes).unwrap_or_else(|_| ServiceRouteHeader::new(Vec::new()).unwrap())
+    ServiceRouteHeader::new(routes)
 }
 
-pub fn parse_path(headers: &Headers) -> PathHeader {
+pub fn parse_path(headers: &Headers) -> Result<PathHeader, RouteError> {
     let mut routes = Vec::new();
     for value in headers.get_all_smol("Path") {
-        for part in split_quoted_commas(value.as_str()) {
-            if let Some(name_addr) = parse_name_addr(&SmolStr::new(part.trim())) {
+        let parts = split_quoted_commas(value.as_str(), MAX_ROUTES)
+            .ok_or_else(|| RouteError::ValidationError("too many Path values".to_string()))?;
+        for part in parts {
+            let trimmed = part.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let value = SmolStr::new(trimmed);
+            if let Some(name_addr) = parse_name_addr(&value) {
                 routes.push(name_addr);
+            } else {
+                return Err(RouteError::ValidationError(
+                    "invalid Path name-addr".to_string(),
+                ));
             }
         }
     }
-    if routes.len() > MAX_ROUTES {
-        routes.truncate(MAX_ROUTES);
-    }
-    PathHeader::new(routes).unwrap_or_else(|_| PathHeader::new(Vec::new()).unwrap())
+    PathHeader::new(routes)
 }
 
 pub fn parse_mime_type(value: &SmolStr) -> Option<MimeType> {
@@ -97,11 +115,11 @@ pub fn parse_sdp(body: &Bytes) -> Option<SdpSession> {
 }
 
 pub fn parse_allow_header(value: &SmolStr) -> AllowHeader {
-    TokenList::from_tokens(parse_token_list(value)).unwrap_or_default()
+    TokenList::parse(value.as_str()).unwrap_or_default()
 }
 
 pub fn parse_supported_header(value: &SmolStr) -> SupportedHeader {
-    TokenList::from_tokens(parse_token_list(value)).unwrap_or_default()
+    TokenList::parse(value.as_str()).unwrap_or_default()
 }
 
 pub fn parse_authorization_header(value: &SmolStr) -> Option<AuthorizationHeader> {
@@ -205,29 +223,32 @@ pub fn parse_subscription_state(value: &SmolStr) -> Option<SubscriptionStateHead
     Some(header)
 }
 
-pub fn parse_history_info(headers: &Headers) -> HistoryInfoHeader {
+pub fn parse_history_info(headers: &Headers) -> Result<HistoryInfoHeader, HistoryInfoError> {
     let mut entries = Vec::new();
     for value in headers.get_all_smol("History-Info") {
-        for part in split_quoted_commas(value.as_str()) {
+        let parts = split_quoted_commas(value.as_str(), MAX_HISTORY_ENTRIES).ok_or_else(|| {
+            HistoryInfoError::TooManyEntries {
+                max: MAX_HISTORY_ENTRIES,
+                actual: MAX_HISTORY_ENTRIES + 1,
+            }
+        })?;
+        for part in parts {
             let part = part.trim();
             if part.is_empty() {
                 continue;
             }
-            if let Some(name_addr) = parse_name_addr(&SmolStr::new(part)) {
-                let mut entry = HistoryInfoEntry::new(name_addr.uri().clone());
-                // Add all parameters from the name_addr
-                for (k, v) in name_addr.params_map() {
-                    let _ = entry.add_param(k, v.as_deref());
-                }
-                entries.push(entry);
+            let name_addr = parse_name_addr(&SmolStr::new(part)).ok_or_else(|| {
+                HistoryInfoError::InvalidEntry("invalid History-Info name-addr".to_string())
+            })?;
+            let mut entry = HistoryInfoEntry::new(name_addr.uri().clone());
+            // Add all parameters from the name_addr
+            for (k, v) in name_addr.params_map() {
+                entry.add_param(k, v.as_deref())?;
             }
+            entries.push(entry);
         }
     }
-    HistoryInfoHeader::new(entries).unwrap_or_else(|_| {
-        // Fallback: create a header with a dummy entry if parsing failed
-        let uri = Uri::parse("sip:invalid@invalid").unwrap();
-        HistoryInfoHeader::single(HistoryInfoEntry::new(uri))
-    })
+    HistoryInfoHeader::new(entries)
 }
 
 pub fn parse_reason_header(value: &SmolStr) -> Option<ReasonHeader> {
@@ -241,7 +262,13 @@ pub fn parse_sip_etag(value: &SmolStr) -> Option<SipETagHeader> {
 pub fn parse_geolocation_header(headers: &Headers) -> Result<GeolocationHeader, GeolocationError> {
     let mut values = Vec::new();
     for header in headers.get_all_smol("Geolocation") {
-        for part in split_quoted_commas(header.as_str()) {
+        let parts = split_quoted_commas(header.as_str(), MAX_GEO_VALUES).ok_or_else(|| {
+            GeolocationError::TooManyValues {
+                max: MAX_GEO_VALUES,
+                actual: MAX_GEO_VALUES + 1,
+            }
+        })?;
+        for part in parts {
             let part = part.trim();
             if part.is_empty() {
                 continue;
@@ -296,8 +323,12 @@ pub fn parse_geolocation_routing(
     value: &SmolStr,
 ) -> Result<GeolocationRoutingHeader, GeolocationError> {
     let mut header = GeolocationRoutingHeader::new();
-    for (name, param_value) in parse_params(value.as_str()) {
-        let _ = header.add_param(name.as_str(), param_value.as_ref().map(|s| s.as_str()));
+    let params = parse_params(value.as_str()).ok_or_else(|| {
+        GeolocationError::TooManyParams { max: MAX_PARAMS, actual: MAX_PARAMS + 1 }
+    })?;
+    for (name, param_value) in params.iter() {
+        let value_str = param_value.as_ref().map(|s| s.as_str());
+        let _ = header.add_param(name.as_str(), value_str);
     }
     Ok(header)
 }
@@ -326,7 +357,8 @@ pub fn parse_p_access_network_info(value: &SmolStr) -> Option<PAccessNetworkInfo
 }
 
 pub fn parse_p_visited_network_id(value: &SmolStr) -> Option<PVisitedNetworkIdHeader> {
-    let values: Vec<SmolStr> = split_quoted_commas(value.as_str())
+    let parts = split_quoted_commas(value.as_str(), MAX_PARAMS)?;
+    let values: Vec<SmolStr> = parts
         .into_iter()
         .filter_map(|token| {
             let trimmed = token.trim_matches('"').trim();
@@ -341,16 +373,22 @@ pub fn parse_p_visited_network_id(value: &SmolStr) -> Option<PVisitedNetworkIdHe
 }
 
 #[allow(dead_code)]
-fn parse_name_addr_list<'a>(header_values: impl Iterator<Item = &'a SmolStr>) -> Vec<NameAddr> {
+fn parse_name_addr_list<'a>(
+    header_values: impl Iterator<Item = &'a SmolStr>,
+) -> Option<Vec<NameAddr>> {
     let mut out = Vec::new();
     for value in header_values {
-        for part in split_quoted_commas(value.as_str()) {
+        let parts = split_quoted_commas(value.as_str(), MAX_ROUTES)?;
+        for part in parts {
             if let Some(name_addr) = parse_name_addr(&SmolStr::new(part.trim())) {
                 out.push(name_addr);
+                if out.len() > MAX_ROUTES {
+                    return None;
+                }
             }
         }
     }
-    out
+    Some(out)
 }
 
 pub fn parse_p_asserted_identity(
@@ -374,7 +412,7 @@ fn parse_name_addr(value: &SmolStr) -> Option<NameAddr> {
         Ok(Some((start, end))) => {
             let display = input[..start].trim();
             let uri = input[start + 1..end].trim();
-            let params = parse_params(input[end + 1..].trim());
+            let params = parse_params(input[end + 1..].trim())?;
             let uri = Uri::parse(uri).ok()?;
             NameAddr::new(
                 if display.is_empty() {
@@ -390,19 +428,31 @@ fn parse_name_addr(value: &SmolStr) -> Option<NameAddr> {
         Ok(None) => {
             let (uri_part, param_part) = input.split_once(';').unwrap_or((input, ""));
             let uri = Uri::parse(uri_part.trim()).ok()?;
-            NameAddr::new(None, uri, parse_params(param_part)).ok()
+            let params = parse_params(param_part)?;
+            NameAddr::new(None, uri, params).ok()
         }
         Err(()) => None,
     }
 }
 
-fn parse_params(input: &str) -> BTreeMap<SmolStr, Option<SmolStr>> {
+/// Maximum number of parameters to prevent DoS attacks
+const MAX_PARAMS: usize = 64;
+
+/// Parses parameters with bounds checking to prevent memory exhaustion.
+/// Returns None if there are too many parameters (>64).
+fn parse_params(input: &str) -> Option<BTreeMap<SmolStr, Option<SmolStr>>> {
     let mut params = BTreeMap::new();
     for raw in input.split(';') {
         let raw = raw.trim();
         if raw.is_empty() {
             continue;
         }
+
+        // Security: Reject if too many parameters (DoS prevention)
+        if params.len() >= MAX_PARAMS {
+            return None;
+        }
+
         if let Some((name, value)) = raw.split_once('=') {
             params.insert(
                 SmolStr::new(name.trim().to_ascii_lowercase()),
@@ -412,7 +462,7 @@ fn parse_params(input: &str) -> BTreeMap<SmolStr, Option<SmolStr>> {
             params.insert(SmolStr::new(raw.to_ascii_lowercase()), None);
         }
     }
-    params
+    Some(params)
 }
 
 fn find_unquoted_angle_brackets(input: &str) -> Result<Option<(usize, usize)>, ()> {
@@ -469,20 +519,6 @@ fn find_unquoted_angle_brackets(input: &str) -> Result<Option<(usize, usize)>, (
     Err(())
 }
 
-fn parse_token_list(value: &SmolStr) -> Vec<SmolStr> {
-    value
-        .split(',')
-        .filter_map(|token| {
-            let trimmed = token.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(SmolStr::new(trimmed))
-            }
-        })
-        .collect()
-}
-
 fn parse_auth_like_header(value: &SmolStr) -> Option<AuthorizationHeader> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -492,19 +528,22 @@ fn parse_auth_like_header(value: &SmolStr) -> Option<AuthorizationHeader> {
     let scheme = SmolStr::new(parts.next()?.trim());
     let remainder = parts.next().unwrap_or("");
     let mut params = BTreeMap::new();
-    for part in split_quoted_commas(remainder) {
-        if let Some((name, val)) = part.split_once('=') {
-            let cleaned = val.trim().trim_matches('"');
-            params.insert(
-                SmolStr::new(name.trim().to_ascii_lowercase()),
-                SmolStr::new(cleaned),
-            );
+    // split_quoted_commas now returns Option to prevent DoS attacks
+    for part in split_quoted_commas(remainder, MAX_PARAMS)? {
+        let (name, val) = part.split_once('=')?;
+        let key = SmolStr::new(name.trim().to_ascii_lowercase());
+        if params.contains_key(&key) {
+            return None;
         }
+        let cleaned = val.trim().trim_matches('"');
+        params.insert(key, SmolStr::new(cleaned));
     }
-    Some(AuthorizationHeader { scheme, params })
+    // Use from_raw() which validates scheme, params count, and param values
+    AuthorizationHeader::from_raw(scheme, params).ok()
 }
 
-fn split_quoted_commas(input: &str) -> Vec<String> {
+/// Splits comma-separated values, respecting quotes. Returns None if too many parts or unbalanced quotes.
+fn split_quoted_commas(input: &str, max_parts: usize) -> Option<Vec<String>> {
     let mut parts = Vec::new();
     let mut current = String::new();
     let mut in_quotes = false;
@@ -526,6 +565,10 @@ fn split_quoted_commas(input: &str) -> Vec<String> {
             }
             ',' if !in_quotes => {
                 if !current.trim().is_empty() {
+                    // Security: Prevent DoS via excessive comma-separated values
+                    if parts.len() >= max_parts {
+                        return None;
+                    }
                     parts.push(current.trim().to_owned());
                 }
                 current.clear();
@@ -533,8 +576,15 @@ fn split_quoted_commas(input: &str) -> Vec<String> {
             _ => current.push(ch),
         }
     }
+    if in_quotes {
+        return None;
+    }
     if !current.trim().is_empty() {
+        // Security: Prevent DoS via excessive comma-separated values
+        if parts.len() >= max_parts {
+            return None;
+        }
         parts.push(current.trim().to_owned());
     }
-    parts
+    Some(parts)
 }
