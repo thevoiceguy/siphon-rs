@@ -545,11 +545,7 @@ async fn handle_packet(
 
             // Always notify transaction manager about ACK
             if let Some(branch) = request_branch_id(&req) {
-                let key = TransactionKey {
-                    branch,
-                    method: Method::Invite,
-                    is_server: true,
-                };
+                let key = TransactionKey::new(branch, Method::Invite, true);
                 transaction_mgr.ack_received(&key).await;
             }
             return;

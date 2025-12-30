@@ -215,14 +215,24 @@ pub enum ServerTransactionState {
 }
 
 /// Unique key identifying a transaction (branch + method + direction).
+/// All fields are private to prevent transaction key manipulation.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TransactionKey {
-    pub branch: SmolStr,
-    pub method: Method,
-    pub is_server: bool,
+    branch: SmolStr,
+    method: Method,
+    is_server: bool,
 }
 
 impl TransactionKey {
+    /// Creates a new transaction key.
+    pub fn new(branch: impl Into<SmolStr>, method: Method, is_server: bool) -> Self {
+        Self {
+            branch: branch.into(),
+            method,
+            is_server,
+        }
+    }
+
     /// Builds a transaction key from a request, deriving the branch parameter.
     pub fn from_request(req: &Request, is_server: bool) -> Option<Self> {
         let branch = request_branch_id(req)?;
@@ -232,13 +242,29 @@ impl TransactionKey {
             is_server,
         })
     }
+
+    /// Returns the branch identifier.
+    pub fn branch(&self) -> &str {
+        &self.branch
+    }
+
+    /// Returns the method.
+    pub fn method(&self) -> &Method {
+        &self.method
+    }
+
+    /// Returns whether this is a server transaction.
+    pub fn is_server(&self) -> bool {
+        self.is_server
+    }
 }
 
 /// Skeleton client transaction state container.
+/// Fields are private to protect transaction state.
 #[derive(Debug)]
 pub struct ClientTransaction {
-    pub key: TransactionKey,
-    pub state: ClientTransactionState,
+    key: TransactionKey,
+    state: ClientTransactionState,
 }
 
 impl ClientTransaction {
@@ -246,19 +272,40 @@ impl ClientTransaction {
     pub fn new(key: TransactionKey, state: ClientTransactionState) -> Self {
         Self { key, state }
     }
+
+    /// Returns the transaction key.
+    pub fn key(&self) -> &TransactionKey {
+        &self.key
+    }
+
+    /// Returns the current state.
+    pub fn state(&self) -> ClientTransactionState {
+        self.state
+    }
 }
 
 /// Skeleton server transaction state container.
+/// Fields are private to protect transaction state.
 #[derive(Debug)]
 pub struct ServerTransaction {
-    pub key: TransactionKey,
-    pub state: ServerTransactionState,
+    key: TransactionKey,
+    state: ServerTransactionState,
 }
 
 impl ServerTransaction {
     /// Creates a server transaction with the provided key and initial state.
     pub fn new(key: TransactionKey, state: ServerTransactionState) -> Self {
         Self { key, state }
+    }
+
+    /// Returns the transaction key.
+    pub fn key(&self) -> &TransactionKey {
+        &self.key
+    }
+
+    /// Returns the current state.
+    pub fn state(&self) -> ServerTransactionState {
+        self.state
     }
 }
 

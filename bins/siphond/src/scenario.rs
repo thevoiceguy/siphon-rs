@@ -73,13 +73,13 @@ impl ClientTransactionUser for ScenarioTransactionUser {
         let ack = self.uac.create_ack(&self.request, &response, None);
         let payload = sip_parse::serialize_request(&ack);
 
-        match ctx.transport {
+        match ctx.transport() {
             TransportKind::Tcp => {
-                let _ = sip_transport::send_tcp(&ctx.peer, &payload).await;
+                let _ = sip_transport::send_tcp(&ctx.peer(), &payload).await;
             }
             TransportKind::Udp => {
-                if let Some(socket) = &ctx.udp_socket {
-                    let _ = sip_transport::send_udp(socket.as_ref(), &ctx.peer, &payload).await;
+                if let Some(socket) = &ctx.udp_socket() {
+                    let _ = sip_transport::send_udp(socket.as_ref(), &ctx.peer(), &payload).await;
                 }
             }
             TransportKind::Ws | TransportKind::Wss => {
@@ -87,7 +87,7 @@ impl ClientTransactionUser for ScenarioTransactionUser {
                 {
                     if let Some(ws_uri) = ctx.ws_uri.as_deref() {
                         let data = bytes::Bytes::from(payload.to_vec());
-                        if ctx.transport == TransportKind::Wss {
+                        if ctx.transport() == TransportKind::Wss {
                             let _ = sip_transport::send_wss(ws_uri, data).await;
                         } else {
                             let _ = sip_transport::send_ws(ws_uri, data).await;

@@ -830,7 +830,7 @@ impl InviteHandler {
             .split('@')
             .nth(1)
             .unwrap_or("localhost");
-        let transport_name = match ctx.transport {
+        let transport_name = match ctx.transport() {
             sip_transaction::TransportKind::Udp => "UDP",
             sip_transaction::TransportKind::Tcp => "TCP",
             sip_transaction::TransportKind::Tls => "TLS",
@@ -846,10 +846,10 @@ impl InviteHandler {
             .proxy_state
             .store_transaction(crate::proxy_state::ProxyTransaction {
                 branch: branch.clone(),
-                sender_addr: ctx.peer,
-                sender_transport: ctx.transport,
-                sender_stream: ctx.stream.clone(),
-                sender_ws_uri: ctx.ws_uri.clone(),
+                sender_addr: ctx.peer(),
+                sender_transport: ctx.transport(),
+                sender_stream: ctx.stream().cloned(),
+                sender_ws_uri: ctx.ws_uri().map(String::from),
                 call_id: call_id.to_string(),
                 created_at: std::time::Instant::now(),
             });

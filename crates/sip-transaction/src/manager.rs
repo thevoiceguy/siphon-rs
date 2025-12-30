@@ -70,20 +70,20 @@ const T4_DEFAULT: Duration = Duration::from_secs(5); // Maximum duration a messa
 ///
 /// // Small server (1-10 concurrent calls)
 /// let small = TransactionLimits::small();
-/// assert_eq!(small.max_server_transactions, 1_000);
-/// assert_eq!(small.max_client_transactions, 1_000);
+/// assert_eq!(small.max_server_transactions(), 1_000);
+/// assert_eq!(small.max_client_transactions(), 1_000);
 ///
 /// // Medium server (10-100 concurrent calls) - default
 /// let medium = TransactionLimits::medium();
-/// assert_eq!(medium.max_server_transactions, 10_000);
+/// assert_eq!(medium.max_server_transactions(), 10_000);
 ///
 /// // Large server (100-1000 concurrent calls)
 /// let large = TransactionLimits::large();
-/// assert_eq!(large.max_server_transactions, 100_000);
+/// assert_eq!(large.max_server_transactions(), 100_000);
 ///
 /// // Carrier-grade (1000+ concurrent calls)
 /// let carrier = TransactionLimits::carrier_grade();
-/// assert_eq!(carrier.max_server_transactions, 500_000);
+/// assert_eq!(carrier.max_server_transactions(), 500_000);
 /// ```
 ///
 /// Custom limits:
@@ -92,19 +92,31 @@ const T4_DEFAULT: Duration = Duration::from_secs(5); // Maximum duration a messa
 ///
 /// // Different limits for client and server
 /// let custom = TransactionLimits::new(5_000, 2_000);
-/// assert_eq!(custom.max_server_transactions, 5_000);
-/// assert_eq!(custom.max_client_transactions, 2_000);
+/// assert_eq!(custom.max_server_transactions(), 5_000);
+/// assert_eq!(custom.max_client_transactions(), 2_000);
 ///
 /// // Unlimited (testing only - NOT for production)
 /// let unlimited = TransactionLimits::unlimited();
-/// assert_eq!(unlimited.max_server_transactions, usize::MAX);
+/// assert_eq!(unlimited.max_server_transactions(), usize::MAX);
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub struct TransactionLimits {
     /// Maximum number of server transactions (incoming requests)
-    pub max_server_transactions: usize,
+    max_server_transactions: usize,
     /// Maximum number of client transactions (outgoing requests)
-    pub max_client_transactions: usize,
+    max_client_transactions: usize,
+}
+
+impl TransactionLimits {
+    /// Returns the maximum number of server transactions.
+    pub fn max_server_transactions(&self) -> usize {
+        self.max_server_transactions
+    }
+
+    /// Returns the maximum number of client transactions.
+    pub fn max_client_transactions(&self) -> usize {
+        self.max_client_transactions
+    }
 }
 
 impl Default for TransactionLimits {
@@ -180,19 +192,20 @@ pub trait ClientTransactionUser: Send + Sync + 'static {
 }
 
 /// Context captured for a server transaction so retransmissions reuse the same transport.
+/// Fields are private to protect transport configuration.
 #[derive(Debug, Clone)]
 pub struct TransportContext {
-    pub transport: TransportKind,
-    pub peer: SocketAddr,
-    pub stream: Option<mpsc::Sender<Bytes>>,
+    transport: TransportKind,
+    peer: SocketAddr,
+    stream: Option<mpsc::Sender<Bytes>>,
     /// Optional server name (SNI) for TLS transports.
-    pub server_name: Option<String>,
+    server_name: Option<String>,
     /// Optional WS/WSS target URI override.
-    pub ws_uri: Option<String>,
+    ws_uri: Option<String>,
     /// Optional UDP socket for sending ACKs and other messages over UDP.
     /// Required for ClientTransactionUser implementations that need to send
     /// ACK for 2xx responses (e.g., REFER transfers, UAC call flows).
-    pub udp_socket: Option<std::sync::Arc<tokio::net::UdpSocket>>,
+    udp_socket: Option<std::sync::Arc<tokio::net::UdpSocket>>,
 }
 
 impl TransportContext {
@@ -209,6 +222,36 @@ impl TransportContext {
             ws_uri: None,
             udp_socket: None,
         }
+    }
+
+    /// Returns the transport kind.
+    pub fn transport(&self) -> TransportKind {
+        self.transport
+    }
+
+    /// Returns the peer socket address.
+    pub fn peer(&self) -> SocketAddr {
+        self.peer
+    }
+
+    /// Returns the stream sender if available.
+    pub fn stream(&self) -> Option<&mpsc::Sender<Bytes>> {
+        self.stream.as_ref()
+    }
+
+    /// Returns the server name (SNI) if set.
+    pub fn server_name(&self) -> Option<&str> {
+        self.server_name.as_deref()
+    }
+
+    /// Returns the WS URI if set.
+    pub fn ws_uri(&self) -> Option<&str> {
+        self.ws_uri.as_deref()
+    }
+
+    /// Returns the UDP socket if set.
+    pub fn udp_socket(&self) -> Option<&std::sync::Arc<tokio::net::UdpSocket>> {
+        self.udp_socket.as_ref()
     }
 
     /// Builder-style helper to set server name (for TLS SNI).

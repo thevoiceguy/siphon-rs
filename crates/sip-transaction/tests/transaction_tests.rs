@@ -82,7 +82,7 @@ fn client_non_invite_duplicate_final_response_ignored() {
 
     fsm.on_event(ClientNonInviteEvent::SendRequest(req));
     fsm.on_event(ClientNonInviteEvent::ReceiveFinal(resp.clone()));
-    assert!(matches!(fsm.state, ClientNonInviteState::Completed));
+    assert!(matches!(fsm.state(), ClientNonInviteState::Completed));
 
     // Duplicate final response should be absorbed
     let actions = fsm.on_event(ClientNonInviteEvent::ReceiveFinal(resp.clone()));
@@ -103,7 +103,7 @@ fn client_non_invite_transport_error() {
     fsm.on_event(ClientNonInviteEvent::SendRequest(req));
 
     let actions = fsm.on_event(ClientNonInviteEvent::TransportError);
-    assert!(matches!(fsm.state, ClientNonInviteState::Terminated));
+    assert!(matches!(fsm.state(), ClientNonInviteState::Terminated));
     assert!(
         actions
             .iter()
@@ -121,7 +121,7 @@ fn client_non_invite_timer_f_timeout() {
 
     // Timer F fires when no response received
     let actions = fsm.on_event(ClientNonInviteEvent::TimerFired(TransactionTimer::F));
-    assert!(matches!(fsm.state, ClientNonInviteState::Terminated));
+    assert!(matches!(fsm.state(), ClientNonInviteState::Terminated));
     assert!(
         actions
             .iter()
@@ -141,7 +141,7 @@ fn client_non_invite_proceeding_to_completed() {
     let actions = fsm.on_event(ClientNonInviteEvent::ReceiveProvisional(sample_response(
         180,
     )));
-    assert!(matches!(fsm.state, ClientNonInviteState::Proceeding));
+    assert!(matches!(fsm.state(), ClientNonInviteState::Proceeding));
     assert!(
         actions
             .iter()
@@ -162,7 +162,7 @@ fn client_non_invite_proceeding_to_completed() {
 
     // Final response
     let actions = fsm.on_event(ClientNonInviteEvent::ReceiveFinal(sample_response(200)));
-    assert!(matches!(fsm.state, ClientNonInviteState::Completed));
+    assert!(matches!(fsm.state(), ClientNonInviteState::Completed));
     assert!(
         actions
             .iter()
@@ -212,7 +212,7 @@ fn client_invite_timer_b_timeout() {
     // Timer B fires when no final response received
     let actions = fsm.on_event(ClientInviteEvent::TimerFired(TransactionTimer::B));
     assert!(matches!(
-        fsm.state,
+        fsm.state(),
         sip_transaction::ClientInviteState::Terminated
     ));
     assert!(
@@ -243,7 +243,7 @@ fn client_invite_provisional_with_rseq() {
 
     let actions = fsm.on_event(ClientInviteEvent::ReceiveProvisional(resp.clone()));
     assert!(matches!(
-        fsm.state,
+        fsm.state(),
         sip_transaction::ClientInviteState::Proceeding
     ));
     assert!(
@@ -264,7 +264,7 @@ fn client_invite_3xx_4xx_5xx_6xx_requires_ack() {
         let actions = fsm.on_event(ClientInviteEvent::ReceiveFinal(sample_response(code)));
 
         assert!(
-            matches!(fsm.state, sip_transaction::ClientInviteState::Completed),
+            matches!(fsm.state(), sip_transaction::ClientInviteState::Completed),
             "Non-2xx final should move to Completed for code {}",
             code
         );
@@ -298,7 +298,7 @@ fn client_invite_2xx_immediate_termination() {
     let actions = fsm.on_event(ClientInviteEvent::ReceiveFinal(sample_response(200)));
 
     assert!(matches!(
-        fsm.state,
+        fsm.state(),
         sip_transaction::ClientInviteState::Terminated
     ));
     assert!(
@@ -328,7 +328,7 @@ fn client_invite_transport_error_in_calling() {
     let actions = fsm.on_event(ClientInviteEvent::TransportError);
 
     assert!(matches!(
-        fsm.state,
+        fsm.state(),
         sip_transaction::ClientInviteState::Terminated
     ));
     assert!(
@@ -350,7 +350,7 @@ fn server_non_invite_absorbs_retransmitted_request() {
 
     fsm.on_event(ServerNonInviteEvent::ReceiveRequest(req.clone()));
     fsm.on_event(ServerNonInviteEvent::SendFinal(sample_response(200)));
-    assert!(matches!(fsm.state, ServerNonInviteState::Completed));
+    assert!(matches!(fsm.state(), ServerNonInviteState::Completed));
 
     // Retransmitted request in Completed state
     let actions = fsm.on_retransmit();
@@ -371,7 +371,7 @@ fn server_non_invite_timer_j_termination() {
     fsm.on_event(ServerNonInviteEvent::SendFinal(sample_response(200)));
 
     let actions = fsm.on_event(ServerNonInviteEvent::TimerFired(TransactionTimer::J));
-    assert!(matches!(fsm.state, ServerNonInviteState::Terminated));
+    assert!(matches!(fsm.state(), ServerNonInviteState::Terminated));
     assert!(
         actions
             .iter()
@@ -389,7 +389,7 @@ fn server_non_invite_provisional_then_final() {
 
     // Send provisional (should be in Proceeding state after receiving request)
     let actions = fsm.on_event(ServerNonInviteEvent::SendProvisional(sample_response(180)));
-    assert!(matches!(fsm.state, ServerNonInviteState::Proceeding));
+    assert!(matches!(fsm.state(), ServerNonInviteState::Proceeding));
     assert!(
         actions
             .iter()
@@ -399,7 +399,7 @@ fn server_non_invite_provisional_then_final() {
 
     // Send final
     let actions = fsm.on_event(ServerNonInviteEvent::SendFinal(sample_response(200)));
-    assert!(matches!(fsm.state, ServerNonInviteState::Completed));
+    assert!(matches!(fsm.state(), ServerNonInviteState::Completed));
     assert!(
         actions
             .iter()
@@ -426,7 +426,7 @@ fn server_non_invite_transport_error() {
     fsm.on_event(ServerNonInviteEvent::ReceiveRequest(req));
     let actions = fsm.on_event(ServerNonInviteEvent::TransportError);
 
-    assert!(matches!(fsm.state, ServerNonInviteState::Terminated));
+    assert!(matches!(fsm.state(), ServerNonInviteState::Terminated));
     assert!(
         actions
             .iter()
@@ -447,7 +447,7 @@ fn server_invite_timer_g_retransmission() {
     fsm.on_event(ServerInviteEvent::ReceiveInvite(invite));
     fsm.on_event(ServerInviteEvent::SendFinal(sample_response(486)));
     assert!(matches!(
-        fsm.state,
+        fsm.state(),
         sip_transaction::ServerInviteState::Completed
     ));
 
@@ -482,7 +482,7 @@ fn server_invite_timer_h_timeout() {
     // Timer H fires when ACK not received
     let actions = fsm.on_event(ServerInviteEvent::TimerFired(TransactionTimer::H));
     assert!(matches!(
-        fsm.state,
+        fsm.state(),
         sip_transaction::ServerInviteState::Terminated
     ));
     assert!(
@@ -501,13 +501,13 @@ fn server_invite_ack_moves_to_confirmed() {
     fsm.on_event(ServerInviteEvent::ReceiveInvite(invite));
     fsm.on_event(ServerInviteEvent::SendFinal(sample_response(486)));
     assert!(matches!(
-        fsm.state,
+        fsm.state(),
         sip_transaction::ServerInviteState::Completed
     ));
 
     let actions = fsm.on_event(ServerInviteEvent::ReceiveAck);
     assert!(matches!(
-        fsm.state,
+        fsm.state(),
         sip_transaction::ServerInviteState::Confirmed
     ));
     assert!(
@@ -537,13 +537,13 @@ fn server_invite_timer_i_termination() {
     fsm.on_event(ServerInviteEvent::SendFinal(sample_response(486)));
     fsm.on_event(ServerInviteEvent::ReceiveAck);
     assert!(matches!(
-        fsm.state,
+        fsm.state(),
         sip_transaction::ServerInviteState::Confirmed
     ));
 
     let actions = fsm.on_event(ServerInviteEvent::TimerFired(TransactionTimer::I));
     assert!(matches!(
-        fsm.state,
+        fsm.state(),
         sip_transaction::ServerInviteState::Terminated
     ));
     assert!(
@@ -563,7 +563,7 @@ fn server_invite_2xx_immediate_termination() {
     let actions = fsm.on_event(ServerInviteEvent::SendFinal(sample_response(200)));
 
     assert!(matches!(
-        fsm.state,
+        fsm.state(),
         sip_transaction::ServerInviteState::Terminated
     ));
     assert!(
@@ -612,7 +612,7 @@ fn server_invite_provisional_response() {
     // Send provisional
     let actions = fsm.on_event(ServerInviteEvent::SendProvisional(sample_response(180)));
     assert!(matches!(
-        fsm.state,
+        fsm.state(),
         sip_transaction::ServerInviteState::Proceeding
     ));
     assert!(
@@ -641,7 +641,7 @@ fn server_invite_transport_error() {
     let actions = fsm.on_event(ServerInviteEvent::TransportError);
 
     assert!(matches!(
-        fsm.state,
+        fsm.state(),
         sip_transaction::ServerInviteState::Terminated
     ));
     assert!(

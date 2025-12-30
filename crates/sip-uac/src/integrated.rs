@@ -550,9 +550,9 @@ impl CallHandle {
                 };
 
                 // Decide keepalive payload based on transport
-                let is_udp = matches!(ctx.transport, sip_transaction::TransportKind::Udp);
+                let is_udp = matches!(ctx.transport(), sip_transaction::TransportKind::Udp);
                 let is_stream = matches!(
-                    ctx.transport,
+                    ctx.transport(),
                     sip_transaction::TransportKind::Tcp | sip_transaction::TransportKind::Tls
                 );
 
@@ -1019,7 +1019,7 @@ impl IntegratedUAC {
 
         info!(
             "Started client transaction {} for {:?}",
-            key.branch,
+            key.branch(),
             request.method()
         );
 
@@ -1094,7 +1094,7 @@ impl IntegratedUAC {
 
         info!(
             "Started authenticated client transaction {} for {:?}",
-            key.branch,
+            key.branch(),
             auth_request.method()
         );
 
@@ -1305,7 +1305,7 @@ impl IntegratedUAC {
 
         info!(
             "Started INVITE client transaction {} to {}",
-            key.branch,
+            key.branch(),
             target_uri.as_str()
         );
 
@@ -1794,7 +1794,7 @@ impl IntegratedUAC {
 
         info!(
             "Started INVITE transaction {} for dialog {}",
-            key.branch, dialog.id().call_id()
+            key.branch(), dialog.id().call_id()
         );
 
         Ok(CallHandle {
@@ -1995,7 +1995,7 @@ impl CallHandle {
 
         info!(
             "Sending CANCEL for transaction {}",
-            self.transaction_key.branch
+            self.transaction_key.branch()
         );
 
         // Create CANCEL request per RFC 3261 §9.1
@@ -2078,7 +2078,7 @@ impl CallHandle {
             .start_client_transaction(cancel_request, (*self.transport_ctx).clone(), tu)
             .await?;
 
-        info!("Started CANCEL transaction {}", key.branch);
+        info!("Started CANCEL transaction {}", key.branch());
 
         // Wait for response to CANCEL
         tokio::select! {
@@ -2311,7 +2311,7 @@ impl ClientTransactionUser for InviteTransactionUser {
                 via.to_string()
             }
         } else {
-            let via_transport = match ctx.transport {
+            let via_transport = match ctx.transport() {
                 sip_transaction::TransportKind::Udp => "UDP",
                 sip_transaction::TransportKind::Tcp => "TCP",
                 sip_transaction::TransportKind::Tls => "TLS",
@@ -2337,7 +2337,7 @@ impl ClientTransactionUser for InviteTransactionUser {
         let ack_bytes = serialize_request(&ack);
 
         // Send ACK directly (ACK for 2xx doesn't go through transaction layer)
-        if let Some(stream) = &ctx.stream {
+        if let Some(stream) = &ctx.stream() {
             if let Err(e) = stream.send(ack_bytes).await {
                 error!("Failed to send ACK via stream: {}", e);
             }
@@ -2369,7 +2369,7 @@ impl ClientTransactionUser for InviteTransactionUser {
                         .await
                     {
                         Ok(key) => {
-                            debug!("Started PRACK transaction {}", key.branch);
+                            debug!("Started PRACK transaction {}", key.branch());
                         }
                         Err(e) => {
                             error!("Failed to start PRACK transaction: {}", e);

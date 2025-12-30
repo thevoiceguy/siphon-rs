@@ -444,18 +444,32 @@ fn response_requires_prack(response: &Response) -> bool {
 /// - **Timer F Duration**: 64*T1 provides sufficient time for delayed servers
 ///   to respond, consistent with RFC 4320's goal of reducing false timeouts.
 pub struct ClientNonInviteFsm {
-    pub state: ClientNonInviteState,
+    state: ClientNonInviteState,
     timers: TransportAwareTimers,
     e_interval: Duration,
     last_request: Option<Bytes>,
 }
 
+impl ClientNonInviteFsm {
+    /// Returns the current state.
+    pub fn state(&self) -> ClientNonInviteState {
+        self.state
+    }
+}
+
 /// Implements the client INVITE transaction state machine.
 pub struct ClientInviteFsm {
-    pub state: crate::ClientInviteState,
+    state: crate::ClientInviteState,
     timers: TransportAwareTimers,
     a_interval: Duration,
     last_invite: Option<Bytes>,
+}
+
+impl ClientInviteFsm {
+    /// Returns the current state.
+    pub fn state(&self) -> crate::ClientInviteState {
+        self.state
+    }
 }
 
 impl ClientInviteFsm {
@@ -803,12 +817,17 @@ impl ClientNonInviteFsm {
 /// manager enforces this by checking transaction state before dispatching
 /// responses.
 pub struct ServerNonInviteFsm {
-    pub state: ServerNonInviteState,
+    state: ServerNonInviteState,
     timers: TransportAwareTimers,
     last_response: Option<Bytes>,
 }
 
 impl ServerNonInviteFsm {
+    /// Returns the current state.
+    pub fn state(&self) -> ServerNonInviteState {
+        self.state
+    }
+
     /// Creates a server FSM in the `Trying` state with transport-aware timers.
     pub fn new(timers: TransportAwareTimers) -> Self {
         Self {
@@ -933,11 +952,18 @@ pub enum TransportKind {
 
 /// Implements the server INVITE transaction state machine.
 pub struct ServerInviteFsm {
-    pub state: crate::ServerInviteState,
+    state: crate::ServerInviteState,
     timers: TransportAwareTimers,
     g_interval: Duration,
     last_response: Option<Bytes>,
     last_final: Option<Bytes>,
+}
+
+impl ServerInviteFsm {
+    /// Returns the current state.
+    pub fn state(&self) -> crate::ServerInviteState {
+        self.state
+    }
 }
 
 impl ServerInviteFsm {

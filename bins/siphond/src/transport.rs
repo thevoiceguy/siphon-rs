@@ -185,24 +185,24 @@ impl SiphonTransportDispatcher {
 impl TransportDispatcher for SiphonTransportDispatcher {
     async fn dispatch(&self, ctx: &TransportContext, payload: Bytes) -> Result<()> {
         let start = std::time::Instant::now();
-        let desired = to_sip_transport(ctx.transport);
+        let desired = to_sip_transport(ctx.transport());
         let selected = self.policy.choose(
             desired,
             payload.len(),
             matches!(
-                ctx.transport,
+                ctx.transport(),
                 TransportKind::Tls | TransportKind::Wss | TransportKind::TlsSctp
             ),
         );
 
         let target = match selected {
             sip_transport::TransportKind::Tcp | sip_transport::TransportKind::Tls
-                if ctx.stream.is_none() =>
+                if ctx.stream().is_none() =>
             {
                 warn!(
                     ?selected,
                     ?desired,
-                    peer = %ctx.peer,
+                    peer = %ctx.peer(),
                     "Policy requested stream transport but no stream available; falling back"
                 );
                 desired
@@ -212,17 +212,17 @@ impl TransportDispatcher for SiphonTransportDispatcher {
 
         match target {
             sip_transport::TransportKind::Udp => {
-                send_udp(self.udp_socket.as_ref(), &ctx.peer, &payload).await?;
+                send_udp(self.udp_socket.as_ref(), &ctx.peer(), &payload).await?;
             }
             sip_transport::TransportKind::Tcp => {
-                if let Some(writer) = &ctx.stream {
+                if let Some(writer) = &ctx.stream() {
                     send_stream(target, writer, payload).await?;
                 } else {
-                    self.tcp_pool.send_tcp(ctx.peer, payload).await?;
+                    self.tcp_pool.send_tcp(ctx.peer(), payload).await?;
                 }
             }
             sip_transport::TransportKind::Tls => {
-                if let Some(writer) = &ctx.stream {
+                if let Some(writer) = &ctx.stream() {
                     send_stream(target, writer, payload).await?;
                 } else {
                     let cfg = self
@@ -230,11 +230,11 @@ impl TransportDispatcher for SiphonTransportDispatcher {
                         .clone()
                         .ok_or_else(|| anyhow!("TLS client config missing"))?;
                     let server_name = ctx
-                        .server_name
-                        .clone()
-                        .unwrap_or_else(|| ctx.peer.ip().to_string());
+                        .server_name()
+                        .map(String::from)
+                        .unwrap_or_else(|| ctx.peer().ip().to_string());
                     self.tls_pool
-                        .send_tls(ctx.peer, server_name, cfg, payload)
+                        .send_tls(ctx.peer(), server_name, cfg, payload)
                         .await?;
                 }
             }
@@ -248,8 +248,8 @@ impl TransportDispatcher for SiphonTransportDispatcher {
                         let host = ctx
                             .server_name
                             .clone()
-                            .unwrap_or_else(|| ctx.peer.ip().to_string());
-                        format!("ws://{}:{}", host, ctx.peer.port())
+                            .unwrap_or_else(|| ctx.peer().ip().to_string());
+                        format!("ws://{}:{}", host, ctx.peer().port())
                     });
                     sip_transport::send_ws(&url, payload).await?;
                 }
@@ -265,8 +265,8 @@ impl TransportDispatcher for SiphonTransportDispatcher {
                         let host = ctx
                             .server_name
                             .clone()
-                            .unwrap_or_else(|| ctx.peer.ip().to_string());
-                        format!("wss://{}:{}", host, ctx.peer.port())
+                            .unwrap_or_else(|| ctx.peer().ip().to_string());
+                        format!("wss://{}:{}", host, ctx.peer().port())
                     });
                     sip_transport::send_wss(&url, payload).await?;
                 }

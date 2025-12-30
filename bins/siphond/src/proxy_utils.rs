@@ -116,7 +116,7 @@ pub async fn forward_request(
         .split('@')
         .nth(1)
         .unwrap_or("localhost");
-    let transport_name = match ctx.transport {
+    let transport_name = match ctx.transport() {
         TransportKind::Udp => "UDP",
         TransportKind::Tcp => "TCP",
         TransportKind::Tls => "TLS",
@@ -131,10 +131,10 @@ pub async fn forward_request(
         .proxy_state
         .store_transaction(crate::proxy_state::ProxyTransaction {
             branch: branch.clone(),
-            sender_addr: ctx.peer,
-            sender_transport: ctx.transport,
-            sender_stream: ctx.stream.clone(),
-            sender_ws_uri: ctx.ws_uri.clone(),
+            sender_addr: ctx.peer(),
+            sender_transport: ctx.transport(),
+            sender_stream: ctx.stream().cloned(),
+            sender_ws_uri: ctx.ws_uri().map(String::from),
             call_id: call_id.to_string(),
             created_at: std::time::Instant::now(),
         });

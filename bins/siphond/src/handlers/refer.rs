@@ -160,14 +160,14 @@ impl ClientTransactionUser for ReferTransferTransactionUser {
             .create_ack(&self.invite, &response, sdp_body.as_deref());
         let payload = sip_parse::serialize_request(&ack);
 
-        match ctx.transport {
+        match ctx.transport() {
             sip_transaction::TransportKind::Tcp => {
-                if let Err(e) = sip_transport::send_tcp(&ctx.peer, &payload).await {
+                if let Err(e) = sip_transport::send_tcp(&ctx.peer(), &payload).await {
                     warn!(error = %e, "Failed to send REFER ACK via TCP");
                 }
             }
             sip_transaction::TransportKind::Tls => {
-                if let Some(writer) = &ctx.stream {
+                if let Some(writer) = &ctx.stream() {
                     if let Err(e) = sip_transport::send_stream(
                         sip_transport::TransportKind::Tls,
                         writer,
@@ -189,7 +189,7 @@ impl ClientTransactionUser for ReferTransferTransactionUser {
                 {
                     if let Some(ws_uri) = ctx.ws_uri.as_deref() {
                         let data = bytes::Bytes::from(payload.to_vec());
-                        let result = if ctx.transport == sip_transaction::TransportKind::Wss {
+                        let result = if ctx.transport() == sip_transaction::TransportKind::Wss {
                             sip_transport::send_wss(ws_uri, data).await
                         } else {
                             sip_transport::send_ws(ws_uri, data).await
@@ -202,9 +202,9 @@ impl ClientTransactionUser for ReferTransferTransactionUser {
             }
             sip_transaction::TransportKind::Udp => {
                 // Send ACK over UDP using the socket from TransportContext
-                if let Some(socket) = &ctx.udp_socket {
+                if let Some(socket) = &ctx.udp_socket() {
                     if let Err(e) =
-                        sip_transport::send_udp(socket.as_ref(), &ctx.peer, &payload).await
+                        sip_transport::send_udp(socket.as_ref(), &ctx.peer(), &payload).await
                     {
                         warn!(error = %e, "Failed to send REFER ACK via UDP");
                     }
