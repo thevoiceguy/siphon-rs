@@ -42,13 +42,13 @@ use tracing::{debug, info, warn};
 #[derive(Debug, Clone)]
 pub struct ProxyTarget {
     /// Target SIP URI
-    pub uri: SipUri,
+    pub(crate) uri: SipUri,
 
     /// Priority (lower is higher priority, for sequential forking)
-    pub priority: u32,
+    pub(crate) priority: u32,
 
     /// Q-value from registration (1.0 = highest, 0.0 = lowest)
-    pub q_value: f32,
+    pub(crate) q_value: f32,
 }
 
 impl ProxyTarget {
@@ -72,25 +72,83 @@ impl ProxyTarget {
         self.q_value = q.clamp(0.0, 1.0);
         self
     }
+
+    /// Returns the target URI.
+    pub fn uri(&self) -> &SipUri {
+        &self.uri
+    }
+
+    /// Returns the priority.
+    pub fn priority(&self) -> u32 {
+        self.priority
+    }
+
+    /// Returns the q-value.
+    pub fn q_value(&self) -> f32 {
+        self.q_value
+    }
 }
 
 /// Branch information for a forwarded request
 #[derive(Debug, Clone)]
 pub struct BranchInfo {
     /// Branch ID generated for this forward
-    pub branch_id: SmolStr,
+    pub(crate) branch_id: SmolStr,
 
     /// Target URI this branch was sent to
-    pub target: SipUri,
+    pub(crate) target: SipUri,
 
     /// When this branch was created
-    pub created_at: Instant,
+    pub(crate) created_at: Instant,
 
     /// Current state of this branch
-    pub state: BranchState,
+    pub(crate) state: BranchState,
 
     /// Best response received so far (for response selection)
-    pub best_response: Option<Response>,
+    pub(crate) best_response: Option<Response>,
+}
+
+impl BranchInfo {
+    /// Creates a new BranchInfo.
+    pub fn new(
+        branch_id: impl Into<SmolStr>,
+        target: SipUri,
+        created_at: Instant,
+        state: BranchState,
+    ) -> Self {
+        Self {
+            branch_id: branch_id.into(),
+            target,
+            created_at,
+            state,
+            best_response: None,
+        }
+    }
+
+    /// Returns the branch ID.
+    pub fn branch_id(&self) -> &str {
+        &self.branch_id
+    }
+
+    /// Returns the target URI.
+    pub fn target(&self) -> &SipUri {
+        &self.target
+    }
+
+    /// Returns when this branch was created.
+    pub fn created_at(&self) -> Instant {
+        self.created_at
+    }
+
+    /// Returns the current state.
+    pub fn state(&self) -> BranchState {
+        self.state
+    }
+
+    /// Returns the best response received.
+    pub fn best_response(&self) -> Option<&Response> {
+        self.best_response.as_ref()
+    }
 }
 
 /// State of a proxy branch
@@ -128,19 +186,19 @@ pub enum ForkMode {
 /// Context for a single proxied request
 pub struct ProxyContext {
     /// Original request from client
-    pub original_request: Request,
+    pub(crate) original_request: Request,
 
     /// Call-ID for correlation
-    pub call_id: SmolStr,
+    pub(crate) call_id: SmolStr,
 
     /// Client transaction branch (from client's Via header)
-    pub client_branch: SmolStr,
+    pub(crate) client_branch: SmolStr,
 
     /// Proxy hostname used for forwarding on this context
-    pub proxy_host: SmolStr,
+    pub(crate) proxy_host: SmolStr,
 
     /// Transport used for forwarding on this context
-    pub transport: SmolStr,
+    pub(crate) transport: SmolStr,
 
     /// Branches created for forwarding (branch_id → info)
     branches: RwLock<HashMap<SmolStr, BranchInfo>>,
@@ -159,7 +217,7 @@ pub struct ProxyContext {
     outstanding_count: RwLock<usize>,
 
     /// When this context was created
-    created_at: Instant,
+    pub(crate) created_at: Instant,
 }
 
 impl ProxyContext {
@@ -343,6 +401,36 @@ impl ProxyContext {
     /// Get forking mode
     pub fn fork_mode(&self) -> ForkMode {
         self.fork_mode
+    }
+
+    /// Returns the original request.
+    pub fn original_request(&self) -> &Request {
+        &self.original_request
+    }
+
+    /// Returns the Call-ID.
+    pub fn call_id(&self) -> &str {
+        &self.call_id
+    }
+
+    /// Returns the client branch.
+    pub fn client_branch(&self) -> &str {
+        &self.client_branch
+    }
+
+    /// Returns the proxy hostname.
+    pub fn proxy_host(&self) -> &str {
+        &self.proxy_host
+    }
+
+    /// Returns the transport.
+    pub fn transport(&self) -> &str {
+        &self.transport
+    }
+
+    /// Returns when this context was created.
+    pub fn created_at(&self) -> Instant {
+        self.created_at
     }
 }
 
@@ -587,7 +675,7 @@ mod tests {
             ForkMode::Parallel,
         );
 
-        assert_eq!(context.call_id.as_str(), "test-call-123");
+        assert_eq!(context.call_id(), "test-call-123");
         assert_eq!(context.fork_mode(), ForkMode::Parallel);
     }
 

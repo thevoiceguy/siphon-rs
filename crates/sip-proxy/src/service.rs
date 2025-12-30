@@ -16,13 +16,47 @@ use tokio::sync::mpsc;
 
 /// Actions returned when processing a branch response.
 pub struct ProxyActions {
-    pub forward: Option<ResponseAction>,
-    pub cancels: Vec<Request>,
+    forward: Option<ResponseAction>,
+    cancels: Vec<Request>,
+}
+
+impl ProxyActions {
+    /// Returns the response action to forward upstream.
+    pub fn forward(&self) -> Option<&ResponseAction> {
+        self.forward.as_ref()
+    }
+
+    /// Returns the CANCEL requests to send.
+    pub fn cancels(&self) -> &[Request] {
+        &self.cancels
+    }
+
+    /// Consumes self and returns the forward action.
+    pub fn into_forward(self) -> Option<ResponseAction> {
+        self.forward
+    }
+
+    /// Consumes self and returns the CANCEL requests.
+    pub fn into_cancels(self) -> Vec<Request> {
+        self.cancels
+    }
 }
 
 /// Response to forward upstream.
 pub struct ResponseAction {
-    pub response: sip_core::Response,
+    response: sip_core::Response,
+}
+
+impl ResponseAction {
+    /// Returns a reference to the response.
+    pub fn response(&self) -> &sip_core::Response {
+        &self.response
+    }
+
+    /// Consumes self and returns the response.
+    pub fn into_response(self) -> sip_core::Response {
+        self.response
+    }
 }
 
 /// High-level proxy service that glues stateful proxy context with forwarding helpers.

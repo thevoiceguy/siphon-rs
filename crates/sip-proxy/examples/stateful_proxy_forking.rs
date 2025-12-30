@@ -153,9 +153,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!(
             "    [{}] {} (priority={}, q={})",
             i + 1,
-            target.uri.as_str(),
-            target.priority,
-            target.q_value
+            target.uri().as_str(),
+            target.priority(),
+            target.q_value()
         );
     }
     println!();
@@ -182,7 +182,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Prepare forwarded request
         let (_forwarded, branch_id) = forwarding::prepare_forward(
             &invite,
-            &target.uri,
+            target.uri(),
             "proxy.example.com",
             "UDP",
             true, // add Record-Route
@@ -192,18 +192,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!(
             "  [Branch {}] Forwarded to {} (branch={})",
             i + 1,
-            target.uri.as_str(),
+            target.uri().as_str(),
             branch_id
         );
 
         // Add branch to context
-        let branch_info = BranchInfo {
-            branch_id: branch_id.clone(),
-            target: target.uri.clone(),
-            created_at: std::time::Instant::now(),
-            state: BranchState::Trying,
-            best_response: None,
-        };
+        let branch_info = BranchInfo::new(
+            branch_id.clone(),
+            target.uri().clone(),
+            std::time::Instant::now(),
+            BranchState::Trying,
+        );
         context.add_branch(branch_info).await;
         branch_ids.push(branch_id);
     }
