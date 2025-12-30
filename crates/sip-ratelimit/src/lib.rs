@@ -21,7 +21,10 @@
 //! use sip_ratelimit::{RateLimiter, RateLimitConfig};
 //!
 //! // Configure rate limiter: 10 requests per minute with burst of 20
-//! let config = RateLimitConfig::new(10, 60).with_burst_capacity(20).unwrap();
+//! let config = RateLimitConfig::new(10, 60)
+//!     .unwrap()
+//!     .with_burst_capacity(20)
+//!     .unwrap();
 //! let limiter = RateLimiter::new(config);
 //!
 //! // Check if request is allowed
