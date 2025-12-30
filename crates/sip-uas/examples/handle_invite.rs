@@ -140,11 +140,11 @@ a=rtpmap:0 PCMU/8000
 
             println!("\n--- Dialog Created ---");
             println!("Dialog ID:");
-            println!("  Call-ID: {}", dialog.id.call_id);
-            println!("  Local tag: {}", dialog.id.local_tag);
-            println!("  Remote tag: {}", dialog.id.remote_tag);
-            println!("Dialog state: {:?}", dialog.state);
-            println!("Remote target: {}", dialog.remote_target.as_str());
+            println!("  Call-ID: {}", dialog.id().call_id());
+            println!("  Local tag: {}", dialog.id().local_tag());
+            println!("  Remote tag: {}", dialog.id().remote_tag());
+            println!("Dialog state: {:?}", dialog.state());
+            println!("Remote target: {}", dialog.remote_target().as_str());
         }
         Err(e) => {
             println!("Error accepting invite: {}", e);

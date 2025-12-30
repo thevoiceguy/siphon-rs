@@ -69,7 +69,7 @@ impl SdpAnswerGenerator for SimpleSdpGenerator {
             )
             .build();
 
-        println!("Generated SDP answer for dialog {}", dialog.id.call_id);
+        println!("Generated SDP answer for dialog {}", dialog.id().call_id());
         Ok(answer)
     }
 }

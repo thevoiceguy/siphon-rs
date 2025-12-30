@@ -439,7 +439,7 @@ mod tests {
     #[tokio::test]
     async fn start_and_stop_timer() {
         let manager = SessionTimerManager::new();
-        let dialog_id = DialogId::new("call-1", "tag1", "tag2");
+        let dialog_id = DialogId::test("call-1", "tag1", "tag2");
 
         assert!(!manager.has_timer(&dialog_id));
 
@@ -455,7 +455,7 @@ mod tests {
     #[tokio::test]
     async fn time_remaining_calculation() {
         let manager = SessionTimerManager::new();
-        let dialog_id = DialogId::new("call-1", "tag1", "tag2");
+        let dialog_id = DialogId::test("call-1", "tag1", "tag2");
 
         manager.start_timer(dialog_id.clone(), Duration::from_secs(100), true);
 
@@ -467,7 +467,7 @@ mod tests {
     #[tokio::test]
     async fn refresh_timer_replaces_existing() {
         let manager = SessionTimerManager::new();
-        let dialog_id = DialogId::new("call-1", "tag1", "tag2");
+        let dialog_id = DialogId::test("call-1", "tag1", "tag2");
 
         manager.start_timer(dialog_id.clone(), Duration::from_secs(10), true);
 
@@ -489,7 +489,7 @@ mod tests {
     #[tokio::test]
     async fn refresh_event_emitted_for_refresher() {
         let manager = SessionTimerManager::new();
-        let dialog_id = DialogId::new("call-1", "tag1", "tag2");
+        let dialog_id = DialogId::test("call-1", "tag1", "tag2");
 
         let mut events = manager.subscribe().await;
 
@@ -508,7 +508,7 @@ mod tests {
     #[tokio::test]
     async fn expiration_event_emitted() {
         let manager = SessionTimerManager::new();
-        let dialog_id = DialogId::new("call-1", "tag1", "tag2");
+        let dialog_id = DialogId::test("call-1", "tag1", "tag2");
 
         let mut events = manager.subscribe().await;
 
@@ -530,7 +530,7 @@ mod tests {
     #[tokio::test]
     async fn both_refresh_and_expiration_events_for_refresher() {
         let manager = SessionTimerManager::new();
-        let dialog_id = DialogId::new("call-1", "tag1", "tag2");
+        let dialog_id = DialogId::test("call-1", "tag1", "tag2");
 
         let mut events = manager.subscribe().await;
 
@@ -557,17 +557,17 @@ mod tests {
         let manager = SessionTimerManager::new();
 
         manager.start_timer(
-            DialogId::new("call-1", "t1", "t2"),
+            DialogId::test("call-1", "t1", "t2"),
             Duration::from_secs(100),
             true,
         );
         manager.start_timer(
-            DialogId::new("call-2", "t3", "t4"),
+            DialogId::test("call-2", "t3", "t4"),
             Duration::from_secs(100),
             true,
         );
         manager.start_timer(
-            DialogId::new("call-3", "t5", "t6"),
+            DialogId::test("call-3", "t5", "t6"),
             Duration::from_secs(100),
             true,
         );

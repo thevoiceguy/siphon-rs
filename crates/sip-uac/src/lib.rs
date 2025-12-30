@@ -775,7 +775,7 @@ impl UserAgentClient {
         let from = format!(
             "<{}>;tag={}",
             self.local_uri.as_str(),
-            dialog.id.local_tag.as_str()
+            dialog.id().local_tag()
         );
         headers
             .push(SmolStr::new("From"), SmolStr::new(from))
@@ -784,14 +784,14 @@ impl UserAgentClient {
         // To (with remote tag)
         let to = format!(
             "<{}>;tag={}",
-            dialog.remote_uri.as_str(),
-            dialog.id.remote_tag.as_str()
+            dialog.remote_uri().as_str(),
+            dialog.id().remote_tag()
         );
         headers.push(SmolStr::new("To"), SmolStr::new(to)).unwrap();
 
         // Call-ID
         headers
-            .push(SmolStr::new("Call-ID"), dialog.id.call_id.clone())
+            .push(SmolStr::new("Call-ID"), dialog.id().call_id().clone())
             .unwrap();
 
         // CSeq (next local CSeq)
@@ -812,7 +812,7 @@ impl UserAgentClient {
             .unwrap();
 
         // Request-URI is the remote target
-        let request_uri = dialog.remote_target.clone();
+        let request_uri = dialog.remote_target().clone();
 
         Request::new(
             RequestLine::new(Method::Bye, request_uri),
@@ -848,13 +848,13 @@ impl UserAgentClient {
                 "\"{}\" <{}>;tag={}",
                 display,
                 self.local_uri.as_str(),
-                dialog.id.local_tag.as_str()
+                dialog.id().local_tag()
             )
         } else {
             format!(
                 "<{}>;tag={}",
                 self.local_uri.as_str(),
-                dialog.id.local_tag.as_str()
+                dialog.id().local_tag()
             )
         };
         headers
@@ -864,14 +864,14 @@ impl UserAgentClient {
         // To (with remote tag)
         let to = format!(
             "<{}>;tag={}",
-            dialog.remote_uri.as_str(),
-            dialog.id.remote_tag.as_str()
+            dialog.remote_uri().as_str(),
+            dialog.id().remote_tag()
         );
         headers.push(SmolStr::new("To"), SmolStr::new(to)).unwrap();
 
         // Call-ID
         headers
-            .push(SmolStr::new("Call-ID"), dialog.id.call_id.clone())
+            .push(SmolStr::new("Call-ID"), dialog.id().call_id().clone())
             .unwrap();
 
         // CSeq (next local CSeq)
@@ -928,7 +928,7 @@ impl UserAgentClient {
         };
 
         // Request-URI is the remote target
-        let request_uri = dialog.remote_target.clone();
+        let request_uri = dialog.remote_target().clone();
 
         Request::new(RequestLine::new(Method::Invite, request_uri), headers, body)
             .expect("valid re-INVITE request")
@@ -960,13 +960,13 @@ impl UserAgentClient {
                 "\"{}\" <{}>;tag={}",
                 display,
                 self.local_uri.as_str(),
-                dialog.id.local_tag.as_str()
+                dialog.id().local_tag()
             )
         } else {
             format!(
                 "<{}>;tag={}",
                 self.local_uri.as_str(),
-                dialog.id.local_tag.as_str()
+                dialog.id().local_tag()
             )
         };
         headers
@@ -976,14 +976,14 @@ impl UserAgentClient {
         // To (with remote tag)
         let to = format!(
             "<{}>;tag={}",
-            dialog.remote_uri.as_str(),
-            dialog.id.remote_tag.as_str()
+            dialog.remote_uri().as_str(),
+            dialog.id().remote_tag()
         );
         headers.push(SmolStr::new("To"), SmolStr::new(to)).unwrap();
 
         // Call-ID
         headers
-            .push(SmolStr::new("Call-ID"), dialog.id.call_id.clone())
+            .push(SmolStr::new("Call-ID"), dialog.id().call_id().clone())
             .unwrap();
 
         // CSeq (next local CSeq)
@@ -1040,7 +1040,7 @@ impl UserAgentClient {
         };
 
         // Request-URI is the remote target
-        let request_uri = dialog.remote_target.clone();
+        let request_uri = dialog.remote_target().clone();
 
         Request::new(RequestLine::new(Method::Update, request_uri), headers, body)
             .expect("valid UPDATE request")
@@ -1243,7 +1243,7 @@ impl UserAgentClient {
         let from = format!(
             "<{}>;tag={}",
             self.local_uri.as_str(),
-            dialog.id.local_tag.as_str()
+            dialog.id().local_tag()
         );
         headers
             .push(SmolStr::new("From"), SmolStr::new(from))
@@ -1252,14 +1252,14 @@ impl UserAgentClient {
         // To (with remote tag)
         let to = format!(
             "<{}>;tag={}",
-            dialog.remote_uri.as_str(),
-            dialog.id.remote_tag.as_str()
+            dialog.remote_uri().as_str(),
+            dialog.id().remote_tag()
         );
         headers.push(SmolStr::new("To"), SmolStr::new(to)).unwrap();
 
         // Call-ID
         headers
-            .push(SmolStr::new("Call-ID"), dialog.id.call_id.clone())
+            .push(SmolStr::new("Call-ID"), dialog.id().call_id().clone())
             .unwrap();
 
         // CSeq (next local CSeq)
@@ -1288,7 +1288,7 @@ impl UserAgentClient {
             .unwrap();
 
         // Request-URI is the remote target
-        let request_uri = dialog.remote_target.clone();
+        let request_uri = dialog.remote_target().clone();
 
         Request::new(
             RequestLine::new(Method::Info, request_uri),
@@ -1639,13 +1639,13 @@ impl UserAgentClient {
                 "\"{}\" <{}>;tag={}",
                 display,
                 self.local_uri.as_str(),
-                dialog.id.local_tag.as_str()
+                dialog.id().local_tag()
             )
         } else {
             format!(
                 "<{}>;tag={}",
                 self.local_uri.as_str(),
-                dialog.id.local_tag.as_str()
+                dialog.id().local_tag()
             )
         };
         headers
@@ -1655,14 +1655,14 @@ impl UserAgentClient {
         // To (with remote tag from provisional response)
         let to = format!(
             "<{}>;tag={}",
-            dialog.remote_uri.as_str(),
-            dialog.id.remote_tag.as_str()
+            dialog.remote_uri().as_str(),
+            dialog.id().remote_tag()
         );
         headers.push(SmolStr::new("To"), SmolStr::new(to)).unwrap();
 
         // Call-ID
         headers
-            .push(SmolStr::new("Call-ID"), dialog.id.call_id.clone())
+            .push(SmolStr::new("Call-ID"), dialog.id().call_id().clone())
             .unwrap();
 
         // CSeq (next local CSeq for PRACK)
@@ -1699,7 +1699,7 @@ impl UserAgentClient {
             .unwrap();
 
         // Request-URI is the remote target (Contact from provisional response)
-        let request_uri = dialog.remote_target.clone();
+        let request_uri = dialog.remote_target().clone();
 
         Ok(Request::new(
             RequestLine::new(Method::Prack, request_uri),
@@ -1729,13 +1729,13 @@ impl UserAgentClient {
         )?;
 
         info!(
-            call_id = %dialog.id.call_id,
-            state = ?dialog.state,
+            call_id = %dialog.id().call_id(),
+            state = ?dialog.state(),
             "UAC created dialog"
         );
 
         // Store in dialog manager or update existing dialog
-        if let Some(mut existing) = self.dialog_manager.get(&dialog.id) {
+        if let Some(mut existing) = self.dialog_manager.get(dialog.id()) {
             existing.update_from_response(response);
             self.dialog_manager.insert(existing.clone());
             return Some(existing);
@@ -1854,8 +1854,8 @@ impl UserAgentClient {
         )?;
 
         info!(
-            call_id = %subscription.id.call_id,
-            event = %subscription.id.event,
+            call_id = %subscription.id().call_id(),
+            event = %subscription.id().event(),
             "UAC created subscription"
         );
 
@@ -1895,7 +1895,7 @@ impl UserAgentClient {
         let from = format!(
             "<{}>;tag={}",
             self.local_uri.as_str(),
-            subscription.id.to_tag.as_str()
+            subscription.id().to_tag()
         );
         headers
             .push(SmolStr::new("From"), SmolStr::new(from))
@@ -1904,18 +1904,18 @@ impl UserAgentClient {
         // To
         let to = format!(
             "<{}>;tag={}",
-            subscription.remote_uri.as_str(),
-            subscription.id.from_tag.as_str()
+            subscription.remote_uri().as_str(),
+            subscription.id().from_tag()
         );
         headers.push(SmolStr::new("To"), SmolStr::new(to)).unwrap();
 
         // Call-ID
         headers
-            .push(SmolStr::new("Call-ID"), subscription.id.call_id.clone())
+            .push(SmolStr::new("Call-ID"), subscription.id().call_id().clone())
             .unwrap();
 
         // CSeq (use subscription's CSeq)
-        let cseq = subscription.local_cseq + 1;
+        let cseq = subscription.local_cseq() + 1;
         headers
             .push(
                 SmolStr::new("CSeq"),
@@ -1933,7 +1933,7 @@ impl UserAgentClient {
 
         // Event
         headers
-            .push(SmolStr::new("Event"), subscription.id.event.clone())
+            .push(SmolStr::new("Event"), subscription.id().event().clone())
             .unwrap();
 
         // Subscription-State
@@ -1970,7 +1970,7 @@ impl UserAgentClient {
         };
 
         Request::new(
-            RequestLine::new(Method::Notify, subscription.contact.clone()),
+            RequestLine::new(Method::Notify, subscription.contact().clone()),
             headers,
             request_body,
         )
@@ -2100,7 +2100,7 @@ impl UserAgentClient {
         let from = format!(
             "<{}>;tag={}",
             self.local_uri.as_str(),
-            subscription.id.to_tag.as_str()
+            subscription.id().to_tag()
         );
         headers
             .push(SmolStr::new("From"), SmolStr::new(from))
@@ -2109,18 +2109,18 @@ impl UserAgentClient {
         // To
         let to = format!(
             "<{}>;tag={}",
-            subscription.remote_uri.as_str(),
-            subscription.id.from_tag.as_str()
+            subscription.remote_uri().as_str(),
+            subscription.id().from_tag()
         );
         headers.push(SmolStr::new("To"), SmolStr::new(to)).unwrap();
 
         // Call-ID
         headers
-            .push(SmolStr::new("Call-ID"), subscription.id.call_id.clone())
+            .push(SmolStr::new("Call-ID"), subscription.id().call_id().clone())
             .unwrap();
 
         // CSeq (use subscription's CSeq)
-        let cseq = subscription.local_cseq + 1;
+        let cseq = subscription.local_cseq() + 1;
         headers
             .push(
                 SmolStr::new("CSeq"),
@@ -2172,7 +2172,7 @@ impl UserAgentClient {
             .unwrap();
 
         Request::new(
-            RequestLine::new(Method::Notify, subscription.contact.clone()),
+            RequestLine::new(Method::Notify, subscription.contact().clone()),
             headers,
             Bytes::from(body.into_bytes()),
         )
@@ -2208,7 +2208,7 @@ impl UserAgentClient {
         let from = format!(
             "<{}>;tag={}",
             self.local_uri.as_str(),
-            dialog.id.local_tag.as_str()
+            dialog.id().local_tag()
         );
         headers
             .push(SmolStr::new("From"), SmolStr::new(from))
@@ -2217,14 +2217,14 @@ impl UserAgentClient {
         // To (with remote tag from dialog)
         let to = format!(
             "<{}>;tag={}",
-            dialog.remote_uri.as_str(),
-            dialog.id.remote_tag.as_str()
+            dialog.remote_uri().as_str(),
+            dialog.id().remote_tag()
         );
         headers.push(SmolStr::new("To"), SmolStr::new(to)).unwrap();
 
         // Call-ID (same as dialog)
         headers
-            .push(SmolStr::new("Call-ID"), dialog.id.call_id.clone())
+            .push(SmolStr::new("Call-ID"), dialog.id().call_id().clone())
             .unwrap();
 
         // CSeq (next in dialog)
@@ -2264,7 +2264,7 @@ impl UserAgentClient {
             .unwrap();
 
         Request::new(
-            RequestLine::new(Method::Refer, dialog.remote_target.clone()),
+            RequestLine::new(Method::Refer, dialog.remote_target().clone()),
             headers,
             Bytes::new(),
         )
@@ -2293,9 +2293,9 @@ impl UserAgentClient {
         // Build Replaces parameter: call-id;to-tag=X;from-tag=Y
         let replaces = format!(
             "{};to-tag={};from-tag={}",
-            urlencoding::encode(&target_dialog.id.call_id),
-            urlencoding::encode(&target_dialog.id.remote_tag),
-            urlencoding::encode(&target_dialog.id.local_tag)
+            urlencoding::encode(&target_dialog.id().call_id()),
+            urlencoding::encode(&target_dialog.id().remote_tag()),
+            urlencoding::encode(&target_dialog.id().local_tag())
         );
 
         // Create Refer-To with Replaces parameter
@@ -2316,7 +2316,7 @@ impl UserAgentClient {
         let from = format!(
             "<{}>;tag={}",
             self.local_uri.as_str(),
-            dialog.id.local_tag.as_str()
+            dialog.id().local_tag()
         );
         headers
             .push(SmolStr::new("From"), SmolStr::new(from))
@@ -2325,14 +2325,14 @@ impl UserAgentClient {
         // To (with remote tag from dialog)
         let to = format!(
             "<{}>;tag={}",
-            dialog.remote_uri.as_str(),
-            dialog.id.remote_tag.as_str()
+            dialog.remote_uri().as_str(),
+            dialog.id().remote_tag()
         );
         headers.push(SmolStr::new("To"), SmolStr::new(to)).unwrap();
 
         // Call-ID (same as dialog)
         headers
-            .push(SmolStr::new("Call-ID"), dialog.id.call_id.clone())
+            .push(SmolStr::new("Call-ID"), dialog.id().call_id().clone())
             .unwrap();
 
         // CSeq (next in dialog)
@@ -2380,7 +2380,7 @@ impl UserAgentClient {
             .unwrap();
 
         Request::new(
-            RequestLine::new(Method::Refer, dialog.remote_target.clone()),
+            RequestLine::new(Method::Refer, dialog.remote_target().clone()),
             headers,
             Bytes::new(),
         )
@@ -2748,7 +2748,7 @@ mod tests {
         let registrar_uri = SipUri::parse("sip:example.com").unwrap();
         let request = uac.create_register(&registrar_uri, 3600);
 
-        assert_eq!(request.method().as_str(), Method::Register.as_str());
+        assert_eq!(request.method(), &Method::Register);
         assert!(request.headers().get("From").is_some());
         assert!(request.headers().get("To").is_some());
         assert!(request.headers().get("Call-ID").is_some());
@@ -2785,7 +2785,7 @@ mod tests {
         let target_uri = SipUri::parse("sip:bob@example.com").unwrap();
         let request = uac.create_invite(&target_uri, None);
 
-        assert_eq!(request.method().as_str(), Method::Invite.as_str());
+        assert_eq!(request.method(), &Method::Invite);
         assert!(request.headers().get("From").is_some());
         assert!(request.headers().get("To").is_some());
         assert!(request.headers().get("Contact").is_some());
@@ -2943,7 +2943,7 @@ mod tests {
         // Create ACK without SDP (early offer - answer was in 200 OK)
         let ack = uac.create_ack(&invite, &response, None);
 
-        assert_eq!(ack.method().as_str(), Method::Ack.as_str());
+        assert_eq!(ack.method(), &Method::Ack);
         assert_eq!(ack.body().len(), 0);
         assert_eq!(ack.headers().get("Content-Length").unwrap(), "0");
         assert!(ack.headers().get("Content-Type").is_none());
@@ -3005,7 +3005,7 @@ mod tests {
         let sdp_answer = "v=0\r\no=- 345 678 IN IP4 192.168.1.100\r\n";
         let ack = uac.create_ack(&invite, &response, Some(sdp_answer));
 
-        assert_eq!(ack.method().as_str(), Method::Ack.as_str());
+        assert_eq!(ack.method(), &Method::Ack);
         assert_eq!(ack.body().len(), sdp_answer.len());
         assert_eq!(
             ack.headers().get("Content-Type").unwrap(),
@@ -3027,7 +3027,7 @@ mod tests {
         let target_uri = SipUri::parse("sip:bob@example.com").unwrap();
         let request = uac.create_subscribe(&target_uri, "refer", 3600);
 
-        assert_eq!(request.method().as_str(), Method::Subscribe.as_str());
+        assert_eq!(request.method(), &Method::Subscribe);
         assert_eq!(request.headers().get("Event").unwrap(), "refer");
         assert_eq!(request.headers().get("Expires").unwrap(), "3600");
         assert!(request.headers().get("Contact").is_some());
@@ -3090,7 +3090,7 @@ mod tests {
         let transfer_target = SipUri::parse("sip:charlie@example.com").unwrap();
         let refer = uac.create_refer(&dialog, &transfer_target);
 
-        assert_eq!(refer.method().as_str(), Method::Refer.as_str());
+        assert_eq!(refer.method(), &Method::Refer);
         assert!(refer
             .headers()
             .get("Refer-To")
@@ -3182,7 +3182,7 @@ mod tests {
         let transfer_target = SipUri::parse("sip:charlie@example.com").unwrap();
         let refer = uac.create_refer_with_replaces(&dialog1, &transfer_target, &dialog2);
 
-        assert_eq!(refer.method().as_str(), Method::Refer.as_str());
+        assert_eq!(refer.method(), &Method::Refer);
         let refer_to = refer.headers().get("Refer-To").unwrap();
         assert!(refer_to.contains("charlie@example.com"));
         assert!(refer_to.contains("Replaces="));
@@ -3258,7 +3258,7 @@ mod tests {
         // Create NOTIFY
         let notify = uac.create_notify(&subscription, SubscriptionState::Active, Some("test body"));
 
-        assert_eq!(notify.method().as_str(), Method::Notify.as_str());
+        assert_eq!(notify.method(), &Method::Notify);
         assert_eq!(notify.headers().get("Event").unwrap(), "refer");
         assert_eq!(
             notify.headers().get("Subscription-State").unwrap(),
@@ -3284,25 +3284,22 @@ mod tests {
         let invite = uac.create_invite(&remote_uri, Some("v=0\r\n"));
 
         // Mock dialog (early dialog from 180 Ringing)
-        let dialog = Dialog {
-            id: DialogId {
-                call_id: "test-call-id".into(),
-                local_tag: "alice-tag".into(),
-                remote_tag: "bob-tag".into(),
-            },
-            state: DialogStateType::Early,
-            local_uri: local_uri.clone(),
-            remote_uri: remote_uri.clone(),
-            remote_target: SipUri::parse("sip:bob@192.168.1.200:5060").unwrap(),
-            local_cseq: 1,
-            remote_cseq: 0,
-            last_ack_cseq: None,
-            route_set: vec![],
-            secure: false,
-            session_expires: Some(Duration::from_secs(1800)),
-            refresher: Some(RefresherRole::Uac),
-            is_uac: true,
-        };
+        let dialog_id = DialogId::unchecked_new("test-call-id", "alice-tag", "bob-tag");
+        let dialog = Dialog::unchecked_new(
+            dialog_id,
+            DialogStateType::Early,
+            local_uri.clone(),
+            remote_uri.clone(),
+            SipUri::parse("sip:bob@192.168.1.200:5060").unwrap(),
+            1,  // local_cseq
+            0,  // remote_cseq
+            None,  // last_ack_cseq
+            vec![],  // route_set
+            false,  // secure
+            Some(Duration::from_secs(1800)),  // session_expires
+            Some(RefresherRole::Uac),  // refresher
+            true,  // is_uac
+        );
 
         // Create reliable provisional response (180 Ringing with RSeq)
         let mut prov_headers = Headers::new();
@@ -3354,7 +3351,7 @@ mod tests {
 
         // Verify PRACK request
         assert_eq!(prack.method(), &Method::Prack);
-        assert_eq!(prack.uri().as_str(), "sip:bob@192.168.1.200:5060");
+        assert_eq!(prack.uri().to_string(), "sip:bob@192.168.1.200:5060");
 
         // Verify RAck header: RSeq CSeq-number Method
         let rack = prack.headers().get("RAck").unwrap();
@@ -3383,33 +3380,30 @@ mod tests {
 
         // Mock dialog
         let remote_uri = SipUri::parse("sip:bob@example.com").unwrap();
-        let dialog = Dialog {
-            id: DialogId {
-                call_id: "test-call-id".into(),
-                local_tag: "alice-tag".into(),
-                remote_tag: "bob-tag".into(),
-            },
-            state: DialogStateType::Confirmed,
-            local_uri: local_uri.clone(),
-            remote_uri: remote_uri.clone(),
-            remote_target: SipUri::parse("sip:bob@192.168.1.200:5060").unwrap(),
-            local_cseq: 1,
-            remote_cseq: 0,
-            last_ack_cseq: None,
-            route_set: vec![],
-            secure: false,
-            session_expires: None,
-            refresher: None,
-            is_uac: true,
-        };
+        let dialog_id = DialogId::unchecked_new("test-call-id", "alice-tag", "bob-tag");
+        let dialog = Dialog::unchecked_new(
+            dialog_id,
+            DialogStateType::Confirmed,
+            local_uri.clone(),
+            remote_uri.clone(),
+            SipUri::parse("sip:bob@192.168.1.200:5060").unwrap(),
+            1,  // local_cseq
+            0,  // remote_cseq
+            None,  // last_ack_cseq
+            vec![],  // route_set
+            false,  // secure
+            None,  // session_expires
+            None,  // refresher
+            true,  // is_uac
+        );
 
         // Create INFO with DTMF payload
         let dtmf_body = "Signal=1\r\nDuration=100\r\n";
         let info = uac.create_info(&dialog, "application/dtmf-relay", dtmf_body);
 
         // Verify INFO request
-        assert_eq!(info.method().as_str(), Method::Info.as_str());
-        assert_eq!(info.uri().as_str(), "sip:bob@192.168.1.200:5060");
+        assert_eq!(info.method(), &Method::Info);
+        assert_eq!(info.uri().to_string(), "sip:bob@192.168.1.200:5060");
 
         // Verify headers
         assert!(info.headers().get("From").unwrap().contains("alice-tag"));
@@ -3447,32 +3441,29 @@ mod tests {
 
         // Mock dialog
         let remote_uri = SipUri::parse("sip:bob@example.com").unwrap();
-        let dialog = Dialog {
-            id: DialogId {
-                call_id: "test-call-id".into(),
-                local_tag: "alice-tag".into(),
-                remote_tag: "bob-tag".into(),
-            },
-            state: DialogStateType::Confirmed,
-            local_uri: local_uri.clone(),
-            remote_uri: remote_uri.clone(),
-            remote_target: SipUri::parse("sip:bob@192.168.1.200:5060").unwrap(),
-            local_cseq: 5,
-            remote_cseq: 0,
-            last_ack_cseq: None,
-            route_set: vec![],
-            secure: false,
-            session_expires: None,
-            refresher: None,
-            is_uac: true,
-        };
+        let dialog_id = DialogId::unchecked_new("test-call-id", "alice-tag", "bob-tag");
+        let dialog = Dialog::unchecked_new(
+            dialog_id,
+            DialogStateType::Confirmed,
+            local_uri.clone(),
+            remote_uri.clone(),
+            SipUri::parse("sip:bob@192.168.1.200:5060").unwrap(),
+            5,  // local_cseq
+            0,  // remote_cseq
+            None,  // last_ack_cseq
+            vec![],  // route_set
+            false,  // secure
+            None,  // session_expires
+            None,  // refresher
+            true,  // is_uac
+        );
 
         // Create INFO with JSON payload
         let json_body = r#"{"action":"mute","value":true}"#;
         let info = uac.create_info(&dialog, "application/json", json_body);
 
         // Verify method
-        assert_eq!(info.method().as_str(), Method::Info.as_str());
+        assert_eq!(info.method(), &Method::Info);
 
         // Verify Content-Type
         assert_eq!(
@@ -3549,7 +3540,7 @@ mod tests {
         // Verify Privacy header
         let privacy = private_invite.headers().get("Privacy").unwrap();
         assert_eq!(privacy, "header; session");
-        assert_eq!(private_invite.method().as_str(), Method::Invite.as_str());
+        assert_eq!(private_invite.method(), &Method::Invite);
     }
 
     #[test]
@@ -3567,7 +3558,7 @@ mod tests {
         UserAgentClient::add_privacy_header(&mut register, vec![PrivacyValue::Id]);
 
         // Verify
-        assert_eq!(register.method().as_str(), Method::Register.as_str());
+        assert_eq!(register.method(), &Method::Register);
         let privacy = register.headers().get("Privacy").unwrap();
         assert_eq!(privacy, "id");
     }
@@ -3584,25 +3575,22 @@ mod tests {
 
         // Mock dialog
         let remote_uri = SipUri::parse("sip:bob@example.com").unwrap();
-        let dialog = Dialog {
-            id: DialogId {
-                call_id: "test-call-id".into(),
-                local_tag: "alice-tag".into(),
-                remote_tag: "bob-tag".into(),
-            },
-            state: DialogStateType::Confirmed,
-            local_uri: local_uri.clone(),
-            remote_uri: remote_uri.clone(),
-            remote_target: SipUri::parse("sip:bob@192.168.1.200:5060").unwrap(),
-            local_cseq: 1,
-            remote_cseq: 0,
-            last_ack_cseq: None,
-            route_set: vec![],
-            secure: false,
-            session_expires: None,
-            refresher: None,
-            is_uac: true,
-        };
+        let dialog_id = DialogId::unchecked_new("test-call-id", "alice-tag", "bob-tag");
+        let dialog = Dialog::unchecked_new(
+            dialog_id,
+            DialogStateType::Confirmed,
+            local_uri.clone(),
+            remote_uri.clone(),
+            SipUri::parse("sip:bob@192.168.1.200:5060").unwrap(),
+            1,  // local_cseq
+            0,  // remote_cseq
+            None,  // last_ack_cseq
+            vec![],  // route_set
+            false,  // secure
+            None,  // session_expires
+            None,  // refresher
+            true,  // is_uac
+        );
 
         let mut bye = uac.create_bye(&dialog);
 
@@ -3630,33 +3618,30 @@ mod tests {
 
         // Mock dialog
         let remote_uri = SipUri::parse("sip:bob@example.com").unwrap();
-        let dialog = Dialog {
-            id: DialogId {
-                call_id: "test-call-id".into(),
-                local_tag: "alice-tag".into(),
-                remote_tag: "bob-tag".into(),
-            },
-            state: DialogStateType::Confirmed,
-            local_uri: local_uri.clone(),
-            remote_uri: remote_uri.clone(),
-            remote_target: SipUri::parse("sip:bob@192.168.1.200:5060").unwrap(),
-            local_cseq: 5,
-            remote_cseq: 0,
-            last_ack_cseq: None,
-            route_set: vec![],
-            secure: false,
-            session_expires: None,
-            refresher: None,
-            is_uac: true,
-        };
+        let dialog_id = DialogId::unchecked_new("test-call-id", "alice-tag", "bob-tag");
+        let dialog = Dialog::unchecked_new(
+            dialog_id,
+            DialogStateType::Confirmed,
+            local_uri.clone(),
+            remote_uri.clone(),
+            SipUri::parse("sip:bob@192.168.1.200:5060").unwrap(),
+            5,  // local_cseq
+            0,  // remote_cseq
+            None,  // last_ack_cseq
+            vec![],  // route_set
+            false,  // secure
+            None,  // session_expires
+            None,  // refresher
+            true,  // is_uac
+        );
 
         // Create BYE with reason
         let reason = ReasonHeader::q850(Q850Cause::UserBusy).unwrap();
         let bye = uac.create_bye_with_reason(&dialog, reason);
 
         // Verify BYE request
-        assert_eq!(bye.method().as_str(), Method::Bye.as_str());
-        assert_eq!(bye.uri().as_str(), "sip:bob@192.168.1.200:5060");
+        assert_eq!(bye.method(), &Method::Bye);
+        assert_eq!(bye.uri().to_string(), "sip:bob@192.168.1.200:5060");
 
         // Verify Reason header
         let reason_header = bye.headers().get("Reason").unwrap();
@@ -3680,32 +3665,29 @@ mod tests {
 
         // Mock dialog
         let remote_uri = SipUri::parse("sip:bob@example.com").unwrap();
-        let dialog = Dialog {
-            id: DialogId {
-                call_id: "test-call-id".into(),
-                local_tag: "alice-tag".into(),
-                remote_tag: "bob-tag".into(),
-            },
-            state: DialogStateType::Confirmed,
-            local_uri: local_uri.clone(),
-            remote_uri: remote_uri.clone(),
-            remote_target: SipUri::parse("sip:bob@192.168.1.200:5060").unwrap(),
-            local_cseq: 1,
-            remote_cseq: 0,
-            last_ack_cseq: None,
-            route_set: vec![],
-            secure: false,
-            session_expires: None,
-            refresher: None,
-            is_uac: true,
-        };
+        let dialog_id = DialogId::unchecked_new("test-call-id", "alice-tag", "bob-tag");
+        let dialog = Dialog::unchecked_new(
+            dialog_id,
+            DialogStateType::Confirmed,
+            local_uri.clone(),
+            remote_uri.clone(),
+            SipUri::parse("sip:bob@192.168.1.200:5060").unwrap(),
+            1,  // local_cseq
+            0,  // remote_cseq
+            None,  // last_ack_cseq
+            vec![],  // route_set
+            false,  // secure
+            None,  // session_expires
+            None,  // refresher
+            true,  // is_uac
+        );
 
         // Create BYE with SIP reason code
         let reason = ReasonHeader::sip(480, None).unwrap();
         let bye = uac.create_bye_with_reason(&dialog, reason);
 
         // Verify method
-        assert_eq!(bye.method().as_str(), Method::Bye.as_str());
+        assert_eq!(bye.method(), &Method::Bye);
 
         // Verify Reason header
         let reason_header = bye.headers().get("Reason").unwrap();
@@ -3731,7 +3713,7 @@ mod tests {
         UserAgentClient::add_reason_header(&mut invite, reason);
 
         // Verify
-        assert_eq!(invite.method().as_str(), Method::Invite.as_str());
+        assert_eq!(invite.method(), &Method::Invite);
         let reason_header = invite.headers().get("Reason").unwrap();
         assert_eq!(reason_header, "Q.850;cause=21;text=\"Call Rejected\"");
     }
@@ -3753,7 +3735,7 @@ mod tests {
         UserAgentClient::add_p_preferred_identity_header(&mut invite, ppi);
 
         // Verify
-        assert_eq!(invite.method().as_str(), Method::Invite.as_str());
+        assert_eq!(invite.method(), &Method::Invite);
         let ppi_header = invite.headers().get("P-Preferred-Identity").unwrap();
         assert!(ppi_header.contains("sip:alice.smith@company.com"));
     }
@@ -3774,7 +3756,7 @@ mod tests {
         UserAgentClient::add_p_preferred_identity_header(&mut invite, ppi);
 
         // Verify
-        assert_eq!(invite.method().as_str(), Method::Invite.as_str());
+        assert_eq!(invite.method(), &Method::Invite);
         let ppi_header = invite.headers().get("P-Preferred-Identity").unwrap();
         assert!(ppi_header.contains("tel:+15551234567"));
     }
@@ -3796,7 +3778,7 @@ mod tests {
         let invite = UserAgentClient::with_p_preferred_identity(invite, ppi);
 
         // Verify
-        assert_eq!(invite.method().as_str(), Method::Invite.as_str());
+        assert_eq!(invite.method(), &Method::Invite);
         let ppi_header = invite.headers().get("P-Preferred-Identity").unwrap();
         assert!(ppi_header.contains("sip:alice.smith@company.com"));
     }
@@ -3819,7 +3801,7 @@ mod tests {
         UserAgentClient::add_p_asserted_identity_header(&mut invite, pai);
 
         // Verify
-        assert_eq!(invite.method().as_str(), Method::Invite.as_str());
+        assert_eq!(invite.method(), &Method::Invite);
         let pai_header = invite.headers().get("P-Asserted-Identity").unwrap();
         assert!(pai_header.contains("sip:alice@example.com"));
         assert!(pai_header.contains("tel:+15551234567"));
@@ -3835,7 +3817,7 @@ mod tests {
         let target_uri = SipUri::parse("sip:bob@example.com").unwrap();
         let request = uac.create_message(&target_uri, "text/plain", "Hello, Bob!");
 
-        assert_eq!(request.method().as_str(), Method::Message.as_str());
+        assert_eq!(request.method(), &Method::Message);
         assert_eq!(request.body().len(), 11); // "Hello, Bob!" length
         assert!(request.headers().get("From").is_some());
         assert!(request.headers().get("To").is_some());
@@ -3872,7 +3854,7 @@ mod tests {
         let html_body = "<html><body><h1>Hello</h1></body></html>";
         let request = uac.create_message(&target_uri, "text/html", html_body);
 
-        assert_eq!(request.method().as_str(), Method::Message.as_str());
+        assert_eq!(request.method(), &Method::Message);
         assert_eq!(request.headers().get("Content-Type").unwrap(), "text/html");
         assert_eq!(request.body().len(), html_body.len());
         assert_eq!(String::from_utf8_lossy(request.body()), html_body);
@@ -3906,7 +3888,7 @@ mod tests {
             extra_headers,
         );
 
-        assert_eq!(request.method().as_str(), Method::Message.as_str());
+        assert_eq!(request.method(), &Method::Message);
         assert!(request.headers().get("Date").is_some());
         assert_eq!(
             request.headers().get("Date").unwrap(),
@@ -4278,25 +4260,22 @@ mod tests {
         let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
         let uac = UserAgentClient::new(local_uri.clone(), contact_uri);
 
-        let dialog = Dialog {
-            id: DialogId {
-                call_id: SmolStr::new("call-id"),
-                local_tag: SmolStr::new("ltag"),
-                remote_tag: SmolStr::new("rtag"),
-            },
-            state: DialogStateType::Confirmed,
-            remote_target: SipUri::parse("sip:bob@example.com").unwrap(),
-            route_set: vec![],
-            local_cseq: 4,
-            remote_cseq: 1,
-            last_ack_cseq: None,
+        let dialog_id = DialogId::unchecked_new("call-id", "ltag", "rtag");
+        let dialog = Dialog::unchecked_new(
+            dialog_id,
+            DialogStateType::Confirmed,
             local_uri,
-            remote_uri: SipUri::parse("sip:bob@example.com").unwrap(),
-            secure: false,
-            session_expires: Some(Duration::from_secs(60)),
-            refresher: None,
-            is_uac: true,
-        };
+            SipUri::parse("sip:bob@example.com").unwrap(),
+            SipUri::parse("sip:bob@example.com").unwrap(),
+            4,  // local_cseq
+            1,  // remote_cseq
+            None,  // last_ack_cseq
+            vec![],  // route_set
+            false,  // secure
+            Some(Duration::from_secs(60)),  // session_expires
+            None,  // refresher
+            true,  // is_uac
+        );
 
         let mut headers = Headers::new();
         headers
@@ -4334,7 +4313,7 @@ mod tests {
 
         assert_eq!(prack.method(), &Method::Prack);
         assert_eq!(prack.headers().get("RAck"), Some("42 7 INVITE"));
-        assert_eq!(prack.uri(), &Uri::from(dialog.remote_target));
+        assert_eq!(prack.uri(), &Uri::from(dialog.remote_target().clone()));
         assert!(prack.headers().get("CSeq").unwrap().contains("PRACK"));
     }
 

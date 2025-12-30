@@ -373,8 +373,8 @@ impl UserAgentServer {
             .ok_or_else(|| anyhow!("Failed to create dialog"))?;
 
         info!(
-            call_id = %dialog.id.call_id,
-            state = ?dialog.state,
+            call_id = %dialog.id().call_id(),
+            state = ?dialog.state(),
             "UAS created dialog"
         );
 
@@ -415,10 +415,10 @@ impl UserAgentServer {
         validate_dialog_request(request, dialog)?;
 
         // Remove dialog from manager
-        self.dialog_manager.remove(&dialog.id);
+        self.dialog_manager.remove(dialog.id());
 
         info!(
-            call_id = %dialog.id.call_id,
+            call_id = %dialog.id().call_id(),
             "UAS terminated dialog"
         );
 
@@ -472,7 +472,7 @@ impl UserAgentServer {
         validate_dialog_request(request, dialog)?;
 
         info!(
-            call_id = %dialog.id.call_id,
+            call_id = %dialog.id().call_id(),
             content_type = ?header(request.headers(), "Content-Type"),
             body_len = request.body().len(),
             "UAS received INFO request"
@@ -581,8 +581,8 @@ impl UserAgentServer {
                 .ok_or_else(|| anyhow!("Failed to create subscription"))?;
 
         info!(
-            call_id = %subscription.id.call_id,
-            event = %subscription.id.event,
+            call_id = %subscription.id().call_id(),
+            event = %subscription.id().event(),
             "UAS created subscription"
         );
 
@@ -638,7 +638,7 @@ impl UserAgentServer {
         let from = format!(
             "<{}>;tag={}",
             self.local_uri.as_str(),
-            subscription.id.to_tag.as_str()
+            subscription.id().to_tag()
         );
         headers
             .push(SmolStr::new("From"), SmolStr::new(from))
@@ -647,19 +647,18 @@ impl UserAgentServer {
         // To (subscriber, use From tag from subscription)
         let to = format!(
             "<{}>;tag={}",
-            subscription.remote_uri.as_str(),
-            subscription.id.from_tag.as_str()
+            subscription.remote_uri().as_str(),
+            subscription.id().from_tag()
         );
         headers.push(SmolStr::new("To"), SmolStr::new(to)).unwrap();
 
         // Call-ID
         headers
-            .push(SmolStr::new("Call-ID"), subscription.id.call_id.clone())
+            .push(SmolStr::new("Call-ID"), subscription.id().call_id().clone())
             .unwrap();
 
         // CSeq
-        subscription.local_cseq = subscription.local_cseq.saturating_add(1);
-        let cseq = subscription.local_cseq;
+        let cseq = subscription.next_local_cseq();
         headers
             .push(
                 SmolStr::new("CSeq"),
@@ -677,7 +676,7 @@ impl UserAgentServer {
 
         // Event (should be "refer")
         headers
-            .push(SmolStr::new("Event"), subscription.id.event.clone())
+            .push(SmolStr::new("Event"), subscription.id().event().clone())
             .unwrap();
 
         // Subscription-State (terminated after final response)
@@ -715,7 +714,7 @@ impl UserAgentServer {
             .unwrap();
 
         Request::new(
-            RequestLine::new(Method::Notify, subscription.contact.clone()),
+            RequestLine::new(Method::Notify, subscription.contact().clone()),
             headers,
             Bytes::from(sipfrag_body.as_bytes().to_vec()),
         )
@@ -766,7 +765,7 @@ impl UserAgentServer {
         self.ensure_to_tag(&mut response);
 
         info!(
-            call_id = %dialog.id.call_id,
+            call_id = %dialog.id().call_id(),
             refer_to = %refer_to,
             "UAS accepted REFER request"
         );
@@ -817,7 +816,7 @@ impl UserAgentServer {
         let mut response = Self::create_response(request, code, reason);
 
         // Add RSeq header
-        let rseq = self.rseq_manager.next_rseq(&dialog.id);
+        let rseq = self.rseq_manager.next_rseq(dialog.id());
         response
             .headers_mut()
             .push(SmolStr::new("RSeq"), SmolStr::new(rseq.to_string()))
@@ -845,7 +844,7 @@ impl UserAgentServer {
             if let Some(cseq_num) = cseq.split_whitespace().next() {
                 if let Ok(cseq_num) = cseq_num.parse::<u32>() {
                     self.prack_validator.register_reliable_provisional(
-                        &dialog_id_key(&dialog.id),
+                        &dialog_id_key(dialog.id()),
                         rseq,
                         cseq_num,
                         request.method().clone(),
@@ -902,7 +901,7 @@ impl UserAgentServer {
 
         if let Err(err) = self
             .prack_validator
-            .validate_prack(&dialog_id_key(&dialog.id), request)
+            .validate_prack(&dialog_id_key(dialog.id()), request)
         {
             let err_msg = err.to_string();
             // RFC 3262 §4: Return 400 for malformed/invalid RAck, 481 for no dialog/transaction
@@ -920,7 +919,7 @@ impl UserAgentServer {
         }
 
         info!(
-            call_id = %dialog.id.call_id,
+            call_id = %dialog.id().call_id(),
             "UAS received PRACK"
         );
 
@@ -1026,13 +1025,13 @@ fn extract_tag_param(value: &SmolStr) -> Option<SmolStr> {
 
 /// Builds a stable dialog key for PRACK tracking.
 fn dialog_id_key(id: &sip_dialog::DialogId) -> String {
-    format!("{}:{}:{}", id.call_id, id.local_tag, id.remote_tag)
+    format!("{}:{}:{}", id.call_id(), id.local_tag(), id.remote_tag())
 }
 
 /// Validates that a request matches the dialog's Call-ID and tags.
 fn validate_dialog_request(request: &Request, dialog: &Dialog) -> Result<()> {
     let call_id = header(request.headers(), "Call-ID").ok_or_else(|| anyhow!("Missing Call-ID"))?;
-    if call_id != dialog.id.call_id.as_str() {
+    if call_id != dialog.id().call_id() {
         return Err(anyhow!("Call-ID mismatch"));
     }
 
@@ -1043,10 +1042,10 @@ fn validate_dialog_request(request: &Request, dialog: &Dialog) -> Result<()> {
     let from_tag = extract_tag_param(from_header).ok_or_else(|| anyhow!("Missing From tag"))?;
     let to_tag = extract_tag_param(to_header).ok_or_else(|| anyhow!("Missing To tag"))?;
 
-    if from_tag != dialog.id.remote_tag {
+    if from_tag != dialog.id().remote_tag() {
         return Err(anyhow!("From tag mismatch"));
     }
-    if to_tag != dialog.id.local_tag {
+    if to_tag != dialog.id().local_tag() {
         return Err(anyhow!("To tag mismatch"));
     }
 
@@ -1485,7 +1484,7 @@ mod tests {
 
         let (response, dialog) = result.unwrap();
         assert_eq!(response.code(), 200);
-        assert_eq!(dialog.id.call_id.as_str(), "test-call-id");
+        assert_eq!(dialog.id().call_id(), "test-call-id");
     }
 
     #[test]
@@ -1699,8 +1698,8 @@ mod tests {
         assert!(to_header.contains(";tag="));
 
         // Verify subscription
-        assert_eq!(subscription.id.call_id.as_str(), "test-call-id");
-        assert_eq!(subscription.id.event.as_str(), "refer");
+        assert_eq!(subscription.id().call_id(), "test-call-id");
+        assert_eq!(subscription.id().event(), "refer");
     }
 
     #[test]
@@ -1771,7 +1770,7 @@ mod tests {
                 SmolStr::new("To"),
                 SmolStr::new(format!(
                     "<sip:bob@example.com>;tag={}",
-                    dialog.id.local_tag.as_str()
+                    dialog.id().local_tag()
                 )),
             )
             .unwrap();
@@ -1821,21 +1820,22 @@ mod tests {
 
         // Create a mock subscription
         let remote_uri = SipUri::parse("sip:alice@example.com").unwrap();
-        let mut subscription = Subscription {
-            id: sip_dialog::SubscriptionId {
-                call_id: SmolStr::new("test-call-id"),
-                from_tag: SmolStr::new("abc123"),
-                to_tag: SmolStr::new("def456"),
-                event: SmolStr::new("refer"),
-            },
-            state: SubscriptionState::Active,
-            local_uri: local_uri.clone(),
-            remote_uri: remote_uri.clone(),
-            contact: remote_uri,
-            expires: Duration::from_secs(3600),
-            local_cseq: 1,
-            remote_cseq: 1,
-        };
+        let subscription_id = sip_dialog::SubscriptionId::unchecked_new(
+            "test-call-id",
+            "abc123",
+            "def456",
+            "refer",
+        );
+        let mut subscription = Subscription::unchecked_new(
+            subscription_id,
+            SubscriptionState::Active,
+            local_uri.clone(),
+            remote_uri.clone(),
+            remote_uri,
+            Duration::from_secs(3600),
+            1,  // local_cseq
+            1,  // remote_cseq
+        );
 
         // Test with 100 Trying (should be active)
         let notify_100 = uas.create_notify_sipfrag(&mut subscription, 100, "Trying");
@@ -1977,25 +1977,22 @@ mod tests {
 
         // Mock dialog
         let remote_uri = SipUri::parse("sip:alice@example.com").unwrap();
-        let dialog = Dialog {
-            id: DialogId {
-                call_id: "test-call-id".into(),
-                local_tag: "bob-tag".into(),
-                remote_tag: "alice-tag".into(),
-            },
-            state: DialogStateType::Early,
-            local_uri: local_uri.clone(),
+        let dialog_id = DialogId::unchecked_new("test-call-id", "bob-tag", "alice-tag");
+        let dialog = Dialog::unchecked_new(
+            dialog_id,
+            DialogStateType::Early,
+            local_uri.clone(),
             remote_uri,
-            remote_target: SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
-            local_cseq: 0,
-            remote_cseq: 1,
-            last_ack_cseq: None,
-            route_set: vec![],
-            secure: false,
-            session_expires: Some(Duration::from_secs(1800)),
-            refresher: Some(RefresherRole::Uas),
-            is_uac: false,
-        };
+            SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
+            0,  // local_cseq
+            1,  // remote_cseq
+            None,  // last_ack_cseq
+            vec![],  // route_set
+            false,  // secure
+            Some(Duration::from_secs(1800)),  // session_expires
+            Some(RefresherRole::Uas),  // refresher
+            false,  // is_uac
+        );
 
         // Create reliable provisional response (180 Ringing)
         let response = uas.create_reliable_provisional(&request, &dialog, 180, "Ringing", None);
@@ -2071,25 +2068,22 @@ mod tests {
 
         // Mock dialog
         let remote_uri = SipUri::parse("sip:alice@example.com").unwrap();
-        let dialog = Dialog {
-            id: DialogId {
-                call_id: "test-call-id".into(),
-                local_tag: "bob-tag".into(),
-                remote_tag: "alice-tag".into(),
-            },
-            state: DialogStateType::Early,
-            local_uri: local_uri.clone(),
+        let dialog_id = DialogId::unchecked_new("test-call-id", "bob-tag", "alice-tag");
+        let dialog = Dialog::unchecked_new(
+            dialog_id,
+            DialogStateType::Early,
+            local_uri.clone(),
             remote_uri,
-            remote_target: SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
-            local_cseq: 0,
-            remote_cseq: 1,
-            last_ack_cseq: None,
-            route_set: vec![],
-            secure: false,
-            session_expires: Some(Duration::from_secs(1800)),
-            refresher: Some(RefresherRole::Uas),
-            is_uac: false,
-        };
+            SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
+            0,  // local_cseq
+            1,  // remote_cseq
+            None,  // last_ack_cseq
+            vec![],  // route_set
+            false,  // secure
+            Some(Duration::from_secs(1800)),  // session_expires
+            Some(RefresherRole::Uas),  // refresher
+            false,  // is_uac
+        );
 
         let _provisional =
             uas.create_reliable_provisional(&invite_request, &dialog, 180, "Ringing", None);
@@ -2380,25 +2374,22 @@ mod tests {
 
         // Mock dialog
         let remote_uri = SipUri::parse("sip:alice@example.com").unwrap();
-        let dialog = Dialog {
-            id: DialogId {
-                call_id: "test-call-id".into(),
-                local_tag: "bob-tag".into(),
-                remote_tag: "alice-tag".into(),
-            },
-            state: DialogStateType::Confirmed,
-            local_uri: local_uri.clone(),
+        let dialog_id = DialogId::unchecked_new("test-call-id", "bob-tag", "alice-tag");
+        let dialog = Dialog::unchecked_new(
+            dialog_id,
+            DialogStateType::Confirmed,
+            local_uri.clone(),
             remote_uri,
-            remote_target: SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
-            local_cseq: 0,
-            remote_cseq: 1,
-            last_ack_cseq: None,
-            route_set: vec![],
-            secure: false,
-            session_expires: None,
-            refresher: None,
-            is_uac: false,
-        };
+            SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
+            0,  // local_cseq
+            1,  // remote_cseq
+            None,  // last_ack_cseq
+            vec![],  // route_set
+            false,  // secure
+            None,  // session_expires
+            None,  // refresher
+            false,  // is_uac
+        );
 
         // Create INFO request with DTMF payload
         let mut headers = Headers::new();
@@ -2473,25 +2464,22 @@ mod tests {
 
         // Mock dialog
         let remote_uri = SipUri::parse("sip:alice@example.com").unwrap();
-        let dialog = Dialog {
-            id: DialogId {
-                call_id: "call-123".into(),
-                local_tag: "bob-tag".into(),
-                remote_tag: "alice-tag".into(),
-            },
-            state: DialogStateType::Confirmed,
-            local_uri: local_uri.clone(),
+        let dialog_id = DialogId::unchecked_new("call-123", "bob-tag", "alice-tag");
+        let dialog = Dialog::unchecked_new(
+            dialog_id,
+            DialogStateType::Confirmed,
+            local_uri.clone(),
             remote_uri,
-            remote_target: SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
-            local_cseq: 0,
-            remote_cseq: 5,
-            last_ack_cseq: None,
-            route_set: vec![],
-            secure: false,
-            session_expires: None,
-            refresher: None,
-            is_uac: false,
-        };
+            SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
+            0,  // local_cseq
+            5,  // remote_cseq
+            None,  // last_ack_cseq
+            vec![],  // route_set
+            false,  // secure
+            None,  // session_expires
+            None,  // refresher
+            false,  // is_uac
+        );
 
         // Create INFO request with JSON payload
         let mut headers = Headers::new();
@@ -2563,25 +2551,22 @@ mod tests {
 
         // Mock dialog
         let remote_uri = SipUri::parse("sip:alice@example.com").unwrap();
-        let dialog = Dialog {
-            id: DialogId {
-                call_id: "correct-call-id".into(),
-                local_tag: "bob-tag".into(),
-                remote_tag: "alice-tag".into(),
-            },
-            state: DialogStateType::Confirmed,
-            local_uri: local_uri.clone(),
+        let dialog_id = DialogId::unchecked_new("correct-call-id", "bob-tag", "alice-tag");
+        let dialog = Dialog::unchecked_new(
+            dialog_id,
+            DialogStateType::Confirmed,
+            local_uri.clone(),
             remote_uri,
-            remote_target: SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
-            local_cseq: 0,
-            remote_cseq: 1,
-            last_ack_cseq: None,
-            route_set: vec![],
-            secure: false,
-            session_expires: None,
-            refresher: None,
-            is_uac: false,
-        };
+            SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
+            0,  // local_cseq
+            1,  // remote_cseq
+            None,  // last_ack_cseq
+            vec![],  // route_set
+            false,  // secure
+            None,  // session_expires
+            None,  // refresher
+            false,  // is_uac
+        );
 
         // Create INFO request with WRONG Call-ID
         let mut headers = Headers::new();
@@ -2640,25 +2625,22 @@ mod tests {
 
         // Mock dialog
         let remote_uri = SipUri::parse("sip:alice@example.com").unwrap();
-        let dialog = Dialog {
-            id: DialogId {
-                call_id: "test-call-id".into(),
-                local_tag: "bob-tag".into(),
-                remote_tag: "alice-tag".into(),
-            },
-            state: DialogStateType::Confirmed,
-            local_uri: local_uri.clone(),
+        let dialog_id = DialogId::unchecked_new("test-call-id", "bob-tag", "alice-tag");
+        let dialog = Dialog::unchecked_new(
+            dialog_id,
+            DialogStateType::Confirmed,
+            local_uri.clone(),
             remote_uri,
-            remote_target: SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
-            local_cseq: 0,
-            remote_cseq: 1,
-            last_ack_cseq: None,
-            route_set: vec![],
-            secure: false,
-            session_expires: None,
-            refresher: None,
-            is_uac: false,
-        };
+            SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
+            0,  // local_cseq
+            1,  // remote_cseq
+            None,  // last_ack_cseq
+            vec![],  // route_set
+            false,  // secure
+            None,  // session_expires
+            None,  // refresher
+            false,  // is_uac
+        );
 
         // Create BYE request (not INFO)
         let mut headers = Headers::new();

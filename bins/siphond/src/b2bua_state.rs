@@ -117,7 +117,7 @@ impl B2BUAStateManager {
             .iter()
             .find(|entry| {
                 if let Some(ref uac_dialog) = entry.value().uac_dialog {
-                    &uac_dialog.id == dialog_id
+                    uac_dialog.id() == dialog_id
                 } else {
                     false
                 }
@@ -131,7 +131,7 @@ impl B2BUAStateManager {
             .iter()
             .find(|entry| {
                 if let Some(ref uas_dialog) = entry.value().uas_dialog {
-                    &uas_dialog.id == dialog_id
+                    uas_dialog.id() == dialog_id
                 } else {
                     false
                 }

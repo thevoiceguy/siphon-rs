@@ -128,8 +128,8 @@ fn main() {
         .expect("early dialog");
 
     println!("Alice creates early dialog from 180 response");
-    println!("  State: {:?}", early_dialog.state);
-    println!("  Remote tag: {}", early_dialog.id.remote_tag.as_str());
+    println!("  State: {:?}", early_dialog.state());
+    println!("  Remote tag: {}", early_dialog.id().remote_tag());
 
     // Step 4: Alice sends PRACK
     println!("\n--- Step 4: Alice Sends PRACK ---");

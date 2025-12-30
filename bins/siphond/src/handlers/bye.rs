@@ -478,8 +478,8 @@ impl RequestHandler for ByeHandler {
             Some(dialog) => {
                 info!(
                     call_id,
-                    dialog_id = %dialog.id.call_id,
-                    state = ?dialog.state,
+                    dialog_id = %dialog.id().call_id(),
+                    state = ?dialog.state(),
                     "Dialog found, processing BYE"
                 );
 
@@ -487,7 +487,7 @@ impl RequestHandler for ByeHandler {
                 let response = UserAgentServer::create_response(request, 200, "OK");
 
                 // Remove dialog from manager
-                services.dialog_mgr.remove(&dialog.id);
+                services.dialog_mgr.remove(dialog.id());
 
                 info!(call_id, "Dialog terminated successfully");
 

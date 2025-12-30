@@ -143,8 +143,8 @@ impl SubscribeHandler {
         }
 
         debug!(
-            subscription_id = ?subscription.id,
-            event = %subscription.id.event,
+            subscription_id = ?subscription.id(),
+            event = %subscription.id().event(),
             "Sending initial NOTIFY"
         );
 
@@ -158,7 +158,7 @@ impl SubscribeHandler {
     }
 
     fn build_notify_body(subscription: &Subscription) -> (Option<String>, Option<String>) {
-        let event = subscription.id.event.as_str();
+        let event = subscription.id().event();
         match event {
             "presence" => {
                 let body = format!(
@@ -168,7 +168,7 @@ impl SubscribeHandler {
     <status><basic>open</basic></status>\r\n\
   </tuple>\r\n\
 </presence>\r\n",
-                    subscription.remote_uri.as_str()
+                    subscription.remote_uri().as_str()
                 );
                 (Some("application/pidf+xml".to_string()), Some(body))
             }
@@ -187,8 +187,8 @@ impl SubscribeHandler {
     <state>confirmed</state>\r\n\
   </dialog>\r\n\
 </dialog-info>\r\n",
-                    subscription.remote_uri.as_str(),
-                    subscription.id.call_id.as_str()
+                    subscription.remote_uri().as_str(),
+                    subscription.id().call_id()
                 );
                 (Some("application/dialog-info+xml".to_string()), Some(body))
             }
@@ -283,13 +283,13 @@ impl RequestHandler for SubscribeHandler {
                 info!(
                     call_id,
                     event_package,
-                    state = ?subscription.state,
-                    expires = subscription.expires.as_secs(),
+                    state = ?subscription.state(),
+                    expires = subscription.expires().as_secs(),
                     "Subscription created successfully"
                 );
 
                 if requested_expiry == 0 {
-                    subscription.state = SubscriptionState::Terminated;
+                    subscription.update_state(SubscriptionState::Terminated);
                 }
 
                 // Store subscription in manager
@@ -314,7 +314,7 @@ impl RequestHandler for SubscribeHandler {
                 }
 
                 if requested_expiry == 0 {
-                    services.subscription_mgr.remove(&subscription.id);
+                    services.subscription_mgr.remove(subscription.id());
                 }
             }
             Err(e) => {

@@ -298,8 +298,8 @@ fn prepare_in_dialog_request(dialog: &mut Dialog, request: &mut Request) -> SipU
 
     // Ensure Route headers reflect the dialog route set
     headers.remove("Route");
-    if dialog.route_set.is_empty() {
-        let request_uri = dialog.remote_target.clone();
+    if dialog.route_set().is_empty() {
+        let request_uri = dialog.remote_target().clone();
         let new_request =
             Request::new(RequestLine::new(method, request_uri.clone()), headers, body)
                 .expect("valid in-dialog request");
@@ -307,12 +307,12 @@ fn prepare_in_dialog_request(dialog: &mut Dialog, request: &mut Request) -> SipU
         return request_uri;
     }
 
-    let first_route = dialog.route_set.first().cloned().unwrap();
+    let first_route = dialog.route_set().first().cloned().unwrap();
     let loose_route = first_route.params().contains_key(&SmolStr::new("lr"));
 
     if loose_route {
-        let request_uri = dialog.remote_target.clone();
-        for route in dialog.route_set.iter() {
+        let request_uri = dialog.remote_target().clone();
+        for route in dialog.route_set().iter() {
             headers
                 .push(
                     SmolStr::new("Route"),
@@ -329,7 +329,7 @@ fn prepare_in_dialog_request(dialog: &mut Dialog, request: &mut Request) -> SipU
     } else {
         // Strict routing: first route becomes Request-URI, remote target appended to Route
         let request_uri = first_route.clone();
-        for route in dialog.route_set.iter().skip(1) {
+        for route in dialog.route_set().iter().skip(1) {
             headers
                 .push(
                     SmolStr::new("Route"),
@@ -340,7 +340,7 @@ fn prepare_in_dialog_request(dialog: &mut Dialog, request: &mut Request) -> SipU
         headers
             .push(
                 SmolStr::new("Route"),
-                SmolStr::new(format!("<{}>", dialog.remote_target.as_str())),
+                SmolStr::new(format!("<{}>", dialog.remote_target().as_str())),
             )
             .unwrap();
         let new_request =
@@ -357,8 +357,8 @@ fn apply_route_set_to_request(dialog: &Dialog, request: &mut Request) {
     let mut headers = request.headers().clone();
 
     headers.remove("Route");
-    if dialog.route_set.is_empty() {
-        let request_uri = dialog.remote_target.clone();
+    if dialog.route_set().is_empty() {
+        let request_uri = dialog.remote_target().clone();
         let new_request =
             Request::new(RequestLine::new(method, request_uri.clone()), headers, body)
                 .expect("valid in-dialog request");
@@ -366,12 +366,12 @@ fn apply_route_set_to_request(dialog: &Dialog, request: &mut Request) {
         return;
     }
 
-    let first_route = dialog.route_set.first().cloned().unwrap();
+    let first_route = dialog.route_set().first().cloned().unwrap();
     let loose_route = first_route.params().contains_key(&SmolStr::new("lr"));
 
     if loose_route {
-        let request_uri = dialog.remote_target.clone();
-        for route in dialog.route_set.iter() {
+        let request_uri = dialog.remote_target().clone();
+        for route in dialog.route_set().iter() {
             headers
                 .push(
                     SmolStr::new("Route"),
@@ -384,7 +384,7 @@ fn apply_route_set_to_request(dialog: &Dialog, request: &mut Request) {
         *request = new_request;
     } else {
         let request_uri = first_route.clone();
-        for route in dialog.route_set.iter().skip(1) {
+        for route in dialog.route_set().iter().skip(1) {
             headers
                 .push(
                     SmolStr::new("Route"),
@@ -395,7 +395,7 @@ fn apply_route_set_to_request(dialog: &Dialog, request: &mut Request) {
         headers
             .push(
                 SmolStr::new("Route"),
-                SmolStr::new(format!("<{}>", dialog.remote_target.as_str())),
+                SmolStr::new(format!("<{}>", dialog.remote_target().as_str())),
             )
             .unwrap();
         let new_request = Request::new(RequestLine::new(method, request_uri), headers, body)
@@ -1312,25 +1312,26 @@ impl IntegratedUAC {
 
         // Create placeholder dialog (will be updated when 1xx/2xx arrives)
         let helper = self.helper.lock().await;
-        let placeholder_dialog = Dialog {
-            id: sip_dialog::DialogId {
-                call_id: request.headers().get_smol("Call-ID").unwrap().clone(),
-                local_tag: helper.local_tag.clone(),
-                remote_tag: SmolStr::new("pending"),
-            },
-            state: sip_dialog::DialogStateType::Early,
-            local_uri: helper.local_uri.clone(),
-            remote_uri: target_uri.clone(),
-            remote_target: target_uri,
-            local_cseq: 1,
-            remote_cseq: 0,
-            last_ack_cseq: None,
-            route_set: vec![],
-            secure: false,
-            session_expires: None,
-            refresher: None,
-            is_uac: true,
-        };
+        let dialog_id = sip_dialog::DialogId::unchecked_new(
+            request.headers().get_smol("Call-ID").unwrap().clone(),
+            helper.local_tag.clone(),
+            SmolStr::new("pending"),
+        );
+        let placeholder_dialog = Dialog::unchecked_new(
+            dialog_id,
+            sip_dialog::DialogStateType::Early,
+            helper.local_uri.clone(),
+            target_uri.clone(),
+            target_uri,
+            1,
+            0,
+            None,
+            vec![],
+            false,
+            None,
+            None,
+            true,
+        );
         drop(helper);
 
         Ok(CallHandle {
@@ -1369,7 +1370,7 @@ impl IntegratedUAC {
         drop(helper);
 
         // Use remote target from dialog for DNS resolution
-        let target = RequestTarget::Uri(dialog.remote_target.clone());
+        let target = RequestTarget::Uri(dialog.remote_target().clone());
         let dns_target = self.resolve_target(&target).await?;
 
         // Auto-fill Via with resolved transport
@@ -1444,7 +1445,7 @@ impl IntegratedUAC {
         drop(helper);
 
         // Use subscription contact for DNS resolution
-        let target = RequestTarget::Uri(subscription.contact.clone());
+        let target = RequestTarget::Uri(subscription.contact().clone());
         let dns_target = self.resolve_target(&target).await?;
         self.auto_fill_headers(&mut request, Some(dns_target.transport))
             .await;
@@ -1794,7 +1795,7 @@ impl IntegratedUAC {
 
         info!(
             "Started INVITE transaction {} for dialog {}",
-            key.branch, dialog.id.call_id
+            key.branch, dialog.id().call_id()
         );
 
         Ok(CallHandle {
@@ -1836,34 +1837,52 @@ mod tests {
     use std::time::Duration;
 
     fn base_dialog() -> Dialog {
-        Dialog {
-            id: DialogId {
-                call_id: SmolStr::new("call"),
-                local_tag: SmolStr::new("local"),
-                remote_tag: SmolStr::new("remote"),
-            },
-            state: DialogStateType::Confirmed,
-            remote_target: SipUri::parse("sip:remote@example.com").unwrap(),
-            route_set: vec![],
-            local_cseq: 1,
-            remote_cseq: 0,
-            last_ack_cseq: None,
-            local_uri: SipUri::parse("sip:local@example.com").unwrap(),
-            remote_uri: SipUri::parse("sip:remote@example.com").unwrap(),
-            secure: false,
-            session_expires: Some(Duration::from_secs(30)),
-            refresher: None,
-            is_uac: true,
-        }
+        let dialog_id = DialogId::unchecked_new("call", "local", "remote");
+        Dialog::unchecked_new(
+            dialog_id,
+            DialogStateType::Confirmed,
+            SipUri::parse("sip:local@example.com").unwrap(),
+            SipUri::parse("sip:remote@example.com").unwrap(),
+            SipUri::parse("sip:remote@example.com").unwrap(),
+            1,  // local_cseq
+            0,  // remote_cseq
+            None,  // last_ack_cseq
+            vec![],  // route_set
+            false,  // secure
+            Some(Duration::from_secs(30)),  // session_expires
+            None,  // refresher
+            true,  // is_uac
+        )
+    }
+
+    // Helper to create dialog with custom route_set
+    fn dialog_with_route_set(route_set: Vec<SipUri>) -> Dialog {
+        let dialog_id = DialogId::unchecked_new("call", "local", "remote");
+        Dialog::unchecked_new(
+            dialog_id,
+            DialogStateType::Confirmed,
+            SipUri::parse("sip:local@example.com").unwrap(),
+            SipUri::parse("sip:remote@example.com").unwrap(),
+            SipUri::parse("sip:remote@example.com").unwrap(),
+            1,  // local_cseq
+            0,  // remote_cseq
+            None,  // last_ack_cseq
+            route_set,  // custom route_set
+            false,  // secure
+            Some(Duration::from_secs(30)),  // session_expires
+            None,  // refresher
+            true,  // is_uac
+        )
     }
 
     #[test]
     fn prepare_in_dialog_respects_loose_routing() {
-        let mut dialog = base_dialog();
-        dialog.route_set = vec![SipUri::parse("sip:proxy.example.com;lr").expect("valid route")];
+        let mut dialog = dialog_with_route_set(vec![
+            SipUri::parse("sip:proxy.example.com;lr").expect("valid route")
+        ]);
 
         let mut request = Request::new(
-            RequestLine::new(Method::Info, dialog.remote_target.clone()),
+            RequestLine::new(Method::Info, dialog.remote_target().clone()),
             Headers::new(),
             Bytes::new(),
         )
@@ -1871,26 +1890,25 @@ mod tests {
 
         let target = prepare_in_dialog_request(&mut dialog, &mut request);
 
-        assert_eq!(target, dialog.route_set[0]);
-        assert_eq!(request.uri(), &dialog.remote_target.clone().into());
+        assert_eq!(target, dialog.route_set()[0]);
+        assert_eq!(request.uri(), &dialog.remote_target().clone().into());
         assert_eq!(
             request.headers().get("Route"),
             Some("<sip:proxy.example.com;lr>")
         );
-        assert_eq!(dialog.local_cseq, 2);
+        assert_eq!(dialog.local_cseq(), 2);
         assert_eq!(request.headers().get("CSeq"), Some("2 INFO"));
     }
 
     #[test]
     fn prepare_in_dialog_handles_strict_routing() {
-        let mut dialog = base_dialog();
-        dialog.route_set = vec![
+        let mut dialog = dialog_with_route_set(vec![
             SipUri::parse("sip:strict.example.com").unwrap(),
             SipUri::parse("sip:loose.example.com;lr").unwrap(),
-        ];
+        ]);
 
         let mut request = Request::new(
-            RequestLine::new(Method::Update, dialog.remote_target.clone()),
+            RequestLine::new(Method::Update, dialog.remote_target().clone()),
             Headers::new(),
             Bytes::new(),
         )
@@ -1899,8 +1917,8 @@ mod tests {
         let target = prepare_in_dialog_request(&mut dialog, &mut request);
         let routes: Vec<&SmolStr> = request.headers().get_all_smol("Route").collect();
 
-        assert_eq!(target, dialog.route_set[0]);
-        assert_eq!(request.uri(), &dialog.route_set[0].clone().into());
+        assert_eq!(target, dialog.route_set()[0]);
+        assert_eq!(request.uri(), &dialog.route_set()[0].clone().into());
         assert_eq!(routes.len(), 2);
         assert_eq!(routes[0].as_str(), "<sip:loose.example.com;lr>");
         assert_eq!(routes[1].as_str(), "<sip:remote@example.com>");
@@ -1925,8 +1943,8 @@ mod tests {
         .expect("valid response");
 
         apply_in_dialog_response(&manager, &mut dialog, &response).unwrap();
-        assert_eq!(dialog.remote_target.as_str(), "sip:new-remote@example.com");
-        assert_eq!(dialog.state, DialogStateType::Confirmed);
+        assert_eq!(dialog.remote_target().as_str(), "sip:new-remote@example.com");
+        assert_eq!(dialog.state(), DialogStateType::Confirmed);
     }
 
     #[test]
@@ -1943,7 +1961,7 @@ mod tests {
 
         let result = apply_in_dialog_response(&manager, &mut dialog, &response);
         assert!(result.is_err());
-        assert_eq!(dialog.state, DialogStateType::Terminated);
+        assert_eq!(dialog.state(), DialogStateType::Terminated);
     }
 }
 
@@ -2104,7 +2122,7 @@ impl ClientTransactionUser for InviteTransactionUser {
         if response.code() > 100 {
             let helper = self.helper.lock().await;
             if let Some(dialog) = helper.process_invite_response(&self.request, response) {
-                let to_tag = dialog.id.remote_tag.clone();
+                let to_tag = SmolStr::new(dialog.id().remote_tag());
 
                 // Track early dialog for forking support
                 let mut early_dialogs = self.early_dialogs.lock().await;
@@ -2142,7 +2160,7 @@ impl ClientTransactionUser for InviteTransactionUser {
                 info!(
                     "Confirmed dialog from {}: {}",
                     response.code(),
-                    dialog.id.call_id
+                    dialog.id().call_id()
                 );
             }
         }

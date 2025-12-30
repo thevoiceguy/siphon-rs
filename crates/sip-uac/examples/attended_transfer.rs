@@ -52,25 +52,22 @@ fn main() {
     println!();
 
     // Mock Call A dialog from Bob's perspective
-    let dialog_a = Dialog {
-        id: DialogId {
-            call_id: "call-alice-bob-123".into(),
-            local_tag: "bob-tag-222".into(),
-            remote_tag: "alice-tag-111".into(),
-        },
-        state: DialogStateType::Confirmed,
-        local_uri: bob_uri.clone(),
-        remote_uri: alice_uri.clone(),
-        remote_target: alice_contact.clone(),
-        local_cseq: 1,
-        remote_cseq: 1,
-        last_ack_cseq: None,
-        route_set: vec![],
-        secure: false,
-        session_expires: Some(Duration::from_secs(1800)),
-        refresher: Some(RefresherRole::Uac),
-        is_uac: false, // Bob is UAS (Alice called Bob)
-    };
+    let dialog_a_id = DialogId::unchecked_new("call-alice-bob-123", "bob-tag-222", "alice-tag-111");
+    let dialog_a = Dialog::unchecked_new(
+        dialog_a_id,
+        DialogStateType::Confirmed,
+        bob_uri.clone(),
+        alice_uri.clone(),
+        alice_contact.clone(),
+        1,  // local_cseq
+        1,  // remote_cseq
+        None,  // last_ack_cseq
+        vec![],  // route_set
+        false,  // secure
+        Some(Duration::from_secs(1800)),  // session_expires
+        Some(RefresherRole::Uac),  // refresher
+        false,  // is_uac - Bob is UAS (Alice called Bob)
+    );
 
     // Step 2: Bob puts Alice on hold
     println!("--- Step 2: Bob Puts Alice On Hold ---");
@@ -93,25 +90,22 @@ fn main() {
         .with_display_name("Bob Jones".to_string());
 
     // Mock Call B dialog from Bob's perspective
-    let dialog_b = Dialog {
-        id: DialogId {
-            call_id: "call-bob-charlie-456".into(),
-            local_tag: "bob-tag-333".into(),
-            remote_tag: "charlie-tag-444".into(),
-        },
-        state: DialogStateType::Confirmed,
-        local_uri: bob_uri.clone(),
-        remote_uri: charlie_uri.clone(),
-        remote_target: charlie_contact.clone(),
-        local_cseq: 1,
-        remote_cseq: 1,
-        last_ack_cseq: None,
-        route_set: vec![],
-        secure: false,
-        session_expires: Some(Duration::from_secs(1800)),
-        refresher: Some(RefresherRole::Uac),
-        is_uac: true, // Bob is UAC (Bob called Charlie)
-    };
+    let dialog_b_id = DialogId::unchecked_new("call-bob-charlie-456", "bob-tag-333", "charlie-tag-444");
+    let dialog_b = Dialog::unchecked_new(
+        dialog_b_id,
+        DialogStateType::Confirmed,
+        bob_uri.clone(),
+        charlie_uri.clone(),
+        charlie_contact.clone(),
+        1,  // local_cseq
+        1,  // remote_cseq
+        None,  // last_ack_cseq
+        vec![],  // route_set
+        false,  // secure
+        Some(Duration::from_secs(1800)),  // session_expires
+        Some(RefresherRole::Uac),  // refresher
+        true,  // is_uac - Bob is UAC (Bob called Charlie)
+    );
 
     println!("Bob talks to Charlie: \"I have Alice on the line, can you take the call?\"");
     println!("Charlie: \"Yes, transfer her to me.\"");
@@ -179,21 +173,17 @@ fn main() {
     println!("--- Step 8: Transfer Progress Notifications ---");
 
     // Mock subscription from REFER
-    let subscription = Subscription {
-        id: SubscriptionId {
-            call_id: "call-alice-bob-123".into(),
-            from_tag: "bob-tag-222".into(),
-            to_tag: "alice-tag-111".into(),
-            event: "refer".into(),
-        },
-        state: SubscriptionState::Active,
-        local_uri: alice_uri.clone(),
-        remote_uri: bob_uri.clone(),
-        contact: bob_contact.clone(),
-        expires: Duration::from_secs(300),
-        local_cseq: 1,
-        remote_cseq: 2,
-    };
+    let subscription_id = SubscriptionId::unchecked_new("call-alice-bob-123", "bob-tag-222", "alice-tag-111", "refer");
+    let subscription = Subscription::unchecked_new(
+        subscription_id,
+        SubscriptionState::Active,
+        alice_uri.clone(),
+        bob_uri.clone(),
+        bob_contact.clone(),
+        Duration::from_secs(300),
+        1,  // local_cseq
+        2,  // remote_cseq
+    );
 
     println!("Alice -> Bob: NOTIFY (sipfrag: 100 Trying)");
     let _notify_100 = alice_uac.create_notify(

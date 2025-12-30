@@ -152,7 +152,7 @@ impl UasRequestHandler for AutoAnswerServer {
 
     /// Handle incoming ACK (for 2xx INVITE responses)
     async fn on_ack(&self, request: &Request, dialog: &Dialog) -> Result<()> {
-        println!("✓ Received ACK for dialog: {}", dialog.id.call_id);
+        println!("✓ Received ACK for dialog: {}", dialog.id().call_id());
 
         // Check if ACK contains SDP (late offer scenario)
         if !request.body().is_empty() {
@@ -174,11 +174,11 @@ impl UasRequestHandler for AutoAnswerServer {
         handle: ServerTransactionHandle,
         dialog: &Dialog,
     ) -> Result<()> {
-        println!("📴 Received BYE from dialog: {}", dialog.id.call_id);
+        println!("📴 Received BYE from dialog: {}", dialog.id().call_id());
 
         // Clean up dialog
         let mut dialogs = self.active_dialogs.write().await;
-        dialogs.remove(&dialog.id.call_id.to_string());
+        dialogs.remove(&dialog.id().call_id().to_string());
         println!("   Removed dialog from active calls");
 
         // Send 200 OK
@@ -265,7 +265,7 @@ impl UasRequestHandler for AutoAnswerServer {
         handle: ServerTransactionHandle,
         dialog: &Dialog,
     ) -> Result<()> {
-        println!("🔀 Received REFER in dialog: {}", dialog.id.call_id);
+        println!("🔀 Received REFER in dialog: {}", dialog.id().call_id());
 
         // Extract Refer-To header
         if let Some(refer_to) = request.headers().get("Refer-To") {
@@ -295,7 +295,7 @@ impl UasRequestHandler for AutoAnswerServer {
         handle: ServerTransactionHandle,
         dialog: &Dialog,
     ) -> Result<()> {
-        println!("🔄 Received UPDATE in dialog: {}", dialog.id.call_id);
+        println!("🔄 Received UPDATE in dialog: {}", dialog.id().call_id());
 
         if !request.body().is_empty() {
             println!("   UPDATE contains SDP ({} bytes)", request.body().len());

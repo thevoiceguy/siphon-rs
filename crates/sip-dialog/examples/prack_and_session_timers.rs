@@ -334,7 +334,7 @@ async fn demonstrate_session_timer_refresh() {
     println!("═══ Session Timer Refresh Events ═══\n");
 
     let manager = SessionTimerManager::new();
-    let dialog_id = DialogId::new("call-xyz789", "tag-uac", "tag-uas");
+    let dialog_id = DialogId::new("call-xyz789", "tag-uac", "tag-uas").expect("valid dialog ID");
 
     println!("Starting session timer with 200ms expiration (for demo)\n");
 
@@ -359,7 +359,7 @@ async fn demonstrate_session_timer_refresh() {
                     println!("┌─ RefreshNeeded Event Fired ───────────────────────────────┐");
                     println!(
                         "│ Dialog: {}                            │",
-                        id.call_id.as_str()
+                        id.call_id()
                     );
                     println!("│ Time: ~100ms (Session-Expires/2)                          │");
                     println!("│                                                           │");
@@ -389,7 +389,7 @@ async fn demonstrate_session_timer_refresh() {
                     println!("┌─ SessionExpired Event Fired ──────────────────────────────┐");
                     println!(
                         "│ Dialog: {}                            │",
-                        id.call_id.as_str()
+                        id.call_id()
                     );
                     println!("│ Time: ~200ms (Session-Expires)                            │");
                     println!("│                                                           │");

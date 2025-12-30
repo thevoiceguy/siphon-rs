@@ -312,10 +312,10 @@ async fn main() -> Result<()> {
             while let Some(event) = rx.recv().await {
                 match event {
                     sip_dialog::session_timer_manager::SessionTimerEvent::RefreshNeeded(id) => {
-                        tracing::info!(call_id = %id.call_id, "Session refresh needed");
+                        tracing::info!(call_id = %id.call_id(), "Session refresh needed");
                     }
                     sip_dialog::session_timer_manager::SessionTimerEvent::SessionExpired(id) => {
-                        tracing::warn!(call_id = %id.call_id, "Session expired - removing dialog");
+                        tracing::warn!(call_id = %id.call_id(), "Session expired - removing dialog");
                         dialog_mgr.remove(&id);
                     }
                 }

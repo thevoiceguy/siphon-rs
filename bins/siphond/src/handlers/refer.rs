@@ -295,16 +295,17 @@ impl ReferHandler {
             .and_then(|cseq| cseq.parse::<u32>().ok())
             .unwrap_or(1);
 
-        Ok(Subscription {
-            id: SubscriptionId::new(call_id, from_tag, to_tag, "refer"),
-            state: SubscriptionState::Active,
+        let subscription_id = SubscriptionId::unchecked_new(call_id, from_tag, to_tag, "refer");
+        Ok(Subscription::unchecked_new(
+            subscription_id,
+            SubscriptionState::Active,
             local_uri,
             remote_uri,
             contact,
-            expires: Duration::from_secs(3600),
+            Duration::from_secs(3600),
             local_cseq,
-            remote_cseq: 0,
-        })
+            0, // remote_cseq
+        ))
     }
 
     async fn send_notify(

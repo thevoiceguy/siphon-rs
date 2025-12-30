@@ -33,7 +33,7 @@ impl InviteHandler {
     }
 
     fn dialog_id_key(id: &sip_dialog::DialogId) -> String {
-        format!("{}:{}:{}", id.call_id, id.local_tag, id.remote_tag)
+        format!("{}:{}:{}", id.call_id(), id.local_tag(), id.remote_tag())
     }
 
     fn schedule_reliable_retransmit(
@@ -104,13 +104,13 @@ impl InviteHandler {
         // Check if this is from the UAC leg (Alice) or UAS leg (Bob)
         let call_leg = services
             .b2bua_state
-            .find_by_uac_dialog(&dialog.id)
-            .or_else(|| services.b2bua_state.find_by_uas_dialog(&dialog.id))
+            .find_by_uac_dialog(dialog.id())
+            .or_else(|| services.b2bua_state.find_by_uas_dialog(dialog.id()))
             .ok_or_else(|| anyhow!("Call leg not found for re-INVITE"))?;
 
         let is_from_alice = services
             .b2bua_state
-            .find_by_uac_dialog(&dialog.id)
+            .find_by_uac_dialog(dialog.id())
             .is_some();
 
         // Extract SDP from re-INVITE to detect hold/resume
@@ -189,8 +189,8 @@ impl InviteHandler {
         // Determine target address from the other dialog's remote target
         let target_addr = format!(
             "{}:{}",
-            other_dialog.remote_target.host(),
-            other_dialog.remote_target.port().unwrap_or(5060)
+            other_dialog.remote_target().host(),
+            other_dialog.remote_target().port().unwrap_or(5060)
         )
         .parse::<std::net::SocketAddr>()?;
 
@@ -645,7 +645,7 @@ impl InviteHandler {
                     ) {
                         tracing::info!(
                             outgoing_call_id,
-                            uac_dialog_id = ?uac_dialog.id,
+                            uac_dialog_id = ?uac_dialog.id(),
                             "Created and storing UAC dialog for re-INVITE support"
                         );
                         services
@@ -699,7 +699,7 @@ impl InviteHandler {
                         ) {
                             tracing::info!(
                                 outgoing_call_id,
-                                uas_dialog_id = ?uas_dialog.id,
+                                uas_dialog_id = ?uas_dialog.id(),
                                 "Created and storing UAS dialog for re-INVITE support"
                             );
                             services
@@ -1141,11 +1141,11 @@ impl RequestHandler for InviteHandler {
             dialog.update_from_response(&ok);
 
             if services.config.features.enable_session_timers {
-                if let Some(session_expires) = dialog.session_expires {
+                if let Some(session_expires) = dialog.session_expires() {
                     let is_refresher =
-                        matches!(dialog.refresher, Some(sip_core::RefresherRole::Uac));
+                        matches!(dialog.refresher(), Some(sip_core::RefresherRole::Uac));
                     services.session_timer_mgr.refresh_timer(
-                        dialog.id.clone(),
+                        dialog.id().clone(),
                         session_expires,
                         is_refresher,
                     );
@@ -1255,8 +1255,8 @@ impl RequestHandler for InviteHandler {
                 {
                     services.dialog_mgr.insert(early_dialog.clone());
 
-                    let rseq = services.rseq_mgr.next_rseq(&early_dialog.id);
-                    reliable_info = Some((Self::dialog_id_key(&early_dialog.id), rseq));
+                    let rseq = services.rseq_mgr.next_rseq(&early_dialog.id());
+                    reliable_info = Some((Self::dialog_id_key(&early_dialog.id()), rseq));
                     let _ = ringing.headers_mut().push("RSeq", rseq.to_string());
                     let _ = ringing.headers_mut().push("Require", "100rel");
                     let _ = ringing
@@ -1268,7 +1268,7 @@ impl RequestHandler for InviteHandler {
                         .and_then(|value| value.parse::<u32>().ok())
                     {
                         services.prack_validator.register_reliable_provisional(
-                            &Self::dialog_id_key(&early_dialog.id),
+                            &Self::dialog_id_key(&early_dialog.id()),
                             rseq,
                             cseq,
                             request.method().clone(),
@@ -1371,11 +1371,11 @@ impl RequestHandler for InviteHandler {
 
                     dialog.update_from_response(&response);
 
-                    if let Some(session_expires) = dialog.session_expires {
+                    if let Some(session_expires) = dialog.session_expires() {
                         let is_refresher =
-                            matches!(dialog.refresher, Some(sip_core::RefresherRole::Uac));
+                            matches!(dialog.refresher(), Some(sip_core::RefresherRole::Uac));
                         services.session_timer_mgr.start_timer(
-                            dialog.id.clone(),
+                            dialog.id().clone(),
                             session_expires,
                             is_refresher,
                         );
@@ -1384,9 +1384,9 @@ impl RequestHandler for InviteHandler {
 
                 info!(
                     call_id,
-                    dialog_call_id = %dialog.id.call_id,
-                    local_tag = %dialog.id.local_tag,
-                    remote_tag = %dialog.id.remote_tag,
+                    dialog_call_id = %dialog.id().call_id(),
+                    local_tag = %dialog.id().local_tag(),
+                    remote_tag = %dialog.id().remote_tag(),
                     "Dialog created, sending 200 OK"
                 );
 

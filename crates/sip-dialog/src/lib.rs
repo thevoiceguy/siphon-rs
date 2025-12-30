@@ -135,9 +135,11 @@ impl DialogId {
         }
     }
 
-    /// Internal unchecked constructor for use by parser methods.
-    /// Assumes input is already validated by the SIP parser.
-    fn unchecked_new(
+    /// Unchecked constructor for use by parser methods and internal construction.
+    ///
+    /// **Warning**: This bypasses validation and should only be used when values are already trusted
+    /// (e.g., from parsed SIP messages or internal construction).
+    pub fn unchecked_new(
         call_id: impl Into<SmolStr>,
         local_tag: impl Into<SmolStr>,
         remote_tag: impl Into<SmolStr>,
@@ -478,6 +480,43 @@ impl Dialog {
     /// Returns whether this dialog is from UAC perspective.
     pub fn is_uac(&self) -> bool {
         self.is_uac
+    }
+
+    /// Creates a Dialog without validation.
+    ///
+    /// **Warning**: This bypasses validation and should only be used when values are already trusted
+    /// (e.g., from parsed SIP messages or internal construction).
+    #[allow(clippy::too_many_arguments)]
+    pub fn unchecked_new(
+        id: DialogId,
+        state: DialogStateType,
+        local_uri: SipUri,
+        remote_uri: SipUri,
+        remote_target: SipUri,
+        local_cseq: u32,
+        remote_cseq: u32,
+        last_ack_cseq: Option<u32>,
+        route_set: Vec<SipUri>,
+        secure: bool,
+        session_expires: Option<Duration>,
+        refresher: Option<RefresherRole>,
+        is_uac: bool,
+    ) -> Self {
+        Self {
+            id,
+            state,
+            local_uri,
+            remote_uri,
+            remote_target,
+            local_cseq,
+            remote_cseq,
+            last_ack_cseq,
+            route_set,
+            secure,
+            session_expires,
+            refresher,
+            is_uac,
+        }
     }
 
     /// Sets the session expiration duration with validation.
@@ -1313,8 +1352,11 @@ impl SubscriptionId {
         }
     }
 
-    /// Internal unchecked constructor for use by parser methods.
-    fn unchecked_new(
+    /// Unchecked constructor for use by parser methods and internal construction.
+    ///
+    /// **Warning**: This bypasses validation and should only be used when values are already trusted
+    /// (e.g., from parsed SIP messages or internal construction).
+    pub fn unchecked_new(
         call_id: impl Into<SmolStr>,
         from_tag: impl Into<SmolStr>,
         to_tag: impl Into<SmolStr>,
@@ -1465,6 +1507,32 @@ impl Subscription {
     /// Returns the current remote CSeq value.
     pub fn remote_cseq(&self) -> u32 {
         self.remote_cseq
+    }
+
+    /// Creates a Subscription without validation.
+    ///
+    /// **Warning**: This bypasses validation and should only be used when values are already trusted
+    /// (e.g., from parsed SIP messages or internal construction).
+    pub fn unchecked_new(
+        id: SubscriptionId,
+        state: SubscriptionState,
+        local_uri: SipUri,
+        remote_uri: SipUri,
+        contact: SipUri,
+        expires: Duration,
+        local_cseq: u32,
+        remote_cseq: u32,
+    ) -> Self {
+        Self {
+            id,
+            state,
+            local_uri,
+            remote_uri,
+            contact,
+            expires,
+            local_cseq,
+            remote_cseq,
+        }
     }
 
     // Mutation methods
