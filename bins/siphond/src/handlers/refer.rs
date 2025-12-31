@@ -96,9 +96,16 @@ impl ReferTransferTransactionUser {
     async fn send_notify(&self, status_code: u16, reason: &str) {
         let notify = {
             let mut subscription = self.subscription.lock().await;
-            self.uas
+            match self
+                .uas
                 .create_notify_sipfrag(&mut subscription, status_code, reason)
-                .expect("valid notify sipfrag")
+            {
+                Ok(notify) => notify,
+                Err(e) => {
+                    warn!(error = %e, status_code, reason, "Failed to create REFER NOTIFY sipfrag");
+                    return;
+                }
+            }
         };
 
         let tu = Arc::new(ReferNotifyTransactionUser);
@@ -321,9 +328,13 @@ impl ReferHandler {
             warn!("Transaction manager not available, cannot send REFER NOTIFY");
             return;
         };
-        let notify = uas
-            .create_notify_sipfrag(subscription, status, reason)
-            .expect("valid notify sipfrag");
+        let notify = match uas.create_notify_sipfrag(subscription, status, reason) {
+            Ok(notify) => notify,
+            Err(e) => {
+                warn!(error = %e, status, reason, "Failed to create REFER NOTIFY sipfrag");
+                return;
+            }
+        };
         let tu = Arc::new(ReferNotifyTransactionUser);
         if let Err(e) = transaction_mgr
             .start_client_transaction(notify, ctx.clone(), tu)
@@ -352,13 +363,23 @@ impl RequestHandler for ReferHandler {
             warn!(call_id, "REFER rejected: feature not enabled");
             let mut headers = sip_core::Headers::new();
             copy_headers(request, &mut headers);
-            let response = sip_core::Response::new(
-                sip_core::StatusLine::new(501, "Not Implemented").expect("valid status line"),
-                headers,
-                bytes::Bytes::new(),
-            )
-            .expect("valid response");
-            handle.send_final(response).await;
+
+            // Try to create and send 501 response, but don't crash if it fails
+            match sip_core::StatusLine::new(501, "Not Implemented") {
+                Ok(status_line) => {
+                    match sip_core::Response::new(status_line, headers, bytes::Bytes::new()) {
+                        Ok(response) => {
+                            handle.send_final(response).await;
+                        }
+                        Err(e) => {
+                            warn!(call_id, error = %e, "Failed to create 501 response for disabled REFER");
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(call_id, error = %e, "Failed to create status line for 501 response");
+                }
+            }
             return Ok(());
         }
 
@@ -392,18 +413,51 @@ impl RequestHandler for ReferHandler {
             );
             let mut headers = sip_core::Headers::new();
             copy_headers(request, &mut headers);
-            let response = sip_core::Response::new(
-                sip_core::StatusLine::new(481, "Call/Transaction Does Not Exist")
-                    .expect("valid status line"),
-                headers,
-                bytes::Bytes::new(),
-            )
-            .expect("valid response");
-            handle.send_final(response).await;
+
+            // Try to create and send 481 response, but don't crash if it fails
+            match sip_core::StatusLine::new(481, "Call/Transaction Does Not Exist") {
+                Ok(status_line) => {
+                    match sip_core::Response::new(status_line, headers, bytes::Bytes::new()) {
+                        Ok(response) => {
+                            handle.send_final(response).await;
+                        }
+                        Err(e) => {
+                            warn!(call_id, error = %e, "Failed to create 481 response for out-of-dialog REFER");
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(call_id, error = %e, "Failed to create status line for 481 response");
+                }
+            }
             return Ok(());
         }
 
-        let dialog = dialog.unwrap();
+        // At this point dialog must be Some because we handled None case above
+        let Some(dialog) = dialog else {
+            // This should be unreachable due to logic above, but handle gracefully
+            warn!(call_id, "Unexpected None dialog after guard check");
+            let mut headers = sip_core::Headers::new();
+            copy_headers(request, &mut headers);
+
+            // Try to create and send 481 response, but don't crash if it fails
+            match sip_core::StatusLine::new(481, "Call/Transaction Does Not Exist") {
+                Ok(status_line) => {
+                    match sip_core::Response::new(status_line, headers, bytes::Bytes::new()) {
+                        Ok(response) => {
+                            handle.send_final(response).await;
+                        }
+                        Err(e) => {
+                            warn!(call_id, error = %e, "Failed to create 481 response after guard check");
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(call_id, error = %e, "Failed to create status line for 481 response");
+                }
+            }
+            return Ok(());
+        };
 
         // Parse local URI from config
         let local_uri = match sip_core::SipUri::parse(&services.config.local_uri) {
@@ -550,10 +604,22 @@ impl RequestHandler for ReferHandler {
                             .unwrap_or_else(|| sip_transaction::generate_branch_id().to_string());
                         let new_via =
                             format!("SIP/2.0/{} placeholder;branch={}", transport_name, branch);
-                        new_headers.push(header.name(), new_via).unwrap();
+                        if let Err(e) = new_headers.push(header.name(), new_via) {
+                            warn!(
+                                header = %header.name(),
+                                error = %e,
+                                "Failed to push Via header to REFER INVITE, skipping"
+                            );
+                        }
                         via_replaced = true;
                     } else {
-                        new_headers.push(header.name(), header.value()).unwrap();
+                        if let Err(e) = new_headers.push(header.name(), header.value()) {
+                            warn!(
+                                header = %header.name(),
+                                error = %e,
+                                "Failed to push header to REFER INVITE, skipping"
+                            );
+                        }
                     }
                 }
                 *invite.headers_mut() = new_headers;

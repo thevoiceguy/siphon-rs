@@ -188,16 +188,32 @@ impl ByeHandler {
 
                     // Copy base headers
                     for header in bye_headers_base.iter() {
-                        bye_headers_udp.push(header.name(), header.value()).unwrap();
+                        if let Err(e) = bye_headers_udp.push(header.name(), header.value()) {
+                            warn!(
+                                header = %header.name(),
+                                error = %e,
+                                "Failed to push header to BYE request, skipping"
+                            );
+                        }
                     }
 
                     // Now serialize the request with correct Via
-                    let bye_request_udp = sip_core::Request::new(
+                    let bye_request_udp = match sip_core::Request::new(
                         RequestLine::new(Method::Bye, caller_sip_uri.clone()),
                         bye_headers_udp,
                         bytes::Bytes::new(),
-                    )
-                    .expect("valid BYE request");
+                    ) {
+                        Ok(req) => req,
+                        Err(e) => {
+                            warn!(
+                                error = %e,
+                                caller = %caller_addr,
+                                "Failed to create BYE request for caller, aborting"
+                            );
+                            services.b2bua_state.remove_call_leg(&leg.outgoing_call_id);
+                            return Ok(());
+                        }
+                    };
                     let payload = sip_parse::serialize_request(&bye_request_udp);
 
                     info!(
@@ -234,15 +250,31 @@ impl ByeHandler {
 
                                 // Copy base headers
                                 for header in bye_headers_base.iter() {
-                                    bye_headers_tcp.push(header.name(), header.value()).unwrap();
+                                    if let Err(e) = bye_headers_tcp.push(header.name(), header.value()) {
+                                        warn!(
+                                            header = %header.name(),
+                                            error = %e,
+                                            "Failed to push header to BYE request, skipping"
+                                        );
+                                    }
                                 }
 
-                                let bye_request_tcp = sip_core::Request::new(
+                                let bye_request_tcp = match sip_core::Request::new(
                                     RequestLine::new(Method::Bye, caller_sip_uri.clone()),
                                     bye_headers_tcp,
                                     bytes::Bytes::new(),
-                                )
-                                .expect("valid BYE request");
+                                ) {
+                                    Ok(req) => req,
+                                    Err(e) => {
+                                        warn!(
+                                            error = %e,
+                                            caller = %caller_addr,
+                                            "Failed to create BYE request for caller (TCP fallback), aborting"
+                                        );
+                                        services.b2bua_state.remove_call_leg(&leg.outgoing_call_id);
+                                        return Ok(());
+                                    }
+                                };
                                 let payload_tcp = sip_parse::serialize_request(&bye_request_tcp);
 
                                 if let Err(e) = sip_transport::send_tcp(&addr, &payload_tcp).await {
@@ -289,12 +321,22 @@ impl ByeHandler {
                                 let _ = bye_headers_tcp.push(header.name(), header.value());
                             }
 
-                            let bye_request_tcp = sip_core::Request::new(
+                            let bye_request_tcp = match sip_core::Request::new(
                                 RequestLine::new(Method::Bye, caller_sip_uri.clone()),
                                 bye_headers_tcp,
                                 bytes::Bytes::new(),
-                            )
-                            .expect("valid BYE request");
+                            ) {
+                                Ok(req) => req,
+                                Err(e) => {
+                                    warn!(
+                                        error = %e,
+                                        caller = %caller_addr,
+                                        "Failed to create BYE request for caller (TCP fallback after socket error), aborting"
+                                    );
+                                    services.b2bua_state.remove_call_leg(&leg.outgoing_call_id);
+                                    return Ok(());
+                                }
+                            };
                             let payload_tcp = sip_parse::serialize_request(&bye_request_tcp);
 
                             if let Err(e) = sip_transport::send_tcp(&addr, &payload_tcp).await {
@@ -324,18 +366,51 @@ impl ByeHandler {
             warn!(call_id, "B2BUA: BYE received for unknown call leg");
             let mut headers = sip_core::Headers::new();
             copy_headers(request, &mut headers);
-            let response = sip_core::Response::new(
-                sip_core::StatusLine::new(481, "Call/Transaction Does Not Exist")
-                    .expect("valid status line"),
-                headers,
-                bytes::Bytes::new(),
-            )
-            .expect("valid response");
-            handle.send_final(response).await;
+
+            // Try to create and send 481 response, but don't crash if it fails
+            match sip_core::StatusLine::new(481, "Call/Transaction Does Not Exist") {
+                Ok(status_line) => {
+                    match sip_core::Response::new(status_line, headers, bytes::Bytes::new()) {
+                        Ok(response) => {
+                            handle.send_final(response).await;
+                        }
+                        Err(e) => {
+                            warn!(call_id, error = %e, "Failed to create 481 response for unknown call leg");
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(call_id, error = %e, "Failed to create status line for 481 response");
+                }
+            }
             return Ok(());
         }
 
-        let call_leg = call_leg.unwrap();
+        // At this point call_leg must be Some because we handled None case above
+        let Some(call_leg) = call_leg else {
+            // This should be unreachable due to logic above, but handle gracefully
+            warn!(call_id, "B2BUA: Unexpected None call_leg after guard check");
+            let mut headers = sip_core::Headers::new();
+            copy_headers(request, &mut headers);
+
+            // Try to create and send 481 response, but don't crash if it fails
+            match sip_core::StatusLine::new(481, "Call/Transaction Does Not Exist") {
+                Ok(status_line) => {
+                    match sip_core::Response::new(status_line, headers, bytes::Bytes::new()) {
+                        Ok(response) => {
+                            handle.send_final(response).await;
+                        }
+                        Err(e) => {
+                            warn!(call_id, error = %e, "Failed to create 481 response after guard check");
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(call_id, error = %e, "Failed to create status line for 481 response");
+                }
+            }
+            return Ok(());
+        };
 
         info!(
             incoming_call_id = %call_leg.incoming_call_id,
@@ -395,12 +470,22 @@ impl ByeHandler {
         let _ = bye_headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"));
 
         // Create BYE request
-        let bye_request = sip_core::Request::new(
+        let bye_request = match sip_core::Request::new(
             RequestLine::new(Method::Bye, call_leg.callee_contact.clone()),
             bye_headers,
             bytes::Bytes::new(),
-        )
-        .expect("valid BYE request");
+        ) {
+            Ok(req) => req,
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    outgoing_call_id = %call_leg.outgoing_call_id,
+                    "Failed to create BYE request for callee, cleaning up"
+                );
+                services.b2bua_state.remove_call_leg(&call_leg.outgoing_call_id);
+                return Ok(());
+            }
+        };
 
         // Send BYE to callee
         let callee_addr = format!(
@@ -501,15 +586,22 @@ impl RequestHandler for ByeHandler {
                 let mut headers = sip_core::Headers::new();
                 copy_headers(request, &mut headers);
 
-                let response = sip_core::Response::new(
-                    sip_core::StatusLine::new(481, "Call/Transaction Does Not Exist")
-                        .expect("valid status line"),
-                    headers,
-                    bytes::Bytes::new(),
-                )
-                .expect("valid response");
-
-                handle.send_final(response).await;
+                // Try to create and send 481 response, but don't crash if it fails
+                match sip_core::StatusLine::new(481, "Call/Transaction Does Not Exist") {
+                    Ok(status_line) => {
+                        match sip_core::Response::new(status_line, headers, bytes::Bytes::new()) {
+                            Ok(response) => {
+                                handle.send_final(response).await;
+                            }
+                            Err(e) => {
+                                warn!(call_id, error = %e, "Failed to create 481 response for unknown dialog");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(call_id, error = %e, "Failed to create status line for 481 response");
+                    }
+                }
             }
         }
 
