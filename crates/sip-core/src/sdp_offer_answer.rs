@@ -232,13 +232,18 @@ impl Default for AnswerOptions {
             local_address: "0.0.0.0".to_string(),
             base_port: 50000,
             audio_codecs: vec![
-                CodecInfo::new("PCMU", 8000, Some(1)).unwrap(),
-                CodecInfo::new("PCMA", 8000, Some(1)).unwrap(),
-                CodecInfo::new("telephone-event", 8000, Some(1)).unwrap(),
+                CodecInfo::new("PCMU", 8000, Some(1))
+                    .expect("hardcoded PCMU codec is valid"),
+                CodecInfo::new("PCMA", 8000, Some(1))
+                    .expect("hardcoded PCMA codec is valid"),
+                CodecInfo::new("telephone-event", 8000, Some(1))
+                    .expect("hardcoded telephone-event codec is valid"),
             ],
             video_codecs: vec![
-                CodecInfo::new("H264", 90000, None).unwrap(),
-                CodecInfo::new("VP8", 90000, None).unwrap(),
+                CodecInfo::new("H264", 90000, None)
+                    .expect("hardcoded H264 codec is valid"),
+                CodecInfo::new("VP8", 90000, None)
+                    .expect("hardcoded VP8 codec is valid"),
             ],
             direction_override: None,
             reject_media: Vec::new(),
