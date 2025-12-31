@@ -977,20 +977,20 @@ impl<S: CredentialStore> Authenticator for DigestAuthenticator<S> {
 
         // RFC 3261: Copy required headers from request to response
         if let Some(via) = request.headers().get("Via") {
-            headers.push(SmolStr::new("Via"), via).unwrap();
+            headers.push(SmolStr::new("Via"), via)?;
         }
         if let Some(from) = request.headers().get("From") {
-            headers.push(SmolStr::new("From"), from).unwrap();
+            headers.push(SmolStr::new("From"), from)?;
         }
         // RFC 3261 §8.2.6.2: UAS MUST add tag to To header if not present
         if let Some(to) = request.headers().get("To") {
-            headers.push(SmolStr::new("To"), ensure_to_tag(to)).unwrap();
+            headers.push(SmolStr::new("To"), ensure_to_tag(to))?;
         }
         if let Some(call_id) = request.headers().get("Call-ID") {
-            headers.push(SmolStr::new("Call-ID"), call_id).unwrap();
+            headers.push(SmolStr::new("Call-ID"), call_id)?;
         }
         if let Some(cseq) = request.headers().get("CSeq") {
-            headers.push(SmolStr::new("CSeq"), cseq).unwrap();
+            headers.push(SmolStr::new("CSeq"), cseq)?;
         }
 
         info!(realm = %self.realm, proxy = self.proxy_auth, "issuing digest challenge");

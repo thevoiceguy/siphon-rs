@@ -678,7 +678,11 @@ fn xml_unescape(s: &str) -> Result<String, WatcherinfoError> {
             }
             idx += end + 1;
         } else {
-            let ch = remainder.chars().next().unwrap();
+            let ch = remainder.chars().next().ok_or_else(|| {
+                WatcherinfoError::XmlParseError(
+                    "invalid UTF-8 sequence or empty remainder".to_string(),
+                )
+            })?;
             out.push(ch);
             idx += ch.len_utf8();
         }
@@ -818,7 +822,11 @@ fn extract_attribute(
 
         let mut idx = after_idx;
         while idx < tag_str.len() {
-            let ch = tag_str[idx..].chars().next().unwrap();
+            let ch = tag_str[idx..].chars().next().ok_or_else(|| {
+                WatcherinfoError::XmlParseError(
+                    "invalid UTF-8 sequence in attribute parsing".to_string(),
+                )
+            })?;
             if !ch.is_whitespace() {
                 break;
             }
@@ -832,7 +840,11 @@ fn extract_attribute(
         idx += 1;
 
         while idx < tag_str.len() {
-            let ch = tag_str[idx..].chars().next().unwrap();
+            let ch = tag_str[idx..].chars().next().ok_or_else(|| {
+                WatcherinfoError::XmlParseError(
+                    "invalid UTF-8 sequence in attribute parsing".to_string(),
+                )
+            })?;
             if !ch.is_whitespace() {
                 break;
             }
@@ -845,7 +857,11 @@ fn extract_attribute(
             ));
         }
 
-        let quote = tag_str[idx..].chars().next().unwrap();
+        let quote = tag_str[idx..].chars().next().ok_or_else(|| {
+            WatcherinfoError::XmlParseError(
+                "invalid UTF-8 sequence in quote character".to_string(),
+            )
+        })?;
         if quote != '"' && quote != '\'' {
             return Err(WatcherinfoError::XmlParseError(
                 "unterminated attribute".to_string(),
