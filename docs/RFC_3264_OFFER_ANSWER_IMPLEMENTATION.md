@@ -73,22 +73,37 @@ pub struct OfferAnswerEngine {}
 
 /// Configuration for generating answers
 pub struct AnswerOptions {
-    pub local_address: String,       // IP address for connection
-    pub base_port: u16,              // Starting port number
-    pub audio_codecs: Vec<CodecInfo>, // Supported audio codecs
-    pub video_codecs: Vec<CodecInfo>, // Supported video codecs
-    pub direction_override: Option<Direction>, // Force direction
-    pub reject_media: Vec<usize>,    // Media indices to reject
-    pub username: String,            // SDP origin username
-    pub session_id: String,          // SDP origin session ID
+    // Fields are private; configure via builder methods.
+}
+
+impl AnswerOptions {
+    pub fn new() -> Self;
+    pub fn with_local_address(self, address: impl AsRef<str>) -> Result<Self, NegotiationError>;
+    pub fn with_base_port(self, port: u16) -> Self;
+    pub fn with_audio_codecs(self, codecs: Vec<CodecInfo>) -> Result<Self, NegotiationError>;
+    pub fn with_video_codecs(self, codecs: Vec<CodecInfo>) -> Result<Self, NegotiationError>;
+    pub fn with_direction_override(self, direction: Direction) -> Self;
+    pub fn with_reject_media(self, reject: Vec<usize>) -> Result<Self, NegotiationError>;
+    pub fn with_username(self, username: impl AsRef<str>) -> Result<Self, NegotiationError>;
+    pub fn with_session_id(self, session_id: impl AsRef<str>) -> Result<Self, NegotiationError>;
+    pub fn with_qos_local_status(self, status: PreconditionDirection) -> Self;
+    pub fn with_qos_remote_status(self, status: PreconditionDirection) -> Self;
+    pub fn with_upgrade_preconditions(self, upgrade: bool) -> Self;
 }
 
 /// Codec information for negotiation
 pub struct CodecInfo {
-    pub name: String,           // Codec name (PCMU, PCMA, H264, etc.)
-    pub clock_rate: u32,        // RTP clock rate
-    pub channels: Option<u16>,  // Audio channels
-    pub fmtp: Option<String>,   // Format parameters
+    // Fields are private; configure via builder methods.
+}
+
+impl CodecInfo {
+    pub fn new(
+        name: impl AsRef<str>,
+        clock_rate: u32,
+        channels: Option<u16>,
+    ) -> Result<Self, NegotiationError>;
+    pub fn with_fmtp(self, fmtp: impl AsRef<str>) -> Result<Self, NegotiationError>;
+    pub fn matches(&self, rtpmap: &RtpMap) -> bool;
 }
 
 /// Negotiation errors
@@ -97,6 +112,8 @@ pub enum NegotiationError {
     InvalidSdp(String),         // Invalid SDP structure
     MediaMismatch(String),      // Stream count mismatch
     DirectionConflict(String),  // Invalid direction combination
+    ValidationError(String),    // Input validation failure
+    TooManyMediaStreams { max: usize, actual: usize },
 }
 ```
 
@@ -124,13 +141,16 @@ let offer = SdpSession::parse(offer_sdp).unwrap();
 // Bob generates answer
 let engine = OfferAnswerEngine::new();
 
-let mut answer_options = AnswerOptions::default();
-answer_options.local_address = "203.0.113.5".to_string();
-answer_options.base_port = 60000;
-answer_options.username = "bob".to_string();
-answer_options.session_id = "9876543210".to_string();
+let answer_options = AnswerOptions::default()
+    .with_local_address("203.0.113.5")
+    .expect("valid local address")
+    .with_base_port(60000)
+    .with_username("bob")
+    .expect("valid username")
+    .with_session_id("9876543210")
+    .expect("valid session id");
 
-let answer = engine.generate_answer(&offer, answer_options).unwrap();
+let answer = engine.generate_answer(&offer, answer_options)?;
 
 // Answer contains:
 // - Same media type (audio)
@@ -153,7 +173,8 @@ println!("{}", answer);
 ### Example 2: Codec Negotiation
 
 ```rust
-use sip_core::sdp_offer_answer::{OfferAnswerEngine, AnswerOptions, CodecInfo};
+use sip_core::sdp::SdpSession;
+use sip_core::sdp_offer_answer::{AnswerOptions, CodecInfo, OfferAnswerEngine};
 
 // Offer with 3 codecs
 let offer_sdp = "v=0\r\n\
@@ -169,26 +190,28 @@ let offer_sdp = "v=0\r\n\
 let offer = SdpSession::parse(offer_sdp).unwrap();
 
 // Bob only supports PCMU and PCMA (not G729)
-let mut options = AnswerOptions::default();
-options.audio_codecs = vec![
-    CodecInfo::new("PCMU", 8000, Some(1)),
-    CodecInfo::new("PCMA", 8000, Some(1)),
-    // G729 not included - won't be selected
-];
+let options = AnswerOptions::default()
+    .with_audio_codecs(vec![
+        CodecInfo::new("PCMU", 8000, Some(1)).unwrap(),
+        CodecInfo::new("PCMA", 8000, Some(1)).unwrap(),
+        // G729 not included - won't be selected
+    ])
+    .unwrap();
 
 let engine = OfferAnswerEngine::new();
-let answer = engine.generate_answer(&offer, options).unwrap();
+let answer = engine.generate_answer(&offer, options)?;
 
 // Answer only includes common codecs (PCMU and PCMA)
-assert_eq!(answer.media[0].fmt.len(), 2);
-assert!(answer.media[0].fmt.contains(&"0".to_string())); // PCMU
-assert!(answer.media[0].fmt.contains(&"8".to_string())); // PCMA
+assert_eq!(answer.media()[0].fmt().len(), 2);
+assert!(answer.media()[0].fmt().contains(&"0".to_string())); // PCMU
+assert!(answer.media()[0].fmt().contains(&"8".to_string())); // PCMA
 ```
 
 ### Example 3: Rejecting Media Streams
 
 ```rust
-use sip_core::sdp_offer_answer::{OfferAnswerEngine, AnswerOptions};
+use sip_core::sdp::SdpSession;
+use sip_core::sdp_offer_answer::{AnswerOptions, OfferAnswerEngine};
 
 // Offer with audio and video
 let offer_sdp = "v=0\r\n\
@@ -204,17 +227,18 @@ let offer_sdp = "v=0\r\n\
 let offer = SdpSession::parse(offer_sdp).unwrap();
 
 // Bob wants audio only (reject video)
-let mut options = AnswerOptions::default();
-options.reject_media = vec![1]; // Reject second media (video)
+let options = AnswerOptions::default()
+    .with_reject_media(vec![1])
+    .unwrap(); // Reject second media (video)
 
 let engine = OfferAnswerEngine::new();
-let answer = engine.generate_answer(&offer, options).unwrap();
+let answer = engine.generate_answer(&offer, options)?;
 
 // Audio accepted (port != 0)
-assert_ne!(answer.media[0].port, 0);
+assert_ne!(answer.media()[0].port(), 0);
 
 // Video rejected (port == 0)
-assert_eq!(answer.media[1].port, 0);
+assert_eq!(answer.media()[1].port(), 0);
 
 println!("{}", answer);
 // v=0
@@ -246,7 +270,7 @@ let hold_offer = "v=0\r\n\
 
 let offer = SdpSession::parse(hold_offer).unwrap();
 let engine = OfferAnswerEngine::new();
-let answer = engine.generate_answer(&offer, AnswerOptions::default()).unwrap();
+let answer = engine.generate_answer(&offer, AnswerOptions::default())?;
 
 // Bob's answer is recvonly (receives music on hold)
 let answer_dir = answer.find_direction(Some(0)).unwrap();
@@ -264,7 +288,7 @@ let broadcast_offer = "v=0\r\n\
                        a=recvonly\r\n";  // Server wants to receive (unused)
 
 let offer = SdpSession::parse(broadcast_offer).unwrap();
-let answer = engine.generate_answer(&offer, AnswerOptions::default()).unwrap();
+let answer = engine.generate_answer(&offer, AnswerOptions::default())?;
 
 // Answer is sendonly (client sends to server)
 let answer_dir = answer.find_direction(Some(0)).unwrap();
@@ -274,7 +298,7 @@ assert_eq!(answer_dir, Direction::SendOnly);
 ### Example 5: Hold and Resume
 
 ```rust
-use sip_core::sdp::SdpSession;
+use sip_core::sdp::{Direction, SdpSession};
 use sip_core::sdp_offer_answer::OfferAnswerEngine;
 
 // ===== Initial Active Call =====
@@ -298,7 +322,7 @@ let hold_offer = engine.create_hold_offer(&active_session);
 assert_eq!(hold_offer.find_direction(Some(0)).unwrap(), Direction::SendOnly);
 
 // Session version incremented
-assert_eq!(hold_offer.origin.sess_version, "1");
+assert_eq!(hold_offer.origin().sess_version(), "1");
 
 // Send re-INVITE with hold offer
 println!("Hold offer:\n{}", hold_offer);
@@ -312,7 +336,7 @@ let resume_offer = engine.create_resume_offer(&hold_offer);
 assert_eq!(resume_offer.find_direction(Some(0)).unwrap(), Direction::SendRecv);
 
 // Session version incremented again
-assert_eq!(resume_offer.origin.sess_version, "2");
+assert_eq!(resume_offer.origin().sess_version(), "2");
 
 println!("Resume offer:\n{}", resume_offer);
 ```
@@ -320,7 +344,8 @@ println!("Resume offer:\n{}", resume_offer);
 ### Example 6: Static Payload Types
 
 ```rust
-use sip_core::sdp_offer_answer::OfferAnswerEngine;
+use sip_core::sdp::SdpSession;
+use sip_core::sdp_offer_answer::{AnswerOptions, OfferAnswerEngine};
 
 // Offer without explicit rtpmap (uses static payload types)
 let offer_sdp = "v=0\r\n\
@@ -333,18 +358,18 @@ let offer_sdp = "v=0\r\n\
 
 let offer = SdpSession::parse(offer_sdp).unwrap();
 let engine = OfferAnswerEngine::new();
-let answer = engine.generate_answer(&offer, AnswerOptions::default()).unwrap();
+let answer = engine.generate_answer(&offer, AnswerOptions::default())?;
 
 // Engine recognizes static payload types:
 // 0 = PCMU/8000
 // 8 = PCMA/8000
 
-assert!(answer.media[0].fmt.contains(&"0".to_string()));
-assert!(answer.media[0].fmt.contains(&"8".to_string()));
+assert!(answer.media()[0].fmt().contains(&"0".to_string()));
+assert!(answer.media()[0].fmt().contains(&"8".to_string()));
 
 // Answer includes explicit rtpmap
-let has_pcmu_rtpmap = answer.media[0]
-    .attributes
+let has_pcmu_rtpmap = answer.media()[0]
+    .attributes()
     .iter()
     .any(|a| a.value.as_ref().map_or(false, |v| v.contains("PCMU/8000")));
 assert!(has_pcmu_rtpmap);
@@ -353,7 +378,8 @@ assert!(has_pcmu_rtpmap);
 ### Example 7: Format Parameters (fmtp)
 
 ```rust
-use sip_core::sdp_offer_answer::OfferAnswerEngine;
+use sip_core::sdp::SdpSession;
+use sip_core::sdp_offer_answer::{AnswerOptions, OfferAnswerEngine};
 
 // Offer with fmtp for H.264
 let offer_sdp = "v=0\r\n\
@@ -367,11 +393,11 @@ let offer_sdp = "v=0\r\n\
 
 let offer = SdpSession::parse(offer_sdp).unwrap();
 let engine = OfferAnswerEngine::new();
-let answer = engine.generate_answer(&offer, AnswerOptions::default()).unwrap();
+let answer = engine.generate_answer(&offer, AnswerOptions::default())?;
 
 // fmtp is copied to answer
-let has_fmtp = answer.media[0]
-    .attributes
+let has_fmtp = answer.media()[0]
+    .attributes()
     .iter()
     .any(|a| {
         a.name == "fmtp" &&
@@ -384,10 +410,11 @@ assert!(has_fmtp);
 ### Example 8: SIP Integration
 
 ```rust
-use sip_core::{Request, Response, Method, SipUri, RequestLine, StatusLine};
+use sip_core::{Headers, Method, Request, RequestLine, Response, SipUri, StatusLine};
 use sip_core::sdp::SdpSession;
 use sip_core::sdp_offer_answer::{OfferAnswerEngine, AnswerOptions};
 use bytes::Bytes;
+use smol_str::SmolStr;
 
 // ===== Alice sends INVITE with SDP offer =====
 
@@ -404,42 +431,52 @@ let mut invite = Request::new(
     RequestLine::new(Method::Invite, SipUri::parse("sip:bob@example.com").unwrap()),
     Headers::new(),
     Bytes::from(offer_sdp),
-);
+)
+.unwrap();
 
 // Add Content-Type
-invite.headers.push(
-    SmolStr::new("Content-Type"),
-    SmolStr::new("application/sdp"),
-);
+invite
+    .headers_mut()
+    .push(
+        SmolStr::new("Content-Type"),
+        SmolStr::new("application/sdp"),
+    )
+    .unwrap();
 
 
 // ===== Bob receives INVITE and generates answer =====
 
 // Parse offer from INVITE body
-let offer = SdpSession::parse(std::str::from_utf8(&invite.body).unwrap()).unwrap();
+let offer = SdpSession::parse(std::str::from_utf8(invite.body()).unwrap()).unwrap();
 
 // Generate answer
 let engine = OfferAnswerEngine::new();
-let mut answer_options = AnswerOptions::default();
-answer_options.local_address = "203.0.113.5".to_string();
-answer_options.username = "bob".to_string();
+let answer_options = AnswerOptions::default()
+    .with_local_address("203.0.113.5")
+    .unwrap()
+    .with_username("bob")
+    .unwrap();
 
-let answer = engine.generate_answer(&offer, answer_options).unwrap();
+let answer = engine.generate_answer(&offer, answer_options)?;
 let answer_sdp = answer.to_string();
 
 
 // ===== Bob sends 200 OK with SDP answer =====
 
 let mut ok_response = Response::new(
-    StatusLine::new(200, SmolStr::new("OK")),
-    invite.headers.clone(),
+    StatusLine::new(200, "OK").unwrap(),
+    invite.headers().clone(),
     Bytes::from(answer_sdp),
-);
+)
+.unwrap();
 
-ok_response.headers.push(
-    SmolStr::new("Content-Type"),
-    SmolStr::new("application/sdp"),
-);
+ok_response
+    .headers_mut()
+    .push(
+        SmolStr::new("Content-Type"),
+        SmolStr::new("application/sdp"),
+    )
+    .unwrap();
 
 // Now both parties can communicate using negotiated parameters
 ```
@@ -527,11 +564,11 @@ let resume_offer = engine.create_resume_offer(&hold_offer);
 
 ## Testing
 
-Comprehensive test coverage with 8 tests:
+Comprehensive test coverage with 16 tests:
 
 ```bash
 $ cargo test --package sip-core sdp_offer_answer::
-running 8 tests
+running 16 tests
 test sdp_offer_answer::tests::generate_basic_answer ... ok
 test sdp_offer_answer::tests::codec_negotiation_selects_common ... ok
 test sdp_offer_answer::tests::reject_media_with_port_zero ... ok
@@ -540,8 +577,16 @@ test sdp_offer_answer::tests::hold_offer_changes_to_sendonly ... ok
 test sdp_offer_answer::tests::resume_offer_restores_sendrecv ... ok
 test sdp_offer_answer::tests::static_payload_type_mapping ... ok
 test sdp_offer_answer::tests::fmtp_copied_to_answer ... ok
+test sdp_offer_answer::tests::reject_oversized_codec_name ... ok
+test sdp_offer_answer::tests::reject_empty_codec_name ... ok
+test sdp_offer_answer::tests::reject_codec_name_with_control_chars ... ok
+test sdp_offer_answer::tests::reject_too_many_audio_codecs ... ok
+test sdp_offer_answer::tests::reject_too_many_media_streams ... ok
+test sdp_offer_answer::tests::fields_are_private ... ok
+test sdp_offer_answer::tests::answer_without_preconditions_in_offer ... ok
+test sdp_offer_answer::tests::answer_with_segmented_preconditions ... ok
 
-test result: ok. 8 passed; 0 failed
+test result: ok. 16 passed; 0 failed
 ```
 
 Tests cover:
@@ -553,6 +598,8 @@ Tests cover:
 - ✅ Resume offer generation
 - ✅ Static payload type recognition
 - ✅ fmtp parameter copying
+- ✅ Input validation (codec limits, media stream caps)
+- ✅ Preconditions handling (RFC 3312)
 
 ## API Reference
 
@@ -584,32 +631,60 @@ impl OfferAnswerEngine {
 
 ```rust
 pub struct AnswerOptions {
-    pub local_address: String,         // IP for c= line
-    pub base_port: u16,                // Starting port number
-    pub audio_codecs: Vec<CodecInfo>,  // Supported audio codecs
-    pub video_codecs: Vec<CodecInfo>,  // Supported video codecs
-    pub direction_override: Option<Direction>, // Force direction
-    pub reject_media: Vec<usize>,      // Media indices to reject
-    pub username: String,              // SDP o= username
-    pub session_id: String,            // SDP o= session ID
+    // Fields are private; configure via builder methods.
+}
+
+impl AnswerOptions {
+    pub fn new() -> Self;
+    pub fn with_local_address(self, address: impl AsRef<str>) -> Result<Self, NegotiationError>;
+    pub fn with_base_port(self, port: u16) -> Self;
+    pub fn with_audio_codecs(self, codecs: Vec<CodecInfo>) -> Result<Self, NegotiationError>;
+    pub fn with_video_codecs(self, codecs: Vec<CodecInfo>) -> Result<Self, NegotiationError>;
+    pub fn with_direction_override(self, direction: Direction) -> Self;
+    pub fn with_reject_media(self, reject: Vec<usize>) -> Result<Self, NegotiationError>;
+    pub fn with_username(self, username: impl AsRef<str>) -> Result<Self, NegotiationError>;
+    pub fn with_session_id(self, session_id: impl AsRef<str>) -> Result<Self, NegotiationError>;
+    pub fn with_qos_local_status(self, status: PreconditionDirection) -> Self;
+    pub fn with_qos_remote_status(self, status: PreconditionDirection) -> Self;
+    pub fn with_upgrade_preconditions(self, upgrade: bool) -> Self;
+
+    pub fn local_address(&self) -> &str;
+    pub fn base_port(&self) -> u16;
+    pub fn audio_codecs(&self) -> &[CodecInfo];
+    pub fn video_codecs(&self) -> &[CodecInfo];
+    pub fn direction_override(&self) -> Option<Direction>;
+    pub fn reject_media(&self) -> &[usize];
+    pub fn username(&self) -> &str;
+    pub fn session_id(&self) -> &str;
+    pub fn qos_local_status(&self) -> Option<PreconditionDirection>;
+    pub fn qos_remote_status(&self) -> Option<PreconditionDirection>;
+    pub fn upgrade_preconditions_to_mandatory(&self) -> bool;
 }
 
 impl Default for AnswerOptions;
 ```
 
+`AnswerOptions::default()` builds the hardcoded codec lists with `CodecInfo::new(...).ok()` and
+filters invalid entries, so a validation change will drop a default codec instead of panicking.
+
 ### CodecInfo
 
 ```rust
 pub struct CodecInfo {
-    pub name: String,           // Codec name (e.g., "PCMU")
-    pub clock_rate: u32,        // RTP clock rate
-    pub channels: Option<u16>,  // Audio channels
-    pub fmtp: Option<String>,   // Format parameters
+    // Fields are private; configure via builder methods.
 }
 
 impl CodecInfo {
-    pub fn new(name: impl Into<String>, clock_rate: u32, channels: Option<u16>) -> Self;
-    pub fn with_fmtp(self, fmtp: impl Into<String>) -> Self;
+    pub fn new(
+        name: impl AsRef<str>,
+        clock_rate: u32,
+        channels: Option<u16>,
+    ) -> Result<Self, NegotiationError>;
+    pub fn with_fmtp(self, fmtp: impl AsRef<str>) -> Result<Self, NegotiationError>;
+    pub fn name(&self) -> &str;
+    pub fn clock_rate(&self) -> u32;
+    pub fn channels(&self) -> Option<u16>;
+    pub fn fmtp(&self) -> Option<&str>;
     pub fn matches(&self, rtpmap: &RtpMap) -> bool;
 }
 ```
@@ -622,6 +697,8 @@ pub enum NegotiationError {
     InvalidSdp(String),         // SDP structure error
     MediaMismatch(String),      // Stream count mismatch
     DirectionConflict(String),  // Invalid direction combination
+    ValidationError(String),    // Input validation failure
+    TooManyMediaStreams { max: usize, actual: usize },
 }
 ```
 
@@ -642,27 +719,28 @@ pub enum NegotiationError {
 
 ### `crates/sip-core/src/sdp_offer_answer.rs`
 
-**Lines 1-36**: Module documentation and imports
-**Lines 38-56**: `NegotiationError` enum
-**Lines 58-96**: `AnswerOptions` struct and Default implementation
-**Lines 98-137**: `CodecInfo` struct with matching logic
-**Lines 139-146**: `OfferAnswerEngine` struct
-**Lines 148-223**: `generate_answer()` - Core offer/answer negotiation
-**Lines 225-287**: `negotiate_media()` - Per-media stream negotiation
-**Lines 289-302**: `create_rejected_media()` - Media rejection helper
-**Lines 304-322**: `extract_rtpmaps()` - RTP mapping extraction
-**Lines 324-358**: `get_static_payload_rtpmap()` - Static payload recognition
-**Lines 360-373**: `find_fmtp_for_payload()` - Format parameter lookup
-**Lines 375-385**: `get_media_direction()` - Direction attribute extraction
-**Lines 387-400**: `negotiate_direction()` - Direction negotiation logic
-**Lines 402-445**: `create_hold_offer()` - Hold offer generation
-**Lines 447-490**: `create_resume_offer()` - Resume offer generation
-**Lines 492-695**: Comprehensive test suite (8 tests)
+**Lines 1-16**: Module documentation and imports
+**Lines 27-61**: `NegotiationError` enum
+**Lines 63-252**: `AnswerOptions` struct, builder methods, and Default implementation
+**Lines 254-329**: `CodecInfo` struct with matching logic
+**Lines 436-438**: `OfferAnswerEngine` struct
+**Lines 445-511**: `generate_answer()` - Core offer/answer negotiation
+**Lines 513-602**: `negotiate_media()` - Per-media stream negotiation
+**Lines 604-621**: `create_rejected_media()` - Media rejection helper
+**Lines 623-647**: `extract_rtpmaps()` - RTP mapping extraction
+**Lines 649-689**: `get_static_payload_rtpmap()` - Static payload recognition
+**Lines 692-706**: `find_fmtp_for_payload()` - Format parameter lookup
+**Lines 708-718**: `get_media_direction()` - Direction attribute extraction
+**Lines 720-728**: `negotiate_direction()` - Direction negotiation logic
+**Lines 730-758**: `create_hold_offer()` - Hold offer generation
+**Lines 761-790**: `create_resume_offer()` - Resume offer generation
+**Lines 792-912**: `handle_preconditions()` - RFC 3312 preconditions
+**Lines 921-1237**: Comprehensive test suite (16 tests)
 
 ### `crates/sip-core/src/lib.rs`
 
-**Line 31**: Module declaration
-**Line 94**: Exported types
+**Line 60**: Module declaration
+**Line 119**: Exported types
 
 ## Conclusion
 
