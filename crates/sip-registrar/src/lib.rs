@@ -1086,25 +1086,24 @@ impl<S, A> BasicRegistrar<S, A> {
 
         // RFC 3261: Copy required headers from request to response
         if let Some(via) = request.headers().get("Via") {
-            headers.push(SmolStr::new("Via"), via).unwrap();
+            headers.push(SmolStr::new("Via"), via)?;
         }
         if let Some(from) = request.headers().get("From") {
-            headers.push(SmolStr::new("From"), from).unwrap();
+            headers.push(SmolStr::new("From"), from)?;
         }
         // RFC 3261 §8.2.6.2: UAS MUST add tag to To header if not present
         if let Some(to) = request.headers().get("To") {
-            headers.push(SmolStr::new("To"), ensure_to_tag(to)).unwrap();
+            headers.push(SmolStr::new("To"), ensure_to_tag(to))?;
         }
         if let Some(call_id) = request.headers().get("Call-ID") {
-            headers.push(SmolStr::new("Call-ID"), call_id).unwrap();
+            headers.push(SmolStr::new("Call-ID"), call_id)?;
         }
         if let Some(cseq) = request.headers().get("CSeq") {
-            headers.push(SmolStr::new("CSeq"), cseq).unwrap();
+            headers.push(SmolStr::new("CSeq"), cseq)?;
         }
 
         headers
-            .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
-            .unwrap();
+            .push(SmolStr::new("Content-Length"), SmolStr::new("0"))?;
 
         Ok(Response::new(
             StatusLine::new(code, reason)?,
@@ -1120,8 +1119,7 @@ impl<S, A> BasicRegistrar<S, A> {
             .push(
                 SmolStr::new("Min-Expires"),
                 SmolStr::new(min_expires.to_string()),
-            )
-            .unwrap();
+            )?;
         Ok(response)
     }
 }
@@ -1287,30 +1285,27 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
             let mut headers = Headers::new();
 
             if let Some(via) = request.headers().get("Via") {
-                headers.push(SmolStr::new("Via"), via).unwrap();
+                headers.push(SmolStr::new("Via"), via)?;
             }
             if let Some(from) = request.headers().get("From") {
-                headers.push(SmolStr::new("From"), from).unwrap();
+                headers.push(SmolStr::new("From"), from)?;
             }
             if let Some(to) = request.headers().get("To") {
-                headers.push(SmolStr::new("To"), ensure_to_tag(to)).unwrap();
+                headers.push(SmolStr::new("To"), ensure_to_tag(to))?;
             }
             if let Some(call_id) = request.headers().get("Call-ID") {
-                headers.push(SmolStr::new("Call-ID"), call_id).unwrap();
+                headers.push(SmolStr::new("Call-ID"), call_id)?;
             }
             if let Some(cseq) = request.headers().get("CSeq") {
-                headers.push(SmolStr::new("CSeq"), cseq).unwrap();
+                headers.push(SmolStr::new("CSeq"), cseq)?;
             }
 
             headers
-                .push(SmolStr::new("Contact"), SmolStr::new("*"))
-                .unwrap();
+                .push(SmolStr::new("Contact"), SmolStr::new("*"))?;
             headers
-                .push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()))
-                .unwrap();
+                .push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()))?;
             headers
-                .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
-                .unwrap();
+                .push(SmolStr::new("Content-Length"), SmolStr::new("0"))?;
 
             return Ok(Response::new(
                 StatusLine::new(200, "OK")?,
@@ -1404,19 +1399,19 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
         let mut headers = Headers::new();
 
         if let Some(via) = request.headers().get("Via") {
-            headers.push(SmolStr::new("Via"), via).unwrap();
+            headers.push(SmolStr::new("Via"), via)?;
         }
         if let Some(from) = request.headers().get("From") {
-            headers.push(SmolStr::new("From"), from).unwrap();
+            headers.push(SmolStr::new("From"), from)?;
         }
         if let Some(to) = request.headers().get("To") {
-            headers.push(SmolStr::new("To"), ensure_to_tag(to)).unwrap();
+            headers.push(SmolStr::new("To"), ensure_to_tag(to))?;
         }
         if let Some(call_id) = request.headers().get("Call-ID") {
-            headers.push(SmolStr::new("Call-ID"), call_id).unwrap();
+            headers.push(SmolStr::new("Call-ID"), call_id)?;
         }
         if let Some(cseq) = request.headers().get("CSeq") {
-            headers.push(SmolStr::new("CSeq"), cseq).unwrap();
+            headers.push(SmolStr::new("CSeq"), cseq)?;
         }
 
         let bindings = self.store.lookup(&aor).await?;
@@ -1425,16 +1420,13 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
                 .push(
                     SmolStr::new("Contact"),
                     format_contact(&binding.contact, binding.expires, binding.q_value),
-                )
-                .unwrap();
+                )?;
         }
 
         headers
-            .push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()))
-            .unwrap();
+            .push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()))?;
         headers
-            .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
-            .unwrap();
+            .push(SmolStr::new("Content-Length"), SmolStr::new("0"))?;
 
         Ok(Response::new(
             StatusLine::new(200, "OK")?,
@@ -1571,31 +1563,28 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
 
             // RFC 3261: Copy required headers from request to response
             if let Some(via) = request.headers().get("Via") {
-                headers.push(SmolStr::new("Via"), via).unwrap();
+                headers.push(SmolStr::new("Via"), via)?;
             }
             if let Some(from) = request.headers().get("From") {
-                headers.push(SmolStr::new("From"), from).unwrap();
+                headers.push(SmolStr::new("From"), from)?;
             }
             // RFC 3261 §8.2.6.2: UAS MUST add tag to To header if not present
             if let Some(to) = request.headers().get("To") {
-                headers.push(SmolStr::new("To"), ensure_to_tag(to)).unwrap();
+                headers.push(SmolStr::new("To"), ensure_to_tag(to))?;
             }
             if let Some(call_id) = request.headers().get("Call-ID") {
-                headers.push(SmolStr::new("Call-ID"), call_id).unwrap();
+                headers.push(SmolStr::new("Call-ID"), call_id)?;
             }
             if let Some(cseq) = request.headers().get("CSeq") {
-                headers.push(SmolStr::new("CSeq"), cseq).unwrap();
+                headers.push(SmolStr::new("CSeq"), cseq)?;
             }
 
             headers
-                .push(SmolStr::new("Contact"), SmolStr::new("*"))
-                .unwrap();
+                .push(SmolStr::new("Contact"), SmolStr::new("*"))?;
             headers
-                .push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()))
-                .unwrap();
+                .push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()))?;
             headers
-                .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
-                .unwrap();
+                .push(SmolStr::new("Content-Length"), SmolStr::new("0"))?;
 
             return Ok(Response::new(
                 StatusLine::new(200, "OK")?,
@@ -1694,20 +1683,20 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
 
         // RFC 3261: Copy required headers from request to response
         if let Some(via) = request.headers().get("Via") {
-            headers.push(SmolStr::new("Via"), via).unwrap();
+            headers.push(SmolStr::new("Via"), via)?;
         }
         if let Some(from) = request.headers().get("From") {
-            headers.push(SmolStr::new("From"), from).unwrap();
+            headers.push(SmolStr::new("From"), from)?;
         }
         // RFC 3261 §8.2.6.2: UAS MUST add tag to To header if not present
         if let Some(to) = request.headers().get("To") {
-            headers.push(SmolStr::new("To"), ensure_to_tag(to)).unwrap();
+            headers.push(SmolStr::new("To"), ensure_to_tag(to))?;
         }
         if let Some(call_id) = request.headers().get("Call-ID") {
-            headers.push(SmolStr::new("Call-ID"), call_id).unwrap();
+            headers.push(SmolStr::new("Call-ID"), call_id)?;
         }
         if let Some(cseq) = request.headers().get("CSeq") {
-            headers.push(SmolStr::new("CSeq"), cseq).unwrap();
+            headers.push(SmolStr::new("CSeq"), cseq)?;
         }
 
         let bindings = self.store.lookup(&aor)?;
@@ -1716,16 +1705,13 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
                 .push(
                     SmolStr::new("Contact"),
                     format_contact(&binding.contact, binding.expires, binding.q_value),
-                )
-                .unwrap();
+                )?;
         }
 
         headers
-            .push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()))
-            .unwrap();
+            .push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()))?;
         headers
-            .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
-            .unwrap();
+            .push(SmolStr::new("Content-Length"), SmolStr::new("0"))?;
 
         Ok(Response::new(
             StatusLine::new(200, "OK")?,
