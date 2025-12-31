@@ -31,6 +31,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Docs: fix sip-ratelimit doctest** - Update module example after API hardening to unwrap Result from RateLimitConfig::new() before chaining methods. All doctests passing.
 
+- **Refactor: eliminate production unwrap() calls (91 total)** - Replace panic-inducing unwrap/expect with graceful error handling across the codebase:
+  * **bins/siphond handlers (16 fixes)**: bye.rs and refer.rs
+    - Replaced `.expect()` with `match` for graceful error handling
+    - `header.push()` failures: Log warning and skip problematic headers
+    - `Request::new()` failures: Log error, clean up state, abort gracefully
+    - `Response::new()` failures: Log error, don't send response
+    - Zero crashes from bad requests/dialogs in B2BUA mode
+  * **crates/sip-core/watcher_info.rs (4 fixes)**:
+    - Replaced char iteration `.unwrap()` with `.ok_or_else()` returning XmlParseError
+    - `xml_unescape()` and `extract_attribute()` handle invalid UTF-8 gracefully
+    - Zero crashes from malformed XML
+  * **crates/sip-auth (5 fixes)**:
+    - Replaced header push `.unwrap()` with `?` operator in `DigestAuthenticator::challenge()`
+    - Clean error propagation for Via, From, To, Call-ID, CSeq header copies
+    - Zero crashes from malformed authentication challenges
+  * **crates/sip-registrar (41 fixes)**:
+    - Replaced 41 header push `.unwrap()` with `?` operator across all response builders
+    - Functions: `build_error_response()`, `build_interval_too_brief()`, `handle_register_async()`, `handle_register()`
+    - Zero crashes from malformed REGISTER requests
+  * **Philosophy**: In a production SIP stack, one bad request must never crash the server and terminate hundreds of active calls
+  * All 235+ tests passing after changes
+
 - Add async trait support for registrar/auth storage (`AsyncLocationStore`, `AsyncCredentialStore`) with adapters for sync/async interop.
 - Extend `BasicRegistrar` and `DigestAuthenticator` with async handlers to enable non-blocking storage backends.
 - Update memory stores to implement both sync and async traits and add Tokio/async-trait dependencies where required.
