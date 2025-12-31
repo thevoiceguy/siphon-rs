@@ -53,6 +53,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   * **Philosophy**: In a production SIP stack, one bad request must never crash the server and terminate hundreds of active calls
   * All 235+ tests passing after changes
 
+- **Refactor: eliminate panic risk in AnswerOptions::default()** - Complete unwrap/expect elimination effort:
+  * **crates/sip-core/sdp_offer_answer.rs (5 fixes)**:
+    - Replaced 5 `.expect()` calls with `.ok()` + `.flatten()` pattern
+    - audio_codecs: PCMU, PCMA, telephone-event (3 codecs)
+    - video_codecs: H264, VP8 (2 codecs)
+    - Failed codec creation results in omission from default list, never panic
+  * **Result**: Zero panic risk from Default trait implementations
+  * **Total production unwrap/expect eliminations: 96 fixes**
+  * All 16 sdp_offer_answer tests passing
+
 - Add async trait support for registrar/auth storage (`AsyncLocationStore`, `AsyncCredentialStore`) with adapters for sync/async interop.
 - Extend `BasicRegistrar` and `DigestAuthenticator` with async handlers to enable non-blocking storage backends.
 - Update memory stores to implement both sync and async traits and add Tokio/async-trait dependencies where required.
