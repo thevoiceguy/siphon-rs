@@ -2,7 +2,7 @@
 
 **Date:** 2025-01-21
 **Status:** ✅ **COMPLETE** - Full RFC 3325 compliance achieved
-**Test Results:** ✅ All 104+ tests passing (16 P-header core tests, 4 UAC tests, 74 sip-core tests, 30 sip-uac tests)
+**Test Results:** ✅ All P-header tests passing (13 core tests, 4 UAC tests)
 
 ---
 
@@ -27,15 +27,16 @@ RFC 3325 defines:
 
 | Component | Status | Location | Description |
 |-----------|--------|----------|-------------|
-| **PIdentity Type** | ✅ Complete | `sip-core/src/p_headers.rs:14-54` | Generic identity with Uri enum |
-| **PAssertedIdentityHeader** | ✅ Complete | `sip-core/src/p_headers.rs:97-187` | P-Asserted-Identity header type |
-| **PPreferredIdentityHeader** | ✅ Complete | `sip-core/src/p_headers.rs:220-307` | P-Preferred-Identity header type |
+| **PHeaderError Type** | ✅ Complete | `sip-core/src/p_headers.rs:22-62` | Validation and parsing errors |
+| **PIdentity Type** | ✅ Complete | `sip-core/src/p_headers.rs:64-162` | Generic identity with Uri enum |
+| **PAssertedIdentityHeader** | ✅ Complete | `sip-core/src/p_headers.rs:326-469` | P-Asserted-Identity header type |
+| **PPreferredIdentityHeader** | ✅ Complete | `sip-core/src/p_headers.rs:472-609` | P-Preferred-Identity header type |
 | **Builder Methods** | ✅ Complete | Multiple methods | single_sip(), single_tel(), sip_and_tel() |
 | **Query Methods** | ✅ Complete | Multiple methods | has_tel_identity(), sip_identity(), etc. |
 | **Display Implementation** | ✅ Complete | Both header types | Formats as "<uri>" or "Name" <uri> |
-| **Parsing** | ✅ Complete | `sip-core/src/p_headers.rs:322-383` | Parses both SIP and Tel URIs |
-| **UAC APIs** | ✅ Complete | `sip-uac/src/lib.rs:589-691` | add_p_preferred_identity_header(), etc. |
-| **Tests** | ✅ Complete | 20 core tests + 4 UAC tests | Comprehensive coverage |
+| **Parsing** | ✅ Complete | `sip-core/src/p_headers.rs:612-703` | Parses both SIP and Tel URIs |
+| **UAC APIs** | ✅ Complete | `sip-uac/src/lib.rs:1601-1718` | add_p_preferred_identity_header(), etc. |
+| **Tests** | ✅ Complete | 13 core tests + 4 UAC tests | Comprehensive coverage |
 | **Documentation** | ✅ Complete | Inline docs + this document | Usage examples and API docs |
 
 ---
@@ -46,22 +47,47 @@ RFC 3325 defines:
 
 **Location:** `crates/sip-core/src/p_headers.rs`
 
+#### PHeaderError Type
+
+```rust
+pub enum PHeaderError {
+    DisplayNameTooLong { max: usize, actual: usize },
+    ParamNameTooLong { max: usize, actual: usize },
+    ParamValueTooLong { max: usize, actual: usize },
+    TooManyParams { max: usize, actual: usize },
+    TooManyIdentities { max: usize, actual: usize },
+    TooManyNetworkIds { max: usize, actual: usize },
+    NetworkIdTooLong { max: usize, actual: usize },
+    AccessTypeTooLong { max: usize, actual: usize },
+    InvalidDisplayName(String),
+    InvalidParamName(String),
+    InvalidParamValue(String),
+    InvalidAccessType(String),
+    InvalidNetworkId(String),
+    DuplicateParam(String),
+    EmptyIdentities,
+    EmptyNetworkIds,
+    InvalidTelUri(String),
+    ParseError(String),
+}
+```
+
 #### PIdentity Struct
 
 Generic identity structure that can hold both SIP and Tel URIs.
 
 ```rust
 pub struct PIdentity {
-    pub display_name: Option<SmolStr>,
-    pub uri: Uri,  // Can be Uri::Sip or Uri::Tel
-    pub params: BTreeMap<SmolStr, Option<SmolStr>>,
+    // fields are private
 }
 ```
 
 **Methods:**
 - `from_uri(uri: Uri)` - Create identity from URI with no display name
-- `with_display_name(name: &str)` - Add display name to identity
-- **Display trait** - Formats as `"Name" <uri>` or `<uri>`
+- `with_display_name(name: &str) -> Result<Self, PHeaderError>` - Add display name
+- `with_param(name: &str, value: Option<&str>) -> Result<Self, PHeaderError>` - Add param
+- `display_name()` / `uri()` / `params()` / `get_param()` - Accessors
+- **Display trait** - Formats as `"Name" <uri>;param=value` or `<uri>`
 
 #### PAssertedIdentityHeader
 
@@ -69,15 +95,15 @@ Used by trusted proxies to assert the identity of the originator within a trust 
 
 ```rust
 pub struct PAssertedIdentityHeader {
-    pub identities: Vec<PIdentity>,
+    // identities are private
 }
 ```
 
 **Constructor Methods:**
 - `single_sip(uri: SipUri)` - Create with single SIP URI identity
-- `single_tel(number: &str)` - Create with single Tel URI identity
-- `sip_and_tel(sip_uri: SipUri, tel_number: &str)` - Create with both SIP and Tel URIs
-- `new(identities: Vec<PIdentity>)` - Create with custom identity list
+- `single_tel(number: &str) -> Result<Self, PHeaderError>` - Create with single Tel URI identity
+- `sip_and_tel(sip_uri: SipUri, tel_number: &str) -> Result<Self, PHeaderError>` - Create with both SIP and Tel URIs
+- `new(identities: Vec<PIdentity>) -> Result<Self, PHeaderError>` - Create with custom identity list
 
 **Query Methods:**
 - `has_tel_identity()` - Returns true if header contains at least one Tel URI
@@ -96,15 +122,15 @@ Used by UACs to express a preference about which identity should be asserted by 
 
 ```rust
 pub struct PPreferredIdentityHeader {
-    pub identities: Vec<PIdentity>,
+    // identities are private
 }
 ```
 
 **Constructor Methods:**
 - `single_sip(uri: SipUri)` - Create with single SIP URI identity
-- `single_tel(number: &str)` - Create with single Tel URI identity
-- `sip_and_tel(sip_uri: SipUri, tel_number: &str)` - Create with both SIP and Tel URIs
-- `new(identities: Vec<PIdentity>)` - Create with custom identity list
+- `single_tel(number: &str) -> Result<Self, PHeaderError>` - Create with single Tel URI identity
+- `sip_and_tel(sip_uri: SipUri, tel_number: &str) -> Result<Self, PHeaderError>` - Create with both SIP and Tel URIs
+- `new(identities: Vec<PIdentity>) -> Result<Self, PHeaderError>` - Create with custom identity list
 
 **Query Methods:**
 - Same as PAssertedIdentityHeader: `has_tel_identity()`, `has_sip_identity()`, `sip_identity()`, `tel_identity()`, `is_empty()`, `len()`
@@ -115,8 +141,8 @@ pub struct PPreferredIdentityHeader {
 #### Helper Functions
 
 ```rust
-pub fn parse_p_asserted_identity(headers: &Headers) -> Option<PAssertedIdentityHeader>
-pub fn parse_p_preferred_identity(headers: &Headers) -> Option<PPreferredIdentityHeader>
+pub fn parse_p_asserted_identity(headers: &Headers) -> Result<Option<PAssertedIdentityHeader>, PHeaderError>
+pub fn parse_p_preferred_identity(headers: &Headers) -> Result<Option<PPreferredIdentityHeader>, PHeaderError>
 ```
 
 Parse P-header values from SIP message headers, supporting both SIP and Tel URIs.
@@ -125,7 +151,7 @@ Parse P-header values from SIP message headers, supporting both SIP and Tel URIs
 
 ### UAC P-Header APIs
 
-**Location:** `crates/sip-uac/src/lib.rs:589-691`
+**Location:** `crates/sip-uac/src/lib.rs:1601-1718`
 
 #### add_p_preferred_identity_header()
 
@@ -200,7 +226,7 @@ let mut invite = uac.create_invite(&remote_uri, Some(sdp));
 
 // Assert identity (typically done by proxy, not UAC)
 let asserted_uri = SipUri::parse("sip:alice@example.com").unwrap();
-let pai = PAssertedIdentityHeader::sip_and_tel(asserted_uri, "+15551234567");
+let pai = PAssertedIdentityHeader::sip_and_tel(asserted_uri, "+15551234567")?;
 UserAgentClient::add_p_asserted_identity_header(&mut invite, pai);
 ```
 
@@ -244,7 +270,7 @@ let uac = UserAgentClient::new(local_uri, contact_uri);
 let mut invite = uac.create_invite(&remote_uri, None);
 
 // Prefer telephone number identity
-let ppi = PPreferredIdentityHeader::single_tel("+15551234567");
+let ppi = PPreferredIdentityHeader::single_tel("+15551234567")?;
 UserAgentClient::add_p_preferred_identity_header(&mut invite, ppi);
 
 // Result: P-Preferred-Identity: <tel:+15551234567>
@@ -255,23 +281,27 @@ UserAgentClient::add_p_preferred_identity_header(&mut invite, ppi);
 A trusted proxy asserting both SIP and telephone identities:
 
 ```rust
-use sip_core::{PAssertedIdentityHeader, SipUri, parse_p_preferred_identity};
+use sip_core::{parse_p_preferred_identity, PAssertedIdentityHeader, SipUri};
+use smol_str::SmolStr;
 
 // Parse incoming P-Preferred-Identity from UAC
-let ppi = parse_p_preferred_identity(&request.headers);
+let ppi = parse_p_preferred_identity(request.headers())?;
 
 // Proxy validates and asserts identity
 let sip_uri = SipUri::parse("sip:alice@example.com").unwrap();
-let pai = PAssertedIdentityHeader::sip_and_tel(sip_uri, "+15551234567");
+let pai = PAssertedIdentityHeader::sip_and_tel(sip_uri, "+15551234567")?;
 
 // Add to forwarded request
-request.headers.push(
-    SmolStr::new("P-Asserted-Identity"),
-    SmolStr::new(pai.to_string())
-);
+request
+    .headers_mut()
+    .push(
+        SmolStr::new("P-Asserted-Identity"),
+        SmolStr::new(pai.to_string()),
+    )
+    .unwrap();
 
 // Remove P-Preferred-Identity at trust domain boundary
-request.headers.remove("P-Preferred-Identity");
+request.headers_mut().remove("P-Preferred-Identity");
 
 // Result: P-Asserted-Identity: <sip:alice@example.com>, <tel:+15551234567>
 ```
@@ -284,7 +314,7 @@ Extracting identity information from P-Asserted-Identity:
 use sip_core::parse_p_asserted_identity;
 
 // Parse P-Asserted-Identity from incoming request
-if let Some(pai) = parse_p_asserted_identity(&request.headers) {
+if let Some(pai) = parse_p_asserted_identity(request.headers())? {
     // Check what types of identities are present
     if pai.has_sip_identity() {
         println!("SIP identity: {}", pai.sip_identity().unwrap());
@@ -306,19 +336,12 @@ if let Some(pai) = parse_p_asserted_identity(&request.headers) {
 Respecting Privacy header when handling P-Asserted-Identity:
 
 ```rust
-use sip_core::{parse_privacy_header, parse_p_asserted_identity, PrivacyValue};
+use sip_core::{enforce_privacy, parse_privacy_header};
 
 // Check if privacy is requested
-if let Some(privacy) = parse_privacy_header(&request.headers) {
-    if privacy.requires_identity_anonymization() {
-        // Remove P-Asserted-Identity at trust domain boundary
-        request.headers.remove("P-Asserted-Identity");
-
-        // Also remove P-Preferred-Identity
-        request.headers.remove("P-Preferred-Identity");
-
-        println!("Identity headers removed due to Privacy:id");
-    }
+if let Some(privacy) = parse_privacy_header(request.headers()) {
+    // Removes P-Asserted-Identity/P-Preferred-Identity and anonymizes identity headers.
+    enforce_privacy(request.headers_mut(), &privacy)?;
 }
 ```
 
@@ -327,16 +350,14 @@ if let Some(privacy) = parse_privacy_header(&request.headers) {
 Removing P-Asserted-Identity at trust domain boundaries:
 
 ```rust
-use sip_core::parse_p_asserted_identity;
-
 // Function called at trust domain boundary
 fn sanitize_at_trust_boundary(request: &mut Request) {
     // P-Asserted-Identity MUST be removed
-    request.headers.remove("P-Asserted-Identity");
+    request.headers_mut().remove("P-Asserted-Identity");
 
     // P-Preferred-Identity can be kept or removed based on policy
     // (typically removed for privacy)
-    request.headers.remove("P-Preferred-Identity");
+    request.headers_mut().remove("P-Preferred-Identity");
 }
 ```
 
@@ -350,12 +371,12 @@ use sip_core::{PIdentity, PAssertedIdentityHeader, SipUri, Uri};
 // Create multiple identity entries
 let sip_uri = SipUri::parse("sip:alice@example.com").unwrap();
 let sip_identity = PIdentity::from_uri(Uri::Sip(sip_uri))
-    .with_display_name("Alice Smith");
+    .with_display_name("Alice Smith")?;
 
 let tel_uri = Uri::parse("tel:+15551234567").unwrap();
 let tel_identity = PIdentity::from_uri(tel_uri);
 
-let pai = PAssertedIdentityHeader::new(vec![sip_identity, tel_identity]);
+let pai = PAssertedIdentityHeader::new(vec![sip_identity, tel_identity])?;
 
 // Result: P-Asserted-Identity: "Alice Smith" <sip:alice@example.com>, <tel:+15551234567>
 ```
@@ -368,7 +389,7 @@ Parsing P-Preferred-Identity and validating before asserting:
 use sip_core::{parse_p_preferred_identity, PAssertedIdentityHeader, SipUri};
 
 // Parse P-Preferred-Identity from UAC request
-if let Some(ppi) = parse_p_preferred_identity(&request.headers) {
+if let Some(ppi) = parse_p_preferred_identity(request.headers())? {
     // Validate that the UAC is authorized for this identity
     if let Some(sip_id) = ppi.sip_identity() {
         if is_authorized_for_identity(&uac_credentials, sip_id) {
@@ -380,7 +401,7 @@ if let Some(ppi) = parse_p_preferred_identity(&request.headers) {
             UserAgentClient::add_p_asserted_identity_header(&mut request, pai);
 
             // Remove P-Preferred-Identity
-            request.headers.remove("P-Preferred-Identity");
+            request.headers_mut().remove("P-Preferred-Identity");
         } else {
             // Not authorized - reject or use default identity
             println!("UAC not authorized for preferred identity");
@@ -435,6 +456,8 @@ When Privacy:id or Privacy:user is requested:
 - Proxies **MUST** remove P-Asserted-Identity at trust domain boundaries
 - Proxies **SHOULD** remove P-Preferred-Identity
 - From/Contact headers should be anonymized (per RFC 3323)
+
+The `enforce_privacy()` helper removes P-Asserted-Identity/P-Preferred-Identity and anonymizes From/Contact when Privacy:id or Privacy:user is present.
 
 Example:
 ```rust
@@ -509,30 +532,27 @@ PPreferredIdentityHeader
 
 ## Test Coverage
 
-### Core P-Header Tests (16 tests)
+### Core P-Header Tests (13 tests)
 
-**Location:** `crates/sip-core/src/p_headers.rs` (lines 386-541)
+**Location:** `crates/sip-core/src/p_headers.rs` (lines 911-1040)
 
 - ✅ `p_asserted_identity_single_sip` - Single SIP identity creation
 - ✅ `p_asserted_identity_single_tel` - Single Tel identity creation
-- ✅ `p_asserted_identity_sip_and_tel` - Both SIP and Tel identities
-- ✅ `p_asserted_identity_display` - Display formatting
-- ✅ `p_asserted_identity_tel_format` - Tel URI with/without prefix
-- ✅ `p_asserted_identity_is_empty` - Empty header handling
-- ✅ `p_preferred_identity_single_sip` - Single SIP identity creation
-- ✅ `p_preferred_identity_single_tel` - Single Tel identity creation
-- ✅ `p_preferred_identity_display` - Display formatting
-- ✅ `p_preferred_identity_is_empty` - Empty header handling
-- ✅ `parse_p_identity_with_brackets` - Parsing with angle brackets
+- ✅ `reject_crlf_in_display_name` - Rejects CRLF injection in display name
+- ✅ `reject_oversized_display_name` - Enforces display name limits
+- ✅ `reject_too_many_identities` - Enforces identity count limits
+- ✅ `reject_empty_identities` - Rejects empty identity list
+- ✅ `reject_too_many_params` - Enforces parameter limits
+- ✅ `fields_are_private` - Confirms accessor-only API
 - ✅ `parse_p_identity_with_display` - Parsing with display name
-- ✅ `parse_p_identity_plain_uri` - Parsing plain URI
-- ✅ `parse_p_identity_tel_uri` - Parsing Tel URI
-- ✅ `p_identity_display_with_name` - PIdentity display with name
-- ✅ `p_identity_display_without_name` - PIdentity display without name
+- ✅ `parse_p_identity_with_angle_in_display` - Parsing with angle brackets in display
+- ✅ `parse_p_identity_with_params` - Parsing with parameters
+- ✅ `parse_p_identity_list_with_commas` - Parsing multiple identities
+- ✅ `reject_invalid_parse_input` - Rejects malformed inputs
 
 ### UAC P-Header Tests (4 tests)
 
-**Location:** `crates/sip-uac/src/lib.rs` (lines 1951-2037)
+**Location:** `crates/sip-uac/src/lib.rs` (lines 3911-3997)
 
 - ✅ `adds_p_preferred_identity_sip` - Adding SIP P-Preferred-Identity
 - ✅ `adds_p_preferred_identity_tel` - Adding Tel P-Preferred-Identity
@@ -554,7 +574,7 @@ PPreferredIdentityHeader
 | Multiple identities per header | ✅ | Vec<PIdentity> |
 | Display name support | ✅ | PIdentity.display_name |
 | Trust domain awareness (docs) | ✅ | Documentation and warnings |
-| Privacy interaction (RFC 3323) | ⚠️ | Documented, not enforced in code |
+| Privacy interaction (RFC 3323) | ✅ | Enforced via `enforce_privacy()` removing P-headers |
 | Parsing of P-headers | ✅ | parse_p_asserted_identity(), parse_p_preferred_identity() |
 | Formatting of P-headers | ✅ | Display trait implementations |
 
@@ -564,9 +584,9 @@ PPreferredIdentityHeader
 |----------|--------|-------|
 | UACs use P-Preferred-Identity | ✅ | UAC APIs provided |
 | Proxies use P-Asserted-Identity | ✅ | Static method with warnings |
-| Remove at trust boundaries | ⚠️ | Documented, not automated |
+| Remove at trust boundaries | ⚠️ | Documented; `enforce_privacy()` covers Privacy:id/user cases |
 | Validate before asserting | ⚠️ | Left to application logic |
-| Respect Privacy header | ⚠️ | Documented, not enforced |
+| Respect Privacy header | ✅ | `enforce_privacy()` applies Privacy header policies |
 
 **Legend:**
 - ✅ Fully implemented
@@ -584,8 +604,8 @@ PPreferredIdentityHeader
    - Trust validation framework
 
 2. **Privacy Integration**
-   - Automatic P-Asserted-Identity removal when Privacy:id present
-   - Integrated privacy enforcement function
+   - Proxy integration for `enforce_privacy()` in forwarding paths
+   - Session privacy helpers (SDP scrubbing)
    - Privacy-aware proxy APIs
 
 3. **Validation Framework**
@@ -614,4 +634,3 @@ PPreferredIdentityHeader
 | Date | Version | Changes |
 |------|---------|---------|
 | 2025-01-21 | 1.0 | Initial RFC 3325 implementation complete |
-
