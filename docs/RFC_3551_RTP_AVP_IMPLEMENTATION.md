@@ -90,13 +90,37 @@ The implementation provides a comprehensive module for RFC 3551:
 /// Static payload type information
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StaticPayloadType {
-    pub payload_type: u8,
-    pub encoding_name: &'static str,
-    pub clock_rate: u32,
-    pub channels: Option<u8>,
-    pub media_type: &'static str,
+    payload_type: u8,
+    encoding_name: &'static str,
+    clock_rate: u32,
+    channels: Option<u8>,
+    media_type: &'static str,
+}
+
+impl StaticPayloadType {
+    pub const fn payload_type(&self) -> u8 {
+        self.payload_type
+    }
+
+    pub const fn encoding_name(&self) -> &'static str {
+        self.encoding_name
+    }
+
+    pub const fn clock_rate(&self) -> u32 {
+        self.clock_rate
+    }
+
+    pub const fn channels(&self) -> Option<u8> {
+        self.channels
+    }
+
+    pub const fn media_type(&self) -> &'static str {
+        self.media_type
+    }
 }
 ```
+
+Fields are private; use the accessor methods when reading payload metadata.
 
 ### Predefined Constants
 
@@ -107,10 +131,18 @@ pub const PCMU: StaticPayloadType;    // PT 0
 pub const GSM: StaticPayloadType;     // PT 3
 pub const G723: StaticPayloadType;    // PT 4
 pub const DVI4_8000: StaticPayloadType;  // PT 5
+pub const DVI4_16000: StaticPayloadType; // PT 6
 pub const PCMA: StaticPayloadType;    // PT 8
 pub const G722: StaticPayloadType;    // PT 9
+pub const L16_STEREO: StaticPayloadType; // PT 10
+pub const L16_MONO: StaticPayloadType;   // PT 11
 pub const G729: StaticPayloadType;    // PT 18
+pub const CELB: StaticPayloadType;    // PT 25
+pub const JPEG: StaticPayloadType;    // PT 26
+pub const NV: StaticPayloadType;      // PT 28
 pub const H261: StaticPayloadType;    // PT 31
+pub const MPV: StaticPayloadType;     // PT 32
+pub const MP2T: StaticPayloadType;    // PT 33
 pub const H263: StaticPayloadType;    // PT 34
 // ... and many more
 ```
@@ -137,6 +169,8 @@ pub fn is_dynamic_range(pt: u8) -> bool;
 pub fn is_reserved(pt: u8) -> bool;
 ```
 
+Encoding-name lookups are case-insensitive and reject inputs longer than 32 bytes.
+
 ## Usage Examples
 
 ### Looking Up Payload Type Information
@@ -146,17 +180,17 @@ use sip_core::rtp_avp::get_static_payload_type;
 
 // Get PCMU information
 let pcmu = get_static_payload_type(0)?;
-assert_eq!(pcmu.encoding_name, "PCMU");
-assert_eq!(pcmu.clock_rate, 8000);
-assert_eq!(pcmu.channels, Some(1));
-assert_eq!(pcmu.media_type, "audio");
+assert_eq!(pcmu.encoding_name(), "PCMU");
+assert_eq!(pcmu.clock_rate(), 8000);
+assert_eq!(pcmu.channels(), Some(1));
+assert_eq!(pcmu.media_type(), "audio");
 
 // Get H.261 information
 let h261 = get_static_payload_type(31)?;
-assert_eq!(h261.encoding_name, "H261");
-assert_eq!(h261.clock_rate, 90000);
-assert_eq!(h261.channels, None);  // Video has no channel concept
-assert_eq!(h261.media_type, "video");
+assert_eq!(h261.encoding_name(), "H261");
+assert_eq!(h261.clock_rate(), 90000);
+assert_eq!(h261.channels(), None);  // Video has no channel concept
+assert_eq!(h261.media_type(), "video");
 
 // Dynamic payload types return None
 assert!(get_static_payload_type(96).is_none());
@@ -217,14 +251,17 @@ m=audio 49170 RTP/AVP 0 8\r\n\
 ";
 
 let session = SdpSession::parse(sdp)?;
-let media = &session.media[0];
-
-// Parse formats
-for fmt in &media.fmt {
-    if let Ok(pt) = fmt.parse::<u8>() {
-        if let Some(info) = get_static_payload_type(pt) {
-            println!("Codec: {} at {} Hz",
-                info.encoding_name, info.clock_rate);
+if let Some(media) = session.media().first() {
+    // Parse formats
+    for fmt in media.fmt() {
+        if let Ok(pt) = fmt.parse::<u8>() {
+            if let Some(info) = get_static_payload_type(pt) {
+                println!(
+                    "Codec: {} at {} Hz",
+                    info.encoding_name(),
+                    info.clock_rate()
+                );
+            }
         }
     }
 }
@@ -284,7 +321,7 @@ for fmt in &media.fmt {
 ### Use Case 1: Basic PCMU Audio Call
 
 ```rust
-use sip_core::rtp_avp::{PCMU, get_static_payload_type};
+use sip_core::rtp_avp::PCMU;
 
 // Create SDP with static PT 0 (PCMU)
 let sdp = format!("\
@@ -294,7 +331,7 @@ s=Call\r\n\
 c=IN IP4 192.0.2.1\r\n\
 t=0 0\r\n\
 m=audio 49170 RTP/AVP {}\r\n\
-", PCMU.payload_type);
+", PCMU.payload_type());
 
 // No rtpmap needed - PT 0 is universally understood as PCMU/8000
 ```
@@ -312,7 +349,7 @@ c=IN IP4 192.0.2.1\r\n\
 t=0 0\r\n\
 m=audio 49170 RTP/AVP {}\r\n\
 m=video 49172 RTP/AVP {}\r\n\
-", PCMU.payload_type, H261.payload_type);
+", PCMU.payload_type(), H261.payload_type());
 
 // Both payload types are static - no rtpmap required
 ```
@@ -357,36 +394,75 @@ a=rtpmap:96 opus/48000/2\r\n\
 
 ## Integration with Offer/Answer
 
-The RTP/AVP module integrates with the existing SDP offer/answer engine in `sdp_offer_answer.rs`. The engine automatically uses static payload type information when rtpmap attributes are absent.
+The SDP offer/answer engine includes a small static mapping for common audio payload
+types (PCMU, PCMA, GSM, G723, G722, G729). For full RFC 3551 coverage, use the
+`rtp_avp` helpers when generating or interpreting SDP.
 
 ```rust
 // In OfferAnswerEngine
-fn get_rtpmaps(&self, media: &MediaDescription) -> HashMap<String, RtpMap> {
+fn extract_rtpmaps(&self, media: &MediaDescription) -> HashMap<String, RtpMap> {
+    let mut rtpmaps = HashMap::new();
+
     // ... parse explicit rtpmap attributes ...
 
     // Add static payload types if not explicitly mapped
-    for fmt in &media.fmt {
+    for fmt in media.fmt() {
         if !rtpmaps.contains_key(fmt) {
-            if let Ok(pt) = fmt.parse::<u8>() {
-                if let Some(info) = get_static_payload_type(pt) {
-                    rtpmaps.insert(fmt.clone(), RtpMap {
-                        payload_type: info.payload_type,
-                        encoding_name: info.encoding_name.to_string(),
-                        clock_rate: info.clock_rate,
-                        encoding_params: info.channels.map(|ch| ch.to_string()),
-                    });
-                }
+            if let Some(rtpmap) = self.get_static_payload_rtpmap(fmt) {
+                rtpmaps.insert(fmt.clone(), rtpmap);
             }
         }
     }
 
     rtpmaps
 }
+
+fn get_static_payload_rtpmap(&self, payload: &str) -> Option<RtpMap> {
+    match payload {
+        "0" => Some(RtpMap {
+            payload_type: 0,
+            encoding_name: "PCMU".to_string(),
+            clock_rate: 8000,
+            encoding_params: None,
+        }),
+        "8" => Some(RtpMap {
+            payload_type: 8,
+            encoding_name: "PCMA".to_string(),
+            clock_rate: 8000,
+            encoding_params: None,
+        }),
+        "3" => Some(RtpMap {
+            payload_type: 3,
+            encoding_name: "GSM".to_string(),
+            clock_rate: 8000,
+            encoding_params: None,
+        }),
+        "4" => Some(RtpMap {
+            payload_type: 4,
+            encoding_name: "G723".to_string(),
+            clock_rate: 8000,
+            encoding_params: None,
+        }),
+        "9" => Some(RtpMap {
+            payload_type: 9,
+            encoding_name: "G722".to_string(),
+            clock_rate: 8000,
+            encoding_params: None,
+        }),
+        "18" => Some(RtpMap {
+            payload_type: 18,
+            encoding_name: "G729".to_string(),
+            clock_rate: 8000,
+            encoding_params: None,
+        }),
+        _ => None,
+    }
+}
 ```
 
 ## Testing
 
-The implementation includes 14 comprehensive tests:
+The implementation includes 16 comprehensive tests:
 
 ### Payload Type Lookup Tests
 - `test_get_static_payload_type_pcmu` - PCMU (PT 0) lookup
@@ -412,6 +488,10 @@ The implementation includes 14 comprehensive tests:
 - `test_all_audio_codecs` - All 18 audio codecs present
 - `test_all_video_codecs` - All 7 video codecs present
 
+### Security Tests
+- `reject_oversized_encoding_name` - Length guard on encoding name inputs
+- `const_data_cannot_be_mutated` - Const instances cannot be modified
+
 Run tests with:
 ```bash
 cargo test rtp_avp::tests
@@ -425,21 +505,21 @@ cargo test rtp_avp::tests
 | **Audio codecs** | ✅ Complete | 18 codecs (0-18) |
 | **Video codecs** | ✅ Complete | 7 codecs (25-34) |
 | **Lookup by PT** | ✅ Complete | O(1) array access |
-| **Lookup by name** | ✅ Complete | Case-insensitive |
+| **Lookup by name** | ✅ Complete | Case-insensitive, 32-byte max |
 | **Clock rate lookup** | ✅ Complete | For multi-rate codecs |
 | **Range validation** | ✅ Complete | Static/dynamic/reserved |
 | **Display formatting** | ✅ Complete | Human-readable |
 | **Documentation** | ✅ Complete | Full API docs |
-| **Test coverage** | ✅ Complete | 14 comprehensive tests |
-| **SDP integration** | ✅ Complete | Offer/answer uses it |
+| **Test coverage** | ✅ Complete | 16 comprehensive tests |
+| **SDP integration** | ⚠️ Limited | Offer/answer uses a small static subset |
 
 ## Code Locations
 
 | Component | File | Description |
 |-----------|------|-------------|
 | Main module | `crates/sip-core/src/rtp_avp.rs` | Complete implementation |
-| Module export | `crates/sip-core/src/lib.rs:30` | Public module |
-| Integration | `crates/sip-core/src/sdp_offer_answer.rs` | Offer/answer uses static PTs |
+| Module export | `crates/sip-core/src/lib.rs:58` | Public module |
+| Integration | `crates/sip-core/src/sdp_offer_answer.rs:629` | Static subset in offer/answer |
 
 ## References
 
@@ -474,5 +554,4 @@ While the current implementation is fully compliant with RFC 3551, potential fut
   - Implemented lookup functions (by PT, by name, by name+rate)
   - Added range validation functions
   - Integrated with existing offer/answer engine
-  - Added 14 comprehensive tests
-  - All 431 tests passing
+  - Added 16 comprehensive tests
