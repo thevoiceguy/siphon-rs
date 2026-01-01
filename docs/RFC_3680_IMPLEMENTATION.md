@@ -2,8 +2,6 @@
 
 **Date:** 2025-01-21
 **Status:** ✅ **COMPLETE** - Full RFC 3680 compliance achieved
-**Test Results:** ✅ All 57 tests passing (11 reg_event tests + 46 sip-uac tests)
-
 ---
 
 ## Overview
@@ -42,14 +40,14 @@ RFC 3680 defines the "reg" event package:
 
 | Component | Status | Location | Description |
 |-----------|--------|----------|-------------|
-| **RegInfo Type** | ✅ Complete | `sip-core/src/reg_event.rs:40-58` | Registration information document |
-| **Registration Type** | ✅ Complete | `sip-core/src/reg_event.rs:93-121` | Address-of-record registration |
-| **Contact Type** | ✅ Complete | `sip-core/src/reg_event.rs:152-227` | Contact binding details |
-| **XML Generation** | ✅ Complete | `sip-core/src/reg_event.rs:321-387` | application/reginfo+xml output |
-| **State Enums** | ✅ Complete | Various | RegInfoState, RegistrationState, ContactState, ContactEvent |
-| **create_reg_subscribe()** | ✅ Complete | `sip-uac/src/lib.rs:1105-1116` | Create reg event SUBSCRIBE |
-| **create_reg_notify()** | ✅ Complete | `sip-uac/src/lib.rs:1171-1224` | Create NOTIFY with reginfo |
-| **Tests** | ✅ Complete | 11 comprehensive tests | Full coverage |
+| **RegInfo Type** | ✅ Complete | `crates/sip-core/src/reg_event.rs:53-110` | Registration information document |
+| **Registration Type** | ✅ Complete | `crates/sip-core/src/reg_event.rs:128-199` | Address-of-record registration |
+| **Contact Type** | ✅ Complete | `crates/sip-core/src/reg_event.rs:219-373` | Contact binding details |
+| **XML Generation** | ✅ Complete | `crates/sip-core/src/reg_event.rs:538-619` | application/reginfo+xml output |
+| **State Enums** | ✅ Complete | `crates/sip-core/src/reg_event.rs:112-433` | RegInfoState, RegistrationState, ContactState, ContactEvent |
+| **create_reg_subscribe()** | ✅ Complete | `crates/sip-uac/src/lib.rs:2176-2189` | Create reg event SUBSCRIBE |
+| **create_reg_notify()** | ✅ Complete | `crates/sip-uac/src/lib.rs:2246-2343` | Create NOTIFY with reginfo |
+| **Tests** | ✅ Complete | `crates/sip-core/src/reg_event.rs:622-942` | Core reg_event + security tests |
 | **Documentation** | ✅ Complete | Inline docs + this document | Usage examples and API docs |
 
 ---
@@ -64,9 +62,18 @@ Main registration information document:
 
 ```rust
 pub struct RegInfo {
-    pub version: u32,                      // Incremented with each state change
-    pub state: RegInfoState,               // Full or Partial
-    pub registrations: Vec<Registration>,  // One per address-of-record
+    version: u32,                      // Incremented with each state change
+    state: RegInfoState,               // Full or Partial
+    registrations: Vec<Registration>,  // One per address-of-record
+}
+
+impl RegInfo {
+    pub fn new(version: u32, state: RegInfoState) -> Self;
+    pub fn add_registration(&mut self, registration: Registration) -> Result<(), RegEventsError>;
+    pub fn version(&self) -> u32;
+    pub fn state(&self) -> RegInfoState;
+    pub fn registrations(&self) -> &[Registration];
+    pub fn is_empty(&self) -> bool;
 }
 ```
 
@@ -74,6 +81,8 @@ pub struct RegInfo {
 ```rust
 let reginfo = RegInfo::new(1, RegInfoState::Full);
 ```
+
+Fields are private; use getters and `add_registration()` (which enforces `MAX_REGISTRATIONS`).
 
 #### RegInfoState
 
@@ -92,21 +101,38 @@ Represents one address-of-record:
 
 ```rust
 pub struct Registration {
-    pub aor: SmolStr,                // Address-of-record URI
-    pub id: SmolStr,                 // Unique identifier
-    pub state: RegistrationState,    // Init, Active, Terminated
-    pub contacts: Vec<Contact>,      // Registered contacts
+    aor: SmolStr,                // Address-of-record URI
+    id: SmolStr,                 // Unique identifier
+    state: RegistrationState,    // Init, Active, Terminated
+    contacts: Vec<Contact>,      // Registered contacts
+}
+
+impl Registration {
+    pub fn new(
+        aor: impl AsRef<str>,
+        id: impl AsRef<str>,
+        state: RegistrationState,
+    ) -> Result<Self, RegEventsError>;
+    pub fn add_contact(&mut self, contact: Contact) -> Result<(), RegEventsError>;
+    pub fn aor(&self) -> &str;
+    pub fn id(&self) -> &str;
+    pub fn state(&self) -> RegistrationState;
+    pub fn contacts(&self) -> &[Contact];
+    pub fn is_empty(&self) -> bool;
 }
 ```
 
 **Constructor:**
 ```rust
 let registration = Registration::new(
-    SmolStr::new("sip:alice@example.com"),
-    SmolStr::new("reg1"),
-    RegistrationState::Active
-);
+    "sip:alice@example.com",
+    "reg1",
+    RegistrationState::Active,
+)?;
 ```
+
+`new()` and `add_contact()` validate identifiers and enforce `MAX_CONTACTS`.
+Fields are private; use getters like `aor()` and `contacts()`.
 
 #### RegistrationState
 
@@ -126,37 +152,69 @@ Individual contact binding:
 
 ```rust
 pub struct Contact {
-    pub id: SmolStr,                       // Unique identifier
-    pub state: ContactState,               // Active or Terminated
-    pub event: Option<ContactEvent>,       // Trigger event
-    pub uri: SmolStr,                      // Contact URI
-    pub display_name: Option<SmolStr>,     // Display name
-    pub expires: Option<u32>,              // Expiration in seconds
-    pub retry_after: Option<u32>,          // Retry delay for rejected
-    pub duration_registered: Option<u32>,  // Time in probation
-    pub q: Option<f32>,                    // Q-value (priority)
-    pub call_id: Option<SmolStr>,          // REGISTER Call-ID
-    pub cseq: Option<u32>,                 // REGISTER CSeq
+    id: SmolStr,                       // Unique identifier
+    state: ContactState,               // Active or Terminated
+    event: Option<ContactEvent>,       // Trigger event
+    uri: SmolStr,                      // Contact URI
+    display_name: Option<SmolStr>,     // Display name
+    expires: Option<u32>,              // Expiration in seconds
+    retry_after: Option<u32>,          // Retry delay for rejected
+    duration_registered: Option<u32>,  // Time in probation
+    q: Option<f32>,                    // Q-value (priority)
+    call_id: Option<SmolStr>,          // REGISTER Call-ID
+    cseq: Option<u32>,                 // REGISTER CSeq
+}
+
+impl Contact {
+    pub fn new(
+        id: impl AsRef<str>,
+        state: ContactState,
+        uri: impl AsRef<str>,
+    ) -> Result<Self, RegEventsError>;
+    pub fn with_event(self, event: ContactEvent) -> Self;
+    pub fn with_expires(self, expires: u32) -> Self;
+    pub fn with_display_name(self, name: impl AsRef<str>) -> Result<Self, RegEventsError>;
+    pub fn with_q(self, q: f32) -> Result<Self, RegEventsError>;
+    pub fn with_call_id(self, call_id: impl AsRef<str>) -> Result<Self, RegEventsError>;
+    pub fn with_cseq(self, cseq: u32) -> Self;
+    pub fn with_retry_after(self, retry_after: u32) -> Self;
+    pub fn with_duration_registered(self, duration: u32) -> Self;
+
+    pub fn id(&self) -> &str;
+    pub fn state(&self) -> ContactState;
+    pub fn event(&self) -> Option<ContactEvent>;
+    pub fn uri(&self) -> &str;
+    pub fn display_name(&self) -> Option<&str>;
+    pub fn expires(&self) -> Option<u32>;
+    pub fn retry_after(&self) -> Option<u32>;
+    pub fn duration_registered(&self) -> Option<u32>;
+    pub fn q(&self) -> Option<f32>;
+    pub fn call_id(&self) -> Option<&str>;
+    pub fn cseq(&self) -> Option<u32>;
 }
 ```
 
 **Constructor:**
 ```rust
 let contact = Contact::new(
-    SmolStr::new("contact1"),
+    "contact1",
     ContactState::Active,
-    SmolStr::new("sip:alice@192.168.1.100:5060")
-);
+    "sip:alice@192.168.1.100:5060"
+)?;
 ```
+
+`with_display_name()`, `with_q()`, and `with_call_id()` return `RegEventsError` on validation failure.
+
+Fields are private; use getters like `uri()` and `expires()`.
 
 **Builder Methods:**
 ```rust
-let contact = Contact::new(id, state, uri)
+let contact = Contact::new(id, state, uri)?
     .with_event(ContactEvent::Registered)
     .with_expires(3600)
-    .with_display_name("Alice Smith")
-    .with_q(0.8)
-    .with_call_id("abc123")
+    .with_display_name("Alice Smith")?
+    .with_q(0.8)?
+    .with_call_id("abc123")?
     .with_cseq(42);
 ```
 
@@ -188,6 +246,20 @@ pub enum ContactEvent {
     Probation,     // In probation period
 }
 ```
+
+#### Validation and Limits
+
+Registration event types enforce input validation and size limits:
+
+- Maximum registrations: 100
+- Maximum contacts per registration: 50
+- Max URI length: 512
+- Max ID length: 128
+- Max display name length: 256
+- Max Call-ID length: 256
+- Q-values must be in the range 0.0–1.0
+
+Validation failures return `RegEventsError`.
 
 ### UAC Methods
 
@@ -256,7 +328,6 @@ use sip_uac::UserAgentClient;
 use sip_core::{SipUri, RegInfo, RegInfoState, Registration, RegistrationState,
                Contact, ContactState, ContactEvent};
 use sip_dialog::SubscriptionState;
-use smol_str::SmolStr;
 
 let uac = UserAgentClient::new(
     SipUri::parse("sip:registrar@example.com")?,
@@ -267,21 +338,22 @@ let uac = UserAgentClient::new(
 let mut reginfo = RegInfo::new(1, RegInfoState::Full);
 
 let mut registration = Registration::new(
-    SmolStr::new("sip:bob@example.com"),
-    SmolStr::new("reg1"),
-    RegistrationState::Active
-);
+    "sip:bob@example.com",
+    "reg1",
+    RegistrationState::Active,
+)?;
 
 let contact = Contact::new(
-    SmolStr::new("contact1"),
+    "contact1",
     ContactState::Active,
-    SmolStr::new("sip:bob@192.168.1.200:5060")
-).with_event(ContactEvent::Registered)
-  .with_expires(3600)
-  .with_display_name("Bob's Phone");
+    "sip:bob@192.168.1.200:5060",
+)?
+.with_event(ContactEvent::Registered)
+.with_expires(3600)
+.with_display_name("Bob's Phone")?;
 
-registration.add_contact(contact);
-reginfo.add_registration(registration);
+registration.add_contact(contact)?;
+reginfo.add_registration(registration)?;
 
 // Create NOTIFY
 let notify = uac.create_reg_notify(
@@ -322,7 +394,7 @@ async fn monitor_user_registration(
 
             // Parse reginfo XML from body
             // (XML parsing not yet implemented - use external XML parser)
-            let reginfo_xml = String::from_utf8_lossy(&notify.body);
+            let reginfo_xml = String::from_utf8_lossy(notify.body());
             println!("Registration state: {}", reginfo_xml);
         }
     }
@@ -338,7 +410,6 @@ use sip_uac::UserAgentClient;
 use sip_core::{RegInfo, RegInfoState, Registration, RegistrationState,
                Contact, ContactState, ContactEvent};
 use sip_dialog::SubscriptionState;
-use smol_str::SmolStr;
 
 async fn send_registration_notification(
     uac: &UserAgentClient,
@@ -351,20 +422,21 @@ async fn send_registration_notification(
     let mut reginfo = RegInfo::new(1, RegInfoState::Full);
 
     let mut registration = Registration::new(
-        SmolStr::new(aor.to_owned()),
-        SmolStr::new("reg1"),
-        RegistrationState::Active
-    );
+        aor,
+        "reg1",
+        RegistrationState::Active,
+    )?;
 
     let contact = Contact::new(
-        SmolStr::new("contact1"),
+        "contact1",
         ContactState::Active,
-        SmolStr::new(contact_uri.to_owned())
-    ).with_event(ContactEvent::Registered)
-      .with_expires(expires);
+        contact_uri,
+    )?
+    .with_event(ContactEvent::Registered)
+    .with_expires(expires);
 
-    registration.add_contact(contact);
-    reginfo.add_registration(registration);
+    registration.add_contact(contact)?;
+    reginfo.add_registration(registration)?;
 
     // Send NOTIFY
     let notify = uac.create_reg_notify(
@@ -386,34 +458,36 @@ async fn send_registration_notification(
 let mut reginfo = RegInfo::new(1, RegInfoState::Full);
 
 let mut registration = Registration::new(
-    SmolStr::new("sip:alice@example.com"),
-    SmolStr::new("reg1"),
-    RegistrationState::Active
-);
+    "sip:alice@example.com",
+    "reg1",
+    RegistrationState::Active,
+)?;
 
 // Desktop phone
 let contact1 = Contact::new(
-    SmolStr::new("contact1"),
+    "contact1",
     ContactState::Active,
-    SmolStr::new("sip:alice@192.168.1.100:5060")
-).with_event(ContactEvent::Registered)
-  .with_expires(3600)
-  .with_display_name("Alice Desktop")
-  .with_q(1.0);
+    "sip:alice@192.168.1.100:5060",
+)?
+.with_event(ContactEvent::Registered)
+.with_expires(3600)
+.with_display_name("Alice Desktop")?
+.with_q(1.0)?;
 
 // Mobile phone
 let contact2 = Contact::new(
-    SmolStr::new("contact2"),
+    "contact2",
     ContactState::Active,
-    SmolStr::new("sip:alice@10.0.0.50:5060")
-).with_event(ContactEvent::Registered)
-  .with_expires(7200)
-  .with_display_name("Alice Mobile")
-  .with_q(0.5);
+    "sip:alice@10.0.0.50:5060",
+)?
+.with_event(ContactEvent::Registered)
+.with_expires(7200)
+.with_display_name("Alice Mobile")?
+.with_q(0.5)?;
 
-registration.add_contact(contact1);
-registration.add_contact(contact2);
-reginfo.add_registration(registration);
+registration.add_contact(contact1)?;
+registration.add_contact(contact2)?;
+reginfo.add_registration(registration)?;
 
 let notify = uac.create_reg_notify(&subscription, SubscriptionState::Active, &reginfo);
 ```
@@ -442,19 +516,20 @@ let notify = uac.create_reg_notify(&subscription, SubscriptionState::Active, &re
 let mut reginfo = RegInfo::new(2, RegInfoState::Partial); // Incremented version
 
 let mut registration = Registration::new(
-    SmolStr::new("sip:alice@example.com"),
-    SmolStr::new("reg1"),
-    RegistrationState::Active
-);
+    "sip:alice@example.com",
+    "reg1",
+    RegistrationState::Active,
+)?;
 
 let contact = Contact::new(
-    SmolStr::new("contact1"),
+    "contact1",
     ContactState::Terminated,  // Now terminated
-    SmolStr::new("sip:alice@192.168.1.100:5060")
-).with_event(ContactEvent::Expired);  // Because it expired
+    "sip:alice@192.168.1.100:5060",
+)?
+.with_event(ContactEvent::Expired);  // Because it expired
 
-registration.add_contact(contact);
-reginfo.add_registration(registration);
+registration.add_contact(contact)?;
+reginfo.add_registration(registration)?;
 
 let notify = uac.create_reg_notify(&subscription, SubscriptionState::Active, &reginfo);
 ```
@@ -466,22 +541,23 @@ let notify = uac.create_reg_notify(&subscription, SubscriptionState::Active, &re
 let mut reginfo = RegInfo::new(1, RegInfoState::Full);
 
 let mut registration = Registration::new(
-    SmolStr::new("sip:alice@example.com"),
-    SmolStr::new("reg1"),
-    RegistrationState::Active
-);
+    "sip:alice@example.com",
+    "reg1",
+    RegistrationState::Active,
+)?;
 
 let contact = Contact::new(
-    SmolStr::new("contact1"),
+    "contact1",
     ContactState::Terminated,
-    SmolStr::new("sip:alice@192.168.1.100:5060")
-).with_event(ContactEvent::Rejected);
+    "sip:alice@192.168.1.100:5060",
+)?
+.with_event(ContactEvent::Rejected);
 
 // Optionally include retry-after
 // contact = contact.with_retry_after(300);  // Retry after 5 minutes
 
-registration.add_contact(contact);
-reginfo.add_registration(registration);
+registration.add_contact(contact)?;
+reginfo.add_registration(registration)?;
 
 let notify = uac.create_reg_notify(&subscription, SubscriptionState::Active, &reginfo);
 ```
@@ -586,7 +662,7 @@ let subscribe = uac.create_reg_subscribe(&aor, 7200);
 
 ### Test Coverage
 
-All 11 reg_event tests pass:
+Reg event tests include:
 
 1. ✅ `reginfo_empty` - Empty reginfo creation
 2. ✅ `reginfo_with_registration` - Adding registrations
@@ -599,6 +675,18 @@ All 11 reg_event tests pass:
 9. ✅ `contact_state_as_str` - Contact state strings
 10. ✅ `contact_terminated_with_expired` - Terminated contacts
 11. ✅ `multiple_contacts_in_registration` - Multiple contacts
+12. ✅ `xml_escape_test` - XML escaping
+13. ✅ `xml_injection_prevention` - Injection hardening
+14. ✅ `reject_crlf_in_uri` - CR/LF guard on URI
+15. ✅ `reject_empty_uri` - Empty URI rejection
+16. ✅ `reject_crlf_in_id` - CR/LF guard on IDs
+17. ✅ `reject_invalid_q_value` - q-value bounds
+18. ✅ `accept_valid_q_value` - q-value accepts 0.0–1.0
+19. ✅ `reject_too_many_registrations` - MAX_REGISTRATIONS enforced
+20. ✅ `reject_too_many_contacts` - MAX_CONTACTS enforced
+21. ✅ `reject_oversized_uri` - MAX_URI_LENGTH enforced
+22. ✅ `reject_empty_call_id` - Call-ID validation
+23. ✅ `fields_are_private` - Getter-only access
 
 ### Running Tests
 
@@ -611,25 +699,6 @@ cargo test --package sip-uac
 
 # Run specific test
 cargo test --package sip-core reginfo_xml_output
-```
-
-### Test Results
-
-```
-running 11 tests
-test reg_event::tests::contact_event_from_str ... ok
-test reg_event::tests::contact_state_as_str ... ok
-test reg_event::tests::contact_with_details ... ok
-test reg_event::tests::contact_terminated_with_expired ... ok
-test reg_event::tests::multiple_contacts_in_registration ... ok
-test reg_event::tests::reginfo_state_as_str ... ok
-test reg_event::tests::reginfo_xml_output ... ok
-test reg_event::tests::reginfo_empty ... ok
-test reg_event::tests::registration_state_as_str ... ok
-test reg_event::tests::reginfo_with_registration ... ok
-test reg_event::tests::registration_with_contact ... ok
-
-test result: ok. 11 passed; 0 failed; 0 ignored
 ```
 
 ---
@@ -680,7 +749,7 @@ impl AgentMonitor {
 
     async fn handle_notify(&mut self, notify: &Request) -> anyhow::Result<()> {
         // Parse reginfo XML from body
-        let reginfo_xml = String::from_utf8_lossy(&notify.body);
+        let reginfo_xml = String::from_utf8_lossy(notify.body());
 
         // Update agent status based on registration info
         // (XML parsing needed)
@@ -786,7 +855,7 @@ Registration information can be sensitive:
 use sip_core::parse_reginfo_xml;
 
 fn handle_reg_notify(notify: &Request) -> anyhow::Result<()> {
-    let reginfo = parse_reginfo_xml(&notify.body)?;
+    let reginfo = parse_reginfo_xml(notify.body())?;
 
     println!("Version: {}", reginfo.version());
     println!("State: {}", reginfo.state().as_str());
@@ -846,7 +915,7 @@ The RFC 3680 "reg" event package implementation in SIPHON-RS provides:
 - All contact events
 
 ✅ **Production Ready**
-- Comprehensive test coverage (11 tests)
+- Comprehensive test coverage
 - Complete documentation with examples
 - Integration with existing subscription infrastructure
 - Ready for monitoring applications
