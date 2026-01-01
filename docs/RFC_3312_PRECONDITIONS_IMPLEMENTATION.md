@@ -119,24 +119,29 @@ pub enum PreconditionDirection {
 
 /// Current status attribute
 pub struct CurrentStatus {
-    pub precondition_type: PreconditionType,
-    pub status_type: StatusType,
-    pub direction: PreconditionDirection,
+    // Fields are private; use parse() and to_string().
+}
+
+impl CurrentStatus {
+    pub fn parse(value: &str) -> Result<Self, SdpError>;
 }
 
 /// Desired status attribute
 pub struct DesiredStatus {
-    pub precondition_type: PreconditionType,
-    pub strength: StrengthTag,
-    pub status_type: StatusType,
-    pub direction: PreconditionDirection,
+    // Fields are private; use parse() and to_string().
+}
+
+impl DesiredStatus {
+    pub fn parse(value: &str) -> Result<Self, SdpError>;
 }
 
 /// Confirm status attribute
 pub struct ConfirmStatus {
-    pub precondition_type: PreconditionType,
-    pub status_type: StatusType,
-    pub direction: PreconditionDirection,
+    // Fields are private; use parse() and to_string().
+}
+
+impl ConfirmStatus {
+    pub fn parse(value: &str) -> Result<Self, SdpError>;
 }
 ```
 
@@ -186,16 +191,13 @@ impl PreconditionDirection {
 
 ```rust
 pub struct AnswerOptions {
-    // ... existing fields ...
+    // Fields are private; configure via builder methods.
+}
 
-    /// Current QoS status for local segment
-    pub qos_local_status: Option<PreconditionDirection>,
-
-    /// Current QoS status for remote segment
-    pub qos_remote_status: Option<PreconditionDirection>,
-
-    /// Upgrade strength tags to mandatory
-    pub upgrade_preconditions_to_mandatory: bool,
+impl AnswerOptions {
+    pub fn with_qos_local_status(self, status: PreconditionDirection) -> Self;
+    pub fn with_qos_remote_status(self, status: PreconditionDirection) -> Self;
+    pub fn with_upgrade_preconditions(self, upgrade: bool) -> Self;
 }
 ```
 
@@ -295,15 +297,17 @@ a=des:qos mandatory remote sendrecv
 
 **Code**:
 ```rust
-use sip_core::sdp::PreconditionDirection;
+use sip_core::sdp::{PreconditionDirection, SdpSession};
+use sip_core::sdp_offer_answer::{AnswerOptions, OfferAnswerEngine};
 
 let offer = SdpSession::parse(offer_sdp)?;
+let engine = OfferAnswerEngine::new();
 
-let mut options = AnswerOptions::default();
-// Set answerer's local segment QoS status
-options.qos_local_status = Some(PreconditionDirection::SendRecv);
-// Remote segment not yet ready
-options.qos_remote_status = Some(PreconditionDirection::None);
+let options = AnswerOptions::default()
+    // Set answerer's local segment QoS status
+    .with_qos_local_status(PreconditionDirection::SendRecv)
+    // Remote segment not yet ready
+    .with_qos_remote_status(PreconditionDirection::None);
 
 let answer = engine.generate_answer(&offer, options)?;
 
@@ -321,6 +325,9 @@ assert_eq!(curr.len(), 2);
 
 **Code**:
 ```rust
+use sip_core::sdp::SdpSession;
+use sip_core::sdp_offer_answer::{AnswerOptions, OfferAnswerEngine};
+
 let offer_sdp = "v=0\r\n\
                  o=alice 123 456 IN IP4 192.0.2.1\r\n\
                  s=Call\r\n\
@@ -331,44 +338,37 @@ let offer_sdp = "v=0\r\n\
 
 let offer = SdpSession::parse(offer_sdp)?;
 
-let mut options = AnswerOptions::default();
-options.upgrade_preconditions_to_mandatory = true;
+let options = AnswerOptions::default().with_upgrade_preconditions(true);
 
+let engine = OfferAnswerEngine::new();
 let answer = engine.generate_answer(&offer, options)?;
 
 let des = answer.find_desired_status(0);
-assert_eq!(des[0].strength, StrengthTag::Mandatory);  // Upgraded!
+assert_eq!(des[0].to_string(), "qos mandatory e2e sendrecv");  // Upgraded!
 ```
 
 ### Example 4: Checking if Preconditions Are Met
 
 **Code**:
 ```rust
-use sip_core::sdp::{Attribute, CurrentStatus, DesiredStatus,
-                    PreconditionType, PreconditionDirection,
-                    StatusType, StrengthTag};
+use sip_core::sdp::SdpSession;
 
-// Create SDP with preconditions met
-let mut session = SdpSession::parse(base_sdp)?;
+let base_sdp = "v=0\r\n\
+                o=alice 123 456 IN IP4 192.0.2.1\r\n\
+                s=Call\r\n\
+                c=IN IP4 192.0.2.1\r\n\
+                t=0 0\r\n\
+                m=audio 49170 RTP/AVP 0\r\n\
+                a=curr:qos e2e sendrecv\r\n\
+                a=des:qos mandatory e2e sendrecv\r\n";
 
-// Add precondition attributes to first media
-session.media[0].attributes.push(Attribute {
-    name: "curr".to_string(),
-    value: Some("qos e2e sendrecv".to_string()),
-});
-
-session.media[0].attributes.push(Attribute {
-    name: "des".to_string(),
-    value: Some("qos mandatory e2e sendrecv".to_string()),
-});
-
-// Check if preconditions are met
+// Preconditions are met (curr matches des)
+let session = SdpSession::parse(base_sdp)?;
 assert!(session.are_preconditions_met(0));
 
-// Modify current to not meet desired
-session.media[0].attributes[0].value = Some("qos e2e none".to_string());
-
-// Now preconditions are NOT met
+// Update current to not meet desired
+let updated_sdp = base_sdp.replace("a=curr:qos e2e sendrecv", "a=curr:qos e2e none");
+let session = SdpSession::parse(&updated_sdp)?;
 assert!(!session.are_preconditions_met(0));
 ```
 
@@ -380,20 +380,15 @@ use sip_core::sdp::{CurrentStatus, DesiredStatus, ConfirmStatus};
 
 // Parse current status
 let curr = CurrentStatus::parse("qos e2e sendrecv")?;
-assert_eq!(curr.precondition_type, PreconditionType::Qos);
-assert_eq!(curr.status_type, StatusType::E2E);
-assert_eq!(curr.direction, PreconditionDirection::SendRecv);
+assert_eq!(curr.to_string(), "qos e2e sendrecv");
 
 // Parse desired status
 let des = DesiredStatus::parse("qos mandatory local send")?;
-assert_eq!(des.strength, StrengthTag::Mandatory);
-assert_eq!(des.status_type, StatusType::Local);
-assert_eq!(des.direction, PreconditionDirection::Send);
+assert_eq!(des.to_string(), "qos mandatory local send");
 
 // Parse confirm status
 let conf = ConfirmStatus::parse("qos remote recv")?;
-assert_eq!(conf.status_type, StatusType::Remote);
-assert_eq!(conf.direction, PreconditionDirection::Recv);
+assert_eq!(conf.to_string(), "qos remote recv");
 
 // Generate attribute value
 assert_eq!(curr.to_string(), "qos e2e sendrecv");
@@ -450,7 +445,7 @@ The implementation follows RFC 3312 offer/answer rules:
 #### Rule 3: Strength Tag Handling
 - Answerer can **upgrade** strength tags (optional → mandatory)
 - Answerer **cannot downgrade** strength tags (mandatory → optional)
-- Implementation provides `upgrade_preconditions_to_mandatory` option
+- Implementation provides `with_upgrade_preconditions(true)`
 
 #### Rule 4: Current Status
 - Reflects actual resource reservation state
@@ -534,7 +529,7 @@ Alice (Offerer)                                    Bob (Answerer)
 
 The implementation includes comprehensive tests:
 
-### SDP Module Tests (24 tests in `sdp.rs`)
+### SDP Module Tests (`sdp.rs`)
 - Parsing current/desired/confirm status
 - Status with different status types (e2e, local, remote)
 - Status with different directions (send, recv, sendrecv, none)
@@ -547,20 +542,9 @@ The implementation includes comprehensive tests:
 - Round-trip parsing/generation
 - Extensibility (custom precondition types)
 
-### Offer/Answer Module Tests (9 tests in `sdp_offer_answer.rs`)
-- Status type inversion in answers
-- Direction inversion in answers
-- E2E status type handling (unchanged)
-- Strength tag upgrading
-- Strength tag preservation
-- Current status setting from options
-- Confirm status handling
+### Offer/Answer Module Tests (`sdp_offer_answer.rs`)
 - Answers without preconditions
 - Segmented preconditions in offer/answer
-
-**Total**: 33 tests for RFC 3312
-
-All tests pass with 100% success rate.
 
 ## Extensibility
 
@@ -601,9 +585,9 @@ ConfirmStatus::parse("qos remote recv") -> Result<ConfirmStatus, SdpError>
 ### Generation
 
 ```rust
-// Generate attribute value
-let curr = CurrentStatus { ... };
-curr.to_string() -> String  // "qos e2e sendrecv"
+// Generate attribute value (via parse + display)
+let curr = CurrentStatus::parse("qos e2e sendrecv")?;
+assert_eq!(curr.to_string(), "qos e2e sendrecv");
 ```
 
 ### Finding Preconditions
@@ -635,10 +619,13 @@ direction.invert() -> PreconditionDirection
 ### Offer/Answer with Preconditions
 
 ```rust
-let mut options = AnswerOptions::default();
-options.qos_local_status = Some(PreconditionDirection::SendRecv);
-options.qos_remote_status = Some(PreconditionDirection::None);
-options.upgrade_preconditions_to_mandatory = true;
+use sip_core::sdp::PreconditionDirection;
+use sip_core::sdp_offer_answer::AnswerOptions;
+
+let options = AnswerOptions::default()
+    .with_qos_local_status(PreconditionDirection::SendRecv)
+    .with_qos_remote_status(PreconditionDirection::None)
+    .with_upgrade_preconditions(true);
 
 let answer = engine.generate_answer(&offer, options)?;
 ```
@@ -648,34 +635,32 @@ let answer = engine.generate_answer(&offer, options)?;
 ### Pattern 1: Adding Preconditions to Offer
 
 ```rust
-use sip_core::sdp::Attribute;
+use sip_core::sdp::SdpSession;
 
-// Add e2e QoS preconditions
-session.media[0].attributes.extend(vec![
-    Attribute {
-        name: "curr".to_string(),
-        value: Some("qos e2e none".to_string()),
-    },
-    Attribute {
-        name: "des".to_string(),
-        value: Some("qos mandatory e2e sendrecv".to_string()),
-    },
-    Attribute {
-        name: "conf".to_string(),
-        value: Some("qos e2e recv".to_string()),
-    },
-]);
+// Build an offer SDP string with e2e QoS preconditions
+let offer_sdp = "v=0\r\n\
+                 o=alice 123 456 IN IP4 192.0.2.1\r\n\
+                 s=Call\r\n\
+                 c=IN IP4 192.0.2.1\r\n\
+                 t=0 0\r\n\
+                 m=audio 49170 RTP/AVP 0\r\n\
+                 a=curr:qos e2e none\r\n\
+                 a=des:qos mandatory e2e sendrecv\r\n\
+                 a=conf:qos e2e recv\r\n";
+
+let session = SdpSession::parse(offer_sdp)?;
 ```
 
 ### Pattern 2: Updating Current Status After Resource Reservation
 
 ```rust
-// Find and update current status
-for attr in &mut session.media[0].attributes {
-    if attr.name == "curr" && attr.value.as_ref().unwrap().starts_with("qos e2e") {
-        attr.value = Some("qos e2e sendrecv".to_string());
-    }
-}
+use sip_core::sdp::SdpSession;
+
+// Update current status by rebuilding the SDP string
+let updated_sdp = session
+    .to_string()
+    .replace("a=curr:qos e2e none", "a=curr:qos e2e sendrecv");
+let session = SdpSession::parse(&updated_sdp)?;
 
 // Verify preconditions now met
 assert!(session.are_preconditions_met(0));
@@ -732,12 +717,15 @@ if !offer.are_preconditions_met(0) {
 ### 3. Report Accurate Current Status
 
 ```rust
+use sip_core::sdp::PreconditionDirection;
+use sip_core::sdp_offer_answer::AnswerOptions;
+
 // Only report resources actually reserved
-options.qos_local_status = if resources_reserved {
-    Some(PreconditionDirection::SendRecv)
+let options = AnswerOptions::default().with_qos_local_status(if resources_reserved {
+    PreconditionDirection::SendRecv
 } else {
-    Some(PreconditionDirection::None)
-};
+    PreconditionDirection::None
+});
 ```
 
 ### 4. Handle Precondition Failures Gracefully
@@ -785,13 +773,13 @@ Potential future additions:
    - Added parsing/generation methods
    - Added helper methods for finding preconditions
    - Added precondition checking logic
-   - Added 24 comprehensive tests
+   - Added tests covering parsing, inversion, and met/not met checks
 
 2. **`crates/sip-core/src/sdp_offer_answer.rs`**
-   - Extended `AnswerOptions` with precondition fields
+   - Extended `AnswerOptions` with precondition builder methods
    - Added `handle_preconditions()` method
    - Integrated precondition handling into `generate_answer()`
-   - Added 9 comprehensive tests
+   - Added tests for precondition handling in answers
 
 3. **`crates/sip-core/src/lib.rs`**
    - Exported all precondition types and functions
