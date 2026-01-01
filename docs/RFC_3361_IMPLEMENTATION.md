@@ -2,7 +2,7 @@
 
 **Date:** 2025-01-21
 **Status:** ✅ **COMPLETE** - Full RFC 3361 compliance achieved
-**Test Results:** ✅ All 26 tests passing (17 DHCP tests + 9 DNS tests)
+**Test Results:** ✅ All 32 DHCP-related tests passing (Option 66/120/150 + resolver coverage)
 
 ---
 
@@ -19,6 +19,10 @@ RFC 3361 defines DHCP Option 120 for advertising SIP server addresses:
   - **Encoding 1**: IPv4 addresses (4 bytes each in network byte order)
 - **Preference Ordering**: Servers listed in order of preference
 - **Integration with DNS**: Domain names resolved via RFC 3263
+
+**Note:** The DHCP helper layer in `sip-dns` also includes Option 66 (TFTP server name)
+and Option 150 (TFTP server addresses) parsing and provider hooks. These are not part
+of RFC 3361 but share the same provider interface for provisioning workflows.
 
 ### Discovery Flow
 
@@ -37,13 +41,16 @@ RFC 3361 defines DHCP Option 120 for advertising SIP server addresses:
 
 | Component | Status | Location | Description |
 |-----------|--------|----------|-------------|
-| **DHCP Option 120 Parsing** | ✅ Complete | `sip-dns/src/lib.rs:496-582` | Encoding 0 & 1 support |
-| **DhcpSipServer Enum** | ✅ Complete | `sip-dns/src/lib.rs:443-458` | Domain or IPv4 variant |
-| **DhcpProvider Trait** | ✅ Complete | `sip-dns/src/lib.rs:466-472` | Pluggable DHCP backends |
-| **StaticDhcpProvider** | ✅ Complete | `sip-dns/src/lib.rs:600-623` | Testing support |
-| **DhcpResolver** | ✅ Complete | `sip-dns/src/lib.rs:648-715` | DHCP-only resolution |
-| **HybridResolver** | ✅ Complete | `sip-dns/src/lib.rs:740-794` | DHCP + DNS fallback |
-| **Tests** | ✅ Complete | 17 comprehensive tests | Full coverage |
+| **DHCP Option 120 Parsing** | ✅ Complete | `sip-dns/src/lib.rs:852-969` | Encoding 0 & 1 support |
+| **DhcpSipServer Enum** | ✅ Complete | `sip-dns/src/lib.rs:806-821` | Domain or IPv4 variant |
+| **DhcpProvider Trait** | ✅ Complete | `sip-dns/src/lib.rs:823-848` | Pluggable DHCP backends + TFTP hooks |
+| **TftpServerName Type** | ✅ Complete | `sip-dns/src/lib.rs:720-731` | Option 66 wrapper |
+| **DHCP Option 66 Parsing** | ✅ Complete | `sip-dns/src/lib.rs:733-754` | TFTP server name parsing |
+| **DHCP Option 150 Parsing** | ✅ Complete | `sip-dns/src/lib.rs:756-799` | TFTP server address list |
+| **StaticDhcpProvider** | ✅ Complete | `sip-dns/src/lib.rs:971-1038` | Testing support (Options 120/66/150) |
+| **DhcpResolver** | ✅ Complete | `sip-dns/src/lib.rs:1040-1133` | DHCP-only resolution |
+| **HybridResolver** | ✅ Complete | `sip-dns/src/lib.rs:1135-1214` | DHCP + DNS fallback |
+| **Tests** | ✅ Complete | 32 DHCP-related tests | Options 66/120/150 + resolvers |
 | **Documentation** | ✅ Complete | Inline docs + README + this document | Usage examples and API docs |
 
 ---
@@ -70,17 +77,39 @@ impl DhcpSipServer {
 }
 ```
 
+#### TftpServerName
+
+Wrapper for DHCP Option 66 (TFTP server name):
+
+```rust
+pub struct TftpServerName(pub SmolStr);
+
+impl TftpServerName {
+    /// Returns the server name as a string
+    pub fn as_str(&self) -> &str;
+}
+```
+
 #### DhcpProvider Trait
 
-Interface for DHCP clients to provide SIP servers:
+Interface for DHCP clients to provide SIP and related DHCP options:
 
 ```rust
 #[async_trait::async_trait]
 pub trait DhcpProvider: Send + Sync {
     /// Queries DHCP for Option 120 (SIP servers)
     async fn query_sip_servers(&self) -> Result<Option<Vec<DhcpSipServer>>>;
+
+    /// Queries DHCP for Option 66 (TFTP server name)
+    async fn query_tftp_server_name(&self) -> Result<Option<TftpServerName>>;
+
+    /// Queries DHCP for Option 150 (TFTP server addresses)
+    async fn query_tftp_server_addresses(&self) -> Result<Option<Vec<std::net::Ipv4Addr>>>;
 }
 ```
+
+The Option 66/150 methods default to `Ok(None)` in the trait, so only implement them
+when your provider surfaces those options.
 
 ### Functions
 
@@ -119,6 +148,36 @@ let servers = parse_dhcp_option_120(&data)?;
 assert_eq!(servers.len(), 1);
 ```
 
+#### parse_dhcp_option_66
+
+Parses DHCP Option 66 (TFTP server name):
+
+```rust
+pub fn parse_dhcp_option_66(data: &[u8]) -> Result<TftpServerName>
+```
+
+**Example:**
+```rust
+let data = b"tftp.example.com";
+let server = parse_dhcp_option_66(data)?;
+assert_eq!(server.as_str(), "tftp.example.com");
+```
+
+#### parse_dhcp_option_150
+
+Parses DHCP Option 150 (TFTP server address list):
+
+```rust
+pub fn parse_dhcp_option_150(data: &[u8]) -> Result<Vec<std::net::Ipv4Addr>>
+```
+
+**Example:**
+```rust
+let data = vec![192, 168, 1, 1, 10, 0, 0, 1];
+let servers = parse_dhcp_option_150(&data)?;
+assert_eq!(servers.len(), 2);
+```
+
 ### Resolvers
 
 #### StaticDhcpProvider
@@ -134,6 +193,12 @@ impl StaticDhcpProvider {
 
     /// Creates a provider that returns no servers (simulates DHCP without Option 120)
     pub fn empty() -> Self;
+
+    /// Sets the TFTP server name (Option 66)
+    pub fn with_tftp_name(self, name: TftpServerName) -> Self;
+
+    /// Sets the TFTP server addresses (Option 150)
+    pub fn with_tftp_addresses(self, addresses: Vec<std::net::Ipv4Addr>) -> Self;
 }
 ```
 
@@ -143,6 +208,10 @@ let provider = StaticDhcpProvider::new(vec![
     DhcpSipServer::Domain(SmolStr::new("sip.example.com".to_owned())),
     DhcpSipServer::Ipv4("192.168.1.1".parse()?),
 ]);
+
+let provider = provider
+    .with_tftp_name(TftpServerName(SmolStr::new("tftp.example.com".to_owned())))
+    .with_tftp_addresses(vec!["10.0.0.1".parse()?]);
 ```
 
 #### DhcpResolver
@@ -393,7 +462,7 @@ async fn main() -> anyhow::Result<()> {
 use sip_dns::parse_dhcp_option_120;
 
 #[test]
-fn test_dhcp_option_120_edge_cases() {
+fn test_dhcp_option_120_edge_cases() -> anyhow::Result<()> {
     // Empty data
     assert!(parse_dhcp_option_120(&[]).is_err());
 
@@ -419,6 +488,8 @@ fn test_dhcp_option_120_edge_cases() {
         0, 7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm', 0,
     ])?;
     assert_eq!(result.len(), 1);
+
+    Ok(())
 }
 ```
 
@@ -523,6 +594,20 @@ impl DhcpProvider for MacOsDhcpProvider {
 All tests are in `sip-dns/src/lib.rs`:
 
 ```rust
+// DHCP Option 66 parsing tests
+#[test] fn parse_dhcp_option_66_hostname()
+#[test] fn parse_dhcp_option_66_ip_address()
+#[test] fn parse_dhcp_option_66_fqdn()
+#[test] fn parse_dhcp_option_66_empty()
+#[test] fn parse_dhcp_option_66_with_whitespace()
+
+// DHCP Option 150 parsing tests
+#[test] fn parse_dhcp_option_150_single_address()
+#[test] fn parse_dhcp_option_150_multiple_addresses()
+#[test] fn parse_dhcp_option_150_invalid_length()
+#[test] fn parse_dhcp_option_150_empty()
+#[test] fn parse_dhcp_option_150_eight_addresses()
+
 // DHCP Option 120 parsing tests
 #[test] fn parse_dhcp_option_120_ipv4_single()
 #[test] fn parse_dhcp_option_120_ipv4_multiple()
@@ -530,12 +615,17 @@ All tests are in `sip-dns/src/lib.rs`:
 #[test] fn parse_dhcp_option_120_domain_single()
 #[test] fn parse_dhcp_option_120_domain_multiple()
 #[test] fn parse_dhcp_option_120_domain_invalid_length()
+#[test] fn parse_dhcp_option_120_domain_missing_terminator()
+#[test] fn parse_dhcp_option_120_domain_label_too_long()
 #[test] fn parse_dhcp_option_120_empty()
 #[test] fn parse_dhcp_option_120_invalid_encoding()
 
 // DHCP provider tests
 #[test] fn static_dhcp_provider_returns_servers()
 #[test] fn static_dhcp_provider_empty()
+#[test] fn static_dhcp_provider_with_tftp_name()
+#[test] fn static_dhcp_provider_with_tftp_addresses()
+#[test] fn static_dhcp_provider_with_all_options()
 
 // DHCP resolver tests
 #[test] fn dhcp_resolver_with_ipv4()
@@ -750,7 +840,9 @@ let resolver = HybridResolver::new(dhcp_provider, dns_resolver);
 - **RFC 3361** - DHCP Option for SIP Servers (this implementation)
 - **RFC 3263** - Locating SIP Servers via DNS (implemented in `sip-dns`)
 - **RFC 2131** - DHCP Protocol
+- **RFC 2132** - DHCP Options (Option 66)
 - **RFC 1035** - DNS Domain Names (label encoding used in Option 120)
+- **RFC 5859** - DHCP Option 150 for TFTP
 - **RFC 3319** - DHCPv6 Options for SIP Servers (IPv6 equivalent, not implemented)
 
 ---
@@ -760,7 +852,9 @@ let resolver = HybridResolver::new(dhcp_provider, dns_resolver);
 - [RFC 3361](https://datatracker.ietf.org/doc/html/rfc3361) - DHCP-for-IPv4 Option for SIP Servers
 - [RFC 3263](https://datatracker.ietf.org/doc/html/rfc3263) - Locating SIP Servers
 - [RFC 2131](https://datatracker.ietf.org/doc/html/rfc2131) - DHCP Protocol
+- [RFC 2132](https://datatracker.ietf.org/doc/html/rfc2132) - DHCP Options
 - [RFC 1035](https://datatracker.ietf.org/doc/html/rfc1035) - Domain Names - Implementation and Specification
+- [RFC 5859](https://datatracker.ietf.org/doc/html/rfc5859) - DHCP Option 150 for TFTP
 
 ---
 
