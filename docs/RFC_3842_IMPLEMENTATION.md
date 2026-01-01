@@ -72,15 +72,38 @@ The RFC 3842 implementation is located in:
 
 ### Types
 
+#### `MessageWaitingError`
+
+Error type for message summary validation and parsing.
+
+**Variants:**
+- `AccountTooLong { max, actual }` - Account length exceeds `MAX_ACCOUNT_LENGTH`
+- `HeaderValueTooLong { max, actual }` - Header value exceeds `MAX_HEADER_VALUE_LENGTH`
+- `TooManyHeaders { max, actual }` - Message header count exceeds `MAX_MESSAGE_HEADERS`
+- `TooManyClasses { max, actual }` - Message class count exceeds `MAX_MESSAGE_CLASSES`
+- `InvalidAccount(String)` - Account contains invalid data
+- `InvalidHeaderValue(String)` - Header contains invalid data
+- `ParseError(String)` - Parsing failed (missing or invalid fields)
+- `InputTooLarge { max, actual }` - Input exceeds `MAX_PARSE_SIZE`
+
+**Validation Limits:**
+- `MAX_ACCOUNT_LENGTH`: 512
+- `MAX_HEADER_VALUE_LENGTH`: 1024
+- `MAX_MESSAGE_HEADERS`: 50
+- `MAX_MESSAGE_CLASSES`: 10
+- `MAX_PARSE_SIZE`: 102400 bytes
+
+---
+
 #### `MessageSummary`
 
 RFC 3842 Message Summary representing complete message waiting indication.
 
 **Fields:**
-- `messages_waiting: bool` - Whether messages are waiting (mandatory)
-- `account: Option<SmolStr>` - Message account URI (conditional)
-- `messages: BTreeMap<MessageContextClass, MessageCounts>` - Message counts by class
-- `message_headers: Vec<MessageHeader>` - Optional message details
+- `messages_waiting: bool` - Whether messages are waiting (mandatory, private)
+- `account: Option<SmolStr>` - Message account URI (conditional, private)
+- `messages: BTreeMap<MessageContextClass, MessageCounts>` - Message counts by class (private)
+- `message_headers: Vec<MessageHeader>` - Optional message details (private)
 
 **Methods:**
 
@@ -97,40 +120,68 @@ let summary = MessageSummary::new(true);
 
 ---
 
-##### `set_account(&mut self, account: impl Into<SmolStr>)`
+##### `set_account(&mut self, account: impl AsRef<str>) -> Result<(), MessageWaitingError>`
 
-Sets the message account URI.
+Sets the message account URI with validation.
 
 **Example:**
 ```rust
 use sip_core::MessageSummary;
 
 let mut summary = MessageSummary::new(true);
-summary.set_account("sip:alice@vmail.example.com");
+summary.set_account("sip:alice@vmail.example.com")?;
 ```
 
 ---
 
-##### `add_message_class(&mut self, class: MessageContextClass, counts: MessageCounts)`
+##### `add_message_class(&mut self, class: MessageContextClass, counts: MessageCounts) -> Result<(), MessageWaitingError>`
 
 Adds message counts for a context class.
+Returns an error if adding a new class would exceed `MAX_MESSAGE_CLASSES`.
 
 **Example:**
 ```rust
-use sip_core::{MessageSummary, MessageContextClass, MessageCounts};
+use sip_core::{
+    message_waiting::MessageWaitingError, MessageSummary, MessageContextClass, MessageCounts,
+};
 
 let mut summary = MessageSummary::new(true);
 summary.add_message_class(
     MessageContextClass::Voice,
     MessageCounts::new(2, 8)
-);
+)?;
 ```
 
 ---
 
-##### `add_message_header(&mut self, header: MessageHeader)`
+##### `add_message_header(&mut self, header: MessageHeader) -> Result<(), MessageWaitingError>`
 
 Adds a message header for message details.
+Returns an error if adding would exceed `MAX_MESSAGE_HEADERS`.
+
+---
+
+##### `messages_waiting(&self) -> bool`
+
+Returns whether messages are waiting.
+
+---
+
+##### `account(&self) -> Option<&str>`
+
+Returns the message account if set.
+
+---
+
+##### `messages(&self) -> impl Iterator<Item = (&MessageContextClass, &MessageCounts)>`
+
+Returns an iterator over message classes and counts.
+
+---
+
+##### `message_headers(&self) -> impl Iterator<Item = &MessageHeader>`
+
+Returns an iterator over message headers.
 
 ---
 
@@ -149,8 +200,8 @@ Returns the total number of new messages across all classes.
 use sip_core::{MessageSummary, MessageContextClass, MessageCounts};
 
 let mut summary = MessageSummary::new(true);
-summary.add_message_class(MessageContextClass::Voice, MessageCounts::new(2, 5));
-summary.add_message_class(MessageContextClass::Fax, MessageCounts::new(1, 3));
+summary.add_message_class(MessageContextClass::Voice, MessageCounts::new(2, 5))?;
+summary.add_message_class(MessageContextClass::Fax, MessageCounts::new(1, 3))?;
 
 assert_eq!(summary.total_new(), 3); // 2 + 1
 ```
@@ -178,11 +229,11 @@ Formats the message summary as application/simple-message-summary.
 use sip_core::{MessageSummary, MessageContextClass, MessageCounts};
 
 let mut summary = MessageSummary::new(true);
-summary.set_account("sip:alice@vmail.example.com");
+summary.set_account("sip:alice@vmail.example.com")?;
 summary.add_message_class(
     MessageContextClass::Voice,
     MessageCounts::new(2, 8).with_urgent(0, 2)
-);
+)?;
 
 let body = summary.to_string();
 // Output:
@@ -256,10 +307,10 @@ assert_eq!(MessageContextClass::Multimedia.as_str(), "multimedia");
 Message counts for a context class, separated by new/old status and urgent/non-urgent priority.
 
 **Fields:**
-- `new: u32` - Number of new messages
-- `old: u32` - Number of old messages
-- `urgent_new: u32` - Number of urgent new messages
-- `urgent_old: u32` - Number of urgent old messages
+- `new: u32` - Number of new messages (private, use accessors)
+- `old: u32` - Number of old messages (private, use accessors)
+- `urgent_new: u32` - Number of urgent new messages (private, use accessors)
+- `urgent_old: u32` - Number of urgent old messages (private, use accessors)
 
 **Methods:**
 
@@ -272,8 +323,8 @@ Creates new message counts with new and old totals.
 use sip_core::MessageCounts;
 
 let counts = MessageCounts::new(3, 5);
-assert_eq!(counts.new, 3);
-assert_eq!(counts.old, 5);
+assert_eq!(counts.new_count(), 3);
+assert_eq!(counts.old_count(), 5);
 ```
 
 ---
@@ -289,9 +340,33 @@ use sip_core::MessageCounts;
 let counts = MessageCounts::new(2, 8)
     .with_urgent(0, 2);
 
-assert_eq!(counts.urgent_new, 0);
-assert_eq!(counts.urgent_old, 2);
+assert_eq!(counts.urgent_new(), 0);
+assert_eq!(counts.urgent_old(), 2);
 ```
+
+---
+
+##### `new_count(&self) -> u32`
+
+Returns the number of new messages.
+
+---
+
+##### `old_count(&self) -> u32`
+
+Returns the number of old messages.
+
+---
+
+##### `urgent_new(&self) -> u32`
+
+Returns the number of urgent new messages.
+
+---
+
+##### `urgent_old(&self) -> u32`
+
+Returns the number of urgent old messages.
 
 ---
 
@@ -322,15 +397,16 @@ Returns true if there are any urgent messages.
 #### `MessageHeader`
 
 Optional message headers for newly received messages providing details about specific messages.
+All header values are validated for length and control characters.
 
 **Fields:**
-- `to: Option<SmolStr>` - To header
-- `from: Option<SmolStr>` - From header
-- `subject: Option<SmolStr>` - Subject header
-- `date: Option<SmolStr>` - Date header
-- `priority: Option<SmolStr>` - Priority header
-- `message_id: Option<SmolStr>` - Message-ID header
-- `message_context: Option<SmolStr>` - Message-Context header
+- `to: Option<SmolStr>` - To header (private, use accessors)
+- `from: Option<SmolStr>` - From header (private, use accessors)
+- `subject: Option<SmolStr>` - Subject header (private, use accessors)
+- `date: Option<SmolStr>` - Date header (private, use accessors)
+- `priority: Option<SmolStr>` - Priority header (private, use accessors)
+- `message_id: Option<SmolStr>` - Message-ID header (private, use accessors)
+- `message_context: Option<SmolStr>` - Message-Context header (private, use accessors)
 
 **Methods:**
 
@@ -340,7 +416,7 @@ Creates a new empty message header.
 
 ---
 
-##### `with_to(self, to: impl Into<SmolStr>) -> Self`
+##### `with_to(self, to: impl AsRef<str>) -> Result<Self, MessageWaitingError>`
 
 Sets the To header (builder pattern).
 
@@ -349,46 +425,88 @@ Sets the To header (builder pattern).
 use sip_core::MessageHeader;
 
 let header = MessageHeader::new()
-    .with_to("alice@example.com")
-    .with_from("bob@example.com")
-    .with_subject("Meeting reminder");
+    .with_to("alice@example.com")?
+    .with_from("bob@example.com")?
+    .with_subject("Meeting reminder")?;
 ```
 
 ---
 
-##### `with_from(self, from: impl Into<SmolStr>) -> Self`
+##### `with_from(self, from: impl AsRef<str>) -> Result<Self, MessageWaitingError>`
 
 Sets the From header.
 
 ---
 
-##### `with_subject(self, subject: impl Into<SmolStr>) -> Self`
+##### `with_subject(self, subject: impl AsRef<str>) -> Result<Self, MessageWaitingError>`
 
 Sets the Subject header.
 
 ---
 
-##### `with_date(self, date: impl Into<SmolStr>) -> Self`
+##### `with_date(self, date: impl AsRef<str>) -> Result<Self, MessageWaitingError>`
 
 Sets the Date header.
 
 ---
 
-##### `with_priority(self, priority: impl Into<SmolStr>) -> Self`
+##### `with_priority(self, priority: impl AsRef<str>) -> Result<Self, MessageWaitingError>`
 
 Sets the Priority header.
 
 ---
 
-##### `with_message_id(self, message_id: impl Into<SmolStr>) -> Self`
+##### `with_message_id(self, message_id: impl AsRef<str>) -> Result<Self, MessageWaitingError>`
 
 Sets the Message-ID header.
 
 ---
 
-##### `with_message_context(self, message_context: impl Into<SmolStr>) -> Self`
+##### `with_message_context(self, message_context: impl AsRef<str>) -> Result<Self, MessageWaitingError>`
 
 Sets the Message-Context header.
+
+---
+
+##### `to(&self) -> Option<&str>`
+
+Returns the To header.
+
+---
+
+##### `from(&self) -> Option<&str>`
+
+Returns the From header.
+
+---
+
+##### `subject(&self) -> Option<&str>`
+
+Returns the Subject header.
+
+---
+
+##### `date(&self) -> Option<&str>`
+
+Returns the Date header.
+
+---
+
+##### `priority(&self) -> Option<&str>`
+
+Returns the Priority header.
+
+---
+
+##### `message_id(&self) -> Option<&str>`
+
+Returns the Message-ID header.
+
+---
+
+##### `message_context(&self) -> Option<&str>`
+
+Returns the Message-Context header.
 
 ---
 
@@ -397,17 +515,18 @@ Sets the Message-Context header.
 #### `parse_message_summary`
 
 ```rust
-pub fn parse_message_summary(body: &str) -> Option<MessageSummary>
+pub fn parse_message_summary(body: &str) -> Result<MessageSummary, MessageWaitingError>
 ```
 
 Parses a message summary from application/simple-message-summary format.
+Input is capped at `MAX_PARSE_SIZE` (100KB).
 
 **Parameters:**
 - `body` - The message summary body text
 
 **Returns:**
-- `Some(MessageSummary)` if valid
-- `None` if invalid or missing mandatory status line
+- `Ok(MessageSummary)` if valid
+- `Err(MessageWaitingError)` if invalid, missing mandatory status line, or input too large
 
 **Example:**
 ```rust
@@ -418,7 +537,7 @@ let body = "Messages-Waiting: yes\n\
             Voice-Message: 2/8 (0/2)\n";
 
 let summary = parse_message_summary(body)?;
-assert!(summary.messages_waiting);
+assert!(summary.messages_waiting());
 assert_eq!(summary.total_new(), 2);
 ```
 
@@ -434,11 +553,11 @@ Send a simple MWI notification:
 use sip_core::{MessageSummary, MessageContextClass, MessageCounts};
 
 let mut summary = MessageSummary::new(true);
-summary.set_account("sip:alice@vmail.example.com");
+summary.set_account("sip:alice@vmail.example.com")?;
 summary.add_message_class(
     MessageContextClass::Voice,
     MessageCounts::new(2, 8)
-);
+)?;
 
 // Send in NOTIFY body with Content-Type: application/simple-message-summary
 let body = summary.to_string();
@@ -459,22 +578,22 @@ Report multiple message types:
 use sip_core::{MessageSummary, MessageContextClass, MessageCounts};
 
 let mut summary = MessageSummary::new(true);
-summary.set_account("sip:alice@vmail.example.com");
+summary.set_account("sip:alice@vmail.example.com")?;
 
 summary.add_message_class(
     MessageContextClass::Voice,
     MessageCounts::new(2, 8).with_urgent(0, 2)
-);
+)?;
 
 summary.add_message_class(
     MessageContextClass::Fax,
     MessageCounts::new(1, 3)
-);
+)?;
 
 summary.add_message_class(
     MessageContextClass::Text,
     MessageCounts::new(5, 10).with_urgent(2, 0)
-);
+)?;
 
 let body = summary.to_string();
 ```
@@ -509,21 +628,24 @@ Messages-Waiting: no
 Include details about new messages (for incremental updates):
 
 ```rust
-use sip_core::{MessageSummary, MessageContextClass, MessageCounts, MessageHeader};
+use sip_core::{
+    message_waiting::MessageWaitingError, MessageSummary, MessageContextClass, MessageCounts,
+    MessageHeader,
+};
 
 let mut summary = MessageSummary::new(true);
 summary.add_message_class(
     MessageContextClass::Voice,
     MessageCounts::new(4, 8).with_urgent(1, 2)
-);
+)?;
 
 // Add header for newly received message
 let header = MessageHeader::new()
-    .with_to("alice@atlanta.example.com")
-    .with_from("bob@biloxi.example.com")
-    .with_subject("carpool tomorrow?");
+    .with_to("alice@atlanta.example.com")?
+    .with_from("bob@biloxi.example.com")?
+    .with_subject("carpool tomorrow?")?;
 
-summary.add_message_header(header);
+summary.add_message_header(header)?;
 
 let body = summary.to_string();
 ```
@@ -552,12 +674,19 @@ let body = "Messages-Waiting: yes\n\
 let summary = parse_message_summary(body)?;
 
 // Check status
-if summary.messages_waiting {
+if summary.messages_waiting() {
     println!("You have {} new messages", summary.total_new());
 
     // Check voice messages
-    if let Some(voice) = summary.messages.get(&MessageContextClass::Voice) {
-        println!("Voice: {} new, {} old", voice.new, voice.old);
+    if let Some((_, voice)) = summary
+        .messages()
+        .find(|(class, _)| **class == MessageContextClass::Voice)
+    {
+        println!(
+            "Voice: {} new, {} old",
+            voice.new_count(),
+            voice.old_count()
+        );
         if voice.has_urgent() {
             println!("  {} urgent messages", voice.total_urgent());
         }
@@ -625,23 +754,23 @@ struct VoiceMessage {
 }
 
 impl VoicemailBox {
-    fn generate_mwi(&self) -> MessageSummary {
+    fn generate_mwi(&self) -> Result<MessageSummary, MessageWaitingError> {
         let new = self.messages.iter().filter(|m| m.is_new && !m.is_urgent).count() as u32;
         let old = self.messages.iter().filter(|m| !m.is_new && !m.is_urgent).count() as u32;
         let urgent_new = self.messages.iter().filter(|m| m.is_new && m.is_urgent).count() as u32;
         let urgent_old = self.messages.iter().filter(|m| !m.is_new && m.is_urgent).count() as u32;
 
         let mut summary = MessageSummary::new(new > 0 || urgent_new > 0);
-        summary.set_account(format!("sip:{}@vmail.example.com", self.owner));
+        summary.set_account(format!("sip:{}@vmail.example.com", self.owner))?;
 
         if new > 0 || old > 0 || urgent_new > 0 || urgent_old > 0 {
             summary.add_message_class(
                 MessageContextClass::Voice,
                 MessageCounts::new(new, old).with_urgent(urgent_new, urgent_old)
-            );
+            )?;
         }
 
-        summary
+        Ok(summary)
     }
 }
 ```
@@ -654,14 +783,17 @@ UA handling MWI notifications:
 use sip_core::{parse_message_summary, MessageContextClass};
 
 fn handle_mwi_notify(body: &str) {
-    if let Some(summary) = parse_message_summary(body) {
-        if summary.messages_waiting {
+    if let Ok(summary) = parse_message_summary(body) {
+        if summary.messages_waiting() {
             // Light up MWI LED
             turn_on_mwi_indicator();
 
             // Update display
-            if let Some(voice) = summary.messages.get(&MessageContextClass::Voice) {
-                update_display(format!("{} new voice messages", voice.new));
+            if let Some((_, voice)) = summary
+                .messages()
+                .find(|(class, _)| **class == MessageContextClass::Voice)
+            {
+                update_display(format!("{} new voice messages", voice.new_count()));
             }
 
             // Play stutter dial tone if urgent
@@ -682,74 +814,76 @@ fn handle_mwi_notify(body: &str) {
 Send incremental updates with only new message details:
 
 ```rust
-use sip_core::{MessageSummary, MessageContextClass, MessageCounts, MessageHeader};
+use sip_core::{
+    message_waiting::MessageWaitingError, MessageSummary, MessageContextClass, MessageCounts,
+    MessageHeader,
+};
 
 struct MwiNotifier {
     last_count: u32,
 }
 
 impl MwiNotifier {
-    fn send_update(&mut self, new_messages: &[VoiceMessage]) -> MessageSummary {
+    fn send_update(
+        &mut self,
+        new_messages: &[VoiceMessage],
+    ) -> Result<MessageSummary, MessageWaitingError> {
         let current_new = new_messages.len() as u32;
 
         let mut summary = MessageSummary::new(true);
         summary.add_message_class(
             MessageContextClass::Voice,
             MessageCounts::new(current_new, 10) // 10 old messages
-        );
+        )?;
 
         // Only include headers for messages received since last notification
         if current_new > self.last_count {
             for msg in &new_messages[(self.last_count as usize)..] {
                 let header = MessageHeader::new()
-                    .with_from(&msg.from)
-                    .with_subject(&msg.subject)
-                    .with_date(&msg.date);
-                summary.add_message_header(header);
+                    .with_from(&msg.from)?
+                    .with_subject(&msg.subject)?
+                    .with_date(&msg.date)?;
+                summary.add_message_header(header)?;
             }
         }
 
         self.last_count = current_new;
-        summary
+        Ok(summary)
     }
 }
 ```
 
 ## Test Coverage
 
-The message waiting implementation includes 14 comprehensive unit tests:
+The message waiting implementation includes 16 comprehensive unit tests:
 
 ### MessageSummary Tests
 
 1. **message_summary_basic**: Basic creation and properties
 2. **message_summary_output**: Formatting to application/simple-message-summary
+3. **fields_are_private**: Ensures field access is via accessors
 
-### MessageContextClass Tests
+### Validation Tests
 
-3. **message_context_class_header_names**: Header name generation
-4. **message_context_class_from_header**: Parsing from header names
-
-### MessageCounts Tests
-
-5. **message_counts_basic**: Basic count creation and totals
-6. **message_counts_with_urgent**: Urgent count handling
-
-### MessageHeader Tests
-
-7. **message_header_builder**: Builder pattern for headers
+4. **reject_crlf_in_account**: Rejects control characters in accounts
+5. **reject_oversized_account**: Enforces account length limit
+6. **reject_too_many_message_classes**: Enforces class count limit
+7. **reject_too_many_headers**: Enforces header count limit
+8. **reject_crlf_in_message_header**: Rejects control characters in headers
+9. **reject_oversized_header_value**: Enforces header length limit
+10. **reject_oversized_parse_input**: Enforces parse size limit
+11. **reject_missing_status**: Requires Messages-Waiting
+12. **reject_invalid_messages_waiting_value**: Rejects invalid status values
+13. **reject_empty_message_counts**: Ignores empty count lines
 
 ### Parsing Tests
 
-8. **parse_simple_summary**: Basic summary parsing
-9. **parse_summary_with_headers**: Parsing with message headers
-10. **parse_no_messages**: Parsing no-messages notification
-11. **parse_multiple_classes**: Multiple message classes
-12. **parse_message_counts_basic**: Count format parsing
-13. **parse_message_counts_with_urgent**: Urgent count parsing
+14. **parse_simple_summary**: Basic summary parsing
+15. **parse_multiple_message_headers**: Parses multiple message header blocks
 
 ### Integration Tests
 
-14. **round_trip**: Format and parse round-trip consistency
+16. **round_trip**: Format and parse round-trip consistency
 
 ### Running Tests
 
@@ -776,7 +910,7 @@ cargo test --package sip-core message_waiting -- --nocapture
 
 4. **No Extended Format**: Only supports simple count format; extended formats with additional metadata not supported
 
-5. **No Parsing Validation**: Minimal validation of parsed URIs and header values
+5. **No Strict URI Validation**: Only control-character and length checks are enforced; URI syntax is not fully validated
 
 6. **No Binary Format**: Only text-based application/simple-message-summary supported
 
