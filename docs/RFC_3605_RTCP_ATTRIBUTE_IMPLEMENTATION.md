@@ -82,13 +82,13 @@ Each media stream can have its own RTCP port/address.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RtcpAttribute {
     /// RTCP port number
-    pub port: u16,
+    pub(crate) port: u16,
     /// Network type (e.g., "IN"), optional
-    pub nettype: Option<String>,
+    nettype: Option<String>,
     /// Address type (e.g., "IP4", "IP6"), optional
-    pub addrtype: Option<String>,
+    addrtype: Option<String>,
     /// Connection address, optional
-    pub connection_address: Option<String>,
+    connection_address: Option<String>,
 }
 
 impl RtcpAttribute {
@@ -96,9 +96,12 @@ impl RtcpAttribute {
     pub fn with_address(port: u16, nettype: String, addrtype: String,
                         connection_address: String) -> Self;
     pub fn parse(value: &str) -> Result<Self, SdpError>;
-    pub fn to_string(&self) -> String;
+    pub fn format(&self) -> String;
 }
 ```
+
+Fields are crate-private; use `format()` or the `Display` implementation when emitting
+`a=rtcp:` lines.
 
 #### MediaDescription Integration
 
@@ -107,10 +110,14 @@ pub struct MediaDescription {
     // ... other fields ...
 
     /// RTCP port and address (a=rtcp:, RFC 3605)
-    pub rtcp: Option<RtcpAttribute>,
+    pub(crate) rtcp: Option<RtcpAttribute>,
 
     // ... other fields ...
 }
+```
+
+```rust
+pub fn rtcp(&self) -> Option<&RtcpAttribute>;
 ```
 
 ## Parsing and Generation
@@ -134,11 +141,9 @@ a=rtcp:53020\r\n\
 let session = SdpSession::parse(sdp)?;
 
 // Access RTCP attribute
-if let Some(rtcp) = &session.media[0].rtcp {
-    println!("RTCP port: {}", rtcp.port);  // 53020
-    if let Some(addr) = &rtcp.connection_address {
-        println!("RTCP address: {}", addr);
-    }
+if let Some(rtcp) = session.media().first().and_then(|media| media.rtcp()) {
+    println!("RTCP attribute: {}", rtcp);
+    assert_eq!(rtcp.format(), "53020");
 }
 
 // Parse SDP with full address
@@ -153,81 +158,40 @@ a=rtcp:53020 IN IP4 126.16.64.4\r\n\
 ";
 
 let session2 = SdpSession::parse(sdp_full)?;
-let rtcp = session2.media[0].rtcp.as_ref()?;
-println!("RTCP: {}:{}",
-    rtcp.connection_address.as_ref()?,
-    rtcp.port
-);  // "126.16.64.4:53020"
+if let Some(rtcp) = session2.media().first().and_then(|media| media.rtcp()) {
+    println!("RTCP: {}", rtcp);
+    assert_eq!(rtcp.to_string(), "53020 IN IP4 126.16.64.4");
+}
 ```
 
 ### Generation Example
 
 ```rust
-use sip_core::{SdpSession, RtcpAttribute, MediaDescription, Origin, Connection};
+use sip_core::RtcpAttribute;
 
-// Create session
-let mut session = SdpSession::new(
-    Origin {
-        username: "alice".to_string(),
-        sess_id: "123".to_string(),
-        sess_version: "456".to_string(),
-        nettype: "IN".to_string(),
-        addrtype: "IP4".to_string(),
-        unicast_address: "192.0.2.1".to_string(),
-    },
-    "NAT Session".to_string(),
+let audio_rtcp = RtcpAttribute::new(53020);
+let video_rtcp = RtcpAttribute::with_address(
+    53022,
+    "IN".to_string(),
+    "IP4".to_string(),
+    "126.16.64.5".to_string(),
 );
 
-session.connection = Some(Connection {
-    nettype: "IN".to_string(),
-    addrtype: "IP4".to_string(),
-    connection_address: "192.0.2.1".to_string(),
-});
+let sdp_string = format!(
+    "v=0\r\n\
+o=alice 123 456 IN IP4 192.0.2.1\r\n\
+s=NAT Session\r\n\
+c=IN IP4 192.0.2.1\r\n\
+t=0 0\r\n\
+m=audio 49170 RTP/AVP 0\r\n\
+a=rtcp:{}\r\n\
+m=video 49172 RTP/AVP 31\r\n\
+a=rtcp:{}\r\n",
+    audio_rtcp,
+    video_rtcp,
+);
 
-// Add media with RTCP port only
-session.media.push(MediaDescription {
-    media: "audio".to_string(),
-    port: 49170,
-    port_count: None,
-    proto: "RTP/AVP".to_string(),
-    fmt: vec!["0".to_string()],
-    title: None,
-    connection: None,
-    bandwidth: Vec::new(),
-    encryption_key: None,
-    attributes: Vec::new(),
-    mid: None,
-    rtcp: Some(RtcpAttribute::new(53020)),
-    capability_set: None,
-});
-
-// Generate SDP
-let sdp_string = session.to_string();
 // Contains: a=rtcp:53020
-
-// Add media with full RTCP address
-session.media.push(MediaDescription {
-    media: "video".to_string(),
-    port: 49172,
-    port_count: None,
-    proto: "RTP/AVP".to_string(),
-    fmt: vec!["31".to_string()],
-    title: None,
-    connection: None,
-    bandwidth: Vec::new(),
-    encryption_key: None,
-    attributes: Vec::new(),
-    mid: None,
-    rtcp: Some(RtcpAttribute::with_address(
-        53022,
-        "IN".to_string(),
-        "IP4".to_string(),
-        "126.16.64.5".to_string(),
-    )),
-    capability_set: None,
-});
-
-let sdp_string2 = session.to_string();
 // Contains: a=rtcp:53022 IN IP4 126.16.64.5
 ```
 
@@ -335,24 +299,36 @@ a=rtcp:53020 IN IP6 2001:db8::2
 
 3. **Include in SDP offer/answer**:
    ```rust
-   media.rtcp = rtcp_attr;
-   let sdp = session.to_string();
+   let rtcp_line = rtcp_attr
+       .as_ref()
+       .map(|attr| format!("a=rtcp:{}\r\n", attr))
+       .unwrap_or_default();
+
+   let sdp = format!(
+       "v=0\r\n\
+o=alice 123 456 IN IP4 192.0.2.1\r\n\
+s=NAT Session\r\n\
+c=IN IP4 203.0.113.5\r\n\
+t=0 0\r\n\
+m=audio {} RTP/AVP 0\r\n\
+{}",
+       external_rtp_port,
+       rtcp_line
+   );
    // Send via SIP signaling
    ```
 
 ### Example Implementation
 
 ```rust
-use sip_core::{SdpSession, RtcpAttribute};
+use sip_core::RtcpAttribute;
 
 fn create_nat_sdp(
-    local_rtp_port: u16,
+    _local_rtp_port: u16,
     external_rtp_port: u16,
     external_rtcp_port: u16,
     external_ip: &str,
-) -> SdpSession {
-    let mut session = /* ... create session ... */;
-
+) -> String {
     let rtcp_attr = if external_rtcp_port != external_rtp_port + 1 {
         Some(RtcpAttribute::with_address(
             external_rtcp_port,
@@ -364,10 +340,20 @@ fn create_nat_sdp(
         None
     };
 
-    session.media[0].port = external_rtp_port;
-    session.media[0].rtcp = rtcp_attr;
+    let rtcp_line = rtcp_attr
+        .as_ref()
+        .map(|attr| format!("a=rtcp:{}\r\n", attr))
+        .unwrap_or_default();
 
-    session
+    format!(
+        "v=0\r\n\
+o=alice 123 456 IN IP4 {external_ip}\r\n\
+s=NAT Session\r\n\
+c=IN IP4 {external_ip}\r\n\
+t=0 0\r\n\
+m=audio {external_rtp_port} RTP/AVP 0\r\n\
+{rtcp_line}"
+    )
 }
 ```
 
@@ -393,11 +379,10 @@ Use S/MIME to sign SDP bodies in SIP
 **2. Validate RTCP Endpoints**:
 ```rust
 fn validate_rtcp_endpoint(rtcp: &RtcpAttribute, expected_network: &str) -> bool {
-    if let Some(addr) = &rtcp.connection_address {
-        // Check if address is within expected network range
-        is_address_in_network(addr, expected_network)
-    } else {
-        true  // Using same address as RTP
+    let addr = rtcp.format().split_whitespace().nth(3);
+    match addr {
+        Some(addr) => is_address_in_network(addr, expected_network),
+        None => true, // Using same address as RTP
     }
 }
 ```
@@ -455,7 +440,7 @@ cargo test --lib 2>&1 | grep rtcp
 | **Generation** | ✅ Complete | Correct formatting |
 | **MediaDescription integration** | ✅ Complete | Optional rtcp field |
 | **Extraction from attributes** | ✅ Complete | extract_rtcp() method |
-| **Display implementation** | ✅ Complete | to_string() method |
+| **Display implementation** | ✅ Complete | Display + format() |
 | **Round-trip fidelity** | ✅ Complete | Parse→Generate→Parse |
 | **Error handling** | ✅ Complete | Invalid port, incomplete address |
 | **Backward compatibility** | ✅ Complete | Optional attribute |
@@ -466,12 +451,12 @@ cargo test --lib 2>&1 | grep rtcp
 
 | Component | File | Lines |
 |-----------|------|-------|
-| RtcpAttribute struct | `crates/sip-core/src/sdp.rs` | 386-468 |
-| MediaDescription.rtcp | `crates/sip-core/src/sdp.rs` | 352-353 |
-| extract_rtcp() method | `crates/sip-core/src/sdp.rs` | 1259-1281 |
-| Display implementation | `crates/sip-core/src/sdp.rs` | 1733-1736 |
-| Tests | `crates/sip-core/src/sdp.rs` | 4116-4487 |
-| Exports | `crates/sip-core/src/lib.rs` | 95 |
+| RtcpAttribute struct | `crates/sip-core/src/sdp.rs` | 624-706 |
+| MediaDescription.rtcp | `crates/sip-core/src/sdp.rs` | 561-590 |
+| extract_rtcp() method | `crates/sip-core/src/sdp.rs` | 1571-1593 |
+| Display implementation | `crates/sip-core/src/sdp.rs` | 708-711 |
+| Tests | `crates/sip-core/src/sdp.rs` | 4732-5099 |
+| Exports | `crates/sip-core/src/lib.rs` | 119 |
 
 ## References
 
@@ -534,4 +519,3 @@ While the current implementation is fully compliant with RFC 3605, potential fut
   - Implemented parsing with extract_rtcp() method
   - Implemented generation in Display trait
   - Added 21 comprehensive tests
-  - All 467 tests passing (446 existing + 21 new)
