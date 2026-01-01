@@ -55,7 +55,8 @@ From RFC 3556, at least **RS/(RS+RR)** of the total RTCP bandwidth MUST be alloc
 
 **Critical distinction**:
 - **RS/RR**: Values in **bits per second** (bps)
-- **AS/CT/TIAS**: Values in **kilobits per second** (kbps)
+- **AS/CT**: Values in **kilobits per second** (kbps)
+- **TIAS**: Values in **bits per second** (bps)
 
 This difference reflects that RTCP bandwidth is typically much smaller than media bandwidth.
 
@@ -66,7 +67,7 @@ This difference reflects that RTCP bandwidth is typically much smaller than medi
 #### BandwidthType Enum
 
 ```rust
-/// Bandwidth modifier type (RFC 4566, RFC 3556).
+/// Bandwidth modifier type (RFC 4566, RFC 3556, RFC 3890).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BandwidthType {
     /// Conference Total (CT) - total bandwidth for all sites
@@ -96,8 +97,8 @@ impl BandwidthType {
 /// Bandwidth line (b=) components.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bandwidth {
-    pub bwtype: String,
-    pub bandwidth: u64,  // kbps for AS/CT, bps for RS/RR
+    bwtype: String,
+    bandwidth: u64,  // kbps for AS/CT, bps for RS/RR/TIAS
 }
 
 impl Bandwidth {
@@ -108,12 +109,16 @@ impl Bandwidth {
     pub fn rtcp_receivers(bps: u64) -> Self;     // Creates RR
     pub fn application_specific(kbps: u64) -> Self;  // Creates AS
     pub fn conference_total(kbps: u64) -> Self;      // Creates CT
+    pub fn tias(bps: u64) -> Self;                   // Creates TIAS
 
     // Type checking
     pub fn bandwidth_type(&self) -> BandwidthType;
     pub fn is_rtcp(&self) -> bool;
 }
 ```
+
+Fields are private; use the constructors, `bandwidth_type()`, and `is_rtcp()` for inspection. The
+`Display` implementation renders the full `b=` line.
 
 ## Parsing and Generation
 
@@ -137,10 +142,17 @@ m=audio 49170 RTP/AVP 0\r\n\
 let session = SdpSession::parse(sdp)?;
 
 // Access bandwidth modifiers
-for bw in &session.bandwidth {
-    println!("{}: {} {}",
-        bw.bwtype,
-        bw.bandwidth,
+for bw in session.bandwidth() {
+    let value = bw
+        .to_string()
+        .split_once(':')
+        .and_then(|(_, value)| value.parse::<u64>().ok())
+        .unwrap_or_default();
+
+    println!(
+        "{}: {} {}",
+        bw.bandwidth_type(),
+        value,
         if bw.is_rtcp() { "bps" } else { "kbps" }
     );
 }
@@ -150,7 +162,9 @@ for bw in &session.bandwidth {
 // RR: 1500 bps
 
 // Check specific modifiers
-let rtcp_bandwidth: Vec<_> = session.bandwidth.iter()
+let rtcp_bandwidth: Vec<_> = session
+    .bandwidth()
+    .iter()
     .filter(|bw| bw.is_rtcp())
     .collect();
 
@@ -160,50 +174,39 @@ assert_eq!(rtcp_bandwidth.len(), 2);
 ### Generation Example
 
 ```rust
-use sip_core::{SdpSession, Bandwidth, Origin, Connection, MediaDescription};
+use sip_core::Bandwidth;
 
-// Create session
-let mut session = SdpSession::new(
-    Origin {
-        username: "alice".to_string(),
-        sess_id: "123".to_string(),
-        sess_version: "456".to_string(),
-        nettype: "IN".to_string(),
-        addrtype: "IP4".to_string(),
-        unicast_address: "192.0.2.1".to_string(),
-    },
-    "RTCP Bandwidth Example".to_string(),
+let bandwidth_lines = [
+    Bandwidth::application_specific(128).to_string(), // 128 kbps
+    Bandwidth::rtcp_senders(2000).to_string(),        // 2000 bps
+    Bandwidth::rtcp_receivers(1500).to_string(),      // 1500 bps
+]
+.join("\r\n");
+
+let sdp_string = format!(
+    "v=0\r\n\
+o=alice 123 456 IN IP4 192.0.2.1\r\n\
+s=RTCP Bandwidth Example\r\n\
+c=IN IP4 192.0.2.1\r\n\
+t=0 0\r\n\
+{}\r\n\
+m=audio 49170 RTP/AVP 0\r\n",
+    bandwidth_lines
 );
 
-session.connection = Some(Connection {
-    nettype: "IN".to_string(),
-    addrtype: "IP4".to_string(),
-    connection_address: "192.0.2.1".to_string(),
-});
+// Contains:
+// b=AS:128
+// b=RS:2000
+// b=RR:1500
+```
 
-// Add bandwidth modifiers
-session.bandwidth.push(Bandwidth::application_specific(128));  // 128 kbps
-session.bandwidth.push(Bandwidth::rtcp_senders(2000));         // 2000 bps
-session.bandwidth.push(Bandwidth::rtcp_receivers(1500));       // 1500 bps
+You can parse and round-trip the generated SDP if needed:
 
-// Add media
-session.media.push(MediaDescription {
-    media: "audio".to_string(),
-    port: 49170,
-    port_count: None,
-    proto: "RTP/AVP".to_string(),
-    fmt: vec!["0".to_string()],
-    title: None,
-    connection: None,
-    bandwidth: Vec::new(),
-    encryption_key: None,
-    attributes: Vec::new(),
-    mid: None,
-    capability_set: None,
-});
+```rust
+use sip_core::SdpSession;
 
-// Generate SDP
-let sdp_string = session.to_string();
+let session = SdpSession::parse(&sdp_string)?;
+let round_trip = session.to_string();
 // Contains:
 // b=AS:128
 // b=RS:2000
@@ -314,32 +317,42 @@ b=RR:300
 Example function to validate RFC 3556 compliance:
 
 ```rust
-use sip_core::{SdpSession, BandwidthType};
+use sip_core::{Bandwidth, BandwidthType, SdpSession};
 
 fn analyze_rtcp_bandwidth(session: &SdpSession) {
-    let mut rs_bandwidth = 0u64;
-    let mut rr_bandwidth = 0u64;
+    let mut rs_bandwidth = None;
+    let mut rr_bandwidth = None;
 
-    for bw in &session.bandwidth {
-        match bw.bandwidth_type() {
-            BandwidthType::RS => rs_bandwidth = bw.bandwidth,
-            BandwidthType::RR => rr_bandwidth = bw.bandwidth,
-            _ => {}
+    fn bandwidth_value(bw: &Bandwidth) -> Option<u64> {
+        bw.to_string()
+            .split_once(':')
+            .and_then(|(_, value)| value.parse::<u64>().ok())
+    }
+
+    for bw in session.bandwidth() {
+        if let Some(value) = bandwidth_value(bw) {
+            match bw.bandwidth_type() {
+                BandwidthType::RS => rs_bandwidth = Some(value),
+                BandwidthType::RR => rr_bandwidth = Some(value),
+                _ => {}
+            }
         }
     }
 
-    if rs_bandwidth > 0 || rr_bandwidth > 0 {
-        let total_rtcp = rs_bandwidth + rr_bandwidth;
-        let sender_fraction = rs_bandwidth as f64 / total_rtcp as f64;
+    if let (Some(rs), Some(rr)) = (rs_bandwidth, rr_bandwidth) {
+        let total_rtcp = rs + rr;
+        let sender_fraction = rs as f64 / total_rtcp as f64;
 
         println!("RTCP Bandwidth Analysis:");
-        println!("  Senders (RS): {} bps ({:.1}%)", rs_bandwidth, sender_fraction * 100.0);
-        println!("  Receivers (RR): {} bps ({:.1}%)", rr_bandwidth, (1.0 - sender_fraction) * 100.0);
+        println!("  Senders (RS): {} bps ({:.1}%)", rs, sender_fraction * 100.0);
+        println!(
+            "  Receivers (RR): {} bps ({:.1}%)",
+            rr,
+            (1.0 - sender_fraction) * 100.0
+        );
         println!("  Total RTCP: {} bps", total_rtcp);
-
-        if sender_fraction < rs_bandwidth as f64 / total_rtcp as f64 {
-            println!("  ⚠️  Warning: Sender allocation below RFC 3556 minimum");
-        }
+    } else {
+        println!("RTCP Bandwidth Analysis: RS/RR modifiers not both present");
     }
 }
 ```
@@ -445,15 +458,15 @@ cargo test rfc_3556_example
 
 | Component | File | Lines |
 |-----------|------|-------|
-| BandwidthType enum | `crates/sip-core/src/sdp.rs` | 159-220 |
-| RS variant | `crates/sip-core/src/sdp.rs` | 169 |
-| RR variant | `crates/sip-core/src/sdp.rs` | 171 |
-| is_rtcp() method | `crates/sip-core/src/sdp.rs` | 207-210 |
-| Bandwidth struct | `crates/sip-core/src/sdp.rs` | 222-283 |
-| rtcp_senders() | `crates/sip-core/src/sdp.rs` | 263-265 |
-| rtcp_receivers() | `crates/sip-core/src/sdp.rs` | 270-272 |
-| Tests | `crates/sip-core/src/sdp.rs` | 3726-3997 |
-| Exports | `crates/sip-core/src/lib.rs` | 92 |
+| BandwidthType enum | `crates/sip-core/src/sdp.rs` | 386-438 |
+| RS variant | `crates/sip-core/src/sdp.rs` | 395-396 |
+| RR variant | `crates/sip-core/src/sdp.rs` | 397-398 |
+| is_rtcp() method | `crates/sip-core/src/sdp.rs` | 434-437 |
+| Bandwidth struct | `crates/sip-core/src/sdp.rs` | 449-519 |
+| rtcp_senders() | `crates/sip-core/src/sdp.rs` | 488-493 |
+| rtcp_receivers() | `crates/sip-core/src/sdp.rs` | 495-500 |
+| Tests | `crates/sip-core/src/sdp.rs` | 4456-4715 |
+| Exports | `crates/sip-core/src/lib.rs` | 119 |
 
 ## References
 
@@ -509,4 +522,3 @@ While the current implementation is fully compliant with RFC 3556, potential fut
   - Added is_rtcp() methods for type checking
   - Updated parsing and display logic
   - Added 14 comprehensive tests
-  - All 446 tests passing (431 existing + 14 new + 1 pre-existing bandwidth test)
