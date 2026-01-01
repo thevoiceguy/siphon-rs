@@ -2,7 +2,7 @@
 
 **Date:** 2025-01-20
 **Status:** ✅ **COMPLETE** - Full RFC 3323 compliance achieved
-**Test Results:** ✅ All 65+ tests passing (27 privacy core tests, 4 UAC tests, 43 sip-core tests)
+**Test Results:** ✅ All privacy tests passing (36 core privacy tests, 4 UAC tests)
 
 ---
 
@@ -27,12 +27,13 @@ RFC 3323 defines:
 
 | Component | Status | Location | Description |
 |-----------|--------|----------|-------------|
-| **PrivacyValue Enum** | ✅ Complete | `sip-core/src/privacy.rs:28-76` | All 6 privacy values |
-| **PrivacyHeader Type** | ✅ Complete | `sip-core/src/privacy.rs:111-196` | Header parsing and display |
-| **Privacy Parsing** | ✅ Complete | `sip-core/src/privacy.rs:167-181` | Parses "id; critical" format |
-| **Privacy Enforcement** | ✅ Complete | `sip-core/src/privacy.rs:276-335` | Removes/anonymizes headers |
-| **UAC Privacy APIs** | ✅ Complete | `sip-uac/src/lib.rs:484-524` | add_privacy_header(), with_privacy() |
-| **Privacy Tests** | ✅ Complete | 27 core tests + 4 UAC tests | Comprehensive coverage |
+| **PrivacyValue Enum** | ✅ Complete | `sip-core/src/privacy.rs:61-125` | All 6 privacy values |
+| **PrivacyError Type** | ✅ Complete | `sip-core/src/privacy.rs:11-36` | Validation and parsing errors |
+| **PrivacyHeader Type** | ✅ Complete | `sip-core/src/privacy.rs:145-287` | Header parsing and display |
+| **Privacy Parsing** | ✅ Complete | `sip-core/src/privacy.rs:235-287` | Parses "id; critical" format |
+| **Privacy Enforcement** | ✅ Complete | `sip-core/src/privacy.rs:319-483` | Removes/anonymizes headers |
+| **UAC Privacy APIs** | ✅ Complete | `sip-uac/src/lib.rs:1465-1537` | add_privacy_header(), with_privacy() |
+| **Privacy Tests** | ✅ Complete | 36 core tests + 4 UAC tests | Comprehensive coverage |
 | **Documentation** | ✅ Complete | Inline docs + this document | Usage examples and API docs |
 
 ---
@@ -62,26 +63,44 @@ pub enum PrivacyValue {
 - `requires_header_privacy()` - True for Header and User
 - `requires_session_privacy()` - True for Session and User
 
+#### PrivacyError Type
+
+```rust
+pub enum PrivacyError {
+    TooManyValues { max: usize, actual: usize },
+    InputTooLarge { max: usize, actual: usize },
+    InvalidValue(String),
+    EmptyValues,
+    ParseError(String),
+}
+```
+
 #### PrivacyHeader Type
 
 ```rust
 pub struct PrivacyHeader {
-    pub values: Vec<PrivacyValue>,
+    // values are private
 }
 ```
 
 **Constructor Methods:**
-- `new(values: Vec<PrivacyValue>)` - Create with multiple values
+- `new(values: Vec<PrivacyValue>) -> Result<PrivacyHeader, PrivacyError>` - Create with multiple values
 - `single(value: PrivacyValue)` - Create with single value
-- `parse(s: &str)` - Parse from string ("id; critical")
+- `parse(s: &str) -> Result<PrivacyHeader, PrivacyError>` - Parse from string ("id; critical")
 
 **Query Methods:**
+- `values()` - Iterator over privacy values
+- `len()` / `is_empty()` - Count and emptiness
 - `contains(value: PrivacyValue)` - Check if value present
 - `is_critical()` - True if Critical flag set
 - `is_none()` - True if None value present
 - `requires_identity_anonymization()` - True if Id or User present
 - `requires_header_privacy()` - True if Header or User present
 - `requires_session_privacy()` - True if Session or User present
+
+**Validation Rules:**
+- `none` cannot be combined with other privacy values
+- Max value count and parse input length are enforced
 
 **Display:**
 - `to_string()` - Format as "id; critical"
@@ -103,11 +122,15 @@ pub fn add_privacy_header(
 )
 ```
 
+**Note:** `add_privacy_header()` expects valid values (non-empty, no `none` with others). It uses
+`PrivacyHeader::new(...)` internally and will panic on invalid input.
+
 **Example:**
 
 ```rust
 use sip_core::PrivacyValue;
 use sip_uac::UserAgentClient;
+use smol_str::SmolStr;
 
 let uac = UserAgentClient::new(local_uri, contact_uri);
 let mut invite = uac.create_invite(&remote_uri, Some(sdp));
@@ -138,6 +161,7 @@ pub fn with_privacy(
 ```rust
 use sip_core::PrivacyValue;
 use sip_uac::UserAgentClient;
+use smol_str::SmolStr;
 
 let uac = UserAgentClient::new(local_uri, contact_uri);
 let invite = uac.create_invite(&remote_uri, Some(sdp));
@@ -163,7 +187,7 @@ Applies privacy requirements to request headers by removing or anonymizing them.
 pub fn enforce_privacy(
     headers: &mut Headers,
     privacy: &PrivacyHeader
-)
+) -> Result<(), PrivacyError>
 ```
 
 **Privacy Enforcement Rules:**
@@ -172,7 +196,7 @@ pub fn enforce_privacy(
 - **header**: Removes Subject, Call-Info, Organization, User-Agent, Reply-To, In-Reply-To, Server
 - **session**: Caller must remove/anonymize SDP body
 - **user**: Applies both header and id privacy
-- **id**: Anonymizes From and Contact to "anonymous@anonymous.invalid"
+- **id**: Anonymizes From/Contact and removes P-Asserted-Identity/P-Preferred-Identity
 - **critical**: Indicates enforcement is mandatory (handled by caller)
 
 **Example:**
@@ -182,13 +206,25 @@ use sip_core::{Headers, PrivacyHeader, PrivacyValue, enforce_privacy};
 use smol_str::SmolStr;
 
 let mut headers = Headers::new();
-headers.push(SmolStr::new("From"), SmolStr::new("<sip:alice@example.com>"));
-headers.push(SmolStr::new("Subject"), SmolStr::new("Confidential Call"));
-headers.push(SmolStr::new("User-Agent"), SmolStr::new("MyPhone/1.0"));
+headers
+    .push(SmolStr::new("From"), SmolStr::new("<sip:alice@example.com>"))
+    .unwrap();
+headers
+    .push(
+        SmolStr::new("Subject"),
+        SmolStr::new("Confidential Call"),
+    )
+    .unwrap();
+headers
+    .push(
+        SmolStr::new("User-Agent"),
+        SmolStr::new("MyPhone/1.0"),
+    )
+    .unwrap();
 
 // Apply privacy
-let privacy = PrivacyHeader::new(vec![PrivacyValue::Header, PrivacyValue::Id]);
-enforce_privacy(&mut headers, &privacy);
+let privacy = PrivacyHeader::new(vec![PrivacyValue::Header, PrivacyValue::Id])?;
+enforce_privacy(&mut headers, &privacy)?;
 
 // Subject and User-Agent removed
 assert!(headers.get("Subject").is_none());
@@ -213,7 +249,9 @@ use sip_core::{Headers, requires_privacy_enforcement};
 use smol_str::SmolStr;
 
 let mut headers = Headers::new();
-headers.push(SmolStr::new("Privacy"), SmolStr::new("id"));
+headers
+    .push(SmolStr::new("Privacy"), SmolStr::new("id"))
+    .unwrap();
 
 if requires_privacy_enforcement(&headers) {
     // Apply privacy enforcement
@@ -235,7 +273,9 @@ use sip_core::{parse_privacy_header, Headers};
 use smol_str::SmolStr;
 
 let mut headers = Headers::new();
-headers.push(SmolStr::new("Privacy"), SmolStr::new("id; critical"));
+headers
+    .push(SmolStr::new("Privacy"), SmolStr::new("id; critical"))
+    .unwrap();
 
 let privacy = parse_privacy_header(&headers).unwrap();
 assert!(privacy.contains(PrivacyValue::Id));
@@ -275,23 +315,23 @@ transaction_manager.send_request(private_invite)?;
 #### Proxy Side (Enforcing Privacy)
 
 ```rust
-use sip_core::{parse_privacy_header, enforce_privacy};
+use sip_core::{enforce_privacy, parse_privacy_header, Request};
 
 // Receive request
-if let Some(privacy) = parse_privacy_header(&request.headers) {
+if let Some(privacy) = parse_privacy_header(request.headers()) {
     if privacy.requires_identity_anonymization() {
         // Clone headers for modification
-        let mut headers = request.headers.clone();
+        let mut headers = request.headers().clone();
 
         // Apply privacy enforcement
-        enforce_privacy(&mut headers, &privacy);
+        enforce_privacy(&mut headers, &privacy)?;
 
         // Forward modified request
         let modified_request = Request::new(
-            request.start.clone(),
+            request.start_line().clone(),
             headers,
-            request.body.clone(),
-        );
+            request.body().clone(),
+        )?;
         forward_request(modified_request)?;
     }
 }
@@ -304,12 +344,12 @@ use sip_core::{parse_privacy_header, PrivacyValue};
 use sip_parse::header;
 
 // Receive INVITE
-if let Some(privacy) = parse_privacy_header(&invite.headers) {
+if let Some(privacy) = parse_privacy_header(invite.headers()) {
     if privacy.contains(PrivacyValue::Id) {
         println!("Received anonymous call");
 
         // From will be: "Anonymous" <sip:anonymous@anonymous.invalid>;tag=...
-        let from = header(&invite.headers, "From").unwrap();
+        let from = header(invite.headers(), "From").unwrap();
         println!("From: {}", from);
     }
 }
@@ -330,14 +370,20 @@ let uac = UserAgentClient::new(local_uri, contact_uri);
 let mut invite = uac.create_invite(&remote_uri, Some(sdp));
 
 // Add subject and organization (normally exposed)
-invite.headers.push(
-    SmolStr::new("Subject"),
-    SmolStr::new("Confidential Business"),
-);
-invite.headers.push(
-    SmolStr::new("Organization"),
-    SmolStr::new("Secret Inc"),
-);
+invite
+    .headers_mut()
+    .push(
+        SmolStr::new("Subject"),
+        SmolStr::new("Confidential Business"),
+    )
+    .unwrap();
+invite
+    .headers_mut()
+    .push(
+        SmolStr::new("Organization"),
+        SmolStr::new("Secret Inc"),
+    )
+    .unwrap();
 
 // Request complete user-level privacy
 UserAgentClient::add_privacy_header(&mut invite, vec![
@@ -354,6 +400,8 @@ transaction_manager.send_request(invite)?;
 - User-Agent header: REMOVED
 - From: "Anonymous" <sip:anonymous@anonymous.invalid>;tag=...
 - Contact: "Anonymous" <sip:anonymous@anonymous.invalid>
+- P-Asserted-Identity: REMOVED
+- P-Preferred-Identity: REMOVED
 - SDP: Caller should have anonymized/removed (not enforced by header function)
 
 ### 3. Selective Privacy (Only Remove Non-Essential Headers)
@@ -367,10 +415,13 @@ use sip_uac::UserAgentClient;
 let uac = UserAgentClient::new(local_uri, contact_uri);
 let mut invite = uac.create_invite(&remote_uri, Some(sdp));
 
-invite.headers.push(
-    SmolStr::new("Subject"),
-    SmolStr::new("Private Discussion"),
-);
+invite
+    .headers_mut()
+    .push(
+        SmolStr::new("Subject"),
+        SmolStr::new("Private Discussion"),
+    )
+    .unwrap();
 
 // Only remove header privacy, keep identity
 UserAgentClient::add_privacy_header(&mut invite, vec![PrivacyValue::Header]);
@@ -410,7 +461,7 @@ transaction_manager.send_request(critical_invite)?;
 ```rust
 use sip_core::{parse_privacy_header, enforce_privacy};
 
-if let Some(privacy) = parse_privacy_header(&request.headers) {
+if let Some(privacy) = parse_privacy_header(request.headers()) {
     if privacy.is_critical() {
         // Check if we can provide the requested privacy
         if !can_provide_privacy(&privacy) {
@@ -421,8 +472,8 @@ if let Some(privacy) = parse_privacy_header(&request.headers) {
     }
 
     // Enforce privacy
-    let mut headers = request.headers.clone();
-    enforce_privacy(&mut headers, &privacy);
+    let mut headers = request.headers().clone();
+    enforce_privacy(&mut headers, &privacy)?;
     forward_request_with_headers(request, headers)?;
 }
 ```
@@ -432,7 +483,8 @@ if let Some(privacy) = parse_privacy_header(&request.headers) {
 Complete proxy implementation with privacy enforcement.
 
 ```rust
-use sip_core::{parse_privacy_header, enforce_privacy, Request};
+use sip_core::{enforce_privacy, parse_privacy_header, PrivacyHeader, Request};
+use bytes::Bytes;
 use anyhow::Result;
 
 pub struct PrivacyEnforcingProxy {
@@ -442,31 +494,31 @@ pub struct PrivacyEnforcingProxy {
 impl PrivacyEnforcingProxy {
     pub fn forward_request(&self, request: Request) -> Result<Request> {
         // Check for Privacy header
-        if let Some(privacy) = parse_privacy_header(&request.headers) {
+        if let Some(privacy) = parse_privacy_header(request.headers()) {
             // Check critical flag
             if privacy.is_critical() && !self.can_provide_privacy(&privacy) {
                 return Err(anyhow!("Cannot provide requested privacy"));
             }
 
             // Clone and modify headers
-            let mut headers = request.headers.clone();
+            let mut headers = request.headers().clone();
 
             // Apply privacy enforcement
-            enforce_privacy(&mut headers, &privacy);
+            enforce_privacy(&mut headers, &privacy)?;
 
             // Handle session privacy (SDP anonymization)
             let body = if privacy.requires_session_privacy() {
-                self.anonymize_sdp(&request.body)?
+                self.anonymize_sdp(request.body())?
             } else {
-                request.body.clone()
+                request.body().clone()
             };
 
             // Create modified request
             return Ok(Request::new(
-                request.start.clone(),
+                request.start_line().clone(),
                 headers,
                 body,
-            ));
+            )?);
         }
 
         // No privacy requested, forward as-is
@@ -523,6 +575,7 @@ impl PrivacyEnforcingProxy {
 | Contact | `<sip:alice@192.168.1.100:5060>` | `"Anonymous" <sip:anonymous@anonymous.invalid>` |
 
 **Note:** Tags and parameters are preserved to maintain dialog state.
+**Note:** P-Asserted-Identity and P-Preferred-Identity are removed when identity privacy is requested.
 
 ---
 
@@ -533,7 +586,7 @@ impl PrivacyEnforcingProxy {
 | **Privacy header parsing** | ✅ Complete | PrivacyHeader::parse() |
 | **Privacy values (6 total)** | ✅ Complete | PrivacyValue enum |
 | **Header privacy enforcement** | ✅ Complete | enforce_privacy() removes headers |
-| **Identity anonymization** | ✅ Complete | anonymize_identity_headers() |
+| **Identity anonymization** | ✅ Complete | anonymize_identity_headers() removes From/Contact + PAI/PPI |
 | **Tag preservation** | ✅ Complete | Preserves ;tag= parameters |
 | **Multiple privacy values** | ✅ Complete | Supports "id; critical" format |
 | **Case-insensitive parsing** | ✅ Complete | from_str() uses to_lowercase() |
@@ -547,7 +600,7 @@ impl PrivacyEnforcingProxy {
 
 ### Core Privacy Tests
 
-**Location:** `crates/sip-core/src/privacy.rs:361-697`
+**Location:** `crates/sip-core/src/privacy.rs:511-911`
 
 | Test | Purpose |
 |------|---------|
@@ -564,6 +617,7 @@ impl PrivacyEnforcingProxy {
 | `privacy_header_parse_whitespace` | Handle whitespace |
 | `privacy_header_parse_case_insensitive` | Parse "ID; CRITICAL" |
 | `privacy_header_parse_invalid` | Reject invalid values |
+| `privacy_header_rejects_none_with_others` | Disallow "none" + other values |
 | `privacy_header_display` | Format as "id; critical" |
 | `privacy_header_display_empty` | Handle empty header |
 | `parse_privacy_header_from_headers` | Extract from Headers |
@@ -573,17 +627,25 @@ impl PrivacyEnforcingProxy {
 | `enforce_privacy_id_anonymizes_identity` | Anonymize From/Contact |
 | `enforce_privacy_user_applies_all` | Combine header+id privacy |
 | `enforce_privacy_multiple_values` | Handle "id; header; critical" |
+| `enforce_privacy_removes_p_asserted_identity` | Remove PAI/PPI for id privacy |
+| `enforce_privacy_with_user_removes_p_headers` | Remove PAI/PPI for user privacy |
 | `anonymize_identity_preserves_tag` | Keep ;tag= parameter |
 | `anonymize_identity_without_params` | Anonymize simple header |
+| `anonymize_identity_ignores_semicolon_in_quotes` | Robust param splitting |
 | `requires_privacy_enforcement_returns_true` | Detect privacy requirement |
 | `requires_privacy_enforcement_returns_false_for_none` | Ignore 'none' |
 | `requires_privacy_enforcement_returns_false_when_missing` | No header = no enforcement |
+| `reject_empty_values` | Reject empty privacy header |
+| `reject_too_many_values` | Enforce max values |
+| `reject_oversized_parse_input` | Enforce parse input limit |
+| `reject_oversized_anonymize_input` | Enforce anonymize input limit |
+| `fields_are_private` | Ensure private field access |
 
-**Result:** ✅ All 27 tests passing
+**Result:** ✅ All 36 tests passing
 
 ### UAC Privacy Tests
 
-**Location:** `crates/sip-uac/src/lib.rs:1545-1628`
+**Location:** `crates/sip-uac/src/lib.rs:3671-3752`
 
 | Test | Purpose |
 |------|---------|
@@ -598,12 +660,6 @@ impl PrivacyEnforcingProxy {
 
 ```bash
 $ cargo test -p sip-core -p sip-uac
-
-running 43 tests (sip-core)
-test result: ok. 43 passed; 0 failed
-
-running 22 tests (sip-uac)
-test result: ok. 22 passed; 0 failed
 ```
 
 ---
@@ -614,16 +670,16 @@ test result: ok. 22 passed; 0 failed
 
 | File | Lines | Description |
 |------|-------|-------------|
-| `sip-core/src/privacy.rs` | 697 | Complete privacy implementation with tests |
+| `sip-core/src/privacy.rs` | 911 | Complete privacy implementation with tests |
 | `RFC_3323_IMPLEMENTATION.md` | This file | Complete documentation |
 
 ### Modified Files
 
 | File | Lines | Changes |
 |------|-------|---------|
-| `sip-core/src/lib.rs` | 16, 51-54 | Add privacy module and exports |
+| `sip-core/src/lib.rs` | 105-108 | Add privacy exports |
 | `sip-core/src/headers.rs` | 67-82 | Add remove() and retain() methods |
-| `sip-uac/src/lib.rs` | 460-524, 1545-1628 | Add Privacy APIs and 4 tests |
+| `sip-uac/src/lib.rs` | 1465-1537, 3671-3752 | Add Privacy APIs and 4 tests |
 
 ### No Changes Required
 
@@ -648,34 +704,42 @@ let mut invite = uac.create_invite(&remote_uri, Some(sdp));
 UserAgentClient::add_privacy_header(&mut invite, vec![PrivacyValue::Id]);
 
 // Real identity is in From (will be seen by trusted proxy only)
-assert!(invite.headers.get("From").unwrap().contains("alice@example.com"));
+assert!(invite.headers().get("From").unwrap().contains("alice@example.com"));
 ```
 
-**Trusted Proxy → UAS:**
+**Trusted Proxy → External UAS:**
 
 ```rust
-use sip_core::{PAssertedIdentityHeader, NameAddr, enforce_privacy, parse_privacy_header};
+use sip_core::{enforce_privacy, parse_privacy_header, NameAddr, PAssertedIdentityHeader, Request};
+use smol_str::SmolStr;
 
 // Proxy extracts real identity before enforcing privacy
-let from = header(&invite.headers, "From").unwrap();
+let from = header(invite.headers(), "From").unwrap();
 let real_identity = NameAddr::parse(from)?;
 
 // Add P-Asserted-Identity (only in trusted domain)
 let pai = PAssertedIdentityHeader {
     identities: vec![real_identity],
 };
-invite.headers.push(
-    SmolStr::new("P-Asserted-Identity"),
-    SmolStr::new(format!("{}", pai.identities[0])),
-);
+invite
+    .headers_mut()
+    .push(
+        SmolStr::new("P-Asserted-Identity"),
+        SmolStr::new(format!("{}", pai.identities[0])),
+    )
+    .unwrap();
 
-// Now enforce privacy (anonymizes From)
-if let Some(privacy) = parse_privacy_header(&invite.headers) {
-    let mut headers = invite.headers.clone();
-    enforce_privacy(&mut headers, &privacy);
+// Enforce privacy before leaving the trust domain (anonymizes From)
+if let Some(privacy) = parse_privacy_header(invite.headers()) {
+    let mut headers = invite.headers().clone();
+    enforce_privacy(&mut headers, &privacy)?;
 
-    // From now anonymous, but PAI preserves real identity in trusted network
-    forward_to_trusted_domain(Request::new(invite.start, headers, invite.body))?;
+    // From now anonymous, and PAI removed at the trust boundary
+    forward_to_untrusted_domain(Request::new(
+        invite.start_line().clone(),
+        headers,
+        invite.body().clone(),
+    )?)?;
 }
 ```
 
@@ -735,7 +799,7 @@ if let Some(privacy) = parse_privacy_header(&invite.headers) {
 4. **Trust Domains**:
    - Use P-Asserted-Identity within trusted networks
    - Enforce privacy at trust domain boundaries
-   - Remove PAI when forwarding outside trusted domain
+   - `enforce_privacy()` removes P-Asserted-Identity and P-Preferred-Identity for id/user privacy
 
 ---
 
@@ -745,8 +809,7 @@ if let Some(privacy) = parse_privacy_header(&invite.headers) {
 
 1. **No SDP Anonymization**: `enforce_privacy()` only handles headers, not SDP body
 2. **No History-Info Privacy**: RFC 7044 History-Info not anonymized
-3. **No P-Asserted-Identity Removal**: Caller must remove PAI at trust boundaries
-4. **No Privacy Service**: No dedicated privacy service for complex scenarios
+3. **No Privacy Service**: No dedicated privacy service for complex scenarios
 
 ### Future Enhancements (Optional)
 
@@ -758,14 +821,17 @@ if let Some(privacy) = parse_privacy_header(&invite.headers) {
 2. **Complete Request Enforcement**:
    ```rust
    pub fn enforce_privacy_on_request(
-       request: &mut Request,
+       request: &Request,
        privacy: &PrivacyHeader,
-   ) -> Result<()> {
-       enforce_privacy(&mut request.headers, privacy);
-       if privacy.requires_session_privacy() {
-           request.body = anonymize_sdp_body(&request.body)?;
-       }
-       Ok(())
+   ) -> Result<Request> {
+       let (start, mut headers, body) = request.clone().into_parts();
+       enforce_privacy(&mut headers, privacy)?;
+       let body = if privacy.requires_session_privacy() {
+           anonymize_sdp_body(&body)?
+       } else {
+           body
+       };
+       Ok(Request::new(start, headers, body)?)
    }
    ```
 
@@ -798,9 +864,9 @@ RFC 3323 Privacy mechanism is fully implemented with:
 - ✅ Privacy header parsing with case-insensitive, multi-value support
 - ✅ Privacy enforcement (header removal, identity anonymization)
 - ✅ UAC convenience APIs (add_privacy_header, with_privacy)
-- ✅ 31 comprehensive tests (27 core + 4 UAC)
+- ✅ 40 comprehensive tests (36 core + 4 UAC)
 - ✅ Complete documentation with 5 use case examples
-- ✅ All tests passing (65+ total across sip-core and sip-uac)
+- ✅ All privacy tests passing
 
 **Grade: A+**
 
