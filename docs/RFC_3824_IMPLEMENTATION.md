@@ -287,7 +287,7 @@ assert!(record.is_terminal());
 Extracts the URI from the regexp field.
 
 ENUM regexps typically follow the format: `!pattern!replacement!flags`
-This method extracts the replacement part (the consequent/URI).
+This method extracts the replacement part (the consequent/URI), including escaped delimiters.
 
 **Regexp Format:**
 - First character is the delimiter (typically '!' but can be '|', '#', etc.)
@@ -326,6 +326,17 @@ let record3 = EnumNaptrRecord::new(
 );
 // Returns the template (actual substitution would require regex engine)
 assert_eq!(record3.extract_uri(), Some("sip:\\1@example.com".to_string()));
+
+// Escaped delimiter inside replacement
+let record4 = EnumNaptrRecord::new(
+    100, 10, "u", "E2U+sip",
+    "!^.*$!sip:user\\!name@example.com!",
+    ""
+);
+assert_eq!(
+    record4.extract_uri(),
+    Some("sip:user\\!name@example.com".to_string())
+);
 ```
 
 **Note:** This method extracts the URI template from the regexp but does not perform actual regex substitution. A full ENUM implementation would need to apply the pattern to the original E.164 number to produce the final URI.
@@ -510,7 +521,7 @@ In a User Agent Client (UAC) implementation, ENUM would be used to:
 
 ## Test Coverage
 
-The ENUM implementation includes 12 comprehensive unit tests covering all functionality:
+The ENUM implementation includes 13 comprehensive unit tests covering all functionality:
 
 ### Conversion Tests
 
@@ -539,30 +550,32 @@ The ENUM implementation includes 12 comprehensive unit tests covering all functi
 6. **extracts_uri_from_regexp**: URI extraction from regexp field
    - Standard '!' delimiter
    - Alternative delimiters ('|', '#')
-   - Handles empty or invalid regexps
 
 7. **extracts_uri_with_substitution**: Complex regexp patterns
    - Patterns with backreferences (\\1, \\2)
    - Returns template (not substituted)
 
+8. **extracts_uri_with_escaped_delimiter**: Escaped delimiter handling
+   - Preserves escaped delimiter in replacement
+
 ### Sorting and Selection Tests
 
-8. **sorts_records_by_preference**: Sorts by preference within same order
+9. **sorts_records_by_preference**: Sorts by preference within same order
 
-9. **sorts_records_by_order_then_preference**: Two-level sorting
+10. **sorts_records_by_order_then_preference**: Two-level sorting
    - Primary: order (ascending)
    - Secondary: preference (ascending)
 
-10. **filters_sip_records**: Service filtering
+11. **filters_sip_records**: Service filtering
     - Filters "E2U+sip" records
     - Excludes other services (mailto, h323, etc.)
 
-11. **selects_best_sip_record**: End-to-end selection
+12. **selects_best_sip_record**: End-to-end selection
     - Filters for SIP
     - Sorts by priority
     - Returns highest priority record
 
-12. **selects_best_with_no_sip_records**: Edge case handling
+13. **selects_best_with_no_sip_records**: Edge case handling
     - Returns None when no SIP records exist
 
 ### Running Tests
