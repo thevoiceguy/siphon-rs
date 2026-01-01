@@ -107,19 +107,34 @@ SRF leverages the complete grouping infrastructure from RFC 3388:
 ```rust
 /// Media group (a=group:) for grouping media lines
 pub struct MediaGroup {
-    pub semantics: GroupSemantics,  // LS, FID, SRF, or Other
-    pub mids: Vec<String>,          // Media IDs
+    semantics: GroupSemantics,  // LS, FID, SRF, or Other
+    mids: Vec<String>,          // Media IDs
+}
+
+impl MediaGroup {
+    pub fn parse(value: &str) -> Result<Self, SdpError>;
 }
 
 pub struct SdpSession {
     // ... other fields ...
-    pub groups: Vec<MediaGroup>,    // All group attributes
-    pub media: Vec<MediaDescription>,
+    pub(crate) groups: Vec<MediaGroup>,    // All group attributes
+    pub(crate) media: Vec<MediaDescription>,
+}
+
+impl SdpSession {
+    pub fn groups(&self) -> &[MediaGroup];
+    pub fn media(&self) -> &[MediaDescription];
 }
 
 pub struct MediaDescription {
     // ... other fields ...
-    pub mid: Option<String>,        // Media ID (a=mid:)
+    pub(crate) mid: Option<String>, // Media ID (a=mid:)
+}
+
+impl MediaDescription {
+    pub fn mid(&self) -> Option<&str>;
+    pub fn media(&self) -> &str;
+    pub fn port(&self) -> u16;
 }
 ```
 
@@ -145,18 +160,18 @@ a=mid:2\r\n\
 
 let session = SdpSession::parse(sdp)?;
 
-// Access SRF groups
-for group in &session.groups {
-    if group.semantics == GroupSemantics::SRF {
-        println!("SRF group with media IDs: {:?}", group.mids);
-        // Output: SRF group with media IDs: ["1", "2"]
+// Access SRF groups (MediaGroup fields are private; use Display for inspection)
+for group in session.groups() {
+    if group.to_string().starts_with("SRF ") {
+        println!("SRF group: {}", group);
+        // Output: SRF group: SRF 1 2
     }
 }
 
 // Access media with IDs
-for media in &session.media {
-    if let Some(mid) = &media.mid {
-        println!("Media {} on port {}", mid, media.port);
+for media in session.media() {
+    if let Some(mid) = media.mid() {
+        println!("Media {} on port {}", mid, media.port());
     }
 }
 ```
@@ -164,67 +179,22 @@ for media in &session.media {
 ### Generation Example
 
 ```rust
-use sip_core::{SdpSession, MediaGroup, GroupSemantics, MediaDescription,
-               Origin, Connection};
+use sip_core::SdpSession;
 
-// Create session
-let mut session = SdpSession::new(
-    Origin {
-        username: "alice".to_string(),
-        sess_id: "123".to_string(),
-        sess_version: "456".to_string(),
-        nettype: "IN".to_string(),
-        addrtype: "IP4".to_string(),
-        unicast_address: "192.0.2.1".to_string(),
-    },
-    "Multi-Stream Session".to_string(),
-);
+let sdp = "\
+v=0\r\n\
+o=alice 123 456 IN IP4 192.0.2.1\r\n\
+s=Multi-Stream Session\r\n\
+c=IN IP4 192.0.2.1\r\n\
+t=0 0\r\n\
+a=group:SRF audio video\r\n\
+m=audio 49170 RTP/AVP 0\r\n\
+a=mid:audio\r\n\
+m=video 49172 RTP/AVP 31\r\n\
+a=mid:video\r\n\
+";
 
-session.connection = Some(Connection {
-    nettype: "IN".to_string(),
-    addrtype: "IP4".to_string(),
-    connection_address: "192.0.2.1".to_string(),
-});
-
-// Add SRF group
-session.groups.push(MediaGroup {
-    semantics: GroupSemantics::SRF,
-    mids: vec!["audio".to_string(), "video".to_string()],
-});
-
-// Add audio media
-session.media.push(MediaDescription {
-    media: "audio".to_string(),
-    port: 49170,
-    port_count: None,
-    proto: "RTP/AVP".to_string(),
-    fmt: vec!["0".to_string()],
-    title: None,
-    connection: None,
-    bandwidth: Vec::new(),
-    encryption_key: None,
-    attributes: Vec::new(),
-    mid: Some("audio".to_string()),
-    capability_set: None,
-});
-
-// Add video media
-session.media.push(MediaDescription {
-    media: "video".to_string(),
-    port: 49172,
-    port_count: None,
-    proto: "RTP/AVP".to_string(),
-    fmt: vec!["31".to_string()],
-    title: None,
-    connection: None,
-    bandwidth: Vec::new(),
-    encryption_key: None,
-    attributes: Vec::new(),
-    mid: Some("video".to_string()),
-    capability_set: None,
-});
-
-// Generate SDP
+let session = SdpSession::parse(sdp)?;
 let sdp_string = session.to_string();
 // Contains: a=group:SRF audio video
 ```
@@ -388,11 +358,11 @@ cargo test sdp::tests::rfc_3524
 
 | Component | File | Lines |
 |-----------|------|-------|
-| GroupSemantics enum | `crates/sip-core/src/sdp.rs` | 283-316 |
-| SRF variant | `crates/sip-core/src/sdp.rs` | 293 |
-| Parsing logic | `crates/sip-core/src/sdp.rs` | 308-315 |
-| Display logic | `crates/sip-core/src/sdp.rs` | 298-316 |
-| Tests | `crates/sip-core/src/sdp.rs` | 3367-3606 |
+| GroupSemantics enum | `crates/sip-core/src/sdp.rs` | 730-769 |
+| SRF variant | `crates/sip-core/src/sdp.rs` | 739-740 |
+| MediaGroup parsing | `crates/sip-core/src/sdp.rs` | 786-816 |
+| Display logic | `crates/sip-core/src/sdp.rs` | 765-826 |
+| Tests | `crates/sip-core/src/sdp.rs` | 4214-4329 |
 
 ## References
 
@@ -439,38 +409,40 @@ While the current implementation is fully compliant with RFC 3524, potential fut
 
 ## Example Integration
 
-Here's how an application might use SRF groups for RSVP setup:
+Here’s how an application might use SRF groups for RSVP setup:
 
 ```rust
-use sip_core::{SdpSession, GroupSemantics};
+use sip_core::SdpSession;
 
 fn setup_rsvp_sessions(sdp: &SdpSession) {
-    for group in &sdp.groups {
-        if group.semantics == GroupSemantics::SRF {
-            // Collect all media streams in this group
-            let media_in_group: Vec<_> = sdp.media.iter()
-                .filter(|m| m.mid.as_ref().map_or(false, |mid| group.mids.contains(mid)))
+    for group in sdp.groups() {
+        let group_str = group.to_string();
+        if group_str.starts_with("SRF ") {
+            let mids: Vec<&str> = group_str.split_whitespace().skip(1).collect();
+            let media_in_group: Vec<_> = sdp
+                .media()
+                .iter()
+                .filter(|m| m.mid().map_or(false, |mid| mids.contains(&mid)))
                 .collect();
 
-            // Create one RSVP session for all these streams
             println!("Creating RSVP session for {} streams", media_in_group.len());
             for media in media_in_group {
-                println!("  - {} on port {}", media.media, media.port);
-                // Setup RSVP filters for this media...
+                println!("  - {} on port {}", media.media(), media.port());
             }
         }
     }
 
-    // Handle media not in any SRF group (each gets separate session)
-    for media in &sdp.media {
-        let in_srf_group = sdp.groups.iter().any(|g| {
-            g.semantics == GroupSemantics::SRF &&
-            media.mid.as_ref().map_or(false, |mid| g.mids.contains(mid))
+    for media in sdp.media() {
+        let in_srf_group = sdp.groups().iter().any(|group| {
+            let group_str = group.to_string();
+            group_str.starts_with("SRF ")
+                && media
+                    .mid()
+                    .map_or(false, |mid| group_str.split_whitespace().skip(1).any(|m| m == mid))
         });
 
         if !in_srf_group {
-            println!("Creating separate RSVP session for {}", media.media);
-            // Setup individual RSVP session...
+            println!("Creating separate RSVP session for {}", media.media());
         }
     }
 }
@@ -483,4 +455,4 @@ fn setup_rsvp_sessions(sdp: &SdpSession) {
   - Updated parsing and display logic
   - Added 10 comprehensive tests
   - Integrated with existing RFC 3388 framework
-  - All 417 tests passing
+  - All SRF tests passing
