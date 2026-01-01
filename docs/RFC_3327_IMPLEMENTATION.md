@@ -2,7 +2,7 @@
 
 **Date:** 2025-01-21
 **Status:** ✅ **COMPLETE** - Full RFC 3327 compliance achieved
-**Test Results:** ✅ All 15 Path/Service-Route tests passing
+**Test Results:** ✅ All 22 Path/Service-Route core tests passing
 
 ---
 
@@ -36,42 +36,53 @@ RFC 3608 defines the **Service-Route header** returned in REGISTER responses:
 
 | Component | Status | Location | Description |
 |-----------|--------|----------|-------------|
-| **PathHeader Type** | ✅ Complete | `sip-core/src/service_route.rs:34-100` | RFC 3327 Path header |
-| **ServiceRouteHeader Type** | ✅ Complete | `sip-core/src/service_route.rs:150-213` | RFC 3608 Service-Route header |
+| **RouteError Type** | ✅ Complete | `sip-core/src/service_route.rs:15-35` | Validation and bounds errors |
+| **PathHeader Type** | ✅ Complete | `sip-core/src/service_route.rs:37-164` | RFC 3327 Path header |
+| **ServiceRouteHeader Type** | ✅ Complete | `sip-core/src/service_route.rs:167-291` | RFC 3608 Service-Route header |
 | **Builder Methods** | ✅ Complete | Both types | single(), from_uris(), new() |
 | **Helper Methods** | ✅ Complete | Both types | is_empty(), len(), add_route(), uris() |
 | **Loose Routing Check** | ✅ Complete | Both types | all_loose_routing() method |
 | **Display Implementation** | ✅ Complete | Both types | Formats as comma-separated list |
-| **Parsing** | ✅ Complete | `sip-parse` | parse_path(), parse_service_route() |
-| **Tests** | ✅ Complete | 15 comprehensive tests | All functionality tested |
+| **Parsing** | ✅ Complete | `sip-parse/src/header_values.rs:61-106` | parse_path(), parse_service_route() |
+| **Tests** | ✅ Complete | `sip-core/src/service_route.rs:301-565` | 22 comprehensive tests |
 | **Documentation** | ✅ Complete | Inline docs + this document | Usage examples and API docs |
 
 ---
 
 ## API Reference
 
+### RouteError
+
+```rust
+pub enum RouteError {
+    TooManyRoutes { max: usize },
+    ValidationError(String),
+}
+```
+
 ### PathHeader
 
-**Location:** `crates/sip-core/src/service_route.rs:34-100`
+**Location:** `crates/sip-core/src/service_route.rs:37-164`
 
 ```rust
 pub struct PathHeader {
-    pub routes: Vec<NameAddr>,
+    // routes are private
 }
 ```
 
 **Constructor Methods:**
-- `single(uri: SipUri)` - Creates Path header with single route
-- `from_uris(uris: Vec<SipUri>)` - Creates Path header from URI list
-- `new(routes: Vec<NameAddr>)` - Creates Path header with custom NameAddr list
+- `single(uri: Uri) -> Result<Self, RouteError>` - Creates Path header with single route
+- `from_uris(uris: Vec<Uri>) -> Result<Self, RouteError>` - Creates Path header from URI list
+- `new(routes: Vec<NameAddr>) -> Result<Self, RouteError>` - Creates Path header with custom NameAddr list
 
 **Mutation Methods:**
-- `add_route(&mut self, uri: SipUri)` - Adds route to end of Path
+- `add_route(&mut self, uri: Uri) -> Result<(), RouteError>` - Adds route to end of Path
 
 **Query Methods:**
 - `is_empty(&self) -> bool` - Returns true if no routes
 - `len(&self) -> usize` - Returns number of routes
-- `uris(&self) -> impl Iterator<Item = &SipUri>` - Iterates over route URIs
+- `routes(&self) -> &[NameAddr]` - Returns route list
+- `uris(&self) -> impl Iterator<Item = &Uri>` - Iterates over route URIs
 - `all_loose_routing(&self) -> bool` - Checks if all routes have 'lr' parameter
 
 **Display:**
@@ -79,26 +90,27 @@ pub struct PathHeader {
 
 ### ServiceRouteHeader
 
-**Location:** `crates/sip-core/src/service_route.rs:150-213`
+**Location:** `crates/sip-core/src/service_route.rs:167-291`
 
 ```rust
 pub struct ServiceRouteHeader {
-    pub routes: Vec<NameAddr>,
+    // routes are private
 }
 ```
 
 **Constructor Methods:**
-- `single(uri: SipUri)` - Creates Service-Route header with single route
-- `from_uris(uris: Vec<SipUri>)` - Creates Service-Route header from URI list
-- `new(routes: Vec<NameAddr>)` - Creates Service-Route header with custom NameAddr list
+- `single(uri: Uri) -> Result<Self, RouteError>` - Creates Service-Route header with single route
+- `from_uris(uris: Vec<Uri>) -> Result<Self, RouteError>` - Creates Service-Route header from URI list
+- `new(routes: Vec<NameAddr>) -> Result<Self, RouteError>` - Creates Service-Route header with custom NameAddr list
 
 **Mutation Methods:**
-- `add_route(&mut self, uri: SipUri)` - Adds route to end of Service-Route
+- `add_route(&mut self, uri: Uri) -> Result<(), RouteError>` - Adds route to end of Service-Route
 
 **Query Methods:**
 - `is_empty(&self) -> bool` - Returns true if no routes
 - `len(&self) -> usize` - Returns number of routes
-- `uris(&self) -> impl Iterator<Item = &SipUri>` - Iterates over route URIs
+- `routes(&self) -> &[NameAddr]` - Returns route list
+- `uris(&self) -> impl Iterator<Item = &Uri>` - Iterates over route URIs
 - `all_loose_routing(&self) -> bool` - Checks if all routes have 'lr' parameter
 
 **Display:**
@@ -124,17 +136,17 @@ Parse Path and Service-Route headers from SIP message headers.
 A proxy adding its Path entry to a REGISTER request:
 
 ```rust
-use sip_core::{PathHeader, SipUri};
+use sip_core::{PathHeader, Uri};
+use smol_str::SmolStr;
 
 // Proxy adds itself to the Path
-let proxy_uri = SipUri::parse("sip:proxy.example.com;lr")?;
-let path = PathHeader::single(proxy_uri);
+let proxy_uri = Uri::parse("sip:proxy.example.com;lr")?;
+let path = PathHeader::single(proxy_uri)?;
 
 // Add to REGISTER request
-request.headers.push(
-    SmolStr::new("Path"),
-    SmolStr::new(path.to_string())
-);
+request
+    .headers_mut()
+    .push(SmolStr::new("Path"), SmolStr::new(path.to_string()))?;
 
 // Result: Path: <sip:proxy.example.com;lr>
 ```
@@ -144,20 +156,20 @@ request.headers.push(
 Multiple proxies each adding their Path entry:
 
 ```rust
-use sip_core::{PathHeader, SipUri, parse_path};
+use sip_core::{parse_path, PathHeader, Uri};
 
 // Parse existing Path headers from received REGISTER
-let existing_path = parse_path(&request.headers)?;
+let existing_path = parse_path(request.headers())?;
 
 // Proxy adds itself
-let proxy_uri = SipUri::parse("sip:proxy2.example.com;lr")?;
+let proxy_uri = Uri::parse("sip:proxy2.example.com;lr")?;
 let mut path = existing_path;
-path.add_route(proxy_uri);
+path.add_route(proxy_uri)?;
 
 // Or create from scratch with multiple entries
-let proxy1 = SipUri::parse("sip:proxy1.example.com;lr")?;
-let proxy2 = SipUri::parse("sip:proxy2.example.com;lr")?;
-let path = PathHeader::from_uris(vec![proxy1, proxy2]);
+let proxy1 = Uri::parse("sip:proxy1.example.com;lr")?;
+let proxy2 = Uri::parse("sip:proxy2.example.com;lr")?;
+let path = PathHeader::from_uris(vec![proxy1, proxy2])?;
 
 // Result: Path: <sip:proxy1.example.com;lr>, <sip:proxy2.example.com;lr>
 ```
@@ -167,17 +179,17 @@ let path = PathHeader::from_uris(vec![proxy1, proxy2]);
 Registrar returning Service-Route in 200 OK:
 
 ```rust
-use sip_core::{ServiceRouteHeader, SipUri};
+use sip_core::{ServiceRouteHeader, Uri};
+use smol_str::SmolStr;
 
 // Registrar specifies service route
-let service_uri = SipUri::parse("sip:service.example.com;lr")?;
-let sr = ServiceRouteHeader::single(service_uri);
+let service_uri = Uri::parse("sip:service.example.com;lr")?;
+let sr = ServiceRouteHeader::single(service_uri)?;
 
 // Add to 200 OK response
-response.headers.push(
-    SmolStr::new("Service-Route"),
-    SmolStr::new(sr.to_string())
-);
+response
+    .headers_mut()
+    .push(SmolStr::new("Service-Route"), SmolStr::new(sr.to_string()))?;
 
 // Result: Service-Route: <sip:service.example.com;lr>
 ```
@@ -190,7 +202,7 @@ UAC receiving and storing Service-Route from REGISTER response:
 use sip_core::parse_service_route;
 
 // Parse Service-Route from 200 OK to REGISTER
-let service_route = parse_service_route(&response.headers)?;
+let service_route = parse_service_route(response.headers())?;
 
 if !service_route.is_empty() {
     println!("Registrar provided {} service routes", service_route.len());
@@ -215,7 +227,7 @@ Registrar receiving and storing Path from REGISTER:
 use sip_core::parse_path;
 
 // Parse Path headers from REGISTER request
-let path = parse_path(&register_request.headers)?;
+let path = parse_path(register_request.headers())?;
 
 if !path.is_empty() {
     // Store Path with the Contact binding
@@ -240,7 +252,8 @@ if !path.is_empty() {
 Registrar building route set for request to registered UA:
 
 ```rust
-use sip_core::{PathHeader, RouteHeader, parse_path};
+use sip_core::{NameAddr, PathHeader, RouteHeader, parse_path};
+use smol_str::SmolStr;
 
 // Retrieve stored Path for this Contact binding
 let stored_path: PathHeader = get_stored_path_for_contact(&contact);
@@ -249,11 +262,10 @@ let stored_path: PathHeader = get_stored_path_for_contact(&contact);
 if !stored_path.is_empty() {
     // Path becomes Route set (in reverse order per RFC 3327)
     for uri in stored_path.uris().rev() {
-        let route = RouteHeader::single(uri.clone());
-        request.headers.push(
-            SmolStr::new("Route"),
-            SmolStr::new(route.to_string())
-        );
+        let route = RouteHeader::new(NameAddr::from_uri(uri.clone()));
+        request
+            .headers_mut()
+            .push(SmolStr::new("Route"), SmolStr::new(route.to_string()))?;
     }
 }
 ```
@@ -263,24 +275,30 @@ if !stored_path.is_empty() {
 Verifying that Path/Service-Route entries support loose routing:
 
 ```rust
-use sip_core::{PathHeader, ServiceRouteHeader};
+use sip_core::{parse_path, parse_service_route};
 
 // Check Path header
-let path = parse_path(&request.headers)?;
+let path = parse_path(request.headers())?;
 if !path.all_loose_routing() {
     // Some proxies in Path don't support loose routing
     println!("Warning: Not all Path entries have 'lr' parameter");
 
     // Log which entries are missing lr
-    for (i, route) in path.routes.iter().enumerate() {
-        if !route.uri.params.contains_key("lr") {
-            println!("Path entry {} missing lr: {}", i, route.uri.as_str());
+    for (i, route) in path.routes().iter().enumerate() {
+        let has_lr = route.get_param("lr").is_some()
+            || route
+                .uri()
+                .as_sip()
+                .map(|sip| sip.params().contains_key("lr"))
+                .unwrap_or(false);
+        if !has_lr {
+            println!("Path entry {} missing lr: {}", i, route.uri().as_str());
         }
     }
 }
 
 // Check Service-Route header
-let sr = parse_service_route(&response.headers)?;
+let sr = parse_service_route(response.headers())?;
 if sr.all_loose_routing() {
     println!("All Service-Route entries support loose routing");
 }
@@ -291,23 +309,25 @@ if sr.all_loose_routing() {
 Working with route lists:
 
 ```rust
-use sip_core::{PathHeader, ServiceRouteHeader};
+use sip_core::parse_path;
 
-let path = parse_path(&request.headers)?;
+let path = parse_path(request.headers())?;
 
 // Iterate using uris() method
 for uri in path.uris() {
     println!("Path URI: {}", uri.as_str());
-    println!("  Host: {}", uri.host.as_str());
-    if let Some(port) = uri.port {
-        println!("  Port: {}", port);
+    if let Some(sip_uri) = uri.as_sip() {
+        println!("  Host: {}", sip_uri.host());
+        if let Some(port) = sip_uri.port() {
+            println!("  Port: {}", port);
+        }
     }
 }
 
 // Access full NameAddr for parameters
-for route in &path.routes {
-    println!("Route: {}", route.uri.as_str());
-    for (param, value) in &route.params {
+for route in path.routes() {
+    println!("Route: {}", route.uri().as_str());
+    for (param, value) in route.params() {
         match value {
             Some(v) => println!("  Param: {}={}", param, v),
             None => println!("  Param: {}", param),
@@ -400,9 +420,9 @@ The only difference is their usage context (REGISTER request vs response).
 
 ### 2. Loose Routing Check
 
-The `all_loose_routing()` method checks `uri.params` (SipUri parameters) rather than `route.params` (NameAddr parameters) because:
+The `all_loose_routing()` method checks both NameAddr parameters and SIP URI parameters because:
 - RFC 3261 specifies 'lr' as a URI parameter
-- SipUri parser automatically extracts URI parameters
+- Some deployments encode `lr` in NameAddr params
 - This matches the actual SIP message format: `<sip:proxy.example.com;lr>`
 
 ### 3. Builder Pattern
@@ -424,34 +444,41 @@ The `uris()` method returns an iterator rather than a vector to:
 
 ## Test Coverage
 
-### PathHeader Tests (8 tests)
+### PathHeader Tests (12 tests)
 
-**Location:** `crates/sip-core/src/service_route.rs:240-317`
+**Location:** `crates/sip-core/src/service_route.rs:301-565`
 
 - ✅ `path_header_single` - Single route creation
 - ✅ `path_header_from_uris` - Multiple routes from URIs
 - ✅ `path_header_add_route` - Adding routes incrementally
+- ✅ `path_header_rejects_too_many_routes` - Enforces MAX_ROUTES
+- ✅ `path_header_add_route_rejects_when_full` - Enforces MAX_ROUTES on append
 - ✅ `path_header_is_empty` - Empty header detection
 - ✅ `path_header_display` - Display formatting
 - ✅ `path_header_all_loose_routing` - Loose routing detection
+- ✅ `path_header_all_loose_routing_from_params` - NameAddr param support
 - ✅ `path_header_uris_iterator` - URI iteration
 - ✅ `path_header_display_with_params` - Parameter formatting
+- ✅ `fields_are_private` - Accessors-only API surface
 
-### ServiceRouteHeader Tests (7 tests)
+### ServiceRouteHeader Tests (10 tests)
 
-**Location:** `crates/sip-core/src/service_route.rs:320-397`
+**Location:** `crates/sip-core/src/service_route.rs:420-541`
 
 - ✅ `service_route_header_single` - Single route creation
 - ✅ `service_route_header_from_uris` - Multiple routes from URIs
 - ✅ `service_route_header_add_route` - Adding routes incrementally
+- ✅ `service_route_header_rejects_too_many_routes` - Enforces MAX_ROUTES
+- ✅ `service_route_header_add_route_rejects_when_full` - Enforces MAX_ROUTES on append
 - ✅ `service_route_header_is_empty` - Empty header detection
 - ✅ `service_route_header_display` - Display formatting
+- ✅ `service_route_header_display_with_name` - Display formatting with display name
 - ✅ `service_route_header_all_loose_routing` - Loose routing detection
 - ✅ `service_route_header_uris_iterator` - URI iteration
 
 ### Integration Tests
 
-**Location:** `crates/sip-parse/src/lib.rs` (test section)
+**Location:** `crates/sip-parse/src/lib.rs:976-985`
 
 - ✅ Parsing Path from SIP response
 - ✅ Parsing Service-Route from SIP response
@@ -468,7 +495,7 @@ The `uris()` method returns an iterator rather than a vector to:
 |-------------|--------|----------------|
 | Path header support | ✅ | PathHeader type with full API |
 | Multiple Path headers | ✅ | Vec<NameAddr> supports multiple entries |
-| Path URI format | ✅ | Uses SipUri with NameAddr |
+| Path URI format | ✅ | Uses Uri with NameAddr |
 | Loose routing support | ✅ | all_loose_routing() method |
 | Path storage at registrar | ⚠️ | Application-level (not in core) |
 | Route building from Path | ⚠️ | Application-level (not in core) |
@@ -481,7 +508,7 @@ The `uris()` method returns an iterator rather than a vector to:
 |-------------|--------|----------------|
 | Service-Route header support | ✅ | ServiceRouteHeader type with full API |
 | Multiple Service-Route headers | ✅ | Vec<NameAddr> supports multiple entries |
-| Service-Route URI format | ✅ | Uses SipUri with NameAddr |
+| Service-Route URI format | ✅ | Uses Uri with NameAddr |
 | Service-Route in 200 OK | ⚠️ | Application-level (not in core) |
 | UA storage of Service-Route | ⚠️ | Application-level (not in core) |
 | Service-Route header parsing | ✅ | parse_service_route() in sip-parse |
@@ -499,24 +526,24 @@ The `uris()` method returns an iterator rather than a vector to:
 
 ```rust
 // Proxy receives REGISTER, adds Path header
-use sip_core::{PathHeader, SipUri, parse_path};
+use sip_core::{parse_path, PathHeader, Uri};
+use smol_str::SmolStr;
 
 fn proxy_process_register(request: &mut Request, proxy_uri: &str) {
     // Parse existing Path headers
-    let mut path = parse_path(&request.headers)?;
+    let mut path = parse_path(request.headers())?;
 
     // Add this proxy to the Path
-    let my_uri = SipUri::parse(proxy_uri)?;
-    path.add_route(my_uri);
+    let my_uri = Uri::parse(proxy_uri)?;
+    path.add_route(my_uri)?;
 
     // Remove old Path headers
-    request.headers.remove("Path");
+    request.headers_mut().remove("Path");
 
     // Add updated Path
-    request.headers.push(
-        SmolStr::new("Path"),
-        SmolStr::new(path.to_string())
-    );
+    request
+        .headers_mut()
+        .push(SmolStr::new("Path"), SmolStr::new(path.to_string()))?;
 
     // Forward to next hop
 }
@@ -526,26 +553,30 @@ fn proxy_process_register(request: &mut Request, proxy_uri: &str) {
 
 ```rust
 // Registrar receives REGISTER, stores Path with binding
-use sip_core::{parse_path, parse_contact_header};
+use sip_core::parse_path;
+use sip_parse::{header, parse_contact_header};
 
 fn registrar_process_register(request: &Request) -> ContactBinding {
-    let contact = parse_contact_header(&request.headers)?;
-    let path = parse_path(&request.headers)?;
+    let contact_value = header(request.headers(), "Contact")
+        .ok_or("missing Contact header")?;
+    let contact = parse_contact_header(contact_value)
+        .ok_or("invalid Contact header")?;
+    let path = parse_path(request.headers())?;
 
     // Store binding
     ContactBinding {
         contact_uri: contact.uri().clone(),
-        path_routes: path.routes,
+        path_routes: path.routes().to_vec(),
         expires: get_expires(&request),
     }
 }
 
 // When routing to UA, use stored Path as Route set
-fn build_route_set(binding: &ContactBinding) -> Vec<SipUri> {
+fn build_route_set(binding: &ContactBinding) -> Vec<Uri> {
     binding.path_routes
         .iter()
         .rev()  // Reverse order per RFC 3327
-        .map(|r| r.uri.clone())
+        .map(|r| r.uri().clone())
         .collect()
 }
 ```
@@ -555,15 +586,16 @@ fn build_route_set(binding: &ContactBinding) -> Vec<SipUri> {
 ```rust
 // UA receives 200 OK to REGISTER, stores Service-Route
 use sip_core::parse_service_route;
+use smol_str::SmolStr;
 
 fn ua_process_register_response(response: &Response) {
-    let service_route = parse_service_route(&response.headers)?;
+    let service_route = parse_service_route(response.headers())?;
 
     if !service_route.is_empty() {
         // Store Service-Route for this registration
         store_service_route_for_aor(
             &current_aor,
-            service_route.routes
+            service_route.routes().to_vec()
         );
     }
 }
@@ -573,11 +605,13 @@ fn ua_create_request() -> Request {
     let mut request = create_base_request();
 
     if let Some(service_route) = get_service_route_for_aor(&current_aor) {
-        for route in &service_route.routes {
-            request.headers.push(
-                SmolStr::new("Route"),
-                SmolStr::new(format!("<{}>", route.uri.as_str()))
-            );
+        for route in service_route.routes() {
+            request
+                .headers_mut()
+                .push(
+                    SmolStr::new("Route"),
+                    SmolStr::new(format!("<{}>", route.uri().as_str())),
+                )?;
         }
     }
 
