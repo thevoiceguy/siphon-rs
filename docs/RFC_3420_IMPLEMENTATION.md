@@ -2,7 +2,7 @@
 
 **Date:** 2025-01-21
 **Status:** ✅ **COMPLETE** - Full RFC 3420 compliance achieved
-**Test Results:** ✅ All 119 tests passing (8 sipfrag tests + 111 other sip-core tests)
+**Test Results:** ✅ All sipfrag tests passing (16 tests in `sip-core/src/sipfrag.rs`)
 
 ---
 
@@ -40,12 +40,14 @@ Per RFC 3420, a sipfrag can contain:
 
 | Component | Status | Location | Description |
 |-----------|--------|----------|-------------|
-| **SipFrag Type** | ✅ Complete | `sip-core/src/sipfrag.rs:26-166` | Partial SIP message representation |
-| **StartLine Enum** | ✅ Complete | `sip-core/src/sipfrag.rs:40-45` | Request or response start line |
-| **Builder Methods** | ✅ Complete | Constructor methods | empty(), status_only(), from_response(), etc. |
-| **Display Implementation** | ✅ Complete | `sipfrag.rs:168-198` | CRLF-terminated output |
-| **Query Methods** | ✅ Complete | is_response(), status_code(), etc. | Fragment introspection |
-| **Tests** | ✅ Complete | 8 comprehensive tests | Full coverage |
+| **SipFragError Type** | ✅ Complete | `sip-core/src/sipfrag.rs:16-39` | Validation + size-limit errors |
+| **SipFrag Type** | ✅ Complete | `sip-core/src/sipfrag.rs:41-323` | Partial SIP message representation |
+| **StartLine Enum** | ✅ Complete | `sip-core/src/sipfrag.rs:102-109` | Request or response start line |
+| **Builder Methods** | ✅ Complete | `sip-core/src/sipfrag.rs:111-288` | Fallible constructors and setters |
+| **Display Implementation** | ✅ Complete | `sip-core/src/sipfrag.rs:325-367` | CRLF-terminated output |
+| **Validation Helpers** | ✅ Complete | `sip-core/src/sipfrag.rs:370-397` | Content-* checks + length match |
+| **Query Methods** | ✅ Complete | `sip-core/src/sipfrag.rs:190-323` | Fragment introspection |
+| **Tests** | ✅ Complete | 16 comprehensive tests | Full coverage |
 | **Documentation** | ✅ Complete | Inline docs + this document | Usage examples and API docs |
 
 ---
@@ -61,11 +63,18 @@ Represents a SIP message fragment per RFC 3420:
 ```rust
 pub struct SipFrag {
     /// Optional start line (request or response)
-    pub start_line: Option<StartLine>,
+    start_line: Option<StartLine>,
     /// Header fields (may be empty)
-    pub headers: Headers,
+    headers: Headers,
     /// Optional message body
-    pub body: Bytes,
+    body: Bytes,
+}
+
+impl SipFrag {
+    pub fn start_line(&self) -> Option<&StartLine>;
+    pub fn headers(&self) -> &Headers;
+    pub fn headers_mut(&mut self) -> &mut Headers;
+    pub fn body(&self) -> &Bytes;
 }
 ```
 
@@ -77,6 +86,16 @@ pub enum StartLine {
     Request(RequestLine),
     /// Status line (version, code, reason)
     Response(StatusLine),
+}
+```
+
+#### SipFragError
+
+```rust
+pub enum SipFragError {
+    BodyTooLarge { max: usize },
+    InvalidHeader(String),
+    ValidationError(String),
 }
 ```
 
@@ -95,7 +114,7 @@ let frag = SipFrag::empty();
 Creates a sipfrag containing only a status line (most common for REFER):
 
 ```rust
-let frag = SipFrag::status_only(200, SmolStr::new("OK".to_owned()));
+let frag = SipFrag::status_only(200, SmolStr::new("OK".to_owned()))?;
 // Output: "SIP/2.0 200 OK\r\n"
 ```
 
@@ -105,11 +124,11 @@ Creates a sipfrag from a complete Response:
 
 ```rust
 let response = Response::new(
-    StatusLine::new(603, SmolStr::new("Declined".to_owned())),
+    StatusLine::new(603, SmolStr::new("Declined".to_owned()))?,
     Headers::new(),
     Bytes::new(),
-);
-let frag = SipFrag::from_response(response);
+)?;
+let frag = SipFrag::from_response(response)?;
 ```
 
 #### response()
@@ -117,8 +136,8 @@ let frag = SipFrag::from_response(response);
 Creates a sipfrag with a status line:
 
 ```rust
-let status = StatusLine::new(486, SmolStr::new("Busy Here".to_owned()));
-let frag = SipFrag::response(status);
+let status = StatusLine::new(486, SmolStr::new("Busy Here".to_owned()))?;
+let frag = SipFrag::response(status)?;
 ```
 
 #### request()
@@ -126,8 +145,9 @@ let frag = SipFrag::response(status);
 Creates a sipfrag with a request line:
 
 ```rust
-let req_line = RequestLine::new(Method::Invite, sip_uri);
-let frag = SipFrag::request(req_line);
+let uri = Uri::parse("sip:bob@example.com")?;
+let req_line = RequestLine::new(Method::Invite, uri);
+let frag = SipFrag::request(req_line)?;
 ```
 
 #### headers_only()
@@ -136,7 +156,7 @@ Creates a sipfrag containing only headers:
 
 ```rust
 let mut headers = Headers::new();
-headers.push("From".into(), "sip:alice@example.com".into());
+headers.push("From", "sip:alice@example.com")?;
 let frag = SipFrag::headers_only(headers);
 ```
 
@@ -147,8 +167,8 @@ let frag = SipFrag::headers_only(headers);
 Adds a header field:
 
 ```rust
-let frag = SipFrag::status_only(486, SmolStr::new("Busy Here".to_owned()))
-    .with_header("Retry-After", "60");
+let frag = SipFrag::status_only(486, SmolStr::new("Busy Here".to_owned()))?
+    .with_header("Retry-After", "60")?;
 ```
 
 #### with_body()
@@ -156,10 +176,32 @@ let frag = SipFrag::status_only(486, SmolStr::new("Busy Here".to_owned()))
 Sets the message body:
 
 ```rust
-let frag = SipFrag::status_only(200, SmolStr::new("OK".to_owned()))
-    .with_header("Content-Type", "text/plain")
-    .with_header("Content-Length", "11")
-    .with_body("Hello World");
+let frag = SipFrag::status_only(200, SmolStr::new("OK".to_owned()))?
+    .with_header("Content-Type", "text/plain")?
+    .with_header("Content-Length", "11")?
+    .with_body("Hello World")?;
+```
+
+Content-Type and Content-Length must be set before calling `with_body()`.
+
+#### add_header()
+
+Adds a header field using a mutable fragment:
+
+```rust
+let mut frag = SipFrag::empty();
+frag.add_header("From", "sip:alice@example.com")?;
+```
+
+#### set_body()
+
+Sets the message body on a mutable fragment:
+
+```rust
+let mut frag = SipFrag::status_only(200, SmolStr::new("OK".to_owned()))?;
+frag.add_header("Content-Type", "text/plain")?;
+frag.add_header("Content-Length", "4")?;
+frag.set_body("test")?;
 ```
 
 ### Query Methods
@@ -169,7 +211,7 @@ let frag = SipFrag::status_only(200, SmolStr::new("OK".to_owned()))
 Returns true if fragment represents a response:
 
 ```rust
-let frag = SipFrag::status_only(200, SmolStr::new("OK".to_owned()));
+let frag = SipFrag::status_only(200, SmolStr::new("OK".to_owned()))?;
 assert!(frag.is_response());
 ```
 
@@ -178,7 +220,8 @@ assert!(frag.is_response());
 Returns true if fragment represents a request:
 
 ```rust
-let frag = SipFrag::request(req_line);
+let req_line = RequestLine::new(Method::Invite, Uri::parse("sip:bob@example.com")?);
+let frag = SipFrag::request(req_line)?;
 assert!(frag.is_request());
 ```
 
@@ -187,7 +230,7 @@ assert!(frag.is_request());
 Returns the status code if this is a response fragment:
 
 ```rust
-let frag = SipFrag::status_only(404, SmolStr::new("Not Found".to_owned()));
+let frag = SipFrag::status_only(404, SmolStr::new("Not Found".to_owned()))?;
 assert_eq!(frag.status_code(), Some(404));
 ```
 
@@ -196,6 +239,8 @@ assert_eq!(frag.status_code(), Some(404));
 Returns the method if this is a request fragment:
 
 ```rust
+let req_line = RequestLine::new(Method::Invite, Uri::parse("sip:bob@example.com")?);
+let frag = SipFrag::request(req_line)?;
 assert_eq!(frag.method(), Some(&Method::Invite));
 ```
 
@@ -204,6 +249,8 @@ assert_eq!(frag.method(), Some(&Method::Invite));
 Returns the request URI if this is a request fragment:
 
 ```rust
+let req_line = RequestLine::new(Method::Invite, Uri::parse("sip:bob@example.com")?);
+let frag = SipFrag::request(req_line)?;
 let uri = frag.request_uri();
 ```
 
@@ -212,7 +259,7 @@ let uri = frag.request_uri();
 Formats the sipfrag with CRLF line endings per SIP specification:
 
 ```rust
-let frag = SipFrag::status_only(200, SmolStr::new("OK".to_owned()));
+let frag = SipFrag::status_only(200, SmolStr::new("OK".to_owned()))?;
 let body = frag.to_string();  // "SIP/2.0 200 OK\r\n"
 ```
 
@@ -223,27 +270,34 @@ let body = frag.to_string();  // "SIP/2.0 200 OK\r\n"
 ### Example 1: REFER Status Notification (Most Common)
 
 ```rust
-use sip_core::{SipFrag, StatusLine, Request, Method};
+use sip_core::{SipFrag, Request, Method, RequestLine, Headers, Uri};
 use smol_str::SmolStr;
+use bytes::Bytes;
 
 // REFER initiator receives NOTIFY with sipfrag body
-fn create_refer_notification(subscription: &str, status_code: u16, reason: &str) -> Request {
-    let frag = SipFrag::status_only(status_code, SmolStr::new(reason.to_owned()));
+fn create_refer_notification(subscription: &str, status_code: u16, reason: &str) -> anyhow::Result<Request> {
+    let frag = SipFrag::status_only(status_code, SmolStr::new(reason.to_owned()))?;
     let body = frag.to_string();
+    let body_len = body.len();
+    let uri = Uri::parse(subscription)?;
 
     let mut request = Request::new(
-        RequestLine::new(Method::Notify, subscription_uri),
+        RequestLine::new(Method::Notify, uri),
         Headers::new(),
-        body.into(),
-    );
+        Bytes::from(body),
+    )?;
 
     // Add required headers
-    request.headers.push("Event".into(), "refer".into());
-    request.headers.push("Subscription-State".into(), "active".into());
-    request.headers.push("Content-Type".into(), "message/sipfrag;version=2.0".into());
-    request.headers.push("Content-Length".into(), body.len().to_string().into());
-
+    request.headers_mut().push("Event", "refer")?;
+    request.headers_mut().push("Subscription-State", "active")?;
     request
+        .headers_mut()
+        .push("Content-Type", "message/sipfrag;version=2.0")?;
+    request
+        .headers_mut()
+        .push("Content-Length", body_len.to_string())?;
+
+    Ok(request)
 }
 
 // Usage:
@@ -257,13 +311,13 @@ let notify = create_refer_notification(
 ### Example 2: Detailed Status with Headers
 
 ```rust
-use sip_core::SipFrag;
+use sip_core::{SipFrag, SipFragError};
 use smol_str::SmolStr;
 
 // Report call failure with additional context
-let frag = SipFrag::status_only(486, SmolStr::new("Busy Here".to_owned()))
-    .with_header("Retry-After", "60")
-    .with_header("Allow", "INVITE, ACK, BYE");
+let frag = SipFrag::status_only(486, SmolStr::new("Busy Here".to_owned()))?
+    .with_header("Retry-After", "60")?
+    .with_header("Allow", "INVITE, ACK, BYE")?;
 
 let body = frag.to_string();
 // Output:
@@ -275,14 +329,14 @@ let body = frag.to_string();
 ### Example 3: Request Fragment
 
 ```rust
-use sip_core::{SipFrag, RequestLine, Method, Uri, SipUri};
+use sip_core::{SipFrag, RequestLine, Method, SipUri};
 
 let uri = SipUri::parse("sip:bob@example.com")?;
-let req_line = RequestLine::new(Method::Invite, Uri::Sip(uri));
+let req_line = RequestLine::new(Method::Invite, uri);
 
-let frag = SipFrag::request(req_line)
-    .with_header("From", "sip:alice@example.com")
-    .with_header("To", "sip:bob@example.com");
+let frag = SipFrag::request(req_line)?
+    .with_header("From", "sip:alice@example.com")?
+    .with_header("To", "sip:bob@example.com")?;
 
 let body = frag.to_string();
 // Output:
@@ -295,13 +349,12 @@ let body = frag.to_string();
 
 ```rust
 use sip_core::{SipFrag, Headers};
-use smol_str::SmolStr;
 
 // Create fragment for cryptographic assertion
 let mut headers = Headers::new();
-headers.push(SmolStr::new("From".to_owned()), SmolStr::new("sip:alice@example.com".to_owned()));
-headers.push(SmolStr::new("To".to_owned()), SmolStr::new("sip:bob@example.com".to_owned()));
-headers.push(SmolStr::new("Call-ID".to_owned()), SmolStr::new("abc123@example.com".to_owned()));
+headers.push("From", "sip:alice@example.com")?;
+headers.push("To", "sip:bob@example.com")?;
+headers.push("Call-ID", "abc123@example.com")?;
 
 let frag = SipFrag::headers_only(headers);
 let body = frag.to_string();
@@ -314,13 +367,14 @@ let body = frag.to_string();
 ### Example 5: Fragment with Body
 
 ```rust
-use sip_core::SipFrag;
+use sip_core::{SipFrag, SipFragError};
 use smol_str::SmolStr;
 
-let frag = SipFrag::status_only(200, SmolStr::new("OK".to_owned()))
-    .with_header("Content-Type", "text/plain")
-    .with_header("Content-Length", "25")
-    .with_body("Call completed successfully");
+let body_text = "Call completed successfully";
+let frag = SipFrag::status_only(200, SmolStr::new("OK".to_owned()))?
+    .with_header("Content-Type", "text/plain")?
+    .with_header("Content-Length", body_text.len().to_string())?
+    .with_body(body_text)?;
 
 let body = frag.to_string();
 // Output:
@@ -336,19 +390,18 @@ let body = frag.to_string();
 ```rust
 use sip_core::{SipFrag, Response, StatusLine, Headers};
 use bytes::Bytes;
-use smol_str::SmolStr;
 
 let mut headers = Headers::new();
-headers.push(SmolStr::new("Via".to_owned()), SmolStr::new("SIP/2.0/UDP pc33.atlanta.com".to_owned()));
-headers.push(SmolStr::new("From".to_owned()), SmolStr::new("Alice <sip:alice@atlanta.com>".to_owned()));
+headers.push("Via", "SIP/2.0/UDP pc33.atlanta.com")?;
+headers.push("From", "Alice <sip:alice@atlanta.com>")?;
 
 let response = Response::new(
-    StatusLine::new(603, SmolStr::new("Declined".to_owned())),
+    StatusLine::new(603, "Declined")?,
     headers,
     Bytes::new(),
-);
+)?;
 
-let frag = SipFrag::from_response(response);
+let frag = SipFrag::from_response(response)?;
 assert!(frag.is_response());
 assert_eq!(frag.status_code(), Some(603));
 ```
@@ -362,8 +415,9 @@ assert_eq!(frag.status_code(), Some(603));
 The most common use of message/sipfrag is with the REFER method:
 
 ```rust
-use sip_core::{SipFrag, Request, Method, Headers};
+use sip_core::{SipFrag, Request, Method, Headers, RequestLine, Uri};
 use smol_str::SmolStr;
+use bytes::Bytes;
 
 /// Sends NOTIFY with sipfrag body to report REFER status
 pub fn send_refer_notification(
@@ -371,23 +425,24 @@ pub fn send_refer_notification(
     status_code: u16,
     reason: &str,
     subscription_state: &str,
-) -> Result<Request> {
+) -> anyhow::Result<Request> {
     // Create sipfrag body
-    let frag = SipFrag::status_only(status_code, SmolStr::new(reason.to_owned()));
+    let frag = SipFrag::status_only(status_code, SmolStr::new(reason.to_owned()))?;
     let body = frag.to_string();
+    let body_len = body.len();
 
     // Build NOTIFY request
     let mut headers = Headers::new();
-    headers.push("Event".into(), "refer".into());
-    headers.push("Subscription-State".into(), subscription_state.into());
-    headers.push("Content-Type".into(), "message/sipfrag;version=2.0".into());
-    headers.push("Content-Length".into(), body.len().to_string().into());
+    headers.push("Event", "refer")?;
+    headers.push("Subscription-State", subscription_state)?;
+    headers.push("Content-Type", "message/sipfrag;version=2.0")?;
+    headers.push("Content-Length", body_len.to_string())?;
 
     let request = Request::new(
-        RequestLine::new(Method::Notify, parse_uri(refer_to_uri)?),
+        RequestLine::new(Method::Notify, Uri::parse(refer_to_uri)?),
         headers,
-        body.into(),
-    );
+        Bytes::from(body),
+    )?;
 
     Ok(request)
 }
@@ -402,7 +457,7 @@ pub fn send_refer_notification(
 ### Call Transfer Status Updates
 
 ```rust
-use sip_core::SipFrag;
+use sip_core::{SipFrag, SipFragError};
 
 /// Track call transfer progress
 pub enum TransferStatus {
@@ -413,7 +468,7 @@ pub enum TransferStatus {
 }
 
 impl TransferStatus {
-    pub fn to_sipfrag(&self) -> SipFrag {
+    pub fn to_sipfrag(&self) -> Result<SipFrag, SipFragError> {
         use smol_str::SmolStr;
         match self {
             TransferStatus::Trying => {
@@ -436,7 +491,7 @@ impl TransferStatus {
 ### Event Notifications
 
 ```rust
-use sip_core::{SipFrag, StatusLine};
+use sip_core::{SipFrag, SipFragError};
 use smol_str::SmolStr;
 
 /// Generic event notification with sipfrag
@@ -445,14 +500,14 @@ pub fn create_event_notification(
     state: &str,
     status_code: u16,
     reason: &str,
-) -> String {
-    let frag = SipFrag::status_only(status_code, SmolStr::new(reason.to_owned()));
-    format!(
+) -> Result<String, SipFragError> {
+    let frag = SipFrag::status_only(status_code, SmolStr::new(reason.to_owned()))?;
+    Ok(format!(
         "Event: {}\r\nSubscription-State: {}\r\nContent-Type: message/sipfrag\r\n\r\n{}",
         event_type,
         state,
         frag
-    )
+    ))
 }
 ```
 
@@ -473,6 +528,14 @@ All tests are in `sip-core/src/sipfrag.rs`:
 #[test] fn sipfrag_with_body()
 #[test] fn sipfrag_status_code_extraction()
 #[test] fn sipfrag_from_response()
+#[test] fn sipfrag_from_response_validates_body_size()
+#[test] fn sipfrag_rejects_oversized_body()
+#[test] fn sipfrag_accepts_max_sized_body()
+#[test] fn sipfrag_set_body_validates_size()
+#[test] fn sipfrag_add_header_method()
+#[test] fn fields_are_private()
+#[test] fn sipfrag_getters_work()
+#[test] fn sipfrag_builder_pattern_with_results()
 ```
 
 ### Running Tests
@@ -500,7 +563,7 @@ cargo test --package sip-core sipfrag -- --nocapture
 | **Zero or More Headers** | ✅ | `headers: Headers` |
 | **Optional Body** | ✅ | `body: Bytes` |
 | **CRLF Line Endings** | ✅ | Display trait uses `\r\n` |
-| **Content Headers with Body** | ✅ | User responsibility per RFC |
+| **Content Headers with Body** | ✅ | Enforced by SipFrag validation |
 | **Blank Line Before Body** | ✅ | Automatic in Display |
 | **version Parameter** | ✅ | Supported in Content-Type |
 
@@ -515,7 +578,8 @@ Per RFC 3420, valid fragments are created by:
 Invalid fragments:
 - ❌ Incomplete start lines (enforced by type system)
 - ❌ Malformed headers (enforced by Headers type)
-- ❌ Body without Content-* headers (user responsibility per RFC)
+- ❌ Body without Content-* headers (blocked by validation)
+- ❌ Body larger than 64 KB (blocked by validation)
 
 ---
 
@@ -525,14 +589,14 @@ Invalid fragments:
 
 ```rust
 // In NOTIFY request:
-headers.push("Content-Type".into(), "message/sipfrag;version=2.0".into());
+headers.push("Content-Type", "message/sipfrag;version=2.0")?;
 ```
 
 ### Required Headers for Sipfrag Bodies
 
 ```rust
-headers.push("Content-Type".into(), "message/sipfrag;version=2.0".into());
-headers.push("Content-Length".into(), body.len().to_string().into());
+headers.push("Content-Type", "message/sipfrag;version=2.0")?;
+headers.push("Content-Length", body.len().to_string())?;
 ```
 
 ### Optional Parameters
@@ -562,6 +626,7 @@ headers.push("Content-Length".into(), body.len().to_string().into());
 - `SipFrag` uses `Bytes` for body (zero-copy)
 - `SmolStr` for small strings (inline storage)
 - Headers use efficient vector storage
+- Body size capped at 64 KB to prevent memory exhaustion
 
 ### Serialization
 
@@ -586,13 +651,20 @@ Sipfrag enables selective field protection:
 ```rust
 // Protect only critical headers
 let mut headers = Headers::new();
-headers.push("From".into(), "sip:alice@example.com".into());
-headers.push("To".into(), "sip:bob@example.com".into());
-headers.push("Call-ID".into(), "unique-id@example.com".into());
+headers.push("From", "sip:alice@example.com")?;
+headers.push("To", "sip:bob@example.com")?;
+headers.push("Call-ID", "unique-id@example.com")?;
 
 let frag = SipFrag::headers_only(headers);
 // Apply S/MIME signature to this fragment
 ```
+
+### Validation Hardening
+
+- Body size limited to 64 KB
+- Content-Type and Content-Length required when a body is present
+- Headers validated via `Headers::push`
+- Fields are private to avoid bypassing validation
 
 ### Avoiding Downgrade Attacks
 
