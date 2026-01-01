@@ -45,6 +45,21 @@ The RFC 3840 implementation is located in:
 
 ### Enums and Types
 
+#### `CapabilityError`
+
+Error type for capability parsing and validation.
+
+**Variants:**
+- `TokenTooLong { max, actual }` - Token length exceeds `MAX_TOKEN_LENGTH`
+- `StringTooLong { max, actual }` - String length exceeds `MAX_STRING_LENGTH`
+- `TokenListTooLarge { max, actual }` - Token list exceeds `MAX_TOKEN_LIST_SIZE`
+- `InvalidToken` - Token contains invalid characters
+- `InvalidString` - String contains invalid characters (control chars or quotes)
+- `InvalidNumeric` - Numeric value is not finite
+- `InvalidQuoting` - Parameter value has invalid quote framing
+
+---
+
 #### `FeatureTag`
 
 Enumeration of RFC 3840 feature tags for indicating UA capabilities.
@@ -169,6 +184,46 @@ Enumeration of feature tag value types per RFC 3840.
 
 **Methods:**
 
+##### `new_token(token: impl Into<SmolStr>) -> Result<Self, CapabilityError>`
+
+Creates a validated token value.
+
+---
+
+##### `new_token_list(tokens: Vec<SmolStr>) -> Result<Self, CapabilityError>`
+
+Creates a validated token list value.
+
+---
+
+##### `new_string(value: impl Into<SmolStr>) -> Result<Self, CapabilityError>`
+
+Creates a validated string value.
+
+---
+
+##### `new_numeric(value: f64) -> Result<Self, CapabilityError>`
+
+Creates a validated numeric value.
+
+---
+
+##### `validate(&self) -> Result<(), CapabilityError>`
+
+Validates the value against length and character constraints.
+
+---
+
+**Validation Limits:**
+- `MAX_TOKEN_LENGTH`: 64
+- `MAX_STRING_LENGTH`: 256
+- `MAX_TOKEN_LIST_SIZE`: 20
+- Tokens must be non-empty and use RFC 3840 token characters (alphanumeric or - . ! % * _ + backtick ' ~)
+- Strings must not include control characters or quotes
+- Numeric values must be finite
+
+---
+
 ##### `is_true(&self) -> bool`
 
 Returns true if this is a boolean true value.
@@ -245,6 +300,8 @@ assert_eq!(
 Parses a feature value from a Contact header parameter value.
 
 The tag is needed to determine the expected value type.
+List values accept quoted or unquoted comma-separated input, and whitespace is trimmed.
+Invalid quote framing returns `CapabilityError::InvalidQuoting`.
 
 **Examples:**
 ```rust
@@ -345,6 +402,18 @@ let cap = Capability::string(FeatureTag::Description, "Alice's Phone")?;
 ##### `numeric(tag: FeatureTag, value: f64) -> Result<Self, CapabilityError>`
 
 Creates a numeric capability.
+
+---
+
+##### `tag(&self) -> FeatureTag`
+
+Returns the feature tag for this capability.
+
+---
+
+##### `value(&self) -> &FeatureValue`
+
+Returns the feature value for this capability.
 
 ---
 
@@ -488,6 +557,7 @@ Converts the capability set to Contact header parameters.
 
 Returns a map of parameter names to optional values suitable for
 inclusion in a Contact header.
+Boolean false values are omitted.
 
 **Example:**
 ```rust
@@ -878,7 +948,7 @@ fn find_best_contact(
 
 ## Test Coverage
 
-The capabilities implementation includes 24 comprehensive unit tests:
+The capabilities implementation includes 32 comprehensive unit tests:
 
 ### Feature Tag Tests
 
@@ -900,21 +970,29 @@ The capabilities implementation includes 24 comprehensive unit tests:
 13. **parse_feature_value_token_list**: Parsing token list from parameters
 14. **parse_feature_value_string**: Parsing string from parameters
 15. **parse_token_list_with_spaces**: Token list parsing with whitespace
+16. **reject_crlf_in_token**: Control characters rejected in tokens
+17. **reject_oversized_token**: Token length validation
+18. **reject_huge_token_list**: Token list size validation
+19. **reject_nan_numeric**: Numeric validation rejects NaN
+20. **reject_control_chars_in_string**: Control characters rejected in strings
+21. **reject_quotes_in_string**: Quotes rejected in strings
+22. **invalid_numeric_to_param_value**: Numeric encoding validation
+23. **reject_invalid_quoting**: Invalid quoted parameter handling
 
 ### Capability Tests
 
-16. **capability_creation**: Basic capability construction
-17. **capability_to_param**: Conversion to Contact parameters
+24. **capability_creation**: Basic capability construction
+25. **capability_to_param**: Conversion to Contact parameters
 
 ### CapabilitySet Tests
 
-18. **capability_set_add_and_get**: Adding and retrieving capabilities
-19. **capability_set_to_params**: Converting set to Contact parameters
-20. **capability_set_from_params**: Parsing set from Contact parameters
-21. **capability_set_matching_boolean**: Boolean capability matching
-22. **capability_set_matching_token**: Token capability matching
-23. **capability_set_matching_token_list**: Token list matching (subset check)
-24. **capability_set_iteration**: Iterating over capability set
+26. **capability_set_add_and_get**: Adding and retrieving capabilities
+27. **capability_set_to_params**: Converting set to Contact parameters
+28. **capability_set_from_params**: Parsing set from Contact parameters
+29. **capability_set_matching_boolean**: Boolean capability matching
+30. **capability_set_matching_token**: Token capability matching
+31. **capability_set_matching_token_list**: Token list matching (subset check)
+32. **capability_set_iteration**: Iterating over capability set
 
 ### Running Tests
 
