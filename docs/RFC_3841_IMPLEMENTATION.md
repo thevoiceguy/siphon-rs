@@ -46,7 +46,8 @@ Controls proxy behavior with six directive types:
 The proxy computes a caller preference score (Qa) for each contact:
 1. For each Accept-Contact with N features, assign 1/N points per matched feature
 2. Average scores from multiple Accept-Contact headers
-3. Sort contacts by callee q-value (primary), then by Qa (secondary)
+3. If no Accept-Contact headers are present, Qa remains 1.0 for all contacts
+4. Sort contacts by callee q-value (primary), then by Qa (secondary)
 
 ## Implementation Location
 
@@ -59,6 +60,35 @@ The RFC 3841 implementation is located in:
 
 ### Types
 
+#### `CallerPrefsError`
+
+Error type for caller preferences parsing and validation.
+
+**Variants:**
+- `TooManyFeatures` - Feature parameter count exceeds limit
+- `TooManyContacts` - Contact list exceeds limit
+- `TooManyAcceptHeaders` - Accept-Contact header count exceeds limit
+- `TooManyRejectHeaders` - Reject-Contact header count exceeds limit
+- `CapabilityMismatch` - Contacts and capability sets length mismatch
+- `InvalidQValue` - Q-value is not finite
+- `InvalidNumeric` - Numeric feature value is not finite
+- `TokenTooLong` - Token exceeds max length
+- `TokenListTooLarge` - Token list exceeds max size
+- `InvalidToken` - Token contains invalid characters
+- `StringTooLong` - String exceeds max length
+- `InvalidString` - String contains invalid characters
+
+**Validation Limits:**
+- `MAX_FEATURES`: 50
+- `MAX_CONTACTS`: 1024
+- `MAX_ACCEPT_HEADERS`: 32
+- `MAX_REJECT_HEADERS`: 32
+- `MAX_TOKEN_LIST_SIZE`: 20
+- `MAX_TOKEN_LENGTH`: 64
+- `MAX_STRING_LENGTH`: 256
+
+---
+
 #### `AcceptContact`
 
 RFC 3841 Accept-Contact header field.
@@ -66,10 +96,10 @@ RFC 3841 Accept-Contact header field.
 Contains feature preferences that describe UAs the caller would like to reach. Multiple Accept-Contact values can appear in a request.
 
 **Fields:**
-- `features: BTreeMap<FeatureTag, FeatureValue>` - Desired capabilities
-- `require: bool` - If true, non-matching contacts are discarded
-- `explicit: bool` - If true, only explicitly advertised features count
-- `q: Option<f64>` - Q-value for this preference (0.0 to 1.0)
+- `features: BTreeMap<FeatureTag, FeatureValue>` - Desired capabilities (private, use accessors)
+- `require: bool` - If true, non-matching contacts are discarded (private, use accessors)
+- `explicit: bool` - If true, only explicitly advertised features count (private, use accessors)
+- `q: Option<f64>` - Q-value for this preference (0.0 to 1.0) (private, use accessors)
 
 **Methods:**
 
@@ -95,10 +125,8 @@ Adds a feature preference (builder pattern) with validation and limits.
 use sip_core::{AcceptContact, FeatureTag, FeatureValue};
 
 let accept = AcceptContact::new()
-    .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true))
-    ?
-    .with_feature(FeatureTag::Video, FeatureValue::Boolean(true))
-    ?;
+    .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true))?
+    .with_feature(FeatureTag::Video, FeatureValue::Boolean(true))?;
 ```
 
 ---
@@ -112,8 +140,7 @@ Sets the require modifier (non-matching contacts are discarded).
 use sip_core::{AcceptContact, FeatureTag, FeatureValue};
 
 let accept = AcceptContact::new()
-    .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true))
-    ?
+    .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true))?
     .with_require();
 // Non-matching contacts will be discarded
 ```
@@ -129,8 +156,7 @@ Sets the explicit modifier (only explicitly advertised features count).
 use sip_core::{AcceptContact, FeatureTag, FeatureValue};
 
 let accept = AcceptContact::new()
-    .with_feature(FeatureTag::Video, FeatureValue::Boolean(true))
-    ?
+    .with_feature(FeatureTag::Video, FeatureValue::Boolean(true))?
     .with_explicit();
 // Only contacts that explicitly advertised video support will match
 ```
@@ -140,6 +166,7 @@ let accept = AcceptContact::new()
 ##### `with_q(self, q: f64) -> Result<Self, CallerPrefsError>`
 
 Sets the q-value for this preference (validated and clamped to 0.0-1.0).
+The q-value is stored but not yet applied by `score_contacts`.
 
 **Example:**
 ```rust
@@ -168,6 +195,30 @@ Returns the number of feature parameters.
 
 ---
 
+##### `features(&self) -> &BTreeMap<FeatureTag, FeatureValue>`
+
+Returns the feature map for this Accept-Contact.
+
+---
+
+##### `require(&self) -> bool`
+
+Returns true if the require modifier is set.
+
+---
+
+##### `explicit(&self) -> bool`
+
+Returns true if the explicit modifier is set.
+
+---
+
+##### `q(&self) -> Option<f64>`
+
+Returns the optional q-value for this preference.
+
+---
+
 ##### `matches(&self, capabilities: &CapabilitySet, has_explicit_features: bool) -> f64`
 
 Checks if a capability set matches this Accept-Contact predicate.
@@ -176,14 +227,14 @@ Returns a score between 0.0 and 1.0 indicating match quality:
 - Score is 1/N for each of N features that match
 - Returns 0.0 if `require` is set and any feature doesn't match
 - Returns 0.0 if `explicit` is set and contact didn't advertise features
+- Returns 1.0 if the predicate has no features
 
 **Example:**
 ```rust
 use sip_core::{AcceptContact, CapabilitySet, FeatureTag, FeatureValue};
 
 let accept = AcceptContact::new()
-    .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true))
-    ?;
+    .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true))?;
 
 let mut caps = CapabilitySet::new();
 caps.add_boolean(FeatureTag::Audio, true)?;
@@ -201,7 +252,7 @@ RFC 3841 Reject-Contact header field.
 Contains feature sets which, if matched by a UA, indicate that the request should not be routed to that UA. Per RFC 3841, Reject-Contact only discards contacts that explicitly advertised matching features.
 
 **Fields:**
-- `features: BTreeMap<FeatureTag, FeatureValue>` - Rejected capabilities
+- `features: BTreeMap<FeatureTag, FeatureValue>` - Rejected capabilities (private, use accessors)
 
 **Methods:**
 
@@ -227,10 +278,8 @@ Adds a feature to reject (builder pattern) with validation and limits.
 use sip_core::{RejectContact, FeatureTag, FeatureValue};
 
 let reject = RejectContact::new()
-    .with_feature(FeatureTag::Automata, FeatureValue::Boolean(true))
-    ?
-    .with_feature(FeatureTag::Video, FeatureValue::Boolean(true))
-    ?;
+    .with_feature(FeatureTag::Automata, FeatureValue::Boolean(true))?
+    .with_feature(FeatureTag::Video, FeatureValue::Boolean(true))?;
 // Reject UAs that are automata with video
 ```
 
@@ -248,6 +297,18 @@ Returns true if this Reject-Contact has no features.
 
 ---
 
+##### `feature_count(&self) -> usize`
+
+Returns the number of feature parameters.
+
+---
+
+##### `features(&self) -> &BTreeMap<FeatureTag, FeatureValue>`
+
+Returns the feature map for this Reject-Contact.
+
+---
+
 ##### `matches(&self, capabilities: &CapabilitySet, has_explicit_features: bool) -> bool`
 
 Checks if a capability set should be rejected.
@@ -259,8 +320,7 @@ Returns true if the contact explicitly advertised features matching this Reject-
 use sip_core::{RejectContact, CapabilitySet, FeatureTag, FeatureValue};
 
 let reject = RejectContact::new()
-    .with_feature(FeatureTag::Automata, FeatureValue::Boolean(true))
-    ?;
+    .with_feature(FeatureTag::Automata, FeatureValue::Boolean(true))?;
 
 let mut caps = CapabilitySet::new();
 caps.add_boolean(FeatureTag::Automata, true)?;
@@ -281,12 +341,12 @@ RFC 3841 Request-Disposition header directives.
 Specifies caller preferences for request handling by proxies. Contains directives controlling proxy/redirect behavior, forking, cancellation, recursion, parallelism, and queuing.
 
 **Fields:**
-- `proxy: Option<ProxyDirective>` - Proxy or redirect mode
-- `fork: Option<ForkDirective>` - Forking behavior
-- `cancel: Option<CancelDirective>` - Cancellation behavior
-- `recurse: Option<RecurseDirective>` - Recursion behavior (follow 3xx)
-- `parallel: Option<ParallelDirective>` - Parallel or sequential forking
-- `queue: Option<QueueDirective>` - Queuing behavior when busy
+- `proxy: Option<ProxyDirective>` - Proxy or redirect mode (private, use accessors)
+- `fork: Option<ForkDirective>` - Forking behavior (private, use accessors)
+- `cancel: Option<CancelDirective>` - Cancellation behavior (private, use accessors)
+- `recurse: Option<RecurseDirective>` - Recursion behavior (follow 3xx) (private, use accessors)
+- `parallel: Option<ParallelDirective>` - Parallel or sequential forking (private, use accessors)
+- `queue: Option<QueueDirective>` - Queuing behavior when busy (private, use accessors)
 
 **Methods:**
 
@@ -347,6 +407,42 @@ Sets the queue directive.
 
 ---
 
+##### `proxy(&self) -> Option<ProxyDirective>`
+
+Returns the proxy directive.
+
+---
+
+##### `fork(&self) -> Option<ForkDirective>`
+
+Returns the fork directive.
+
+---
+
+##### `cancel(&self) -> Option<CancelDirective>`
+
+Returns the cancel directive.
+
+---
+
+##### `recurse(&self) -> Option<RecurseDirective>`
+
+Returns the recurse directive.
+
+---
+
+##### `parallel(&self) -> Option<ParallelDirective>`
+
+Returns the parallel directive.
+
+---
+
+##### `queue(&self) -> Option<QueueDirective>`
+
+Returns the queue directive.
+
+---
+
 ##### `is_empty(&self) -> bool`
 
 Returns true if all directives are None.
@@ -356,6 +452,8 @@ Returns true if all directives are None.
 ##### `parse(s: &str) -> Option<Self>`
 
 Parses a Request-Disposition from a comma-separated list of directives.
+Unknown directives are ignored. Returns None if no known directives are present
+or if the input contains control characters.
 
 **Example:**
 ```rust
@@ -363,9 +461,9 @@ use sip_core::{RequestDisposition, ProxyDirective, RecurseDirective, ParallelDir
 
 let rd = RequestDisposition::parse("proxy, recurse, parallel")?;
 
-assert_eq!(rd.proxy, Some(ProxyDirective::Proxy));
-assert_eq!(rd.recurse, Some(RecurseDirective::Recurse));
-assert_eq!(rd.parallel, Some(ParallelDirective::Parallel));
+assert_eq!(rd.proxy(), Some(ProxyDirective::Proxy));
+assert_eq!(rd.recurse(), Some(RecurseDirective::Recurse));
+assert_eq!(rd.parallel(), Some(ParallelDirective::Parallel));
 ```
 
 ---
@@ -457,16 +555,17 @@ Represents a contact with its callee q-value and computed caller preference scor
 Used for preference-based routing per RFC 3841.
 
 **Fields:**
-- `uri: SmolStr` - Contact URI
-- `callee_q: f64` - Callee preference (q-value from Contact)
-- `caller_qa: f64` - Caller preference score (Qa, 0.0 to 1.0)
-- `has_explicit_features: bool` - Whether contact has explicit feature parameters
+- `uri: SmolStr` - Contact URI (private, use accessor)
+- `callee_q: f64` - Callee preference (q-value from Contact) (private, use accessor)
+- `caller_qa: f64` - Caller preference score (Qa, 0.0 to 1.0) (private, use accessor)
+- `has_explicit_features: bool` - Whether contact has explicit feature parameters (private, use accessor)
 
 **Methods:**
 
 ##### `new(uri: impl Into<SmolStr>, callee_q: f64) -> Result<Self, CallerPrefsError>`
 
 Creates a new scored contact.
+The callee q-value must be finite and is clamped to 0.0-1.0.
 
 **Example:**
 ```rust
@@ -486,8 +585,31 @@ Sets whether this contact has explicit feature parameters.
 ##### `with_caller_qa(self, qa: f64) -> Result<Self, CallerPrefsError>`
 
 Sets the caller preference score (Qa).
+The Qa value must be finite and is clamped to 0.0-1.0.
 
 ---
+
+##### `uri(&self) -> &str`
+
+Returns the contact URI.
+
+---
+
+##### `callee_q(&self) -> f64`
+
+Returns the callee q-value.
+
+---
+
+##### `caller_qa(&self) -> f64`
+
+Returns the caller preference score (Qa).
+
+---
+
+##### `has_explicit_features(&self) -> bool`
+
+Returns whether this contact has explicit feature parameters.
 
 ### Functions
 
@@ -507,9 +629,11 @@ Computes caller preference scores for contacts based on Accept-Contact headers.
 Per RFC 3841, the Qa score is computed by:
 1. For each Accept-Contact predicate with N terms, assign 1/N points per matched feature
 2. Average scores from multiple Accept-Contact predicates
-3. Contacts without explicit features (immune) get Qa = 1.0
+3. If no Accept-Contact predicates are provided, Qa remains 1.0
 
 Returns contacts sorted by callee q-value (descending), then caller Qa (descending).
+Returns an error if contact limits are exceeded, header counts are exceeded,
+capability list length mismatches, or any q-values are not finite.
 
 **Parameters:**
 - `contacts` - List of contacts with callee q-values
@@ -528,17 +652,14 @@ use sip_core::{
 };
 
 let contacts = vec![
-    ScoredContact::new("sip:c1@example.com", 1.0)
-        ?
+    ScoredContact::new("sip:c1@example.com", 1.0)?
         .with_explicit_features(true),
-    ScoredContact::new("sip:c2@example.com", 1.0)
-        ?
+    ScoredContact::new("sip:c2@example.com", 1.0)?
         .with_explicit_features(true),
 ];
 
 let accept = AcceptContact::new()
-    .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true))
-    ?;
+    .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true))?;
 
 let mut caps1 = CapabilitySet::new();
 caps1.add_boolean(FeatureTag::Audio, true)?;
@@ -549,7 +670,7 @@ caps2.add_boolean(FeatureTag::Video, true)?;
 let scored = score_contacts(contacts, &[accept], &[], &[caps1, caps2])?;
 
 // c1 should rank higher (has audio)
-assert_eq!(scored[0].uri, "sip:c1@example.com");
+assert_eq!(scored[0].uri(), "sip:c1@example.com");
 ```
 
 ---
@@ -564,10 +685,8 @@ Express preference for video-capable UAs:
 use sip_core::{AcceptContact, FeatureTag, FeatureValue};
 
 let accept = AcceptContact::new()
-    .with_feature(FeatureTag::Video, FeatureValue::Boolean(true))
-    ?
-    .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true))
-    ?;
+    .with_feature(FeatureTag::Video, FeatureValue::Boolean(true))?
+    .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true))?;
 
 // Include in INVITE:
 // Accept-Contact: *;audio;video
@@ -581,8 +700,7 @@ Require audio support (discard non-audio UAs):
 use sip_core::{AcceptContact, FeatureTag, FeatureValue};
 
 let accept = AcceptContact::new()
-    .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true))
-    ?
+    .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true))?
     .with_require();
 
 // Include in INVITE:
@@ -598,10 +716,8 @@ use sip_core::{RejectContact, FeatureTag, FeatureValue};
 use smol_str::SmolStr;
 
 let reject = RejectContact::new()
-    .with_feature(FeatureTag::Actor, FeatureValue::Token(SmolStr::new("msg-taker")))
-    ?
-    .with_feature(FeatureTag::Automata, FeatureValue::Boolean(true))
-    ?;
+    .with_feature(FeatureTag::Actor, FeatureValue::Token(SmolStr::new("msg-taker")))?
+    .with_feature(FeatureTag::Automata, FeatureValue::Boolean(true))?;
 
 // Include in INVITE:
 // Reject-Contact: *;actor="msg-taker";automata
@@ -617,19 +733,16 @@ use smol_str::SmolStr;
 
 // Prefer video
 let accept_video = AcceptContact::new()
-    .with_feature(FeatureTag::Video, FeatureValue::Boolean(true))
-    ?;
+    .with_feature(FeatureTag::Video, FeatureValue::Boolean(true))?;
 
 // Require audio
 let accept_audio = AcceptContact::new()
-    .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true))
-    ?
+    .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true))?
     .with_require();
 
 // Prefer business class
 let accept_business = AcceptContact::new()
-    .with_feature(FeatureTag::Class, FeatureValue::Token(SmolStr::new("business")))
-    ?;
+    .with_feature(FeatureTag::Class, FeatureValue::Token(SmolStr::new("business")))?;
 
 // Include all in INVITE:
 // Accept-Contact: *;video
@@ -681,25 +794,19 @@ use smol_str::SmolStr;
 
 // Caller preferences
 let accept = AcceptContact::new()
-    .with_feature(FeatureTag::Video, FeatureValue::Boolean(true))
-    ?
-    .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true))
-    ?;
+    .with_feature(FeatureTag::Video, FeatureValue::Boolean(true))?
+    .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true))?;
 
 let reject = RejectContact::new()
-    .with_feature(FeatureTag::Automata, FeatureValue::Boolean(true))
-    ?;
+    .with_feature(FeatureTag::Automata, FeatureValue::Boolean(true))?;
 
 // Registered contacts
 let contacts = vec![
-    ScoredContact::new("sip:alice@192.168.1.100", 1.0)
-        ?
+    ScoredContact::new("sip:alice@192.168.1.100", 1.0)?
         .with_explicit_features(true),
-    ScoredContact::new("sip:alice@10.0.0.50", 0.8)
-        ?
+    ScoredContact::new("sip:alice@10.0.0.50", 0.8)?
         .with_explicit_features(true),
-    ScoredContact::new("sip:voicemail@example.com", 0.5)
-        ?
+    ScoredContact::new("sip:voicemail@example.com", 0.5)?
         .with_explicit_features(true),
 ];
 
@@ -729,7 +836,12 @@ let scored = score_contacts(
 // voicemail rejected (automata)
 
 for contact in scored {
-    println!("Try {}: q={}, Qa={}", contact.uri, contact.callee_q, contact.caller_qa);
+    println!(
+        "Try {}: q={}, Qa={}",
+        contact.uri(),
+        contact.callee_q(),
+        contact.caller_qa()
+    );
 }
 ```
 
@@ -741,8 +853,7 @@ Only consider UAs that explicitly advertised features:
 use sip_core::{AcceptContact, FeatureTag, FeatureValue};
 
 let accept = AcceptContact::new()
-    .with_feature(FeatureTag::Video, FeatureValue::Boolean(true))
-    ?
+    .with_feature(FeatureTag::Video, FeatureValue::Boolean(true))?
     .with_explicit();
 
 // Only UAs that explicitly advertised video support will match
@@ -757,8 +868,7 @@ Most restrictive matching:
 use sip_core::{AcceptContact, FeatureTag, FeatureValue};
 
 let accept = AcceptContact::new()
-    .with_feature(FeatureTag::Video, FeatureValue::Boolean(true))
-    ?
+    .with_feature(FeatureTag::Video, FeatureValue::Boolean(true))?
     .with_require()
     .with_explicit();
 
@@ -787,8 +897,7 @@ capabilities.add_boolean(FeatureTag::Video, true)?;
 
 // Caller expresses preferences (RFC 3841)
 let accept = AcceptContact::new()
-    .with_feature(FeatureTag::Video, FeatureValue::Boolean(true))
-    ?;
+    .with_feature(FeatureTag::Video, FeatureValue::Boolean(true))?;
 
 // Check match
 let score = accept.matches(&capabilities, true);
@@ -853,7 +962,7 @@ let scored = score_contacts(
 
 // Route to contacts in order
 for contact in scored {
-    // Fork to contact.uri
+    // Fork to contact.uri()
 }
 ```
 
@@ -866,23 +975,23 @@ use sip_core::{RequestDisposition, ForkDirective};
 
 let rd = RequestDisposition::parse(&request_disposition_value)?;
 
-match rd.fork {
+match rd.fork() {
     Some(ForkDirective::Fork) => {
         // Fork to all scored contacts
         for contact in scored {
-            fork_to(contact.uri);
+            fork_to(contact.uri());
         }
     }
     Some(ForkDirective::NoFork) => {
         // Try only best contact
         if let Some(best) = scored.first() {
-            route_to(best.uri);
+            route_to(best.uri());
         }
     }
     None => {
         // Default: fork to all
         for contact in scored {
-            fork_to(contact.uri);
+            fork_to(contact.uri());
         }
     }
 }
@@ -890,7 +999,7 @@ match rd.fork {
 
 ## Test Coverage
 
-The caller preferences implementation includes 15 comprehensive unit tests:
+The caller preferences implementation includes 19 comprehensive unit tests:
 
 ### Accept-Contact Tests
 
@@ -922,6 +1031,13 @@ The caller preferences implementation includes 15 comprehensive unit tests:
 14. **score_contacts_require_filter**: Required features eliminate contacts
 15. **score_contacts_sorting**: Sorting by q-value then Qa
 
+### Validation and Limits Tests
+
+16. **reject_non_finite_q_values**: Rejects NaN/Infinity q-values
+17. **enforce_max_features**: Feature count limit enforcement
+18. **reject_large_token_list**: Token list size validation
+19. **reject_control_chars_in_string**: Control character rejection in strings
+
 ### Running Tests
 
 ```bash
@@ -949,7 +1065,9 @@ cargo test --package sip-core caller_preferences -- --nocapture
 
 5. **No Feature Parameter Parsing**: Full RFC 2533 predicate parsing (negation, numeric ranges, etc.) not implemented
 
-6. **No Compact Forms**: Compact form headers ("a" for Accept-Contact, "j" for Reject-Contact) recognized but not generated
+6. **No Compact Forms**: Compact form headers ("a" for Accept-Contact, "j" for Reject-Contact) not implemented
+
+7. **Accept-Contact Q-values Not Applied**: `q` values are stored but not used to weight scoring yet
 
 ### Future Enhancements
 
