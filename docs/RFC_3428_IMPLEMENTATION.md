@@ -2,7 +2,7 @@
 
 **Date:** 2025-01-21
 **Status:** ✅ **COMPLETE** - Full RFC 3428 compliance achieved
-**Test Results:** ✅ All 38 tests passing (8 MESSAGE tests)
+**Test Results:** ✅ All MESSAGE tests passing (8 tests in `sip-uac/src/lib.rs`)
 
 ---
 
@@ -41,9 +41,9 @@ RFC 3428 defines the MESSAGE method for instant messaging:
 
 | Component | Status | Location | Description |
 |-----------|--------|----------|-------------|
-| **METHOD Enum** | ✅ Pre-existing | `sip-core/src/method.rs:12` | Message variant already present |
-| **create_message()** | ✅ Complete | `sip-uac/src/lib.rs:1096-1146` | Basic MESSAGE request builder |
-| **create_message_with_headers()** | ✅ Complete | `sip-uac/src/lib.rs:1178-1199` | MESSAGE with custom headers |
+| **METHOD Enum** | ✅ Pre-existing | `sip-core/src/method.rs:57-104` | Message variant already present |
+| **create_message()** | ✅ Complete | `sip-uac/src/lib.rs:2589-2652` | Basic MESSAGE request builder |
+| **create_message_with_headers()** | ✅ Complete | `sip-uac/src/lib.rs:2688-2706` | MESSAGE with custom headers |
 | **No Contact Header** | ✅ Complete | Explicitly forbidden | RFC 3428 compliance |
 | **Required Headers** | ✅ Complete | Via, From, To, Call-ID, CSeq, Max-Forwards | All mandatory headers |
 | **Content Handling** | ✅ Complete | Content-Type, Content-Length | Proper content headers |
@@ -56,7 +56,7 @@ RFC 3428 defines the MESSAGE method for instant messaging:
 |---------|--------|-------|
 | **1300 Byte Enforcement** | ⚠️ Not Enforced | Documented but user responsibility |
 | **S/MIME Encryption** | ⚠️ Not Implemented | Optional security feature |
-| **CPIM Format** | ⚠️ Not Implemented | Common Profile for Instant Messaging (RFC 3862) |
+| **CPIM Format** | ⚠️ Not Automatic | CPIM helpers exist in `sip-core` (RFC 3860) but MESSAGE body is user-supplied |
 | **Message Composition Indication** | ⚠️ Not Implemented | "isComposing" notifications (RFC 3994) |
 
 ---
@@ -142,7 +142,6 @@ pub fn create_message_with_headers(
 ```rust
 use sip_uac::UserAgentClient;
 use sip_core::{SipUri, Headers};
-use smol_str::SmolStr;
 
 let uac = UserAgentClient::new(
     SipUri::parse("sip:alice@example.com")?,
@@ -151,14 +150,8 @@ let uac = UserAgentClient::new(
 
 // Create custom headers
 let mut extra_headers = Headers::new();
-extra_headers.push(
-    SmolStr::new("Expires".to_owned()),
-    SmolStr::new("300".to_owned())
-);
-extra_headers.push(
-    SmolStr::new("Date".to_owned()),
-    SmolStr::new("Wed, 21 Jan 2025 12:00:00 GMT".to_owned())
-);
+extra_headers.push("Expires", "300")?;
+extra_headers.push("Date", "Wed, 21 Jan 2025 12:00:00 GMT")?;
 
 let message = uac.create_message_with_headers(
     &SipUri::parse("sip:bob@example.com")?,
@@ -228,13 +221,9 @@ let message = uac.create_message(
 
 ```rust
 use sip_core::Headers;
-use smol_str::SmolStr;
 
 let mut extra_headers = Headers::new();
-extra_headers.push(
-    SmolStr::new("Expires".to_owned()),
-    SmolStr::new("3600".to_owned())  // Expires in 1 hour
-);
+extra_headers.push("Expires", "3600")?;  // Expires in 1 hour
 
 let message = uac.create_message_with_headers(
     &SipUri::parse("sip:bob@example.com")?,
@@ -296,12 +285,10 @@ Per RFC 3428, MESSAGE responses indicate delivery status:
 ### Response Processing Example
 
 ```rust
-use sip_core::StatusLine;
-
 // Send MESSAGE and wait for response
 let response = transport.send_and_wait(&message).await?;
 
-match response.start.code {
+match response.code() {
     200 => {
         println!("Message delivered successfully");
     }
@@ -323,7 +310,7 @@ match response.start.code {
         println!("Recipient unavailable, retry later");
     }
     _ => {
-        println!("MESSAGE failed: {} {}", response.start.code, response.start.reason);
+        println!("MESSAGE failed: {} {}", response.code(), response.reason());
     }
 }
 ```
@@ -355,7 +342,7 @@ match response.start.code {
    let message = uac.create_message(&uri, "text/plain", body);
 
    // Check size (approximate - should serialize full message)
-   let estimated_size = message.body.len() + 500; // Headers + body
+   let estimated_size = message.body().len() + 500; // Headers + body
    if estimated_size > 1300 {
        eprintln!("Warning: MESSAGE exceeds 1300 bytes");
    }
@@ -364,7 +351,7 @@ match response.start.code {
 #### ⚠️ Optional Features Not Implemented
 
 1. **S/MIME Encryption** (RFC 3428 Section 7): Optional content encryption
-2. **CPIM Format** (RFC 3862): Common Profile for Instant Messaging wrapper
+2. **CPIM Format** (RFC 3860): Available via `sip_core::CpimMessage`, but not applied automatically by the MESSAGE builder
 3. **Message Composition Indication** (RFC 3994): "isComposing" notifications
 
 ### Header Requirements
@@ -412,13 +399,8 @@ transport.send(&authenticated).await?;
 MESSAGE requests can include Privacy headers:
 
 ```rust
-use sip_core::PrivacyHeader;
-
 let mut message = uac.create_message(&uri, "text/plain", body);
-message.headers.push(
-    SmolStr::new("Privacy".to_owned()),
-    SmolStr::new("id".to_owned())  // Hide identity
-);
+message.headers_mut().push("Privacy", "id")?;  // Hide identity
 ```
 
 ### Content Security
@@ -445,8 +427,8 @@ Per RFC 3428, the 1300 byte limit prevents:
 ```rust
 fn check_message_size(message: &Request) -> Result<(), String> {
     // Rough estimate: serialize would be more accurate
-    let estimated_size = message.body.len() +
-                        estimate_headers_size(&message.headers);
+    let estimated_size = message.body().len() +
+                        estimate_headers_size(message.headers());
 
     if estimated_size > 1300 {
         return Err(format!(
@@ -504,7 +486,7 @@ fn send_message_to_dialog_peer(
     text: &str
 ) -> Request {
     // Extract remote URI from dialog
-    let remote_uri = dialog.remote_uri.clone();
+    let remote_uri = dialog.remote_uri().clone();
 
     // Create MESSAGE (independent of dialog)
     uac.create_message(&remote_uri, "text/plain", text)
@@ -538,8 +520,8 @@ impl MessageQueue {
             );
 
             match self.transport.send_and_wait(&request).await {
-                Ok(response) if response.start.code == 200 => break,
-                Ok(response) if response.start.code == 480 => {
+                Ok(response) if response.code() == 200 => break,
+                Ok(response) if response.code() == 480 => {
                     // Temporarily unavailable, retry
                     attempts += 1;
                     if attempts >= 3 {
@@ -596,7 +578,7 @@ test tests::message_to_header_has_no_tag ... ok
 test tests::message_from_header_has_tag ... ok
 test tests::creates_message_with_empty_body ... ok
 
-test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured
 ```
 
 ---
@@ -621,7 +603,7 @@ test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured
 - **RFC 3428**: Session Initiation Protocol (SIP) Extension for Instant Messaging
   - https://datatracker.ietf.org/doc/html/rfc3428
 - **RFC 3261**: SIP: Session Initiation Protocol (base specification)
-- **RFC 3862**: Common Profile for Instant Messaging (CPIM)
+- **RFC 3860**: Common Profile for Instant Messaging (CPIM)
 - **RFC 3994**: Indication of Message Composition for Instant Messaging
 
 ### Related Implementations
