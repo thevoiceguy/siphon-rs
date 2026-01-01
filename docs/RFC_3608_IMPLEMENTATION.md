@@ -2,7 +2,6 @@
 
 **Date:** 2025-01-21
 **Status:** ✅ **COMPLETE** - Full RFC 3608 compliance achieved
-**Test Results:** ✅ All 46 tests passing (8 Service-Route tests)
 
 ---
 
@@ -42,12 +41,12 @@ RFC 3608 defines the Service-Route header field:
 
 | Component | Status | Location | Description |
 |-----------|--------|----------|-------------|
-| **ServiceRouteHeader Type** | ✅ Complete | `sip-core/src/service_route.rs:149-232` | Service-Route representation |
-| **Parsing** | ✅ Complete | `sip-parse/src/header_values.rs:89-99` | Header parsing |
-| **process_register_response()** | ✅ Complete | `sip-uac/src/lib.rs:168-191` | Extract from REGISTER response |
-| **get_service_route()** | ✅ Complete | `sip-uac/src/lib.rs:197-199` | Retrieve stored route |
-| **apply_service_route()** | ✅ Complete | `sip-uac/src/lib.rs:236-255` | Apply to outgoing requests |
-| **Tests** | ✅ Complete | 8 comprehensive tests | Full coverage |
+| **ServiceRouteHeader Type** | ✅ Complete | `crates/sip-core/src/service_route.rs:167-291` | Service-Route representation |
+| **Parsing** | ✅ Complete | `crates/sip-parse/src/header_values.rs:61-83` | Header parsing |
+| **process_register_response()** | ✅ Complete | `crates/sip-uac/src/lib.rs:453-483` | Extract from REGISTER response |
+| **get_service_route()** | ✅ Complete | `crates/sip-uac/src/lib.rs:485-491` | Retrieve stored route |
+| **apply_service_route()** | ✅ Complete | `crates/sip-uac/src/lib.rs:493-560` | Apply to outgoing requests |
+| **Tests** | ✅ Complete | `crates/sip-uac/src/lib.rs:4162-4437` | Service-Route coverage |
 | **Documentation** | ✅ Complete | Inline docs + this document | Usage examples and API docs |
 
 ---
@@ -63,7 +62,21 @@ Represents a Service-Route header per RFC 3608:
 ```rust
 pub struct ServiceRouteHeader {
     /// Route entries (one or more)
-    pub routes: Vec<NameAddr>,
+    routes: Vec<NameAddr>,
+}
+```
+
+Fields are private; use the accessor methods and constructors. A maximum of 50 routes is enforced
+per header.
+
+```rust
+pub const MAX_ROUTES: usize = 50;
+```
+
+```rust
+pub enum RouteError {
+    TooManyRoutes { max: usize },
+    ValidationError(String),
 }
 ```
 
@@ -74,8 +87,12 @@ pub struct ServiceRouteHeader {
 Creates a Service-Route header with a single route:
 
 ```rust
+pub fn single(uri: Uri) -> Result<Self, RouteError>
+```
+
+```rust
 let service_uri = SipUri::parse("sip:proxy.example.com;lr")?;
-let sr = ServiceRouteHeader::single(service_uri);
+let sr = ServiceRouteHeader::single(Uri::from(service_uri))?;
 ```
 
 #### from_uris()
@@ -83,9 +100,13 @@ let sr = ServiceRouteHeader::single(service_uri);
 Creates a Service-Route header from multiple URIs:
 
 ```rust
+pub fn from_uris(uris: Vec<Uri>) -> Result<Self, RouteError>
+```
+
+```rust
 let uri1 = SipUri::parse("sip:proxy1.example.com;lr")?;
 let uri2 = SipUri::parse("sip:proxy2.example.com;lr")?;
-let sr = ServiceRouteHeader::from_uris(vec![uri1, uri2]);
+let sr = ServiceRouteHeader::from_uris(vec![Uri::from(uri1), Uri::from(uri2)])?;
 ```
 
 #### new()
@@ -93,7 +114,11 @@ let sr = ServiceRouteHeader::from_uris(vec![uri1, uri2]);
 Creates from pre-built NameAddr entries:
 
 ```rust
-let sr = ServiceRouteHeader::new(routes);
+pub fn new(routes: Vec<NameAddr>) -> Result<Self, RouteError>
+```
+
+```rust
+let sr = ServiceRouteHeader::new(routes)?;
 ```
 
 ### Utility Methods
@@ -110,6 +135,29 @@ if sr.is_empty() {
 
 ```rust
 println!("Service route has {} entries", sr.len());
+```
+
+#### routes()
+
+Returns the underlying `NameAddr` entries:
+
+```rust
+for route in sr.routes() {
+    println!("Route: {}", route.uri().as_str());
+}
+```
+
+#### add_route()
+
+Adds a route, enforcing `MAX_ROUTES`:
+
+```rust
+pub fn add_route(&mut self, uri: Uri) -> Result<(), RouteError>
+```
+
+```rust
+let uri = SipUri::parse("sip:proxy3.example.com;lr")?;
+sr.add_route(Uri::from(uri))?;
 ```
 
 #### uris()
@@ -148,6 +196,7 @@ pub fn process_register_response(&mut self, register_response: &Response)
 - Extracts Service-Route headers from response
 - Stores routes if present, clears if absent
 - Preserves order of multiple routes
+- Clears stored routes on invalid Service-Route parsing
 
 **Example:**
 ```rust
@@ -200,6 +249,7 @@ pub fn apply_service_route(&self, request: &mut Request)
 **Behavior:**
 - Adds Route headers for each Service-Route entry
 - Preserves order (first Service-Route becomes first Route)
+- Inserts Service-Route headers before any existing Route headers
 - Does nothing if no Service-Route is stored
 
 **Example:**
@@ -473,12 +523,30 @@ RFC 3608 Section 6.1:
 
 **Our Implementation:**
 ```rust
-for route in &service_route.routes {
-    request.headers.push(
-        SmolStr::new("Route"),
-        SmolStr::new(format!("<{}>", route.uri.as_str()))
-    );
+use sip_core::{Header, Headers};
+
+let mut new_headers = Vec::with_capacity(request.headers().len());
+let mut inserted = false;
+
+for header in request.headers().iter() {
+    if header.name().eq_ignore_ascii_case("Route") && !inserted {
+        for route in service_route.routes() {
+            let route_value = format!("<{}>", route.uri().as_str());
+            new_headers.push(Header::new("Route", route_value)?);
+        }
+        inserted = true;
+    }
+    new_headers.push(header.clone());
 }
+
+if !inserted {
+    for route in service_route.routes() {
+        let route_value = format!("<{}>", route.uri().as_str());
+        new_headers.push(Header::new("Route", route_value)?);
+    }
+}
+
+*request.headers_mut() = Headers::from_vec(new_headers)?;
 ```
 
 ### Registrar Behavior (RFC 3608 Section 6)
@@ -612,7 +680,7 @@ async fn registration_monitor(
 
 ### Test Coverage
 
-All 8 Service-Route tests pass:
+Service-Route tests include:
 
 1. ✅ `processes_service_route_from_register_response` - Basic extraction
 2. ✅ `processes_multiple_service_routes` - Multiple entries
@@ -634,21 +702,6 @@ cargo test --package sip-uac service_route
 
 # Run specific test
 cargo test --package sip-uac processes_service_route_from_register_response
-```
-
-### Test Results
-
-```
-test tests::processes_service_route_from_register_response ... ok
-test tests::processes_multiple_service_routes ... ok
-test tests::clears_service_route_when_not_present ... ok
-test tests::ignores_non_200_responses_for_service_route ... ok
-test tests::applies_service_route_to_request ... ok
-test tests::applies_multiple_service_routes_in_order ... ok
-test tests::apply_service_route_does_nothing_when_not_set ... ok
-test tests::service_route_with_message_request ... ok
-
-test result: ok. 46 passed; 0 failed; 0 ignored; 0 measured
 ```
 
 ---
@@ -798,7 +851,7 @@ The RFC 3608 Service-Route implementation in SIPHON-RS provides:
 - Preloaded Route header application
 
 ✅ **Production Ready**
-- Comprehensive test coverage (8 tests)
+- Comprehensive test coverage
 - Complete documentation with examples
 - Integration with registration flow
 - Support for all request types (INVITE, MESSAGE, etc.)
