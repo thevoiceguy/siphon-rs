@@ -91,10 +91,14 @@ Important constraints:
 ```rust
 /// Capability description (a=cdsc:)
 pub struct CapabilityDescription {
-    pub cap_num: u8,              // Capability number (1-255)
-    pub media: String,            // Media type (audio, video, etc.)
-    pub transport: String,        // Transport protocol
-    pub formats: Vec<String>,     // Format list (payload types)
+    cap_num: u8,              // Capability number (1-255)
+    pub(crate) media: String, // Media type (audio, video, etc.)
+    transport: String,        // Transport protocol
+    formats: Vec<String>,     // Format list (payload types)
+}
+
+impl CapabilityDescription {
+    pub fn parse(value: &str) -> Result<Self, SdpError>;
 }
 
 /// Capability parameter type
@@ -106,15 +110,23 @@ pub enum CapabilityParameterType {
 
 /// Capability parameter (a=cpar:/cparmin:/cparmax:)
 pub struct CapabilityParameter {
-    pub param_type: CapabilityParameterType,
-    pub value: String,            // Parameter content
+    param_type: CapabilityParameterType,
+    value: String,            // Parameter content
+}
+
+impl CapabilityParameter {
+    pub fn parse(param_type: CapabilityParameterType, value: &str) -> Self;
 }
 
 /// Capability set (collection with sequence number)
 pub struct SdpCapabilitySet {
-    pub sequence_number: u8,                    // a=sqn: (0-255)
-    pub descriptions: Vec<CapabilityDescription>,  // a=cdsc:
-    pub parameters: Vec<CapabilityParameter>,   // a=cpar:/cparmin:/cparmax:
+    sequence_number: u8,                    // a=sqn: (0-255)
+    descriptions: Vec<CapabilityDescription>,  // a=cdsc:
+    parameters: Vec<CapabilityParameter>,   // a=cpar:/cparmin:/cparmax:
+}
+
+impl SdpCapabilitySet {
+    pub fn new(sequence_number: u8) -> Self;
 }
 ```
 
@@ -125,15 +137,28 @@ Capability sets are integrated into existing SDP structures:
 ```rust
 pub struct SdpSession {
     // ... existing fields ...
-    pub capability_set: Option<SdpCapabilitySet>,  // Session-level capabilities
-    pub media: Vec<MediaDescription>,
+    pub(crate) capability_set: Option<SdpCapabilitySet>,  // Session-level capabilities
+    pub(crate) media: Vec<MediaDescription>,
+}
+
+impl SdpSession {
+    pub fn capability_set(&self) -> Option<&SdpCapabilitySet>;
+    pub fn media(&self) -> &[MediaDescription];
 }
 
 pub struct MediaDescription {
     // ... existing fields ...
-    pub capability_set: Option<SdpCapabilitySet>,  // Media-level capabilities
+    pub(crate) capability_set: Option<SdpCapabilitySet>,  // Media-level capabilities
+}
+
+impl MediaDescription {
+    pub fn capability_set(&self) -> Option<&SdpCapabilitySet>;
 }
 ```
+
+Capability set fields are module-private; consumers typically check presence via
+`SdpSession::capability_set()`/`MediaDescription::capability_set()` and use the
+parsed SDP text for details.
 
 ## Parsing and Generation
 
@@ -158,16 +183,13 @@ m=audio 49170 RTP/AVP 0\r\n\
 let session = SdpSession::parse(sdp)?;
 
 // Access session-level capabilities
-if let Some(cap_set) = &session.capability_set {
-    println!("Sequence number: {}", cap_set.sequence_number);
+if let Some(cap_set) = session.capability_set() {
+    println!("Session capability set: {:?}", cap_set);
+}
 
-    for desc in &cap_set.descriptions {
-        println!("Capability {}: {} {}",
-            desc.cap_num, desc.media, desc.transport);
-    }
-
-    for param in &cap_set.parameters {
-        println!("Parameter: {}", param.value);
+for media in session.media() {
+    if let Some(media_caps) = media.capability_set() {
+        println!("Media capability set: {:?}", media_caps);
     }
 }
 ```
@@ -175,53 +197,21 @@ if let Some(cap_set) = &session.capability_set {
 ### Generation Example
 
 ```rust
-use sip_core::{SdpSession, SdpCapabilitySet, CapabilityDescription,
-               CapabilityParameter, CapabilityParameterType, Origin, Connection};
+use sip_core::SdpSession;
 
-// Create basic session
-let mut session = SdpSession::new(
-    Origin {
-        username: "alice".to_string(),
-        sess_id: "123".to_string(),
-        sess_version: "456".to_string(),
-        nettype: "IN".to_string(),
-        addrtype: "IP4".to_string(),
-        unicast_address: "192.0.2.1".to_string(),
-    },
-    "Capability Demo".to_string(),
-);
+let sdp = "\
+v=0\r\n\
+o=alice 123 456 IN IP4 192.0.2.1\r\n\
+s=Capability Demo\r\n\
+c=IN IP4 192.0.2.1\r\n\
+t=0 0\r\n\
+a=sqn:0\r\n\
+a=cdsc:1 audio RTP/AVP 0 18\r\n\
+a=cpar:a=fmtp:18 annexb=yes\r\n\
+m=audio 49170 RTP/AVP 0\r\n\
+";
 
-session.connection = Some(Connection {
-    nettype: "IN".to_string(),
-    addrtype: "IP4".to_string(),
-    connection_address: "192.0.2.1".to_string(),
-});
-
-// Create capability set
-let mut cap_set = SdpCapabilitySet::new(0);
-
-// Add capability descriptions
-cap_set.descriptions.push(CapabilityDescription {
-    cap_num: 1,
-    media: "audio".to_string(),
-    transport: "RTP/AVP".to_string(),
-    formats: vec!["0".to_string(), "18".to_string()],
-});
-
-// Add capability parameters
-cap_set.parameters.push(CapabilityParameter::parse(
-    CapabilityParameterType::General,
-    "a=fmtp:18 annexb=yes",
-));
-
-cap_set.parameters.push(CapabilityParameter::parse(
-    CapabilityParameterType::Min,
-    "b=AS:32",
-));
-
-session.capability_set = Some(cap_set);
-
-// Generate SDP
+let session = SdpSession::parse(sdp)?;
 let sdp_string = session.to_string();
 ```
 
@@ -308,10 +298,15 @@ The implementation enforces these RFC 3407 validation rules:
 
 3. **Capability Number Range**: Must be 1-255 (not 0)
    ```rust
-   CapabilityDescription { cap_num: 1, ... }  // Valid
+   let _cap = CapabilityDescription::parse("1 audio RTP/AVP 0 18")?;  // Valid
+   let invalid = CapabilityDescription::parse("0 audio RTP/AVP 0");
+   assert!(invalid.is_err());
    ```
 
 4. **Single Capability Set**: Only one capability set per session description (validated during parsing)
+5. **Collection Limits**: Capability descriptions and parameters are bounded (DoS protection)
+   - Max descriptions: 50
+   - Max parameters: 100
 
 ## Offer/Answer Model Integration
 
@@ -324,7 +319,7 @@ impl OfferAnswerEngine {
         // ...
         Ok(MediaDescription {
             // ... other fields ...
-            capability_set: offer_media.capability_set.clone(),  // Preserved
+            capability_set: offer_media.capability_set().cloned(),  // Preserved
         })
     }
 }
@@ -385,7 +380,7 @@ cargo test sdp::tests::rfc_3407
 | **Capability parameters (a=cpar:)** | ✅ Complete | General, min, max variants |
 | **Session-level capabilities** | ✅ Complete | Applies to all media |
 | **Media-level capabilities** | ✅ Complete | Per-media capabilities |
-| **Validation** | ✅ Complete | Enforces sqn requirement |
+| **Validation** | ✅ Complete | Enforces sqn requirement + size limits |
 | **Parsing** | ✅ Complete | Full RFC 3407 support |
 | **Generation** | ✅ Complete | Correct attribute ordering |
 | **Round-trip fidelity** | ✅ Complete | Parse→Generate→Parse |
@@ -397,12 +392,12 @@ cargo test sdp::tests::rfc_3407
 
 | Component | File | Lines |
 |-----------|------|-------|
-| Core types | `crates/sip-core/src/sdp.rs` | 369-498 |
-| Parsing logic | `crates/sip-core/src/sdp.rs` | 1029-1128 |
-| Display/Generation | `crates/sip-core/src/sdp.rs` | 1386-1395, 1497-1506 |
-| Offer/Answer | `crates/sip-core/src/sdp_offer_answer.rs` | (capability_set preserved) |
-| Public API exports | `crates/sip-core/src/lib.rs` | 90-96 |
-| Tests | `crates/sip-core/src/sdp.rs` | 2987-3331 |
+| Core types | `crates/sip-core/src/sdp.rs` | 829-972 |
+| Parsing logic | `crates/sip-core/src/sdp.rs` | 1595-1699 |
+| Display/Generation | `crates/sip-core/src/sdp.rs` | 2044-2052, 2246-2253 |
+| Offer/Answer | `crates/sip-core/src/sdp_offer_answer.rs` | 593-606 |
+| Public API exports | `crates/sip-core/src/lib.rs` | 119-125 |
+| Tests | `crates/sip-core/src/sdp.rs` | 3824-4212 |
 
 ## References
 
