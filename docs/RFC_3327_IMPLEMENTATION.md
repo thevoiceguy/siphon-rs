@@ -127,7 +127,7 @@ A proxy adding its Path entry to a REGISTER request:
 use sip_core::{PathHeader, SipUri};
 
 // Proxy adds itself to the Path
-let proxy_uri = SipUri::parse("sip:proxy.example.com;lr").unwrap();
+let proxy_uri = SipUri::parse("sip:proxy.example.com;lr")?;
 let path = PathHeader::single(proxy_uri);
 
 // Add to REGISTER request
@@ -147,16 +147,16 @@ Multiple proxies each adding their Path entry:
 use sip_core::{PathHeader, SipUri, parse_path};
 
 // Parse existing Path headers from received REGISTER
-let existing_path = parse_path(&request.headers).expect("path");
+let existing_path = parse_path(&request.headers)?;
 
 // Proxy adds itself
-let proxy_uri = SipUri::parse("sip:proxy2.example.com;lr").unwrap();
+let proxy_uri = SipUri::parse("sip:proxy2.example.com;lr")?;
 let mut path = existing_path;
 path.add_route(proxy_uri);
 
 // Or create from scratch with multiple entries
-let proxy1 = SipUri::parse("sip:proxy1.example.com;lr").unwrap();
-let proxy2 = SipUri::parse("sip:proxy2.example.com;lr").unwrap();
+let proxy1 = SipUri::parse("sip:proxy1.example.com;lr")?;
+let proxy2 = SipUri::parse("sip:proxy2.example.com;lr")?;
 let path = PathHeader::from_uris(vec![proxy1, proxy2]);
 
 // Result: Path: <sip:proxy1.example.com;lr>, <sip:proxy2.example.com;lr>
@@ -170,7 +170,7 @@ Registrar returning Service-Route in 200 OK:
 use sip_core::{ServiceRouteHeader, SipUri};
 
 // Registrar specifies service route
-let service_uri = SipUri::parse("sip:service.example.com;lr").unwrap();
+let service_uri = SipUri::parse("sip:service.example.com;lr")?;
 let sr = ServiceRouteHeader::single(service_uri);
 
 // Add to 200 OK response
@@ -190,7 +190,7 @@ UAC receiving and storing Service-Route from REGISTER response:
 use sip_core::parse_service_route;
 
 // Parse Service-Route from 200 OK to REGISTER
-let service_route = parse_service_route(&response.headers).expect("service-route");
+let service_route = parse_service_route(&response.headers)?;
 
 if !service_route.is_empty() {
     println!("Registrar provided {} service routes", service_route.len());
@@ -215,7 +215,7 @@ Registrar receiving and storing Path from REGISTER:
 use sip_core::parse_path;
 
 // Parse Path headers from REGISTER request
-let path = parse_path(&register_request.headers).expect("path");
+let path = parse_path(&register_request.headers)?;
 
 if !path.is_empty() {
     // Store Path with the Contact binding
@@ -266,7 +266,7 @@ Verifying that Path/Service-Route entries support loose routing:
 use sip_core::{PathHeader, ServiceRouteHeader};
 
 // Check Path header
-let path = parse_path(&request.headers).expect("path");
+let path = parse_path(&request.headers)?;
 if !path.all_loose_routing() {
     // Some proxies in Path don't support loose routing
     println!("Warning: Not all Path entries have 'lr' parameter");
@@ -280,7 +280,7 @@ if !path.all_loose_routing() {
 }
 
 // Check Service-Route header
-let sr = parse_service_route(&response.headers).expect("service-route");
+let sr = parse_service_route(&response.headers)?;
 if sr.all_loose_routing() {
     println!("All Service-Route entries support loose routing");
 }
@@ -293,7 +293,7 @@ Working with route lists:
 ```rust
 use sip_core::{PathHeader, ServiceRouteHeader};
 
-let path = parse_path(&request.headers).expect("path");
+let path = parse_path(&request.headers)?;
 
 // Iterate using uris() method
 for uri in path.uris() {
@@ -503,10 +503,10 @@ use sip_core::{PathHeader, SipUri, parse_path};
 
 fn proxy_process_register(request: &mut Request, proxy_uri: &str) {
     // Parse existing Path headers
-    let mut path = parse_path(&request.headers).expect("path");
+    let mut path = parse_path(&request.headers)?;
 
     // Add this proxy to the Path
-    let my_uri = SipUri::parse(proxy_uri).unwrap();
+    let my_uri = SipUri::parse(proxy_uri)?;
     path.add_route(my_uri);
 
     // Remove old Path headers
@@ -529,8 +529,8 @@ fn proxy_process_register(request: &mut Request, proxy_uri: &str) {
 use sip_core::{parse_path, parse_contact_header};
 
 fn registrar_process_register(request: &Request) -> ContactBinding {
-    let contact = parse_contact_header(&request.headers).unwrap();
-    let path = parse_path(&request.headers).expect("path");
+    let contact = parse_contact_header(&request.headers)?;
+    let path = parse_path(&request.headers)?;
 
     // Store binding
     ContactBinding {
@@ -557,7 +557,7 @@ fn build_route_set(binding: &ContactBinding) -> Vec<SipUri> {
 use sip_core::parse_service_route;
 
 fn ua_process_register_response(response: &Response) {
-    let service_route = parse_service_route(&response.headers).expect("service-route");
+    let service_route = parse_service_route(&response.headers)?;
 
     if !service_route.is_empty() {
         // Store Service-Route for this registration

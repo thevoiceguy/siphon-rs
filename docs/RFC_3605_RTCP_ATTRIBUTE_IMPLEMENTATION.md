@@ -153,9 +153,9 @@ a=rtcp:53020 IN IP4 126.16.64.4\r\n\
 ";
 
 let session2 = SdpSession::parse(sdp_full)?;
-let rtcp = session2.media[0].rtcp.as_ref().unwrap();
+let rtcp = session2.media[0].rtcp.as_ref()?;
 println!("RTCP: {}:{}",
-    rtcp.connection_address.as_ref().unwrap(),
+    rtcp.connection_address.as_ref()?,
     rtcp.port
 );  // "126.16.64.4:53020"
 ```

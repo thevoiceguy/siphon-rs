@@ -74,7 +74,7 @@ pub struct ServiceRouteHeader {
 Creates a Service-Route header with a single route:
 
 ```rust
-let service_uri = SipUri::parse("sip:proxy.example.com;lr").unwrap();
+let service_uri = SipUri::parse("sip:proxy.example.com;lr")?;
 let sr = ServiceRouteHeader::single(service_uri);
 ```
 
@@ -83,8 +83,8 @@ let sr = ServiceRouteHeader::single(service_uri);
 Creates a Service-Route header from multiple URIs:
 
 ```rust
-let uri1 = SipUri::parse("sip:proxy1.example.com;lr").unwrap();
-let uri2 = SipUri::parse("sip:proxy2.example.com;lr").unwrap();
+let uri1 = SipUri::parse("sip:proxy1.example.com;lr")?;
+let uri2 = SipUri::parse("sip:proxy2.example.com;lr")?;
 let sr = ServiceRouteHeader::from_uris(vec![uri1, uri2]);
 ```
 
@@ -155,8 +155,8 @@ use sip_uac::UserAgentClient;
 use sip_core::{SipUri, Response};
 
 let mut uac = UserAgentClient::new(
-    SipUri::parse("sip:alice@example.com").unwrap(),
-    SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
+    SipUri::parse("sip:alice@example.com")?,
+    SipUri::parse("sip:alice@192.168.1.100:5060")?,
 );
 
 // Send REGISTER and receive response
@@ -205,7 +205,7 @@ pub fn apply_service_route(&self, request: &mut Request)
 **Example:**
 ```rust
 // Create outgoing request
-let target_uri = SipUri::parse("sip:bob@example.com").unwrap();
+let target_uri = SipUri::parse("sip:bob@example.com")?;
 let mut invite = uac.create_invite(&target_uri, None);
 
 // Apply service route
@@ -229,11 +229,11 @@ use sip_transport::TransportLayer;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let mut uac = UserAgentClient::new(
-        SipUri::parse("sip:alice@example.com").unwrap(),
-        SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
+        SipUri::parse("sip:alice@example.com")?,
+        SipUri::parse("sip:alice@192.168.1.100:5060")?,
     );
 
-    let registrar = SipUri::parse("sip:registrar.example.com").unwrap();
+    let registrar = SipUri::parse("sip:registrar.example.com")?;
 
     // Send REGISTER
     let register = uac.create_register(&registrar, 3600);
@@ -350,11 +350,11 @@ println!("Updated service routes: {:?}", uac.get_service_route());
 ```rust
 // IMS network registration through P-CSCF
 let mut uac = UserAgentClient::new(
-    SipUri::parse("sip:alice@ims.example.com").unwrap(),
-    SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
+    SipUri::parse("sip:alice@ims.example.com")?,
+    SipUri::parse("sip:alice@192.168.1.100:5060")?,
 );
 
-let pcscf = SipUri::parse("sip:pcscf.ims.example.com").unwrap();
+let pcscf = SipUri::parse("sip:pcscf.ims.example.com")?;
 
 // Register through P-CSCF
 let register = uac.create_register(&pcscf, 3600);
@@ -365,7 +365,7 @@ let response = transport.send_and_wait(&register).await?;
 uac.process_register_response(&response);
 
 // All subsequent requests route through S-CSCF
-let target = SipUri::parse("sip:bob@ims.example.com").unwrap();
+let target = SipUri::parse("sip:bob@ims.example.com")?;
 let mut invite = uac.create_invite(&target, None);
 uac.apply_service_route(&mut invite);
 
@@ -377,11 +377,11 @@ uac.apply_service_route(&mut invite);
 ```rust
 // Enterprise user registers with corporate SIP server
 let mut uac = UserAgentClient::new(
-    SipUri::parse("sip:alice@corp.example.com").unwrap(),
-    SipUri::parse("sip:alice@10.1.2.100:5060").unwrap(),
+    SipUri::parse("sip:alice@corp.example.com")?,
+    SipUri::parse("sip:alice@10.1.2.100:5060")?,
 );
 
-let registrar = SipUri::parse("sip:registrar.corp.example.com").unwrap();
+let registrar = SipUri::parse("sip:registrar.corp.example.com")?;
 let register = uac.create_register(&registrar, 7200);
 let response = transport.send_and_wait(&register).await?;
 
@@ -393,7 +393,7 @@ uac.process_register_response(&response);
 // - Policy enforcement
 // - Call logging
 // - PSTN gateway access
-let external = SipUri::parse("sip:+15551234567@pstn.example.com").unwrap();
+let external = SipUri::parse("sip:+15551234567@pstn.example.com")?;
 let mut invite = uac.create_invite(&external, None);
 uac.apply_service_route(&mut invite);
 ```
@@ -506,12 +506,12 @@ async fn register_and_make_call(
 ) -> anyhow::Result<()> {
     // Create UAC
     let mut uac = UserAgentClient::new(
-        SipUri::parse("sip:alice@example.com").unwrap(),
-        SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
+        SipUri::parse("sip:alice@example.com")?,
+        SipUri::parse("sip:alice@192.168.1.100:5060")?,
     ).with_credentials("alice", "secret");
 
     // REGISTER
-    let registrar = SipUri::parse("sip:registrar.example.com").unwrap();
+    let registrar = SipUri::parse("sip:registrar.example.com")?;
     let register = uac.create_register(&registrar, 3600);
 
     let response = transport.send_and_wait(&register).await?;
@@ -531,7 +531,7 @@ async fn register_and_make_call(
     }
 
     // Now make call using Service-Route
-    let target = SipUri::parse("sip:bob@example.com").unwrap();
+    let target = SipUri::parse("sip:bob@example.com")?;
     let mut invite = uac.create_invite(&target, None);
 
     // Apply service route
@@ -721,7 +721,7 @@ if response.start.code == 401 {
 
 ```rust
 // Use SIPS URI for secure registration
-let registrar = SipUri::parse("sips:registrar.example.com").unwrap();
+let registrar = SipUri::parse("sips:registrar.example.com")?;
 let register = uac.create_register(&registrar, 3600);
 
 // Transport layer uses TLS, protecting Service-Route in response

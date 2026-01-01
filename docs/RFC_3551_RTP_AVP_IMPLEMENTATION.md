@@ -145,14 +145,14 @@ pub fn is_reserved(pt: u8) -> bool;
 use sip_core::rtp_avp::get_static_payload_type;
 
 // Get PCMU information
-let pcmu = get_static_payload_type(0).unwrap();
+let pcmu = get_static_payload_type(0)?;
 assert_eq!(pcmu.encoding_name, "PCMU");
 assert_eq!(pcmu.clock_rate, 8000);
 assert_eq!(pcmu.channels, Some(1));
 assert_eq!(pcmu.media_type, "audio");
 
 // Get H.261 information
-let h261 = get_static_payload_type(31).unwrap();
+let h261 = get_static_payload_type(31)?;
 assert_eq!(h261.encoding_name, "H261");
 assert_eq!(h261.clock_rate, 90000);
 assert_eq!(h261.channels, None);  // Video has no channel concept

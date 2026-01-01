@@ -136,7 +136,7 @@ use sip_core::ReplacesHeader;
 
 // Parse basic header
 let input = "425928@bobster.example.org;to-tag=7743;from-tag=6472";
-let replaces = ReplacesHeader::parse(input).unwrap();
+let replaces = ReplacesHeader::parse(input)?;
 
 assert_eq!(replaces.call_id(), "425928@bobster.example.org");
 assert_eq!(replaces.to_tag(), "7743");
@@ -144,7 +144,7 @@ assert_eq!(replaces.from_tag(), "6472");
 
 // Parse with early-only
 let input = "98asjd8@test.com;to-tag=12345;from-tag=67890;early-only";
-let replaces = ReplacesHeader::parse(input).unwrap();
+let replaces = ReplacesHeader::parse(input)?;
 
 assert!(replaces.is_early_only());
 ```
@@ -196,8 +196,8 @@ Replaces: call-b@bob.example.com;to-tag=9999;from-tag=8888
 use sip_core::{Request, Method, ReplacesHeader};
 
 // Charlie receives the INVITE and extracts the Replaces header
-let replaces_value = request.headers().get("Replaces").unwrap();
-let replaces = ReplacesHeader::parse(replaces_value).unwrap();
+let replaces_value = request.headers().get("Replaces")?;
+let replaces = ReplacesHeader::parse(replaces_value)?;
 
 // Charlie's phone finds the matching dialog (Call B with Bob)
 if let Some(dialog) = find_dialog(replaces.call_id(), replaces.to_tag(), replaces.from_tag()) {
@@ -286,7 +286,7 @@ let replaces = ReplacesHeader::new(
 // Send INVITE to the parking location
 let mut request = Request::new(
     Method::INVITE,
-    format!("sip:{}@park.example.com", parked_dialog.slot).parse().unwrap()
+    format!("sip:{}@park.example.com", parked_dialog.slot).parse()?
 );
 request.headers_mut().set("Replaces", &replaces.to_string());
 ```
@@ -552,7 +552,7 @@ impl AttendedTransfer {
         // Send REFER to Alice
         let mut refer = Request::new(
             Method::REFER,
-            "sip:alice@example.com".parse().unwrap()
+            "sip:alice@example.com".parse()?
         );
         refer.headers_mut().set("Refer-To", &refer_to);
 
@@ -563,14 +563,14 @@ impl AttendedTransfer {
 fn handle_invite_from_alice(request: &Request) {
     // Charlie receives INVITE with Replaces
     if let Some(replaces_str) = request.headers().get("Replaces") {
-        let replaces = ReplacesHeader::parse(replaces_str).unwrap();
+        let replaces = ReplacesHeader::parse(replaces_str)?;
 
         // Find Call B with Bob
         let dialog_b = find_dialog(
             replaces.call_id(),
             replaces.to_tag(),
             replaces.from_tag()
-        ).unwrap();
+        )?;
 
         // Send BYE to Bob on Call B
         dialog_b.send_bye();
@@ -594,7 +594,7 @@ struct CallPickupService {
 impl CallPickupService {
     fn pickup_call(&self, target_extension: &str) -> Request {
         // Find the ringing call
-        let dialog = self.ringing_calls.get(target_extension).unwrap();
+        let dialog = self.ringing_calls.get(target_extension)?;
 
         // Create Replaces header with early-only
         let replaces = ReplacesHeader::new(
@@ -614,8 +614,8 @@ impl CallPickupService {
     }
 
     fn handle_pickup_invite(&mut self, request: &Request) -> Response {
-        let replaces_str = request.headers().get("Replaces").unwrap();
-        let replaces = ReplacesHeader::parse(replaces_str).unwrap();
+        let replaces_str = request.headers().get("Replaces")?;
+        let replaces = ReplacesHeader::parse(replaces_str)?;
 
         // Find the ringing call
         let dialog = match self.find_dialog_by_replaces(&replaces) {

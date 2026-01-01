@@ -306,7 +306,7 @@ let sub_mgr = SubscriptionManager::new();
 
 // Step 1: Alice sends INVITE
 let invite = Request::new(
-    RequestLine::new(Method::Invite, SipUri::parse("sip:bob@example.com").unwrap()),
+    RequestLine::new(Method::Invite, SipUri::parse("sip:bob@example.com")?),
     headers_with_tag("alice-tag"),
     Bytes::new(),
 );
@@ -322,16 +322,16 @@ let invite_response = Response::new(
 let dialog = Dialog::new_uac(
     &invite,
     &invite_response,
-    SipUri::parse("sip:alice@example.com").unwrap(),
-    SipUri::parse("sip:bob@example.com").unwrap(),
-).unwrap();
+    SipUri::parse("sip:alice@example.com")?,
+    SipUri::parse("sip:bob@example.com")?,
+)?;
 
 let dialog_id = dialog.id.clone();
 dialog_mgr.insert(dialog.clone());
 
 // Step 4: Alice sends SUBSCRIBE in the same dialog
 let subscribe = Request::new(
-    RequestLine::new(Method::Subscribe, SipUri::parse("sip:bob@example.com").unwrap()),
+    RequestLine::new(Method::Subscribe, SipUri::parse("sip:bob@example.com")?),
     headers_with_dialog(&dialog),  // Same Call-ID and tags!
     Bytes::new(),
 );
@@ -349,9 +349,9 @@ let subscribe_response = Response::new(
 let subscription = Subscription::new_subscriber(
     &subscribe,
     &subscribe_response,
-    SipUri::parse("sip:alice@example.com").unwrap(),
-    SipUri::parse("sip:bob@example.com").unwrap(),
-).unwrap();
+    SipUri::parse("sip:alice@example.com")?,
+    SipUri::parse("sip:bob@example.com")?,
+)?;
 
 sub_mgr.insert(subscription);
 
@@ -367,7 +367,7 @@ Bob moves to a different device during the call:
 
 ```rust
 // Initial state: Dialog with 2 usages
-let dialog = dialog_mgr.get(&dialog_id).unwrap();
+let dialog = dialog_mgr.get(&dialog_id)?;
 println!("Remote target: {}", dialog.remote_target);
 // Output: sip:bob@client.example.com:5060
 
@@ -379,8 +379,8 @@ let reinvite = Request::new(
 );
 
 // Update dialog from re-INVITE
-let mut dialog = dialog_mgr.get(&dialog_id).unwrap();
-dialog.update_from_request(&reinvite).unwrap();
+let mut dialog = dialog_mgr.get(&dialog_id)?;
+dialog.update_from_request(&reinvite)?;
 dialog_mgr.insert(dialog.clone());
 
 println!("Remote target: {}", dialog.remote_target);
@@ -418,7 +418,7 @@ let bye = Request::new(
 
 // INVITE usage terminated, but dialog persists
 // (subscriptions still active)
-dialog_mgr.get(&dialog_id).unwrap().terminate();  // Mark, don't remove!
+dialog_mgr.get(&dialog_id)?.terminate();  // Mark, don't remove!
 
 println!("Active usages: 2");
 println!("  - SUBSCRIBE (presence)");
@@ -460,7 +460,7 @@ Using REFER within a dialog without creating a subscription:
 use sip_core::{Method, Request, ReferSubHeader};
 
 // Existing dialog from INVITE
-let dialog = dialog_mgr.get(&dialog_id).unwrap();
+let dialog = dialog_mgr.get(&dialog_id)?;
 
 // Alice refers Bob to Carol (call transfer)
 let mut refer = Request::new(
@@ -490,7 +490,7 @@ Multiple event packages in the same dialog:
 
 ```rust
 // Dialog established by INVITE
-let dialog = dialog_mgr.get(&dialog_id).unwrap();
+let dialog = dialog_mgr.get(&dialog_id)?;
 
 // Alice subscribes to multiple events in same dialog
 let events = vec!["presence", "dialog", "message-summary"];
@@ -509,7 +509,7 @@ for event_name in events {
         &response,
         dialog.local_uri.clone(),
         dialog.remote_uri.clone(),
-    ).unwrap();
+    )?;
 
     sub_mgr.insert(subscription);
 }

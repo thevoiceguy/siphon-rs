@@ -263,8 +263,8 @@ use sip_core::{parse_security_client, parse_security_server};
 
 // Parse Security-Client from initial request
 let security_client = parse_security_client(
-    request.headers.get("Security-Client").unwrap()
-).unwrap();
+    request.headers.get("Security-Client")?
+)?;
 
 // Get server's supported mechanisms
 let security_server = get_server_security_mechanisms();
@@ -290,8 +290,8 @@ use sip_core::{SecurityVerifyHeader, SecurityEntry, parse_security_server};
 
 // Parse Security-Server from 494 response
 let security_server = parse_security_server(
-    response.headers.get("Security-Server").unwrap()
-).unwrap();
+    response.headers.get("Security-Server")?
+)?;
 
 // Choose the server's highest preference mechanism
 let chosen = security_server.sorted_by_preference()[0].clone();
@@ -317,8 +317,8 @@ use sip_core::{parse_security_verify};
 
 // Parse Security-Verify from client's request
 let security_verify = parse_security_verify(
-    request.headers.get("Security-Verify").unwrap()
-).unwrap();
+    request.headers.get("Security-Verify")?
+)?;
 
 // Get the mechanism we told the client to use
 let expected_mechanism = get_agreed_mechanism_for_client(&client_id);
@@ -435,7 +435,7 @@ let server_digest = SecurityEntry::digest("MD5", Some("auth"));
 let security_server = SecurityServerHeader::new(vec![server_tls.clone(), server_digest]);
 
 // Find best match
-let best = security_server.find_best_match(&security_client).unwrap();
+let best = security_server.find_best_match(&security_client)?;
 println!("Agreed mechanism: {}", best.mechanism);
 
 response_494.headers.push(
@@ -452,8 +452,8 @@ new_request.headers.push(
 
 // === STEP 4: UAS verifies ===
 let verify_header = parse_security_verify(
-    new_request.headers.get("Security-Verify").unwrap()
-).unwrap();
+    new_request.headers.get("Security-Verify")?
+)?;
 
 if verify_header.matches(&best) {
     println!("Verification successful!");
@@ -743,7 +743,7 @@ impl SecureUas {
     fn send_494_response(&mut self, request: &Request) -> Result<Response> {
         // Parse Security-Client
         let client_header = parse_security_client(
-            request.headers.get("Security-Client").unwrap()
+            request.headers.get("Security-Client")?
         )?;
 
         // Find best match
@@ -772,7 +772,7 @@ impl SecureUas {
 
     fn verify_and_process(&self, request: &Request) -> Result<Response> {
         let verify_header = parse_security_verify(
-            request.headers.get("Security-Verify").unwrap()
+            request.headers.get("Security-Verify")?
         )?;
 
         // Get agreed mechanism for this client

@@ -223,17 +223,17 @@ use sip_core::FeatureValue;
 use smol_str::SmolStr;
 
 let bool_val = FeatureValue::Boolean(true);
-assert_eq!(bool_val.to_param_value().unwrap(), None); // No value for boolean
+assert_eq!(bool_val.to_param_value()?, None); // No value for boolean
 
 let token_val = FeatureValue::Token(SmolStr::new("fixed"));
-assert_eq!(token_val.to_param_value().unwrap(), Some(SmolStr::new("fixed")));
+assert_eq!(token_val.to_param_value()?, Some(SmolStr::new("fixed")));
 
 let list_val = FeatureValue::TokenList(vec![
     SmolStr::new("INVITE"),
     SmolStr::new("BYE")
 ]);
 assert_eq!(
-    list_val.to_param_value().unwrap(),
+    list_val.to_param_value()?,
     Some(SmolStr::new("\"INVITE,BYE\""))
 );
 ```
@@ -252,15 +252,15 @@ use sip_core::{FeatureTag, FeatureValue};
 use smol_str::SmolStr;
 
 // Boolean (no value)
-let val = FeatureValue::from_param_value(FeatureTag::Audio, None).unwrap();
+let val = FeatureValue::from_param_value(FeatureTag::Audio, None)?;
 assert_eq!(val, FeatureValue::Boolean(true));
 
 // Token
-let val = FeatureValue::from_param_value(FeatureTag::Mobility, Some("fixed")).unwrap();
+let val = FeatureValue::from_param_value(FeatureTag::Mobility, Some("fixed"))?;
 assert_eq!(val, FeatureValue::Token(SmolStr::new("fixed")));
 
 // Token list
-let val = FeatureValue::from_param_value(FeatureTag::Methods, Some("\"INVITE,BYE\"")).unwrap();
+let val = FeatureValue::from_param_value(FeatureTag::Methods, Some("\"INVITE,BYE\""))?;
 assert_eq!(
     val,
     FeatureValue::TokenList(vec![SmolStr::new("INVITE"), SmolStr::new("BYE")])
@@ -293,7 +293,7 @@ Creates a boolean capability.
 ```rust
 use sip_core::{Capability, FeatureTag};
 
-let cap = Capability::boolean(FeatureTag::Audio, true).unwrap();
+let cap = Capability::boolean(FeatureTag::Audio, true)?;
 ```
 
 ---
@@ -306,7 +306,7 @@ Creates a token capability.
 ```rust
 use sip_core::{Capability, FeatureTag};
 
-let cap = Capability::token(FeatureTag::Mobility, "mobile").unwrap();
+let cap = Capability::token(FeatureTag::Mobility, "mobile")?;
 ```
 
 ---
@@ -324,7 +324,7 @@ let cap = Capability::token_list(
     FeatureTag::Methods,
     vec![SmolStr::new("INVITE"), SmolStr::new("BYE")]
 )
-.unwrap();
+?;
 ```
 
 ---
@@ -337,7 +337,7 @@ Creates a string capability.
 ```rust
 use sip_core::{Capability, FeatureTag};
 
-let cap = Capability::string(FeatureTag::Description, "Alice's Phone").unwrap();
+let cap = Capability::string(FeatureTag::Description, "Alice's Phone")?;
 ```
 
 ---
@@ -397,7 +397,7 @@ Adds a capability to the set.
 use sip_core::{CapabilitySet, Capability, FeatureTag};
 
 let mut set = CapabilitySet::new();
-set.add(Capability::boolean(FeatureTag::Audio, true).unwrap()).unwrap();
+set.add(Capability::boolean(FeatureTag::Audio, true)?)?;
 ```
 
 ---
@@ -411,8 +411,8 @@ Adds a boolean capability.
 use sip_core::{CapabilitySet, FeatureTag};
 
 let mut set = CapabilitySet::new();
-set.add_boolean(FeatureTag::Audio, true).unwrap();
-set.add_boolean(FeatureTag::Video, true).unwrap();
+set.add_boolean(FeatureTag::Audio, true)?;
+set.add_boolean(FeatureTag::Video, true)?;
 ```
 
 ---
@@ -450,7 +450,7 @@ Gets a capability value by tag.
 use sip_core::{CapabilitySet, FeatureTag};
 
 let mut set = CapabilitySet::new();
-set.add_boolean(FeatureTag::Audio, true).unwrap();
+set.add_boolean(FeatureTag::Audio, true)?;
 
 assert!(set.get(FeatureTag::Audio).is_some());
 assert!(set.get(FeatureTag::Video).is_none());
@@ -495,10 +495,10 @@ use sip_core::{CapabilitySet, FeatureTag};
 use smol_str::SmolStr;
 
 let mut set = CapabilitySet::new();
-set.add_boolean(FeatureTag::Audio, true).unwrap();
-set.add_token(FeatureTag::Mobility, "fixed").unwrap();
+set.add_boolean(FeatureTag::Audio, true)?;
+set.add_token(FeatureTag::Mobility, "fixed")?;
 
-let params = set.to_params().unwrap();
+let params = set.to_params()?;
 assert_eq!(params.get(&SmolStr::new("audio")), Some(&None));
 assert_eq!(params.get(&SmolStr::new("mobility")), Some(&Some(SmolStr::new("fixed"))));
 ```
@@ -519,7 +519,7 @@ let mut params = BTreeMap::new();
 params.insert(SmolStr::new("audio"), None);
 params.insert(SmolStr::new("video"), None);
 
-let set = CapabilitySet::from_params(&params).unwrap();
+let set = CapabilitySet::from_params(&params)?;
 assert!(set.has(FeatureTag::Audio));
 assert!(set.has(FeatureTag::Video));
 ```
@@ -542,16 +542,16 @@ A capability set matches if:
 use sip_core::{CapabilitySet, FeatureTag};
 
 let mut available = CapabilitySet::new();
-available.add_boolean(FeatureTag::Audio, true).unwrap();
-available.add_boolean(FeatureTag::Video, true).unwrap();
+available.add_boolean(FeatureTag::Audio, true)?;
+available.add_boolean(FeatureTag::Video, true)?;
 
 let mut required = CapabilitySet::new();
-required.add_boolean(FeatureTag::Audio, true).unwrap();
+required.add_boolean(FeatureTag::Audio, true)?;
 
 assert!(available.matches(&required));
 
 // Require text (not available)
-required.add_boolean(FeatureTag::Text, true).unwrap();
+required.add_boolean(FeatureTag::Text, true)?;
 assert!(!available.matches(&required));
 ```
 
@@ -578,13 +578,13 @@ params.insert(SmolStr::new("video"), None);
 
 let name_addr = NameAddr::new(
     None,
-    Uri::from(SipUri::parse("sip:alice@example.com").unwrap()),
+    Uri::from(SipUri::parse("sip:alice@example.com")?),
     params,
 )
-.unwrap();
+?;
 
 let contact = ContactHeader::new(name_addr);
-let capabilities = contact.capabilities().unwrap();
+let capabilities = contact.capabilities()?;
 
 assert!(capabilities.has(FeatureTag::Audio));
 assert!(capabilities.has(FeatureTag::Video));
@@ -602,9 +602,9 @@ use smol_str::SmolStr;
 
 // Build capability set
 let mut capabilities = CapabilitySet::new();
-capabilities.add_boolean(FeatureTag::Audio, true).unwrap();
-capabilities.add_boolean(FeatureTag::Video, true).unwrap();
-capabilities.add_token(FeatureTag::Mobility, "mobile").unwrap();
+capabilities.add_boolean(FeatureTag::Audio, true)?;
+capabilities.add_boolean(FeatureTag::Video, true)?;
+capabilities.add_token(FeatureTag::Mobility, "mobile")?;
 capabilities.add_token_list(
     FeatureTag::Methods,
     vec![
@@ -614,10 +614,10 @@ capabilities.add_token_list(
         SmolStr::new("CANCEL"),
     ]
 )
-.unwrap();
+?;
 
 // Convert to Contact parameters
-let params = capabilities.to_params().unwrap();
+let params = capabilities.to_params()?;
 
 // Add to Contact header when building REGISTER request
 // Contact: <sip:alice@192.168.1.100:5060>;audio;video;mobility=mobile;methods="INVITE,ACK,BYE,CANCEL"
@@ -631,11 +631,11 @@ When responding to OPTIONS, include capabilities:
 use sip_core::{CapabilitySet, FeatureTag};
 
 let mut capabilities = CapabilitySet::new();
-capabilities.add_boolean(FeatureTag::Audio, true).unwrap();
-capabilities.add_boolean(FeatureTag::Video, true).unwrap();
-capabilities.add_boolean(FeatureTag::IsFocus, false).unwrap(); // Not a conference server
+capabilities.add_boolean(FeatureTag::Audio, true)?;
+capabilities.add_boolean(FeatureTag::Video, true)?;
+capabilities.add_boolean(FeatureTag::IsFocus, false)?; // Not a conference server
 
-let params = capabilities.to_params().unwrap();
+let params = capabilities.to_params()?;
 // Include in 200 OK Contact header
 ```
 
@@ -653,7 +653,7 @@ use smol_str::SmolStr;
 
 // Extract capabilities
 let contact: ContactHeader = /* parsed from message */;
-let capabilities = contact.capabilities().unwrap();
+let capabilities = contact.capabilities()?;
 
 // Check what the UA supports
 if capabilities.has(FeatureTag::Audio) {
@@ -681,8 +681,8 @@ use smol_str::SmolStr;
 
 // UA's advertised capabilities
 let mut available = CapabilitySet::new();
-available.add_boolean(FeatureTag::Audio, true).unwrap();
-available.add_boolean(FeatureTag::Video, true).unwrap();
+available.add_boolean(FeatureTag::Audio, true)?;
+available.add_boolean(FeatureTag::Video, true)?;
 available.add_token_list(
     FeatureTag::Methods,
     vec![
@@ -693,17 +693,17 @@ available.add_token_list(
         SmolStr::new("OPTIONS"),
     ]
 )
-.unwrap();
+?;
 
 // Requirements for a video call
 let mut required = CapabilitySet::new();
-required.add_boolean(FeatureTag::Audio, true).unwrap();
-required.add_boolean(FeatureTag::Video, true).unwrap();
+required.add_boolean(FeatureTag::Audio, true)?;
+required.add_boolean(FeatureTag::Video, true)?;
 required.add_token_list(
     FeatureTag::Methods,
     vec![SmolStr::new("INVITE"), SmolStr::new("BYE")]
 )
-.unwrap();
+?;
 
 if available.matches(&required) {
     println!("UA meets requirements for video call");
@@ -725,19 +725,19 @@ use smol_str::SmolStr;
 let mut capabilities = CapabilitySet::new();
 
 // Media capabilities
-capabilities.add_boolean(FeatureTag::Audio, true).unwrap();
-capabilities.add_boolean(FeatureTag::Video, true).unwrap();
-capabilities.add_boolean(FeatureTag::Text, true).unwrap();
+capabilities.add_boolean(FeatureTag::Audio, true)?;
+capabilities.add_boolean(FeatureTag::Video, true)?;
+capabilities.add_boolean(FeatureTag::Text, true)?;
 
 // Device properties
-capabilities.add_boolean(FeatureTag::Automata, false).unwrap(); // Human-operated
-capabilities.add_token(FeatureTag::Class, "personal").unwrap();
-capabilities.add_token(FeatureTag::Duplex, "full").unwrap();
-capabilities.add_token(FeatureTag::Mobility, "mobile").unwrap();
+capabilities.add_boolean(FeatureTag::Automata, false)?; // Human-operated
+capabilities.add_token(FeatureTag::Class, "personal")?;
+capabilities.add_token(FeatureTag::Duplex, "full")?;
+capabilities.add_token(FeatureTag::Mobility, "mobile")?;
 
 // Descriptive information
-capabilities.add_string(FeatureTag::Description, "iPhone 15 Pro").unwrap();
-capabilities.add_string(FeatureTag::Language, "en").unwrap();
+capabilities.add_string(FeatureTag::Description, "iPhone 15 Pro")?;
+capabilities.add_string(FeatureTag::Language, "en")?;
 
 // Protocol support
 capabilities.add_token_list(
@@ -754,7 +754,7 @@ capabilities.add_token_list(
         SmolStr::new("MESSAGE"),
     ]
 )
-.unwrap();
+?;
 
 capabilities.add_token_list(
     FeatureTag::Events,
@@ -764,7 +764,7 @@ capabilities.add_token_list(
         SmolStr::new("reg"),
     ]
 )
-.unwrap();
+?;
 
 capabilities.add_token_list(
     FeatureTag::Schemes,
@@ -774,16 +774,16 @@ capabilities.add_token_list(
         SmolStr::new("tel"),
     ]
 )
-.unwrap();
+?;
 
 // Conference capabilities
-capabilities.add_boolean(FeatureTag::IsFocus, false).unwrap();
+capabilities.add_boolean(FeatureTag::IsFocus, false)?;
 
 // Actor type
-capabilities.add_token(FeatureTag::Actor, "principal").unwrap();
+capabilities.add_token(FeatureTag::Actor, "principal")?;
 
 // Convert to params for Contact header
-let params = capabilities.to_params().unwrap();
+let params = capabilities.to_params()?;
 ```
 
 ## Integration with Other Components
@@ -795,10 +795,10 @@ When sending REGISTER:
 ```rust
 // Build REGISTER request with capabilities in Contact
 let mut capabilities = CapabilitySet::new();
-capabilities.add_boolean(FeatureTag::Audio, true).unwrap();
-capabilities.add_boolean(FeatureTag::Video, true).unwrap();
+capabilities.add_boolean(FeatureTag::Audio, true)?;
+capabilities.add_boolean(FeatureTag::Video, true)?;
 
-let params = capabilities.to_params().unwrap();
+let params = capabilities.to_params()?;
 
 // Create NameAddr with capabilities
 let name_addr = NameAddr::new(
@@ -806,7 +806,7 @@ let name_addr = NameAddr::new(
     contact_uri,
     params, // Include capability parameters
 )
-.unwrap();
+?;
 
 let contact = ContactHeader::new(name_addr);
 // Add contact to REGISTER request
@@ -823,7 +823,7 @@ When responding to OPTIONS:
 let mut capabilities = CapabilitySet::new();
 // ... add capabilities ...
 
-let params = capabilities.to_params().unwrap();
+let params = capabilities.to_params()?;
 
 // Include in Contact header of 200 OK response
 ```
@@ -836,11 +836,11 @@ RFC 3840 capabilities are used by RFC 3841 (Caller Preferences) for intelligent 
 ```rust
 // Caller preferences require video
 let mut required_caps = CapabilitySet::new();
-required_caps.add_boolean(FeatureTag::Video, true).unwrap();
+required_caps.add_boolean(FeatureTag::Video, true)?;
 
 // Check each registered contact
 for contact in registered_contacts {
-    let ua_caps = contact.capabilities().unwrap();
+    let ua_caps = contact.capabilities()?;
     if ua_caps.matches(&required_caps) {
         // This UA can handle video calls
         // Add to routing list

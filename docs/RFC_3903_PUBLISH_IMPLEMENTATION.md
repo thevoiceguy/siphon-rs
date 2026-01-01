@@ -143,7 +143,7 @@ use sip_core::{Request, Method, EventHeader, PresenceDocument, SipETagHeader};
 // Create PUBLISH request
 let mut publish = Request::new(
     Method::Publish,
-    "sip:alice@example.com".parse().unwrap()
+    "sip:alice@example.com".parse()?
 );
 
 // Set headers
@@ -166,8 +166,8 @@ let response = send_request(publish).await;
 
 // Extract SIP-ETag from response
 if response.status_code() == 200 {
-    let etag_value = response.headers().get("SIP-ETag").unwrap();
-    let etag = SipETagHeader::parse(etag_value).unwrap();
+    let etag_value = response.headers().get("SIP-ETag")?;
+    let etag = SipETagHeader::parse(etag_value)?;
 
     // Store entity-tag for future operations
     store_entity_tag("alice@example.com", etag);
@@ -208,7 +208,7 @@ let etag = retrieve_entity_tag("alice@example.com");
 // Create refresh PUBLISH
 let mut publish = Request::new(
     Method::Publish,
-    "sip:alice@example.com".parse().unwrap()
+    "sip:alice@example.com".parse()?
 );
 
 // Add SIP-If-Match with previous entity-tag
@@ -263,7 +263,7 @@ let etag = retrieve_entity_tag("alice@example.com");
 // Create modify PUBLISH
 let mut publish = Request::new(
     Method::Publish,
-    "sip:alice@example.com".parse().unwrap()
+    "sip:alice@example.com".parse()?
 );
 
 // Add SIP-If-Match
@@ -287,8 +287,8 @@ let response = send_request(publish).await;
 
 // Update stored entity-tag with new value
 if response.status_code() == 200 {
-    let new_etag_value = response.headers().get("SIP-ETag").unwrap();
-    let new_etag = SipETagHeader::parse(new_etag_value).unwrap();
+    let new_etag_value = response.headers().get("SIP-ETag")?;
+    let new_etag = SipETagHeader::parse(new_etag_value)?;
     store_entity_tag("alice@example.com", new_etag);
 }
 ```
@@ -322,7 +322,7 @@ let etag = retrieve_entity_tag("alice@example.com");
 // Create remove PUBLISH
 let mut publish = Request::new(
     Method::Publish,
-    "sip:alice@example.com".parse().unwrap()
+    "sip:alice@example.com".parse()?
 );
 
 // Add SIP-If-Match and set Expires to 0
@@ -640,7 +640,7 @@ Protect sensitive information:
 
 ```rust
 // Use TLS for transport
-let sips_uri = "sips:alice@example.com".parse().unwrap();
+let sips_uri = "sips:alice@example.com".parse()?;
 
 // Avoid logging sensitive headers
 fn log_request(request: &Request) {
@@ -724,7 +724,7 @@ impl PresenceAgent {
         // Create PUBLISH request
         let mut publish = Request::new(
             Method::Publish,
-            "sip:alice@example.com".parse().unwrap()
+            "sip:alice@example.com".parse()?
         );
 
         publish.headers_mut().set("Event", "presence");
@@ -736,14 +736,14 @@ impl PresenceAgent {
         let response = send_request(publish).await;
 
         if response.status_code() == 200 {
-            let etag_value = response.headers().get("SIP-ETag").unwrap();
+            let etag_value = response.headers().get("SIP-ETag")?;
             self.entity_tag = SipETagHeader::parse(etag_value);
             println!("Initial publish successful, ETag: {}", etag_value);
         }
     }
 
     async fn modify_publish(&mut self, status: BasicStatus) {
-        let etag = self.entity_tag.as_ref().unwrap();
+        let etag = self.entity_tag.as_ref()?;
 
         // Create updated presence
         let mut presence = PresenceDocument::new("sip:alice@example.com");
@@ -755,7 +755,7 @@ impl PresenceAgent {
         // Create PUBLISH request
         let mut publish = Request::new(
             Method::Publish,
-            "sip:alice@example.com".parse().unwrap()
+            "sip:alice@example.com".parse()?
         );
 
         let if_match = SipIfMatchHeader::new(&etag.value);
@@ -770,7 +770,7 @@ impl PresenceAgent {
 
         match response.status_code() {
             200 => {
-                let etag_value = response.headers().get("SIP-ETag").unwrap();
+                let etag_value = response.headers().get("SIP-ETag")?;
                 self.entity_tag = SipETagHeader::parse(etag_value);
                 println!("Modify publish successful, new ETag: {}", etag_value);
             }
@@ -789,7 +789,7 @@ impl PresenceAgent {
         if let Some(etag) = &self.entity_tag {
             let mut publish = Request::new(
                 Method::Publish,
-                "sip:alice@example.com".parse().unwrap()
+                "sip:alice@example.com".parse()?
             );
 
             let if_match = SipIfMatchHeader::new(&etag.value);
@@ -812,7 +812,7 @@ impl PresenceAgent {
         if let Some(etag) = &self.entity_tag {
             let mut publish = Request::new(
                 Method::Publish,
-                "sip:alice@example.com".parse().unwrap()
+                "sip:alice@example.com".parse()?
             );
 
             let if_match = SipIfMatchHeader::new(&etag.value);

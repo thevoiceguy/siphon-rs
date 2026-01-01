@@ -262,7 +262,7 @@ Content-type: text/plain
 
 Hello, Bob!"#;
 
-let msg = parse_cpim(cpim_str).unwrap();
+let msg = parse_cpim(cpim_str)?;
 assert_eq!(msg.get_header("From"), Some("Alice <im:alice@example.com>"));
 assert_eq!(msg.get_header("To"), Some("Bob <im:bob@example.com>"));
 assert_eq!(msg.body_as_string(), Some("Hello, Bob!".to_string()));
@@ -277,7 +277,7 @@ let msg = CpimMessage::new("text/plain", b"Hello".to_vec())
 let cpim_str = msg.to_string();
 // Subject will be escaped: "Subject: Line 1\\nLine 2\\tTabbed"
 
-let parsed = parse_cpim(&cpim_str).unwrap();
+let parsed = parse_cpim(&cpim_str)?;
 assert_eq!(parsed.get_header("Subject"), Some("Line 1\nLine 2\tTabbed"));
 // Unescaped correctly
 ```
@@ -298,7 +298,7 @@ let cpim = CpimMessage::new("text/plain", b"Hello!".to_vec())
 // Create SIP MESSAGE request
 let mut request = Request::new(
     Method::MESSAGE,
-    "sip:bob@example.com".parse().unwrap(),
+    "sip:bob@example.com".parse()?,
 );
 
 // Set Content-Type header to Message/CPIM

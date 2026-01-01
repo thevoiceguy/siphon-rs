@@ -198,10 +198,10 @@ fn default_transport(uri: &SipUri) -> Transport {
 use sip_transport::TransportKind;
 
 // Parse transport from Via header
-let transport = TransportKind::parse("SCTP").unwrap();
+let transport = TransportKind::parse("SCTP")?;
 assert_eq!(transport, TransportKind::Sctp);
 
-let tls_sctp = TransportKind::parse("TLS-SCTP").unwrap();
+let tls_sctp = TransportKind::parse("TLS-SCTP")?;
 assert_eq!(tls_sctp, TransportKind::TlsSctp);
 
 // Generate Via header value

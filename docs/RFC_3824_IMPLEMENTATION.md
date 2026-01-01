@@ -62,11 +62,11 @@ Converts an E.164 telephone number to an ENUM domain name for DNS lookup.
 use sip_dns::enum_to_domain;
 
 // Standard E.164 conversion
-let domain = enum_to_domain("+12025332600").unwrap();
+let domain = enum_to_domain("+12025332600")?;
 assert_eq!(domain, "0.0.6.2.3.3.5.2.0.2.1.e164.arpa");
 
 // UK number
-let domain = enum_to_domain("+442079460123").unwrap();
+let domain = enum_to_domain("+442079460123")?;
 assert_eq!(domain, "3.2.1.0.6.4.9.7.0.2.4.4.e164.arpa");
 
 // Invalid inputs return None
@@ -99,12 +99,12 @@ use sip_core::TelUri;
 use sip_dns::tel_uri_to_enum_domain;
 
 // Global number - works
-let tel = TelUri::parse("tel:+1-555-123-4567").unwrap();
-let domain = tel_uri_to_enum_domain(&tel).unwrap();
+let tel = TelUri::parse("tel:+1-555-123-4567")?;
+let domain = tel_uri_to_enum_domain(&tel)?;
 assert_eq!(domain, "7.6.5.4.3.2.1.5.5.5.1.e164.arpa");
 
 // Local number - returns None
-let tel = TelUri::parse("tel:5551234;phone-context=example.com").unwrap();
+let tel = TelUri::parse("tel:5551234;phone-context=example.com")?;
 assert_eq!(tel_uri_to_enum_domain(&tel), None);
 ```
 
@@ -202,7 +202,7 @@ let records = vec![
     EnumNaptrRecord::new(100, 10, "u", "E2U+sip", "!^.*$!sip:best@example.com!", ""),
 ];
 
-let best = select_best_sip_record(&records).unwrap();
+let best = select_best_sip_record(&records)?;
 assert_eq!(best.preference, 10);
 assert_eq!(best.extract_uri(), Some("sip:best@example.com".to_string()));
 ```
@@ -341,7 +341,7 @@ use sip_dns::{enum_to_domain, EnumNaptrRecord, select_best_sip_record};
 
 // 1. Convert E.164 number to ENUM domain
 let e164 = "+12025551234";
-let domain = enum_to_domain(e164).expect("Invalid E.164 number");
+let domain = enum_to_domain(e164)?;
 // domain = "4.3.2.1.5.5.5.2.0.2.1.e164.arpa"
 
 // 2. Query DNS for NAPTR records (actual DNS query not shown)
@@ -355,10 +355,10 @@ let records = vec![
 ];
 
 // 4. Select best SIP record
-let best_record = select_best_sip_record(&records).expect("No SIP records found");
+let best_record = select_best_sip_record(&records)?;
 
 // 5. Extract URI
-let sip_uri = best_record.extract_uri().expect("Invalid regexp");
+let sip_uri = best_record.extract_uri()?;
 // sip_uri = "sip:alice@example.com"
 ```
 
@@ -369,7 +369,7 @@ use sip_core::TelUri;
 use sip_dns::tel_uri_to_enum_domain;
 
 // Parse tel URI from SIP message
-let tel = TelUri::parse("tel:+1-555-123-4567").expect("Invalid tel URI");
+let tel = TelUri::parse("tel:+1-555-123-4567")?;
 
 // Convert to ENUM domain
 if let Some(domain) = tel_uri_to_enum_domain(&tel) {
@@ -425,9 +425,9 @@ sort_enum_records(&mut records);
 // Process by service type
 for record in records {
     if record.is_sip_service() {
-        println!("SIP: {}", record.extract_uri().unwrap());
+        println!("SIP: {}", record.extract_uri()?);
     } else if record.service == "E2U+mailto" {
-        println!("Email: {}", record.extract_uri().unwrap());
+        println!("Email: {}", record.extract_uri()?);
     } else {
         println!("Other service: {}", record.service);
     }
@@ -451,11 +451,11 @@ use sip_core::TelUri;
 use sip_dns::tel_uri_to_enum_domain;
 
 // TelUri normalizes the number
-let tel = TelUri::parse("tel:+1-555-123-4567").unwrap();
+let tel = TelUri::parse("tel:+1-555-123-4567")?;
 // tel.number = "+15551234567" (visual separators removed)
 
 // ENUM conversion uses normalized number
-let domain = tel_uri_to_enum_domain(&tel).unwrap();
+let domain = tel_uri_to_enum_domain(&tel)?;
 assert_eq!(domain, "7.6.5.4.3.2.1.5.5.5.1.e164.arpa");
 ```
 

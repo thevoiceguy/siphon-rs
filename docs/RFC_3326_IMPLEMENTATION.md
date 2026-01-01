@@ -2,7 +2,7 @@
 
 **Date:** 2025-01-20
 **Status:** ✅ **COMPLETE** - Full RFC 3326 compliance achieved
-**Test Results:** ✅ All 300+ tests passing (15 Reason core tests, 4 UAC tests, 26 total UAC tests)
+**Test Results:** ✅ All 300+ tests passing (25 Reason-related core tests, 4 UAC tests, 26 total UAC tests)
 
 ---
 
@@ -27,16 +27,17 @@ RFC 3326 defines:
 
 | Component | Status | Location | Description |
 |-----------|--------|----------|-------------|
-| **ReasonHeader Type** | ✅ Complete | `sip-core/src/reason.rs:24-331` | Full Reason header with params |
-| **ReasonProtocol Enum** | ✅ Complete | `sip-core/src/reason.rs:30-54` | SIP, Q.850, SDP protocols |
-| **Q850Cause Enum** | ✅ Complete | `sip-core/src/reason.rs:61-208` | 30 common Q.850 cause codes |
-| **Builder Methods** | ✅ Complete | `sip-core/src/reason.rs:210-295` | q850(), sip(), new() |
-| **Display Implementation** | ✅ Complete | `sip-core/src/reason.rs:333-351` | Format as "Q.850;cause=16;text=\"...\"" |
-| **SIP Response Mapping** | ✅ Complete | `sip-core/src/reason.rs:354-415` | 50+ SIP response code texts |
-| **Parse Function** | ✅ Complete | `sip-core/src/reason.rs:417-443` | Parse from header value |
-| **UAC APIs** | ✅ Complete | `sip-uac/src/lib.rs:526-587` | add_reason_header(), create_bye_with_reason() |
-| **Core Tests** | ✅ Complete | `sip-core/src/reason.rs:445-585` | 15 comprehensive tests |
-| **UAC Tests** | ✅ Complete | `sip-uac/src/lib.rs:1692-1845` | 4 integration tests |
+| **ReasonError Type** | ✅ Complete | `sip-core/src/reason.rs:16-58` | Validation and parsing errors |
+| **ReasonHeader Type** | ✅ Complete | `sip-core/src/reason.rs:60-374` | Full Reason header with params |
+| **ReasonProtocol Enum** | ✅ Complete | `sip-core/src/reason.rs:88-126` | SIP, Q.850, SDP protocols |
+| **Q850Cause Enum** | ✅ Complete | `sip-core/src/reason.rs:128-201` | 30 common Q.850 cause codes |
+| **Builder Methods** | ✅ Complete | `sip-core/src/reason.rs:246-321` | q850(), sip(), new() |
+| **Display Implementation** | ✅ Complete | `sip-core/src/reason.rs:376-392` | Format as "Q.850;cause=16;text=\"...\"" |
+| **SIP Response Mapping** | ✅ Complete | `sip-core/src/reason.rs:456-511` | 50+ SIP response code texts |
+| **Parse Function** | ✅ Complete | `sip-core/src/reason.rs:514-587` | Parse from header value |
+| **UAC APIs** | ✅ Complete | `sip-uac/src/lib.rs:1534-1599` | add_reason_header(), create_bye_with_reason() |
+| **Core Tests** | ✅ Complete | `sip-core/src/reason.rs:621-805` | 22 comprehensive tests |
+| **UAC Tests** | ✅ Complete | `sip-uac/src/lib.rs:3756-3890` | 4 integration tests |
 
 ---
 
@@ -46,12 +47,29 @@ RFC 3326 defines:
 
 **Location:** `crates/sip-core/src/reason.rs`
 
+#### ReasonError
+
+```rust
+pub enum ReasonError {
+    ProtocolTooLong { max: usize, actual: usize },
+    ParamNameTooLong { max: usize, actual: usize },
+    ParamValueTooLong { max: usize, actual: usize },
+    TooManyParams { max: usize, actual: usize },
+    InvalidProtocol(String),
+    InvalidParamName(String),
+    InvalidParamValue(String),
+    EmptyProtocol,
+    DuplicateParam(String),
+    InputTooLarge { max: usize, actual: usize },
+    ParseError(String),
+}
+```
+
 #### ReasonHeader
 
 ```rust
 pub struct ReasonHeader {
-    pub protocol: SmolStr,
-    pub params: BTreeMap<SmolStr, Option<SmolStr>>,
+    // fields are private
 }
 ```
 
@@ -59,24 +77,36 @@ pub struct ReasonHeader {
 
 ```rust
 // Q.850 ISDN cause code
-ReasonHeader::q850(Q850Cause::UserBusy)
+ReasonHeader::q850(Q850Cause::UserBusy)?
 // → "Q.850;cause=17;text=\"User Busy\""
 
 // SIP response code
-ReasonHeader::sip(480, None)
+ReasonHeader::sip(480, None)?
 // → "SIP;cause=480;text=\"Temporarily Unavailable\""
 
 // Custom protocol/params
-ReasonHeader::new("SDP", params)
+ReasonHeader::new("SDP", params)?
 ```
 
 **Query Methods:**
 - `cause_code()` - Extract numeric cause code
+- `protocol()` - Returns protocol string
 - `text()` - Extract text description
 - `is_q850()` - Check if Q.850 protocol
 - `is_sip()` - Check if SIP protocol
 - `as_q850_cause()` - Convert to Q850Cause enum if applicable
+- `params()` / `get_param()` - Access parameter values
 - `to_string()` - Format for header value
+
+#### Helper Functions
+
+```rust
+pub fn parse_reason_header(headers: &Headers) -> Option<ReasonHeader>
+pub fn parse_reason_from_string(value: &str) -> Result<ReasonHeader, ReasonError>
+```
+
+`parse_reason_header()` returns `None` when the header is missing or invalid. Use
+`parse_reason_from_string()` for strict parsing with error details.
 
 #### ReasonProtocol Enum
 
@@ -115,7 +145,7 @@ pub enum ReasonProtocol {
 
 ### UAC Convenience APIs
 
-**Location:** `crates/sip-uac/src/lib.rs:526-587`
+**Location:** `crates/sip-uac/src/lib.rs:1534-1599`
 
 #### add_reason_header()
 
@@ -138,7 +168,7 @@ let uac = UserAgentClient::new(local_uri, contact_uri);
 let mut bye = uac.create_bye(&dialog);
 
 // Add reason for call termination
-let reason = ReasonHeader::q850(Q850Cause::NormalCallClearing);
+let reason = ReasonHeader::q850(Q850Cause::NormalCallClearing)?;
 UserAgentClient::add_reason_header(&mut bye, reason);
 
 transaction_manager.send_request(bye)?;
@@ -165,15 +195,15 @@ use sip_uac::UserAgentClient;
 let uac = UserAgentClient::new(local_uri, contact_uri);
 
 // Normal call clearing
-let reason = ReasonHeader::q850(Q850Cause::NormalCallClearing);
+let reason = ReasonHeader::q850(Q850Cause::NormalCallClearing)?;
 let bye = uac.create_bye_with_reason(&dialog, reason);
 
 // User busy
-let reason = ReasonHeader::q850(Q850Cause::UserBusy);
+let reason = ReasonHeader::q850(Q850Cause::UserBusy)?;
 let bye = uac.create_bye_with_reason(&dialog, reason);
 
 // SIP response code
-let reason = ReasonHeader::sip(480, None);
+let reason = ReasonHeader::sip(480, None)?;
 let bye = uac.create_bye_with_reason(&dialog, reason);
 ```
 
@@ -192,7 +222,7 @@ use sip_uac::UserAgentClient;
 let uac = UserAgentClient::new(local_uri, contact_uri);
 
 // Create BYE with normal clearing reason
-let reason = ReasonHeader::q850(Q850Cause::NormalCallClearing);
+let reason = ReasonHeader::q850(Q850Cause::NormalCallClearing)?;
 let bye = uac.create_bye_with_reason(&dialog, reason);
 
 transaction_manager.send_request(bye)?;
@@ -214,7 +244,7 @@ use sip_uac::UserAgentClient;
 let uac = UserAgentClient::new(local_uri, contact_uri);
 
 // Terminate because user is busy
-let reason = ReasonHeader::q850(Q850Cause::UserBusy);
+let reason = ReasonHeader::q850(Q850Cause::UserBusy)?;
 let bye = uac.create_bye_with_reason(&dialog, reason);
 
 transaction_manager.send_request(bye)?;
@@ -236,7 +266,7 @@ use sip_uac::UserAgentClient;
 let uac = UserAgentClient::new(local_uri, contact_uri);
 
 // Terminate after no answer
-let reason = ReasonHeader::q850(Q850Cause::NoAnswer);
+let reason = ReasonHeader::q850(Q850Cause::NoAnswer)?;
 let bye = uac.create_bye_with_reason(&dialog, reason);
 
 transaction_manager.send_request(bye)?;
@@ -258,7 +288,7 @@ use sip_uac::UserAgentClient;
 let uac = UserAgentClient::new(local_uri, contact_uri);
 
 // Terminate because of 480 Temporarily Unavailable
-let reason = ReasonHeader::sip(480, None);
+let reason = ReasonHeader::sip(480, None)?;
 let bye = uac.create_bye_with_reason(&dialog, reason);
 
 transaction_manager.send_request(bye)?;
@@ -280,7 +310,7 @@ use sip_uac::UserAgentClient;
 let uac = UserAgentClient::new(local_uri, contact_uri);
 
 // Custom busy message
-let reason = ReasonHeader::sip(600, Some("All agents busy, please try later"));
+let reason = ReasonHeader::sip(600, Some("All agents busy, please try later"))?;
 let bye = uac.create_bye_with_reason(&dialog, reason);
 
 transaction_manager.send_request(bye)?;
@@ -302,7 +332,7 @@ use sip_uac::UserAgentClient;
 let uac = UserAgentClient::new(local_uri, contact_uri);
 
 // Call forwarded
-let reason = ReasonHeader::q850(Q850Cause::CallRejected);
+let reason = ReasonHeader::q850(Q850Cause::CallRejected)?;
 let bye = uac.create_bye_with_reason(&dialog, reason);
 
 transaction_manager.send_request(bye)?;
@@ -319,11 +349,11 @@ use sip_uac::UserAgentClient;
 let uac = UserAgentClient::new(local_uri, contact_uri);
 
 // Temporary failure (network issue)
-let reason = ReasonHeader::q850(Q850Cause::TemporaryFailure);
+let reason = ReasonHeader::q850(Q850Cause::TemporaryFailure)?;
 let bye = uac.create_bye_with_reason(&dialog, reason);
 
 // No circuit available (resource exhaustion)
-let reason = ReasonHeader::q850(Q850Cause::NoCircuitAvailable);
+let reason = ReasonHeader::q850(Q850Cause::NoCircuitAvailable)?;
 let bye = uac.create_bye_with_reason(&dialog, reason);
 
 transaction_manager.send_request(bye)?;
@@ -332,13 +362,12 @@ transaction_manager.send_request(bye)?;
 ### 8. UAS Receiving and Parsing Reason
 
 ```rust
-use sip_core::parse_reason_header;
-use sip_parse::header;
+use sip_core::{parse_reason_header, Q850Cause};
 
 // UAS receives BYE with Reason
-if let Some(reason) = parse_reason_header(&bye_request.headers) {
+if let Some(reason) = parse_reason_header(bye_request.headers()) {
     println!("Call terminated:");
-    println!("  Protocol: {}", reason.protocol);
+    println!("  Protocol: {}", reason.protocol());
 
     if let Some(cause) = reason.cause_code() {
         println!("  Cause code: {}", cause);
@@ -473,11 +502,12 @@ Common SIP response codes with default text:
 
 ### Core Reason Tests
 
-**Location:** `crates/sip-core/src/reason.rs:445-585`
+**Location:** `crates/sip-core/src/reason.rs:621-805`, `crates/sip-core/src/msg.rs:652-668`
 
 | Test | Purpose |
 |------|---------|
 | `reason_protocol_as_str` | Protocol enum string representation |
+| `reason_protocol_parse` | Protocol parsing with validation |
 | `q850_cause_code_and_text` | Q.850 code/text extraction |
 | `q850_from_code` | Create Q850Cause from numeric code |
 | `reason_header_q850` | Build Q.850 Reason header |
@@ -485,19 +515,28 @@ Common SIP response codes with default text:
 | `reason_header_sip_with_custom_text` | Build SIP Reason with custom text |
 | `reason_header_display_q850` | Format Q.850 header |
 | `reason_header_display_sip` | Format SIP header |
-| `reason_header_as_q850_cause` | Extract Q850Cause enum |
 | `parse_reason_q850` | Parse Q.850 header string |
 | `parse_reason_sip` | Parse SIP header string |
-| `parse_reason_without_quotes` | Parse unquoted text |
-| `parse_reason_minimal` | Parse with missing text |
+| `parse_reason_text_with_escaped_quotes` | Parse escaped quotes in text |
 | `sip_response_text_common_codes` | SIP response text mapping |
-| `reason_header_new_custom` | Create custom protocol Reason |
+| `reject_empty_protocol` | Reject empty protocol |
+| `reject_crlf_in_protocol` | Reject CRLF in protocol |
+| `reject_crlf_in_param_value` | Reject CRLF in param value |
+| `reject_oversized_protocol` | Enforce protocol length |
+| `reject_oversized_param_value` | Enforce param value length |
+| `reject_too_many_params` | Enforce parameter count |
+| `reject_oversized_parse_input` | Enforce parse input size |
+| `reject_duplicate_params_in_parse` | Reject duplicate params |
+| `fields_are_private` | Accessors-only API surface |
+| `reject_crlf_in_reason` | Reject CRLF in status reason phrase |
+| `reject_control_chars_in_reason` | Reject control characters in reason |
+| `reject_oversized_reason` | Enforce reason length limits |
 
-**Result:** ✅ All 15 tests passing
+**Result:** ✅ All 25 tests passing
 
 ### UAC Reason Tests
 
-**Location:** `crates/sip-uac/src/lib.rs:1692-1845`
+**Location:** `crates/sip-uac/src/lib.rs:3756-3890`
 
 | Test | Purpose |
 |------|---------|
@@ -512,8 +551,8 @@ Common SIP response codes with default text:
 
 ```bash
 $ cargo test -p sip-core reason --lib
-running 15 tests
-test result: ok. 15 passed; 0 failed
+running 25 tests
+test result: ok. 25 passed; 0 failed
 
 $ cargo test -p sip-uac --lib
 running 26 tests
@@ -528,9 +567,9 @@ test result: ok. 26 passed; 0 failed
 
 | File | Lines | Changes |
 |------|-------|---------|
-| `sip-core/src/reason.rs` | 10 → 586 | Complete rewrite with protocols, cause codes, builders, Display |
-| `sip-core/src/lib.rs` | 55 | Updated exports: Q850Cause, ReasonProtocol, parse_reason_header |
-| `sip-uac/src/lib.rs` | 526-587, 1692-1845 | Added Reason APIs and 4 tests |
+| `sip-core/src/reason.rs` | 1-805 | Complete rewrite with protocols, cause codes, builders, Display |
+| `sip-core/src/lib.rs` | 109 | Updated exports: Q850Cause, ReasonProtocol, parse_reason_header |
+| `sip-uac/src/lib.rs` | 1534-1599, 3756-3890 | Added Reason APIs and 4 tests |
 
 ### No New Dependencies
 
@@ -572,19 +611,19 @@ test result: ok. 26 passed; 0 failed
 
 **Pattern 1: Normal Call End**
 ```rust
-let reason = ReasonHeader::q850(Q850Cause::NormalCallClearing);
+let reason = ReasonHeader::q850(Q850Cause::NormalCallClearing)?;
 let bye = uac.create_bye_with_reason(&dialog, reason);
 ```
 
 **Pattern 2: User Rejection**
 ```rust
-let reason = ReasonHeader::q850(Q850Cause::CallRejected);
+let reason = ReasonHeader::q850(Q850Cause::CallRejected)?;
 let bye = uac.create_bye_with_reason(&dialog, reason);
 ```
 
 **Pattern 3: Timeout**
 ```rust
-let reason = ReasonHeader::sip(408, Some("Call Setup Timeout"));
+let reason = ReasonHeader::sip(408, Some("Call Setup Timeout"))?;
 let bye = uac.create_bye_with_reason(&dialog, reason);
 ```
 
@@ -594,7 +633,7 @@ let bye = uac.create_bye_with_reason(&dialog, reason);
 use sip_core::{parse_reason_header, Q850Cause};
 
 // Parse and validate Reason header
-if let Some(reason) = parse_reason_header(&request.headers) {
+if let Some(reason) = parse_reason_header(request.headers()) {
     // Validate protocol
     if reason.is_q850() {
         // Extract and use Q.850 cause
@@ -631,7 +670,7 @@ if let Some(reason) = parse_reason_header(&request.headers) {
 
 ### Current Limitations
 
-1. **No Multiple Reason Headers**: API designed for single Reason header (RFC allows multiple)
+1. **No Multiple Reason Parsing Helper**: No API to parse all Reason headers (RFC allows multiple)
 2. **No CANCEL Reason**: No create_cancel_with_reason() (CANCEL method implementation pending)
 3. **No Response Reason**: Reason can be in responses too (not just requests)
 4. **Limited Q.850 Codes**: Only 30 most common codes (full spec has 127)
@@ -683,7 +722,7 @@ use sip_uas::UserAgentServer;
 let uac = UserAgentClient::new(local_uri, contact_uri);
 
 // User ends call normally
-let reason = ReasonHeader::q850(Q850Cause::NormalCallClearing);
+let reason = ReasonHeader::q850(Q850Cause::NormalCallClearing)?;
 let bye = uac.create_bye_with_reason(&dialog, reason);
 
 // Send BYE
@@ -692,11 +731,11 @@ transaction_manager.send_request(bye)?;
 // UAS: Receive and process BYE with Reason
 let uas = UserAgentServer::new(local_uri, contact_uri);
 
-if let Some(reason) = parse_reason_header(&bye_request.headers) {
+if let Some(reason) = parse_reason_header(bye_request.headers()) {
     // Log the termination reason
     log::info!(
         "Call terminated: protocol={}, cause={:?}, text={:?}",
-        reason.protocol,
+        reason.protocol(),
         reason.cause_code(),
         reason.text()
     );
@@ -723,7 +762,7 @@ use sip_uac::UserAgentClient;
 let uac = UserAgentClient::new(local_uri, contact_uri);
 
 // User forwards call
-let reason = ReasonHeader::q850(Q850Cause::CallRejected);
+let reason = ReasonHeader::q850(Q850Cause::CallRejected)?;
 let bye_original = uac.create_bye_with_reason(&dialog_original, reason);
 transaction_manager.send_request(bye_original)?;
 
@@ -747,7 +786,7 @@ RFC 3326 Reason header is fully implemented with:
 - ✅ SIP response code mapping (50+ codes)
 - ✅ UAC convenience APIs (add_reason_header, create_bye_with_reason)
 - ✅ Parsing function (parse_reason_header)
-- ✅ 19 comprehensive tests (15 core + 4 UAC)
+- ✅ 29 comprehensive tests (25 core + 4 UAC)
 - ✅ Complete documentation with 8 use cases
 - ✅ All 300+ workspace tests passing
 

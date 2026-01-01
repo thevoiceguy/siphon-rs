@@ -193,13 +193,13 @@ let sdp_text = "v=0\r\n\
                 a=sendrecv\r\n";
 
 // Parse SDP
-let session = SdpSession::parse(sdp_text).unwrap();
+let session = SdpSession::parse(sdp_text)?;
 
 // Access session-level fields
 assert_eq!(session.version, 0);
 assert_eq!(session.origin.username, "alice");
 assert_eq!(session.session_name, "Voice Call");
-assert_eq!(session.connection.as_ref().unwrap().connection_address, "192.0.2.1");
+assert_eq!(session.connection.as_ref()?.connection_address, "192.0.2.1");
 
 // Access media descriptions
 assert_eq!(session.media.len(), 1);
@@ -209,7 +209,7 @@ assert_eq!(session.media[0].proto, "RTP/AVP");
 assert_eq!(session.media[0].fmt, vec!["0", "8"]);
 
 // Find direction
-let dir = session.find_direction(Some(0)).unwrap();
+let dir = session.find_direction(Some(0))?;
 assert_eq!(dir, Direction::SendRecv);
 
 // Find rtpmap attributes
@@ -350,7 +350,7 @@ let sdp_body = session.to_string();
 
 // Create INVITE with SDP
 let mut invite = Request::new(
-    RequestLine::new(Method::Invite, SipUri::parse("sip:callee@example.com").unwrap()),
+    RequestLine::new(Method::Invite, SipUri::parse("sip:callee@example.com")?),
     Headers::new(),
     bytes::Bytes::from(sdp_body),
 );
@@ -389,7 +389,7 @@ let sdp = "v=0\r\n\
            m=video 51372 RTP/AVP 99\r\n\
            a=rtpmap:99 h263-1998/90000\r\n";
 
-let session = SdpSession::parse(sdp).unwrap();
+let session = SdpSession::parse(sdp)?;
 
 // Session-level fields
 println!("Version: {}", session.version);
@@ -500,8 +500,8 @@ let hold_sdp = "v=0\r\n\
                 m=audio 49170 RTP/AVP 0\r\n\
                 a=sendonly\r\n";
 
-let session = SdpSession::parse(hold_sdp).unwrap();
-let dir = session.find_direction(Some(0)).unwrap();
+let session = SdpSession::parse(hold_sdp)?;
+let dir = session.find_direction(Some(0))?;
 
 match dir {
     Direction::SendOnly => println!("Call on hold (music on hold)"),
@@ -886,7 +886,7 @@ media.attributes.push(Attribute {
 
 ```rust
 // Parse rtpmap
-let rtpmap = RtpMap::parse("98 L16/16000/2").unwrap();
+let rtpmap = RtpMap::parse("98 L16/16000/2")?;
 assert_eq!(rtpmap.payload_type, 98);
 assert_eq!(rtpmap.encoding_name, "L16");
 assert_eq!(rtpmap.clock_rate, 16000);
@@ -918,7 +918,7 @@ for rtpmap in rtpmaps {
 
 ```rust
 // Parse fmtp
-let fmtp = Fmtp::parse("98 profile-level-id=42e01f").unwrap();
+let fmtp = Fmtp::parse("98 profile-level-id=42e01f")?;
 assert_eq!(fmtp.format, "98");
 assert_eq!(fmtp.params, "profile-level-id=42e01f");
 
@@ -1007,7 +1007,7 @@ use sip_core::sdp::SdpSession;
 // INVITE with SDP offer
 let invite = /* ... */;
 if let Some(body) = invite.body {
-    if let Ok(session) = SdpSession::parse(std::str::from_utf8(&body).unwrap()) {
+    if let Ok(session) = SdpSession::parse(std::str::from_utf8(&body)?) {
         println!("SDP offer received");
         println!("Media count: {}", session.media.len());
     }
@@ -1015,7 +1015,7 @@ if let Some(body) = invite.body {
 
 // 200 OK with SDP answer
 let response = /* ... */;
-if let Ok(session) = SdpSession::parse(std::str::from_utf8(&response.body).unwrap()) {
+if let Ok(session) = SdpSession::parse(std::str::from_utf8(&response.body)?) {
     println!("SDP answer received");
     // Negotiate codecs, ports, etc.
 }

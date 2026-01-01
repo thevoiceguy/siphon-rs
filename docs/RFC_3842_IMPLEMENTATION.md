@@ -417,7 +417,7 @@ let body = "Messages-Waiting: yes\n\
             Message-Account: sip:alice@vmail.example.com\n\
             Voice-Message: 2/8 (0/2)\n";
 
-let summary = parse_message_summary(body).unwrap();
+let summary = parse_message_summary(body)?;
 assert!(summary.messages_waiting);
 assert_eq!(summary.total_new(), 2);
 ```
@@ -549,7 +549,7 @@ let body = "Messages-Waiting: yes\n\
             Voice-Message: 2/8 (0/2)\n\
             Fax-Message: 1/3\n";
 
-let summary = parse_message_summary(body).unwrap();
+let summary = parse_message_summary(body)?;
 
 // Check status
 if summary.messages_waiting {

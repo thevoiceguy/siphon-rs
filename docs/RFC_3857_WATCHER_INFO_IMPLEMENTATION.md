@@ -248,7 +248,7 @@ let xml = r#"<?xml version="1.0"?>
   </watcher-list>
 </watcherinfo>"#;
 
-let doc = parse_watcherinfo(xml).unwrap();
+let doc = parse_watcherinfo(xml)?;
 assert_eq!(doc.version, 0);
 assert_eq!(doc.state, "full");
 assert_eq!(doc.watcher_lists.len(), 1);

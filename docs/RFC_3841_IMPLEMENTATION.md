@@ -96,9 +96,9 @@ use sip_core::{AcceptContact, FeatureTag, FeatureValue};
 
 let accept = AcceptContact::new()
     .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true))
-    .unwrap()
+    ?
     .with_feature(FeatureTag::Video, FeatureValue::Boolean(true))
-    .unwrap();
+    ?;
 ```
 
 ---
@@ -113,7 +113,7 @@ use sip_core::{AcceptContact, FeatureTag, FeatureValue};
 
 let accept = AcceptContact::new()
     .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true))
-    .unwrap()
+    ?
     .with_require();
 // Non-matching contacts will be discarded
 ```
@@ -130,7 +130,7 @@ use sip_core::{AcceptContact, FeatureTag, FeatureValue};
 
 let accept = AcceptContact::new()
     .with_feature(FeatureTag::Video, FeatureValue::Boolean(true))
-    .unwrap()
+    ?
     .with_explicit();
 // Only contacts that explicitly advertised video support will match
 ```
@@ -145,7 +145,7 @@ Sets the q-value for this preference (validated and clamped to 0.0-1.0).
 ```rust
 use sip_core::AcceptContact;
 
-let accept = AcceptContact::new().with_q(0.8).unwrap();
+let accept = AcceptContact::new().with_q(0.8)?;
 ```
 
 ---
@@ -183,10 +183,10 @@ use sip_core::{AcceptContact, CapabilitySet, FeatureTag, FeatureValue};
 
 let accept = AcceptContact::new()
     .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true))
-    .unwrap();
+    ?;
 
 let mut caps = CapabilitySet::new();
-caps.add_boolean(FeatureTag::Audio, true).unwrap();
+caps.add_boolean(FeatureTag::Audio, true)?;
 
 let score = accept.matches(&caps, true);
 assert_eq!(score, 1.0); // Perfect match
@@ -228,9 +228,9 @@ use sip_core::{RejectContact, FeatureTag, FeatureValue};
 
 let reject = RejectContact::new()
     .with_feature(FeatureTag::Automata, FeatureValue::Boolean(true))
-    .unwrap()
+    ?
     .with_feature(FeatureTag::Video, FeatureValue::Boolean(true))
-    .unwrap();
+    ?;
 // Reject UAs that are automata with video
 ```
 
@@ -260,10 +260,10 @@ use sip_core::{RejectContact, CapabilitySet, FeatureTag, FeatureValue};
 
 let reject = RejectContact::new()
     .with_feature(FeatureTag::Automata, FeatureValue::Boolean(true))
-    .unwrap();
+    ?;
 
 let mut caps = CapabilitySet::new();
-caps.add_boolean(FeatureTag::Automata, true).unwrap();
+caps.add_boolean(FeatureTag::Automata, true)?;
 
 // Should reject (contact advertised automata)
 assert!(reject.matches(&caps, true));
@@ -361,7 +361,7 @@ Parses a Request-Disposition from a comma-separated list of directives.
 ```rust
 use sip_core::{RequestDisposition, ProxyDirective, RecurseDirective, ParallelDirective};
 
-let rd = RequestDisposition::parse("proxy, recurse, parallel").unwrap();
+let rd = RequestDisposition::parse("proxy, recurse, parallel")?;
 
 assert_eq!(rd.proxy, Some(ProxyDirective::Proxy));
 assert_eq!(rd.recurse, Some(RecurseDirective::Recurse));
@@ -472,7 +472,7 @@ Creates a new scored contact.
 ```rust
 use sip_core::ScoredContact;
 
-let contact = ScoredContact::new("sip:alice@example.com", 1.0).unwrap();
+let contact = ScoredContact::new("sip:alice@example.com", 1.0)?;
 ```
 
 ---
@@ -529,24 +529,24 @@ use sip_core::{
 
 let contacts = vec![
     ScoredContact::new("sip:c1@example.com", 1.0)
-        .unwrap()
+        ?
         .with_explicit_features(true),
     ScoredContact::new("sip:c2@example.com", 1.0)
-        .unwrap()
+        ?
         .with_explicit_features(true),
 ];
 
 let accept = AcceptContact::new()
     .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true))
-    .unwrap();
+    ?;
 
 let mut caps1 = CapabilitySet::new();
-caps1.add_boolean(FeatureTag::Audio, true).unwrap();
+caps1.add_boolean(FeatureTag::Audio, true)?;
 
 let mut caps2 = CapabilitySet::new();
-caps2.add_boolean(FeatureTag::Video, true).unwrap();
+caps2.add_boolean(FeatureTag::Video, true)?;
 
-let scored = score_contacts(contacts, &[accept], &[], &[caps1, caps2]).unwrap();
+let scored = score_contacts(contacts, &[accept], &[], &[caps1, caps2])?;
 
 // c1 should rank higher (has audio)
 assert_eq!(scored[0].uri, "sip:c1@example.com");
@@ -565,9 +565,9 @@ use sip_core::{AcceptContact, FeatureTag, FeatureValue};
 
 let accept = AcceptContact::new()
     .with_feature(FeatureTag::Video, FeatureValue::Boolean(true))
-    .unwrap()
+    ?
     .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true))
-    .unwrap();
+    ?;
 
 // Include in INVITE:
 // Accept-Contact: *;audio;video
@@ -582,7 +582,7 @@ use sip_core::{AcceptContact, FeatureTag, FeatureValue};
 
 let accept = AcceptContact::new()
     .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true))
-    .unwrap()
+    ?
     .with_require();
 
 // Include in INVITE:
@@ -599,9 +599,9 @@ use smol_str::SmolStr;
 
 let reject = RejectContact::new()
     .with_feature(FeatureTag::Actor, FeatureValue::Token(SmolStr::new("msg-taker")))
-    .unwrap()
+    ?
     .with_feature(FeatureTag::Automata, FeatureValue::Boolean(true))
-    .unwrap();
+    ?;
 
 // Include in INVITE:
 // Reject-Contact: *;actor="msg-taker";automata
@@ -618,18 +618,18 @@ use smol_str::SmolStr;
 // Prefer video
 let accept_video = AcceptContact::new()
     .with_feature(FeatureTag::Video, FeatureValue::Boolean(true))
-    .unwrap();
+    ?;
 
 // Require audio
 let accept_audio = AcceptContact::new()
     .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true))
-    .unwrap()
+    ?
     .with_require();
 
 // Prefer business class
 let accept_business = AcceptContact::new()
     .with_feature(FeatureTag::Class, FeatureValue::Token(SmolStr::new("business")))
-    .unwrap();
+    ?;
 
 // Include all in INVITE:
 // Accept-Contact: *;video
@@ -682,38 +682,38 @@ use smol_str::SmolStr;
 // Caller preferences
 let accept = AcceptContact::new()
     .with_feature(FeatureTag::Video, FeatureValue::Boolean(true))
-    .unwrap()
+    ?
     .with_feature(FeatureTag::Audio, FeatureValue::Boolean(true))
-    .unwrap();
+    ?;
 
 let reject = RejectContact::new()
     .with_feature(FeatureTag::Automata, FeatureValue::Boolean(true))
-    .unwrap();
+    ?;
 
 // Registered contacts
 let contacts = vec![
     ScoredContact::new("sip:alice@192.168.1.100", 1.0)
-        .unwrap()
+        ?
         .with_explicit_features(true),
     ScoredContact::new("sip:alice@10.0.0.50", 0.8)
-        .unwrap()
+        ?
         .with_explicit_features(true),
     ScoredContact::new("sip:voicemail@example.com", 0.5)
-        .unwrap()
+        ?
         .with_explicit_features(true),
 ];
 
 // Contact capabilities
 let mut caps1 = CapabilitySet::new();
-caps1.add_boolean(FeatureTag::Audio, true).unwrap();
-caps1.add_boolean(FeatureTag::Video, true).unwrap();
+caps1.add_boolean(FeatureTag::Audio, true)?;
+caps1.add_boolean(FeatureTag::Video, true)?;
 
 let mut caps2 = CapabilitySet::new();
-caps2.add_boolean(FeatureTag::Audio, true).unwrap();
+caps2.add_boolean(FeatureTag::Audio, true)?;
 
 let mut caps3 = CapabilitySet::new();
-caps3.add_boolean(FeatureTag::Audio, true).unwrap();
-caps3.add_boolean(FeatureTag::Automata, true).unwrap();
+caps3.add_boolean(FeatureTag::Audio, true)?;
+caps3.add_boolean(FeatureTag::Automata, true)?;
 
 // Score and filter contacts
 let scored = score_contacts(
@@ -721,7 +721,7 @@ let scored = score_contacts(
     &[accept],
     &[reject],
     &[caps1, caps2, caps3]
-).unwrap();
+)?;
 
 // Result:
 // 1. alice@192.168.1.100 (q=1.0, Qa=1.0 - has audio+video)
@@ -742,7 +742,7 @@ use sip_core::{AcceptContact, FeatureTag, FeatureValue};
 
 let accept = AcceptContact::new()
     .with_feature(FeatureTag::Video, FeatureValue::Boolean(true))
-    .unwrap()
+    ?
     .with_explicit();
 
 // Only UAs that explicitly advertised video support will match
@@ -758,7 +758,7 @@ use sip_core::{AcceptContact, FeatureTag, FeatureValue};
 
 let accept = AcceptContact::new()
     .with_feature(FeatureTag::Video, FeatureValue::Boolean(true))
-    .unwrap()
+    ?
     .with_require()
     .with_explicit();
 
@@ -782,13 +782,13 @@ use sip_core::{
 
 // UA advertises capabilities (RFC 3840)
 let mut capabilities = CapabilitySet::new();
-capabilities.add_boolean(FeatureTag::Audio, true).unwrap();
-capabilities.add_boolean(FeatureTag::Video, true).unwrap();
+capabilities.add_boolean(FeatureTag::Audio, true)?;
+capabilities.add_boolean(FeatureTag::Video, true)?;
 
 // Caller expresses preferences (RFC 3841)
 let accept = AcceptContact::new()
     .with_feature(FeatureTag::Video, FeatureValue::Boolean(true))
-    .unwrap();
+    ?;
 
 // Check match
 let score = accept.matches(&capabilities, true);
@@ -840,7 +840,7 @@ let contacts = location_service.get_contacts(&aor);
 
 // Extract capabilities
 let capabilities: Vec<_> = contacts.iter()
-    .map(|c| c.capabilities().unwrap())
+    .map(|c| c.capabilities()?)
     .collect();
 
 // Score and filter
@@ -849,7 +849,7 @@ let scored = score_contacts(
     &accept_headers,
     &reject_headers,
     &capabilities
-).unwrap();
+)?;
 
 // Route to contacts in order
 for contact in scored {

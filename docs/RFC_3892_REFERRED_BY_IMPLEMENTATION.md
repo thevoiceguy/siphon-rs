@@ -187,19 +187,19 @@ use sip_core::ReferredByHeader;
 // Parse basic header
 let header = ReferredByHeader::parse(
     "<sip:bob@example.com>"
-).unwrap();
+)?;
 
 // Parse with display name
 let header = ReferredByHeader::parse(
     r#""Bob Smith" <sip:bob@example.com>"#
-).unwrap();
+)?;
 
 assert_eq!(header.name_addr.display_name.as_deref(), Some("Bob Smith"));
 
 // Parse with signature
 let header = ReferredByHeader::parse(
     r#"<sip:bob@example.com>;cid="sig123@example.com""#
-).unwrap();
+)?;
 
 assert_eq!(header.get_cid(), Some("sig123@example.com"));
 ```
@@ -242,7 +242,7 @@ use sip_core::{Request, Method, ReferredByHeader};
 // Bob sends REFER to Alice
 let mut refer = Request::new(
     Method::REFER,
-    "sip:alice@example.com".parse().unwrap()
+    "sip:alice@example.com".parse()?
 );
 
 let referred_by = ReferredByHeader::new("sip:bob@example.com");
@@ -250,13 +250,13 @@ refer.headers_mut().set("Referred-By", &referred_by.to_string());
 refer.headers_mut().set("Refer-To", "<sip:charlie@example.com>");
 
 // Alice receives REFER and extracts Referred-By
-let referred_by_value = refer.headers().get("Referred-By").unwrap();
-let referred_by = ReferredByHeader::parse(referred_by_value).unwrap();
+let referred_by_value = refer.headers().get("Referred-By")?;
+let referred_by = ReferredByHeader::parse(referred_by_value)?;
 
 // Alice creates INVITE to Charlie with same Referred-By
 let mut invite = Request::new(
     Method::INVITE,
-    "sip:charlie@example.com".parse().unwrap()
+    "sip:charlie@example.com".parse()?
 );
 invite.headers_mut().set("Referred-By", &referred_by.to_string());
 ```
@@ -314,7 +314,7 @@ refer.headers_mut().set(
 
 // On receiving side, verify signature
 if referred_by.has_signature() {
-    let cid = referred_by.get_cid().unwrap();
+    let cid = referred_by.get_cid()?;
     // Extract MIME part with matching Content-ID
     // Verify S/MIME signature
     // If valid, trust the referrer identity
@@ -499,7 +499,7 @@ use sip_core::{Request, Method, ReferredByHeader};
 // Create REFER request
 let mut refer = Request::new(
     Method::REFER,
-    "sip:alice@example.com".parse().unwrap()
+    "sip:alice@example.com".parse()?
 );
 
 // Add Refer-To and Referred-By
@@ -749,10 +749,10 @@ send_request(refer);
 // Step 4: Alice receives REFER
 fn handle_refer(refer: &Request) -> Response {
     // Extract headers
-    let refer_to = refer.headers().get("Refer-To").unwrap();
-    let referred_by_value = refer.headers().get("Referred-By").unwrap();
+    let refer_to = refer.headers().get("Refer-To")?;
+    let referred_by_value = refer.headers().get("Referred-By")?;
 
-    let referred_by = ReferredByHeader::parse(referred_by_value).unwrap();
+    let referred_by = ReferredByHeader::parse(referred_by_value)?;
 
     // Parse Refer-To to extract target and Replaces
     // ... parse URI and Replaces parameter ...
@@ -784,8 +784,8 @@ fn handle_refer(refer: &Request) -> Response {
 // Step 6: Charlie receives INVITE
 fn handle_invite_with_replaces(invite: &Request) -> Response {
     // Extract Referred-By
-    let referred_by_value = invite.headers().get("Referred-By").unwrap();
-    let referred_by = ReferredByHeader::parse(referred_by_value).unwrap();
+    let referred_by_value = invite.headers().get("Referred-By")?;
+    let referred_by = ReferredByHeader::parse(referred_by_value)?;
 
     println!("Call transferred by: {}",
         referred_by.name_addr.display_name
@@ -793,8 +793,8 @@ fn handle_invite_with_replaces(invite: &Request) -> Response {
             .unwrap_or("Unknown"));
 
     // Extract and process Replaces
-    let replaces_value = invite.headers().get("Replaces").unwrap();
-    let replaces = ReplacesHeader::parse(replaces_value).unwrap();
+    let replaces_value = invite.headers().get("Replaces")?;
+    let replaces = ReplacesHeader::parse(replaces_value)?;
 
     // Find Call B with Bob
     let call_b = find_dialog(&replaces.call_id, &replaces.to_tag, &replaces.from_tag);

@@ -208,19 +208,19 @@ use smol_str::SmolStr;
 let mut headers = Headers::new();
 headers
     .push(SmolStr::new("From"), SmolStr::new("<sip:alice@example.com>"))
-    .unwrap();
+    ?;
 headers
     .push(
         SmolStr::new("Subject"),
         SmolStr::new("Confidential Call"),
     )
-    .unwrap();
+    ?;
 headers
     .push(
         SmolStr::new("User-Agent"),
         SmolStr::new("MyPhone/1.0"),
     )
-    .unwrap();
+    ?;
 
 // Apply privacy
 let privacy = PrivacyHeader::new(vec![PrivacyValue::Header, PrivacyValue::Id])?;
@@ -231,7 +231,7 @@ assert!(headers.get("Subject").is_none());
 assert!(headers.get("User-Agent").is_none());
 
 // From anonymized
-assert!(headers.get("From").unwrap().contains("anonymous@anonymous.invalid"));
+assert!(headers.get("From")?.contains("anonymous@anonymous.invalid"));
 ```
 
 #### requires_privacy_enforcement()
@@ -251,7 +251,7 @@ use smol_str::SmolStr;
 let mut headers = Headers::new();
 headers
     .push(SmolStr::new("Privacy"), SmolStr::new("id"))
-    .unwrap();
+    ?;
 
 if requires_privacy_enforcement(&headers) {
     // Apply privacy enforcement
@@ -275,9 +275,9 @@ use smol_str::SmolStr;
 let mut headers = Headers::new();
 headers
     .push(SmolStr::new("Privacy"), SmolStr::new("id; critical"))
-    .unwrap();
+    ?;
 
-let privacy = parse_privacy_header(&headers).unwrap();
+let privacy = parse_privacy_header(&headers)?;
 assert!(privacy.contains(PrivacyValue::Id));
 assert!(privacy.is_critical());
 ```
@@ -349,7 +349,7 @@ if let Some(privacy) = parse_privacy_header(invite.headers()) {
         println!("Received anonymous call");
 
         // From will be: "Anonymous" <sip:anonymous@anonymous.invalid>;tag=...
-        let from = header(invite.headers(), "From").unwrap();
+        let from = header(invite.headers(), "From")?;
         println!("From: {}", from);
     }
 }
@@ -376,14 +376,14 @@ invite
         SmolStr::new("Subject"),
         SmolStr::new("Confidential Business"),
     )
-    .unwrap();
+    ?;
 invite
     .headers_mut()
     .push(
         SmolStr::new("Organization"),
         SmolStr::new("Secret Inc"),
     )
-    .unwrap();
+    ?;
 
 // Request complete user-level privacy
 UserAgentClient::add_privacy_header(&mut invite, vec![
@@ -421,7 +421,7 @@ invite
         SmolStr::new("Subject"),
         SmolStr::new("Private Discussion"),
     )
-    .unwrap();
+    ?;
 
 // Only remove header privacy, keep identity
 UserAgentClient::add_privacy_header(&mut invite, vec![PrivacyValue::Header]);
@@ -704,7 +704,7 @@ let mut invite = uac.create_invite(&remote_uri, Some(sdp));
 UserAgentClient::add_privacy_header(&mut invite, vec![PrivacyValue::Id]);
 
 // Real identity is in From (will be seen by trusted proxy only)
-assert!(invite.headers().get("From").unwrap().contains("alice@example.com"));
+assert!(invite.headers().get("From")?.contains("alice@example.com"));
 ```
 
 **Trusted Proxy → External UAS:**
@@ -714,7 +714,7 @@ use sip_core::{enforce_privacy, parse_privacy_header, NameAddr, PAssertedIdentit
 use smol_str::SmolStr;
 
 // Proxy extracts real identity before enforcing privacy
-let from = header(invite.headers(), "From").unwrap();
+let from = header(invite.headers(), "From")?;
 let real_identity = NameAddr::parse(from)?;
 
 // Add P-Asserted-Identity (only in trusted domain)
@@ -727,7 +727,7 @@ invite
         SmolStr::new("P-Asserted-Identity"),
         SmolStr::new(format!("{}", pai.identities[0])),
     )
-    .unwrap();
+    ?;
 
 // Enforce privacy before leaving the trust domain (anonymizes From)
 if let Some(privacy) = parse_privacy_header(invite.headers()) {

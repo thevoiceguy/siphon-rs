@@ -141,7 +141,7 @@ impl StaticDhcpProvider {
 ```rust
 let provider = StaticDhcpProvider::new(vec![
     DhcpSipServer::Domain(SmolStr::new("sip.example.com".to_owned())),
-    DhcpSipServer::Ipv4("192.168.1.1".parse().unwrap()),
+    DhcpSipServer::Ipv4("192.168.1.1".parse()?),
 ]);
 ```
 
@@ -407,17 +407,17 @@ fn test_dhcp_option_120_edge_cases() {
     assert!(parse_dhcp_option_120(&[0, 255, b'a', b'b']).is_err());
 
     // Valid single IPv4
-    let result = parse_dhcp_option_120(&[1, 192, 168, 1, 1]).unwrap();
+    let result = parse_dhcp_option_120(&[1, 192, 168, 1, 1])?;
     assert_eq!(result.len(), 1);
 
     // Valid multiple IPv4
-    let result = parse_dhcp_option_120(&[1, 192, 168, 1, 1, 10, 0, 0, 1]).unwrap();
+    let result = parse_dhcp_option_120(&[1, 192, 168, 1, 1, 10, 0, 0, 1])?;
     assert_eq!(result.len(), 2);
 
     // Valid domain name
     let result = parse_dhcp_option_120(&[
         0, 7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm', 0,
-    ]).unwrap();
+    ])?;
     assert_eq!(result.len(), 1);
 }
 ```

@@ -277,7 +277,7 @@ let body = frag.to_string();
 ```rust
 use sip_core::{SipFrag, RequestLine, Method, Uri, SipUri};
 
-let uri = SipUri::parse("sip:bob@example.com").unwrap();
+let uri = SipUri::parse("sip:bob@example.com")?;
 let req_line = RequestLine::new(Method::Invite, Uri::Sip(uri));
 
 let frag = SipFrag::request(req_line)

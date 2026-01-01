@@ -300,7 +300,7 @@ let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
   </tuple>
 </presence>"#;
 
-let doc = parse_pidf(xml).unwrap();
+let doc = parse_pidf(xml)?;
 assert_eq!(doc.entity, "pres:alice@example.com");
 ```
 
@@ -453,7 +453,7 @@ let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
   </tuple>
 </presence>"#;
 
-let doc = parse_pidf(xml).unwrap();
+let doc = parse_pidf(xml)?;
 
 // Check overall status
 if let Some(status) = doc.basic_status() {

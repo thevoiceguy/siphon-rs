@@ -136,19 +136,19 @@ let offer_sdp = "v=0\r\n\
                  a=rtpmap:8 PCMA/8000\r\n\
                  a=sendrecv\r\n";
 
-let offer = SdpSession::parse(offer_sdp).unwrap();
+let offer = SdpSession::parse(offer_sdp)?;
 
 // Bob generates answer
 let engine = OfferAnswerEngine::new();
 
 let answer_options = AnswerOptions::default()
     .with_local_address("203.0.113.5")
-    .expect("valid local address")
+    ?
     .with_base_port(60000)
     .with_username("bob")
-    .expect("valid username")
+    ?
     .with_session_id("9876543210")
-    .expect("valid session id");
+    ?;
 
 let answer = engine.generate_answer(&offer, answer_options)?;
 
@@ -187,16 +187,16 @@ let offer_sdp = "v=0\r\n\
                  a=rtpmap:8 PCMA/8000\r\n\
                  a=rtpmap:18 G729/8000\r\n";
 
-let offer = SdpSession::parse(offer_sdp).unwrap();
+let offer = SdpSession::parse(offer_sdp)?;
 
 // Bob only supports PCMU and PCMA (not G729)
 let options = AnswerOptions::default()
     .with_audio_codecs(vec![
-        CodecInfo::new("PCMU", 8000, Some(1)).unwrap(),
-        CodecInfo::new("PCMA", 8000, Some(1)).unwrap(),
+        CodecInfo::new("PCMU", 8000, Some(1))?,
+        CodecInfo::new("PCMA", 8000, Some(1))?,
         // G729 not included - won't be selected
     ])
-    .unwrap();
+    ?;
 
 let engine = OfferAnswerEngine::new();
 let answer = engine.generate_answer(&offer, options)?;
@@ -224,12 +224,12 @@ let offer_sdp = "v=0\r\n\
                  m=video 51372 RTP/AVP 99\r\n\
                  a=rtpmap:99 H264/90000\r\n";
 
-let offer = SdpSession::parse(offer_sdp).unwrap();
+let offer = SdpSession::parse(offer_sdp)?;
 
 // Bob wants audio only (reject video)
 let options = AnswerOptions::default()
     .with_reject_media(vec![1])
-    .unwrap(); // Reject second media (video)
+    ?; // Reject second media (video)
 
 let engine = OfferAnswerEngine::new();
 let answer = engine.generate_answer(&offer, options)?;
@@ -268,12 +268,12 @@ let hold_offer = "v=0\r\n\
                   m=audio 49170 RTP/AVP 0\r\n\
                   a=sendonly\r\n";  // Alice sends music on hold
 
-let offer = SdpSession::parse(hold_offer).unwrap();
+let offer = SdpSession::parse(hold_offer)?;
 let engine = OfferAnswerEngine::new();
 let answer = engine.generate_answer(&offer, AnswerOptions::default())?;
 
 // Bob's answer is recvonly (receives music on hold)
-let answer_dir = answer.find_direction(Some(0)).unwrap();
+let answer_dir = answer.find_direction(Some(0))?;
 assert_eq!(answer_dir, Direction::RecvOnly);
 
 
@@ -287,11 +287,11 @@ let broadcast_offer = "v=0\r\n\
                        m=audio 49170 RTP/AVP 0\r\n\
                        a=recvonly\r\n";  // Server wants to receive (unused)
 
-let offer = SdpSession::parse(broadcast_offer).unwrap();
+let offer = SdpSession::parse(broadcast_offer)?;
 let answer = engine.generate_answer(&offer, AnswerOptions::default())?;
 
 // Answer is sendonly (client sends to server)
-let answer_dir = answer.find_direction(Some(0)).unwrap();
+let answer_dir = answer.find_direction(Some(0))?;
 assert_eq!(answer_dir, Direction::SendOnly);
 ```
 
@@ -311,7 +311,7 @@ let active_sdp = "v=0\r\n\
                   m=audio 49170 RTP/AVP 0\r\n\
                   a=sendrecv\r\n";
 
-let active_session = SdpSession::parse(active_sdp).unwrap();
+let active_session = SdpSession::parse(active_sdp)?;
 let engine = OfferAnswerEngine::new();
 
 // ===== Alice Puts Bob on Hold =====
@@ -319,7 +319,7 @@ let engine = OfferAnswerEngine::new();
 let hold_offer = engine.create_hold_offer(&active_session);
 
 // Direction changed to sendonly (send music on hold)
-assert_eq!(hold_offer.find_direction(Some(0)).unwrap(), Direction::SendOnly);
+assert_eq!(hold_offer.find_direction(Some(0))?, Direction::SendOnly);
 
 // Session version incremented
 assert_eq!(hold_offer.origin().sess_version(), "1");
@@ -333,7 +333,7 @@ println!("Hold offer:\n{}", hold_offer);
 let resume_offer = engine.create_resume_offer(&hold_offer);
 
 // Direction restored to sendrecv
-assert_eq!(resume_offer.find_direction(Some(0)).unwrap(), Direction::SendRecv);
+assert_eq!(resume_offer.find_direction(Some(0))?, Direction::SendRecv);
 
 // Session version incremented again
 assert_eq!(resume_offer.origin().sess_version(), "2");
@@ -356,7 +356,7 @@ let offer_sdp = "v=0\r\n\
                  m=audio 49170 RTP/AVP 0 8\r\n";
                  // No rtpmap lines - uses well-known mappings
 
-let offer = SdpSession::parse(offer_sdp).unwrap();
+let offer = SdpSession::parse(offer_sdp)?;
 let engine = OfferAnswerEngine::new();
 let answer = engine.generate_answer(&offer, AnswerOptions::default())?;
 
@@ -391,7 +391,7 @@ let offer_sdp = "v=0\r\n\
                  a=rtpmap:99 H264/90000\r\n\
                  a=fmtp:99 profile-level-id=42e01f;packetization-mode=1\r\n";
 
-let offer = SdpSession::parse(offer_sdp).unwrap();
+let offer = SdpSession::parse(offer_sdp)?;
 let engine = OfferAnswerEngine::new();
 let answer = engine.generate_answer(&offer, AnswerOptions::default())?;
 
@@ -428,11 +428,11 @@ let offer_sdp = "v=0\r\n\
                  a=rtpmap:8 PCMA/8000\r\n";
 
 let mut invite = Request::new(
-    RequestLine::new(Method::Invite, SipUri::parse("sip:bob@example.com").unwrap()),
+    RequestLine::new(Method::Invite, SipUri::parse("sip:bob@example.com")?),
     Headers::new(),
     Bytes::from(offer_sdp),
 )
-.unwrap();
+?;
 
 // Add Content-Type
 invite
@@ -441,21 +441,21 @@ invite
         SmolStr::new("Content-Type"),
         SmolStr::new("application/sdp"),
     )
-    .unwrap();
+    ?;
 
 
 // ===== Bob receives INVITE and generates answer =====
 
 // Parse offer from INVITE body
-let offer = SdpSession::parse(std::str::from_utf8(invite.body()).unwrap()).unwrap();
+let offer = SdpSession::parse(std::str::from_utf8(invite.body())?)?;
 
 // Generate answer
 let engine = OfferAnswerEngine::new();
 let answer_options = AnswerOptions::default()
     .with_local_address("203.0.113.5")
-    .unwrap()
+    ?
     .with_username("bob")
-    .unwrap();
+    ?;
 
 let answer = engine.generate_answer(&offer, answer_options)?;
 let answer_sdp = answer.to_string();
@@ -464,11 +464,11 @@ let answer_sdp = answer.to_string();
 // ===== Bob sends 200 OK with SDP answer =====
 
 let mut ok_response = Response::new(
-    StatusLine::new(200, "OK").unwrap(),
+    StatusLine::new(200, "OK")?,
     invite.headers().clone(),
     Bytes::from(answer_sdp),
 )
-.unwrap();
+?;
 
 ok_response
     .headers_mut()
@@ -476,7 +476,7 @@ ok_response
         SmolStr::new("Content-Type"),
         SmolStr::new("application/sdp"),
     )
-    .unwrap();
+    ?;
 
 // Now both parties can communicate using negotiated parameters
 ```

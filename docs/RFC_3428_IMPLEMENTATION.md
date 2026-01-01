@@ -92,12 +92,12 @@ use sip_uac::UserAgentClient;
 use sip_core::SipUri;
 
 let uac = UserAgentClient::new(
-    SipUri::parse("sip:alice@example.com").unwrap(),
-    SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
+    SipUri::parse("sip:alice@example.com")?,
+    SipUri::parse("sip:alice@192.168.1.100:5060")?,
 );
 
 let message = uac.create_message(
-    &SipUri::parse("sip:bob@example.com").unwrap(),
+    &SipUri::parse("sip:bob@example.com")?,
     "text/plain",
     "Hello Bob!"
 );
@@ -145,8 +145,8 @@ use sip_core::{SipUri, Headers};
 use smol_str::SmolStr;
 
 let uac = UserAgentClient::new(
-    SipUri::parse("sip:alice@example.com").unwrap(),
-    SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
+    SipUri::parse("sip:alice@example.com")?,
+    SipUri::parse("sip:alice@192.168.1.100:5060")?,
 );
 
 // Create custom headers
@@ -161,7 +161,7 @@ extra_headers.push(
 );
 
 let message = uac.create_message_with_headers(
-    &SipUri::parse("sip:bob@example.com").unwrap(),
+    &SipUri::parse("sip:bob@example.com")?,
     "text/plain",
     "Urgent message!",
     extra_headers
@@ -179,12 +179,12 @@ use sip_uac::UserAgentClient;
 use sip_core::SipUri;
 
 let uac = UserAgentClient::new(
-    SipUri::parse("sip:alice@example.com").unwrap(),
-    SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
+    SipUri::parse("sip:alice@example.com")?,
+    SipUri::parse("sip:alice@192.168.1.100:5060")?,
 );
 
 let message = uac.create_message(
-    &SipUri::parse("sip:bob@example.com").unwrap(),
+    &SipUri::parse("sip:bob@example.com")?,
     "text/plain",
     "Hello, how are you?"
 );
@@ -218,7 +218,7 @@ let html_message = r#"
 "#;
 
 let message = uac.create_message(
-    &SipUri::parse("sip:team@example.com").unwrap(),
+    &SipUri::parse("sip:team@example.com")?,
     "text/html",
     html_message
 );
@@ -237,7 +237,7 @@ extra_headers.push(
 );
 
 let message = uac.create_message_with_headers(
-    &SipUri::parse("sip:bob@example.com").unwrap(),
+    &SipUri::parse("sip:bob@example.com")?,
     "text/plain",
     "This message will expire in 1 hour",
     extra_headers
@@ -254,7 +254,7 @@ let csta_message = r#"{
 }"#;
 
 let message = uac.create_message(
-    &SipUri::parse("sip:pbx@example.com").unwrap(),
+    &SipUri::parse("sip:pbx@example.com")?,
     "application/json",
     csta_message
 );
@@ -265,7 +265,7 @@ let message = uac.create_message(
 ```rust
 // Some applications send MESSAGE with empty body as "poke" or presence indicator
 let message = uac.create_message(
-    &SipUri::parse("sip:bob@example.com").unwrap(),
+    &SipUri::parse("sip:bob@example.com")?,
     "text/plain",
     ""
 );
@@ -427,7 +427,7 @@ For sensitive messages, consider:
 
 1. **TLS Transport**: Use SIPS URI and TLS transport
    ```rust
-   let uri = SipUri::parse("sips:bob@example.com").unwrap();
+   let uri = SipUri::parse("sips:bob@example.com")?;
    ```
 
 2. **S/MIME** (not yet implemented): Encrypt message body

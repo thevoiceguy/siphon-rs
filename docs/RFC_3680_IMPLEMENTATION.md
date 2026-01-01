@@ -206,13 +206,13 @@ use sip_uac::UserAgentClient;
 use sip_core::SipUri;
 
 let uac = UserAgentClient::new(
-    SipUri::parse("sip:monitor@example.com").unwrap(),
-    SipUri::parse("sip:monitor@192.168.1.50:5060").unwrap(),
+    SipUri::parse("sip:monitor@example.com")?,
+    SipUri::parse("sip:monitor@192.168.1.50:5060")?,
 );
 
 // Subscribe to Bob's registration state for 1 hour
 let subscribe = uac.create_reg_subscribe(
-    &SipUri::parse("sip:bob@example.com").unwrap(),
+    &SipUri::parse("sip:bob@example.com")?,
     3761  // Default per RFC 3680
 );
 
@@ -259,8 +259,8 @@ use sip_dialog::SubscriptionState;
 use smol_str::SmolStr;
 
 let uac = UserAgentClient::new(
-    SipUri::parse("sip:registrar@example.com").unwrap(),
-    SipUri::parse("sip:registrar@192.168.1.10:5060").unwrap(),
+    SipUri::parse("sip:registrar@example.com")?,
+    SipUri::parse("sip:registrar@192.168.1.10:5060")?,
 );
 
 // Create registration info

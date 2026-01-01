@@ -173,7 +173,7 @@ let uac = UserAgentClient::new(local_uri, contact_uri);
 let mut invite = uac.create_invite(&remote_uri, Some(sdp));
 
 // Prefer specific SIP identity
-let preferred_uri = SipUri::parse("sip:alice.smith@company.com").unwrap();
+let preferred_uri = SipUri::parse("sip:alice.smith@company.com")?;
 let ppi = PPreferredIdentityHeader::single_sip(preferred_uri);
 UserAgentClient::add_p_preferred_identity_header(&mut invite, ppi);
 ```
@@ -198,7 +198,7 @@ let uac = UserAgentClient::new(local_uri, contact_uri);
 let invite = uac.create_invite(&remote_uri, Some(sdp));
 
 // Create invite with preferred identity
-let preferred_uri = SipUri::parse("sip:alice.smith@company.com").unwrap();
+let preferred_uri = SipUri::parse("sip:alice.smith@company.com")?;
 let ppi = PPreferredIdentityHeader::single_sip(preferred_uri);
 let invite = UserAgentClient::with_p_preferred_identity(invite, ppi);
 ```
@@ -225,7 +225,7 @@ let uac = UserAgentClient::new(local_uri, contact_uri);
 let mut invite = uac.create_invite(&remote_uri, Some(sdp));
 
 // Assert identity (typically done by proxy, not UAC)
-let asserted_uri = SipUri::parse("sip:alice@example.com").unwrap();
+let asserted_uri = SipUri::parse("sip:alice@example.com")?;
 let pai = PAssertedIdentityHeader::sip_and_tel(asserted_uri, "+15551234567")?;
 UserAgentClient::add_p_asserted_identity_header(&mut invite, pai);
 ```
@@ -243,15 +243,15 @@ use sip_core::{PPreferredIdentityHeader, SipUri};
 use sip_uac::UserAgentClient;
 
 // UAC has multiple identities, prefer work identity
-let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
-let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
-let remote_uri = SipUri::parse("sip:bob@company.com").unwrap();
+let local_uri = SipUri::parse("sip:alice@example.com")?;
+let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060")?;
+let remote_uri = SipUri::parse("sip:bob@company.com")?;
 
 let uac = UserAgentClient::new(local_uri, contact_uri);
 let mut invite = uac.create_invite(&remote_uri, None);
 
 // Express preference for work identity
-let work_uri = SipUri::parse("sip:alice.smith@company.com").unwrap();
+let work_uri = SipUri::parse("sip:alice.smith@company.com")?;
 let ppi = PPreferredIdentityHeader::single_sip(work_uri);
 UserAgentClient::add_p_preferred_identity_header(&mut invite, ppi);
 
@@ -288,7 +288,7 @@ use smol_str::SmolStr;
 let ppi = parse_p_preferred_identity(request.headers())?;
 
 // Proxy validates and asserts identity
-let sip_uri = SipUri::parse("sip:alice@example.com").unwrap();
+let sip_uri = SipUri::parse("sip:alice@example.com")?;
 let pai = PAssertedIdentityHeader::sip_and_tel(sip_uri, "+15551234567")?;
 
 // Add to forwarded request
@@ -298,7 +298,7 @@ request
         SmolStr::new("P-Asserted-Identity"),
         SmolStr::new(pai.to_string()),
     )
-    .unwrap();
+    ?;
 
 // Remove P-Preferred-Identity at trust domain boundary
 request.headers_mut().remove("P-Preferred-Identity");
@@ -317,11 +317,11 @@ use sip_core::parse_p_asserted_identity;
 if let Some(pai) = parse_p_asserted_identity(request.headers())? {
     // Check what types of identities are present
     if pai.has_sip_identity() {
-        println!("SIP identity: {}", pai.sip_identity().unwrap());
+        println!("SIP identity: {}", pai.sip_identity()?);
     }
 
     if pai.has_tel_identity() {
-        println!("Tel identity: {}", pai.tel_identity().unwrap());
+        println!("Tel identity: {}", pai.tel_identity()?);
     }
 
     // Check if multiple identities
@@ -369,11 +369,11 @@ Creating P-Asserted-Identity with multiple identities:
 use sip_core::{PIdentity, PAssertedIdentityHeader, SipUri, Uri};
 
 // Create multiple identity entries
-let sip_uri = SipUri::parse("sip:alice@example.com").unwrap();
+let sip_uri = SipUri::parse("sip:alice@example.com")?;
 let sip_identity = PIdentity::from_uri(Uri::Sip(sip_uri))
     .with_display_name("Alice Smith")?;
 
-let tel_uri = Uri::parse("tel:+15551234567").unwrap();
+let tel_uri = Uri::parse("tel:+15551234567")?;
 let tel_identity = PIdentity::from_uri(tel_uri);
 
 let pai = PAssertedIdentityHeader::new(vec![sip_identity, tel_identity])?;
@@ -394,7 +394,7 @@ if let Some(ppi) = parse_p_preferred_identity(request.headers())? {
     if let Some(sip_id) = ppi.sip_identity() {
         if is_authorized_for_identity(&uac_credentials, sip_id) {
             // Convert preferred to asserted
-            let sip_uri = SipUri::parse(sip_id).unwrap();
+            let sip_uri = SipUri::parse(sip_id)?;
             let pai = PAssertedIdentityHeader::single_sip(sip_uri);
 
             // Add P-Asserted-Identity
