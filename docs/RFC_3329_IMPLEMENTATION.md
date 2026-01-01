@@ -2,7 +2,7 @@
 
 **Date:** 2025-01-21
 **Status:** ✅ **COMPLETE** - Full RFC 3329 compliance achieved
-**Test Results:** ✅ All 103 tests passing (12 security tests + 91 other sip-core tests)
+**Test Results:** ✅ All security agreement tests passing (27 security tests)
 
 ---
 
@@ -33,25 +33,36 @@ This prevents downgrade attacks where an attacker forces use of weak security.
 
 | Component | Status | Location | Description |
 |-----------|--------|----------|-------------|
-| **SecurityMechanism Enum** | ✅ Complete | `sip-core/src/security.rs:9-51` | TLS, Digest, IPsec variants |
-| **SecurityEntry Type** | ✅ Complete | `sip-core/src/security.rs:90-188` | Mechanism + parameters |
-| **SecurityClientHeader** | ✅ Complete | `sip-core/src/security.rs:218-267` | UAC security advertisement |
-| **SecurityServerHeader** | ✅ Complete | `sip-core/src/security.rs:313-383` | UAS security advertisement |
-| **SecurityVerifyHeader** | ✅ Complete | `sip-core/src/security.rs:433-487` | Security verification |
+| **SecurityError Type** | ✅ Complete | `sip-core/src/security.rs:18-41` | Validation and parsing errors |
+| **SecurityMechanism Enum** | ✅ Complete | `sip-core/src/security.rs:127-172` | TLS, Digest, IPsec variants |
+| **SecurityEntry Type** | ✅ Complete | `sip-core/src/security.rs:174-295` | Mechanism + parameters |
+| **SecurityClientHeader** | ✅ Complete | `sip-core/src/security.rs:298-363` | UAC security advertisement |
+| **SecurityServerHeader** | ✅ Complete | `sip-core/src/security.rs:366-458` | UAS security advertisement |
+| **SecurityVerifyHeader** | ✅ Complete | `sip-core/src/security.rs:460-524` | Security verification |
 | **Preference Handling** | ✅ Complete | q parameter support | Mechanism preference values |
 | **Best Match Algorithm** | ✅ Complete | find_best_match() method | Negotiation logic |
-| **Parsing** | ✅ Complete | parse_security_* functions | All three header types |
+| **Parsing** | ✅ Complete | `sip-core/src/security.rs:527-543` | parse_security_* functions |
 | **Display Implementation** | ✅ Complete | All types | RFC-compliant formatting |
-| **Tests** | ✅ Complete | 12 comprehensive tests | Full coverage |
+| **Tests** | ✅ Complete | 27 comprehensive tests | Full coverage |
 | **Documentation** | ✅ Complete | Inline docs + this document | Usage examples and API docs |
 
 ---
 
 ## API Reference
 
+### SecurityError
+
+```rust
+pub enum SecurityError {
+    ValidationError(String),
+    TooManyItems { field: &'static str, max: usize },
+    InvalidFormat(String),
+}
+```
+
 ### SecurityMechanism Enum
 
-**Location:** `crates/sip-core/src/security.rs:9-51`
+**Location:** `crates/sip-core/src/security.rs:127-172`
 
 ```rust
 pub enum SecurityMechanism {
@@ -65,33 +76,34 @@ pub enum SecurityMechanism {
 
 **Methods:**
 - `as_str(&self) -> &str` - Returns mechanism name
-- `parse(s: &str) -> Self` - Parses from string (case-insensitive)
+- `parse(s: &str) -> Result<Self, SecurityError>` - Parses from string (case-insensitive)
 - **Display trait** - Formats as lowercase string
 
 ### SecurityEntry Struct
 
-**Location:** `crates/sip-core/src/security.rs:90-188`
+**Location:** `crates/sip-core/src/security.rs:174-295`
 
 Represents a single security mechanism with parameters.
 
 ```rust
 pub struct SecurityEntry {
-    pub mechanism: SecurityMechanism,
-    pub params: BTreeMap<SmolStr, Option<SmolStr>>,
+    // fields are private
 }
 ```
 
 **Constructor Methods:**
 - `new(mechanism: SecurityMechanism)` - Creates with mechanism, no params
 - `tls()` - Creates TLS entry
-- `digest(algorithm: &str, qop: Option<&str>)` - Creates Digest entry with algorithm
-- `ipsec_ike(algorithm: &str, protocol: &str, mode: &str)` - Creates IPsec-IKE entry
+- `digest(algorithm: &str, qop: Option<&str>) -> Result<Self, SecurityError>` - Creates Digest entry with algorithm
+- `ipsec_ike(algorithm: &str, protocol: &str, mode: &str) -> Result<Self, SecurityError>` - Creates IPsec-IKE entry
 
 **Parameter Methods:**
-- `set_param(&mut self, name: &str, value: Option<&str>)` - Sets a parameter
+- `set_param(&mut self, name: &str, value: Option<&str>) -> Result<(), SecurityError>` - Sets a parameter
 - `get_param(&self, name: &str) -> Option<&Option<SmolStr>>` - Gets a parameter
-- `set_preference(&mut self, q: f32)` - Sets q parameter (0.0-1.0)
+- `set_preference(&mut self, q: f32) -> Result<(), SecurityError>` - Sets q parameter (0.0-1.0)
 - `preference(&self) -> Option<f32>` - Gets q parameter value
+- `mechanism(&self) -> &SecurityMechanism` - Gets mechanism
+- `params(&self) -> &BTreeMap<SmolStr, Option<SmolStr>>` - Gets params
 
 **Display:**
 - `to_string()` - Formats as `mechanism;param1=value1;param2=value2`
@@ -110,23 +122,24 @@ pub struct SecurityEntry {
 
 ### SecurityClientHeader
 
-**Location:** `crates/sip-core/src/security.rs:218-267`
+**Location:** `crates/sip-core/src/security.rs:298-363`
 
 UAC advertisement of supported mechanisms.
 
 ```rust
 pub struct SecurityClientHeader {
-    pub entries: Vec<SecurityEntry>,
+    // entries are private
 }
 ```
 
 **Constructor Methods:**
-- `new(entries: Vec<SecurityEntry>)` - Creates with entry list
+- `new(entries: Vec<SecurityEntry>) -> Result<Self, SecurityError>` - Creates with entry list
 - `single(entry: SecurityEntry)` - Creates with single entry
 
 **Query Methods:**
 - `is_empty(&self) -> bool` - True if no entries
 - `len(&self) -> usize` - Number of entries
+- `entries(&self) -> &[SecurityEntry]` - Access entries
 - `sorted_by_preference(&self) -> Vec<&SecurityEntry>` - Entries sorted by q value (highest first)
 
 **Display:**
@@ -134,23 +147,24 @@ pub struct SecurityClientHeader {
 
 ### SecurityServerHeader
 
-**Location:** `crates/sip-core/src/security.rs:313-383`
+**Location:** `crates/sip-core/src/security.rs:366-458`
 
 UAS advertisement of supported mechanisms.
 
 ```rust
 pub struct SecurityServerHeader {
-    pub entries: Vec<SecurityEntry>,
+    // entries are private
 }
 ```
 
 **Constructor Methods:**
-- `new(entries: Vec<SecurityEntry>)` - Creates with entry list
+- `new(entries: Vec<SecurityEntry>) -> Result<Self, SecurityError>` - Creates with entry list
 - `single(entry: SecurityEntry)` - Creates with single entry
 
 **Query Methods:**
 - `is_empty(&self) -> bool` - True if no entries
 - `len(&self) -> usize` - Number of entries
+- `entries(&self) -> &[SecurityEntry]` - Access entries
 - `sorted_by_preference(&self) -> Vec<&SecurityEntry>` - Entries sorted by q value (highest first)
 - `find_best_match(&self, client: &SecurityClientHeader) -> Option<&SecurityEntry>` - Finds best matching mechanism
 
@@ -159,23 +173,24 @@ pub struct SecurityServerHeader {
 
 ### SecurityVerifyHeader
 
-**Location:** `crates/sip-core/src/security.rs:433-487`
+**Location:** `crates/sip-core/src/security.rs:460-524`
 
 UAC verification of chosen mechanism.
 
 ```rust
 pub struct SecurityVerifyHeader {
-    pub entries: Vec<SecurityEntry>,
+    // entries are private
 }
 ```
 
 **Constructor Methods:**
-- `new(entries: Vec<SecurityEntry>)` - Creates with entry list
+- `new(entries: Vec<SecurityEntry>) -> Result<Self, SecurityError>` - Creates with entry list
 - `single(entry: SecurityEntry)` - Creates with single entry
 
 **Query Methods:**
 - `is_empty(&self) -> bool` - True if no entries
 - `len(&self) -> usize` - Number of entries
+- `entries(&self) -> &[SecurityEntry]` - Access entries
 - `matches(&self, server_entry: &SecurityEntry) -> bool` - Verifies mechanism matches
 
 **Display:**
@@ -183,12 +198,12 @@ pub struct SecurityVerifyHeader {
 
 ### Parsing Functions
 
-**Location:** `crates/sip-core/src/security.rs:489-546`
+**Location:** `crates/sip-core/src/security.rs:527-543`
 
 ```rust
-pub fn parse_security_client(value: &str) -> Option<SecurityClientHeader>
-pub fn parse_security_server(value: &str) -> Option<SecurityServerHeader>
-pub fn parse_security_verify(value: &str) -> Option<SecurityVerifyHeader>
+pub fn parse_security_client(value: &str) -> Result<SecurityClientHeader, SecurityError>
+pub fn parse_security_server(value: &str) -> Result<SecurityServerHeader, SecurityError>
+pub fn parse_security_verify(value: &str) -> Result<SecurityVerifyHeader, SecurityError>
 ```
 
 Parse security headers from header value strings.
@@ -202,22 +217,25 @@ Parse security headers from header value strings.
 UAC sends initial request advertising supported security mechanisms:
 
 ```rust
-use sip_core::{SecurityClientHeader, SecurityEntry, SecurityMechanism};
+use sip_core::{SecurityClientHeader, SecurityEntry};
+use smol_str::SmolStr;
 
 // UAC supports TLS (preferred) and Digest
 let mut tls = SecurityEntry::tls();
-tls.set_preference(0.8);
+tls.set_preference(0.8)?;
 
-let mut digest = SecurityEntry::digest("SHA-256", Some("auth"));
-digest.set_preference(0.5);
+let mut digest = SecurityEntry::digest("SHA-256", Some("auth"))?;
+digest.set_preference(0.5)?;
 
-let security_client = SecurityClientHeader::new(vec![tls, digest]);
+let security_client = SecurityClientHeader::new(vec![tls, digest])?;
 
 // Add to REGISTER request
-request.headers.push(
-    SmolStr::new("Security-Client"),
-    SmolStr::new(security_client.to_string())
-);
+request
+    .headers_mut()
+    .push(
+        SmolStr::new("Security-Client"),
+        SmolStr::new(security_client.to_string()),
+    )?;
 
 // Result: Security-Client: tls;q=0.8, digest;d-alg=SHA-256;d-qop=auth;q=0.5
 ```
@@ -228,28 +246,31 @@ UAS responds with 494 and its supported mechanisms:
 
 ```rust
 use sip_core::{SecurityServerHeader, SecurityEntry};
+use smol_str::SmolStr;
 
 // Server supports TLS and Digest
 let mut tls = SecurityEntry::tls();
-tls.set_preference(0.9);
+tls.set_preference(0.9)?;
 
-let mut digest = SecurityEntry::digest("MD5", Some("auth"));
-digest.set_preference(0.3);
+let mut digest = SecurityEntry::digest("MD5", Some("auth"))?;
+digest.set_preference(0.3)?;
 
-let security_server = SecurityServerHeader::new(vec![tls, digest]);
+let security_server = SecurityServerHeader::new(vec![tls, digest])?;
 
 // Create 494 response
 let mut response = Response::new(
-    StatusLine::new(494, SmolStr::new("Security Agreement Required")),
+    StatusLine::new(494, SmolStr::new("Security Agreement Required"))?,
     headers,
-    Bytes::new()
-);
+    Bytes::new(),
+)?;
 
 // Add Security-Server header
-response.headers.push(
-    SmolStr::new("Security-Server"),
-    SmolStr::new(security_server.to_string())
-);
+response
+    .headers_mut()
+    .push(
+        SmolStr::new("Security-Server"),
+        SmolStr::new(security_server.to_string()),
+    )?;
 
 // Result: Security-Server: tls;q=0.9, digest;d-alg=MD5;d-qop=auth;q=0.3
 ```
@@ -259,11 +280,14 @@ response.headers.push(
 Server determines the best security mechanism supported by both parties:
 
 ```rust
-use sip_core::{parse_security_client, parse_security_server};
+use sip_core::parse_security_client;
 
 // Parse Security-Client from initial request
 let security_client = parse_security_client(
-    request.headers.get("Security-Client")?
+    request
+        .headers()
+        .get("Security-Client")
+        .ok_or("Missing Security-Client")?,
 )?;
 
 // Get server's supported mechanisms
@@ -271,7 +295,7 @@ let security_server = get_server_security_mechanisms();
 
 // Find best match
 if let Some(best_match) = security_server.find_best_match(&security_client) {
-    println!("Chosen mechanism: {}", best_match.mechanism);
+    println!("Chosen mechanism: {}", best_match.mechanism());
 
     // Include in 494 response
     // Client will use this mechanism in subsequent request
@@ -286,11 +310,15 @@ if let Some(best_match) = security_server.find_best_match(&security_client) {
 UAC sends new request with Security-Verify echoing chosen mechanism:
 
 ```rust
-use sip_core::{SecurityVerifyHeader, SecurityEntry, parse_security_server};
+use sip_core::{parse_security_server, SecurityVerifyHeader};
+use smol_str::SmolStr;
 
 // Parse Security-Server from 494 response
 let security_server = parse_security_server(
-    response.headers.get("Security-Server")?
+    response
+        .headers()
+        .get("Security-Server")
+        .ok_or("Missing Security-Server")?,
 )?;
 
 // Choose the server's highest preference mechanism
@@ -300,10 +328,12 @@ let chosen = security_server.sorted_by_preference()[0].clone();
 let security_verify = SecurityVerifyHeader::single(chosen);
 
 // Add to new request
-request.headers.push(
-    SmolStr::new("Security-Verify"),
-    SmolStr::new(security_verify.to_string())
-);
+request
+    .headers_mut()
+    .push(
+        SmolStr::new("Security-Verify"),
+        SmolStr::new(security_verify.to_string()),
+    )?;
 
 // Result: Security-Verify: tls;q=0.9
 ```
@@ -313,11 +343,14 @@ request.headers.push(
 Server verifies that client is using the agreed mechanism:
 
 ```rust
-use sip_core::{parse_security_verify};
+use sip_core::parse_security_verify;
 
 // Parse Security-Verify from client's request
 let security_verify = parse_security_verify(
-    request.headers.get("Security-Verify")?
+    request
+        .headers()
+        .get("Security-Verify")
+        .ok_or("Missing Security-Verify")?,
 )?;
 
 // Get the mechanism we told the client to use
@@ -345,15 +378,15 @@ let mut ipsec_ike = SecurityEntry::ipsec_ike(
     "des-ede3-cbc",  // algorithm
     "esp",            // protocol
     "trans"           // mode
-);
-ipsec_ike.set_preference(0.7);
+)?;
+ipsec_ike.set_preference(0.7)?;
 
 // Add additional IPsec parameters
-ipsec_ike.set_param("encrypt-algorithm", Some("des-ede3-cbc"));
-ipsec_ike.set_param("spi-c", Some("1234"));
-ipsec_ike.set_param("spi-s", Some("5678"));
-ipsec_ike.set_param("port-c", Some("5060"));
-ipsec_ike.set_param("port-s", Some("5060"));
+ipsec_ike.set_param("encrypt-algorithm", Some("des-ede3-cbc"))?;
+ipsec_ike.set_param("spi-c", Some("1234"))?;
+ipsec_ike.set_param("spi-s", Some("5678"))?;
+ipsec_ike.set_param("port-c", Some("5060"))?;
+ipsec_ike.set_param("port-s", Some("5060"))?;
 
 // Result: ipsec-ike;algorithm=des-ede3-cbc;protocol=esp;mode=trans;...
 ```
@@ -367,22 +400,22 @@ use sip_core::{SecurityClientHeader, SecurityEntry};
 
 // Create entries with different preferences
 let mut tls = SecurityEntry::tls();
-tls.set_preference(0.3);
+tls.set_preference(0.3)?;
 
-let mut digest = SecurityEntry::digest("SHA-256", None);
-digest.set_preference(0.9);
+let mut digest = SecurityEntry::digest("SHA-256", None)?;
+digest.set_preference(0.9)?;
 
-let mut ipsec = SecurityEntry::ipsec_ike("des", "esp", "trans");
-ipsec.set_preference(0.6);
+let mut ipsec = SecurityEntry::ipsec_ike("des", "esp", "trans")?;
+ipsec.set_preference(0.6)?;
 
-let header = SecurityClientHeader::new(vec![tls, digest, ipsec]);
+let header = SecurityClientHeader::new(vec![tls, digest, ipsec])?;
 
 // Get sorted by preference (highest first)
 let sorted = header.sorted_by_preference();
 
 for entry in sorted {
-    let q = entry.preference().unwrap_or(0.001);
-    println!("{}: q={}", entry.mechanism, q);
+let q = entry.preference().unwrap_or(0.001);
+println!("{}: q={}", entry.mechanism(), q);
 }
 
 // Output:
@@ -399,12 +432,12 @@ Using custom/proprietary security mechanisms:
 use sip_core::{SecurityEntry, SecurityMechanism};
 
 // Custom mechanism
-let mechanism = SecurityMechanism::parse("mycompany-secure");
+let mechanism = SecurityMechanism::parse("mycompany-secure")?;
 let mut entry = SecurityEntry::new(mechanism);
 
-entry.set_param("version", Some("2.0"));
-entry.set_param("cipher", Some("aes-256-gcm"));
-entry.set_preference(0.8);
+entry.set_param("version", Some("2.0"))?;
+entry.set_param("cipher", Some("aes-256-gcm"))?;
+entry.set_preference(0.8)?;
 
 // Result: mycompany-secure;version=2.0;cipher=aes-256-gcm;q=0.8
 ```
@@ -415,44 +448,57 @@ Full UAC-UAS security agreement:
 
 ```rust
 use sip_core::*;
+use smol_str::SmolStr;
+use smol_str::SmolStr;
 
 // === STEP 1: UAC sends initial request ===
 let mut tls = SecurityEntry::tls();
-tls.set_preference(0.8);
-let mut digest = SecurityEntry::digest("SHA-256", Some("auth"));
-digest.set_preference(0.5);
+tls.set_preference(0.8)?;
+let mut digest = SecurityEntry::digest("SHA-256", Some("auth"))?;
+digest.set_preference(0.5)?;
 
-let security_client = SecurityClientHeader::new(vec![tls, digest]);
-initial_request.headers.push(
-    SmolStr::new("Security-Client"),
-    SmolStr::new(security_client.to_string())
-);
+let security_client = SecurityClientHeader::new(vec![tls, digest])?;
+initial_request
+    .headers_mut()
+    .push(
+        SmolStr::new("Security-Client"),
+        SmolStr::new(security_client.to_string()),
+    )?;
 
 // === STEP 2: UAS responds with 494 ===
 let server_tls = SecurityEntry::tls();
-let server_digest = SecurityEntry::digest("MD5", Some("auth"));
+let server_digest = SecurityEntry::digest("MD5", Some("auth"))?;
 
-let security_server = SecurityServerHeader::new(vec![server_tls.clone(), server_digest]);
+let security_server = SecurityServerHeader::new(vec![server_tls.clone(), server_digest])?;
 
 // Find best match
-let best = security_server.find_best_match(&security_client)?;
-println!("Agreed mechanism: {}", best.mechanism);
+let best = security_server
+    .find_best_match(&security_client)
+    .ok_or("No compatible mechanisms")?;
+println!("Agreed mechanism: {}", best.mechanism());
 
-response_494.headers.push(
-    SmolStr::new("Security-Server"),
-    SmolStr::new(security_server.to_string())
-);
+response_494
+    .headers_mut()
+    .push(
+        SmolStr::new("Security-Server"),
+        SmolStr::new(security_server.to_string()),
+    )?;
 
 // === STEP 3: UAC sends new request with Security-Verify ===
 let security_verify = SecurityVerifyHeader::single(best.clone());
-new_request.headers.push(
-    SmolStr::new("Security-Verify"),
-    SmolStr::new(security_verify.to_string())
-);
+new_request
+    .headers_mut()
+    .push(
+        SmolStr::new("Security-Verify"),
+        SmolStr::new(security_verify.to_string()),
+    )?;
 
 // === STEP 4: UAS verifies ===
 let verify_header = parse_security_verify(
-    new_request.headers.get("Security-Verify")?
+    new_request
+        .headers()
+        .get("Security-Verify")
+        .ok_or("Missing Security-Verify")?,
 )?;
 
 if verify_header.matches(&best) {
@@ -541,20 +587,20 @@ Used `BTreeMap` for parameters instead of specific fields:
 - Allows custom parameters for proprietary mechanisms
 - Maintains sorted order for consistent output
 
-### 3. Preference as f32
+### 3. Preference Parsing
 
-Stored q values as f32 rather than string:
-- Enables arithmetic comparison for sorting
-- More efficient than string parsing repeatedly
-- Display implementation formats correctly
+q values are stored as parameters but parsed/validated as f32:
+- `set_preference()` validates and formats q values
+- `preference()` parses q for sorting and comparison
+- Preserves RFC-compliant wire formatting
 
 ### 4. Best Match Algorithm
 
-`find_best_match()` prioritizes server preferences:
-- Iterates through server entries by preference
-- Returns first match found in client list
-- Server controls final choice (security policy)
-- Simple and predictable behavior
+`find_best_match()` uses combined preference scoring:
+- Computes `server_q * client_q` for each shared mechanism
+- Selects the highest combined score
+- Balances server policy with client capability
+- Deterministic and resistant to preference skew
 
 ### 5. Separate Header Types
 
@@ -568,22 +614,37 @@ Created three distinct header types (SecurityClient, SecurityServer, SecurityVer
 
 ## Test Coverage
 
-### Security Agreement Tests (12 tests)
+### Security Agreement Tests (27 tests)
 
-**Location:** `crates/sip-core/src/security.rs:548-669`
+**Location:** `crates/sip-core/src/security.rs:698-1051`
 
 - ✅ `security_mechanism_parse` - Mechanism parsing (case-insensitive)
+- ✅ `security_mechanism_parse_rejects_empty` - Empty mechanism rejected
+- ✅ `security_mechanism_parse_rejects_too_long` - Length limits enforced
+- ✅ `security_mechanism_parse_rejects_control_chars` - Control chars rejected
 - ✅ `security_mechanism_display` - Mechanism formatting
 - ✅ `security_entry_basic` - Entry creation and parameters
+- ✅ `security_entry_rejects_too_many_params` - Parameter limit enforced
+- ✅ `security_entry_rejects_invalid_param_name` - Param name validation
+- ✅ `security_entry_rejects_invalid_param_value` - Param value validation
 - ✅ `security_entry_preference` - Preference handling
+- ✅ `security_entry_preference_validates_range` - Q value validation
 - ✅ `security_entry_display` - Entry formatting
 - ✅ `security_client_header` - Client header creation
+- ✅ `security_client_header_rejects_too_many_entries` - Entry limit enforced
 - ✅ `security_client_display` - Client header formatting
 - ✅ `security_server_find_best_match` - Mechanism negotiation
+- ✅ `security_server_find_best_match_combines_preferences` - Combined scoring
 - ✅ `security_verify_matches` - Verification matching
 - ✅ `parse_security_client` - Client header parsing
 - ✅ `parse_security_server` - Server header parsing
+- ✅ `parse_security_client_rejects_too_many_entries` - Parse entry limit
+- ✅ `parse_security_client_rejects_empty` - Empty input rejection
+- ✅ `parse_security_client_handles_quoted_separators` - Quoted separator parsing
+- ✅ `get_param_is_case_insensitive` - Case-insensitive param lookup
 - ✅ `security_sorted_by_preference` - Preference sorting
+- ✅ `security_sorted_by_preference_ignores_invalid_q` - Invalid q handling
+- ✅ `fields_are_private` - Accessors-only API surface
 
 ---
 
@@ -622,7 +683,7 @@ Created three distinct header types (SecurityClient, SecurityServer, SecurityVer
 | UAS responds with 494 + Security-Server | ⚠️ | Application responsibility |
 | UAC includes Security-Verify | ⚠️ | Application responsibility |
 | UAS verifies Security-Verify | ✅ | matches() method provided |
-| Use highest mutual preference | ✅ | find_best_match() implements this |
+| Use highest mutual preference | ✅ | find_best_match() uses combined preference score |
 | Support multiple mechanisms | ✅ | Vec<SecurityEntry> supports this |
 
 ---
@@ -640,36 +701,40 @@ struct SecureUac {
 }
 
 impl SecureUac {
-    fn new() -> Self {
+    fn new() -> Result<Self> {
         // Define supported mechanisms
         let mut tls = SecurityEntry::tls();
-        tls.set_preference(0.9);
+        tls.set_preference(0.9)?;
 
-        let mut digest = SecurityEntry::digest("SHA-256", Some("auth"));
-        digest.set_preference(0.5);
+        let mut digest = SecurityEntry::digest("SHA-256", Some("auth"))?;
+        digest.set_preference(0.5)?;
 
-        Self {
-            supported_mechanisms: SecurityClientHeader::new(vec![tls, digest]),
+        Ok(Self {
+            supported_mechanisms: SecurityClientHeader::new(vec![tls, digest])?,
             agreed_mechanism: None,
-        }
+        })
     }
 
-    fn create_initial_request(&self) -> Request {
+    fn create_initial_request(&self) -> Result<Request> {
         let mut request = create_base_request();
 
         // Add Security-Client
-        request.headers.push(
-            SmolStr::new("Security-Client"),
-            SmolStr::new(self.supported_mechanisms.to_string())
-        );
-
         request
+            .headers_mut()
+            .push(
+                SmolStr::new("Security-Client"),
+                SmolStr::new(self.supported_mechanisms.to_string()),
+            )?;
+
+        Ok(request)
     }
 
     fn handle_494_response(&mut self, response: &Response) -> Result<Request> {
         // Parse Security-Server
         let server_header = parse_security_server(
-            response.headers.get("Security-Server")
+            response
+                .headers()
+                .get("Security-Server")
                 .ok_or("Missing Security-Server")?
         )?;
 
@@ -685,13 +750,15 @@ impl SecureUac {
         self.establish_security(&chosen)?;
 
         // Create new request with Security-Verify
-        let mut request = self.create_initial_request();
+        let mut request = self.create_initial_request()?;
 
         let verify = SecurityVerifyHeader::single(chosen);
-        request.headers.push(
-            SmolStr::new("Security-Verify"),
-            SmolStr::new(verify.to_string())
-        );
+        request
+            .headers_mut()
+            .push(
+                SmolStr::new("Security-Verify"),
+                SmolStr::new(verify.to_string()),
+            )?;
 
         Ok(request)
     }
@@ -702,6 +769,7 @@ impl SecureUac {
 
 ```rust
 use sip_core::*;
+use smol_str::SmolStr;
 
 struct SecureUas {
     supported_mechanisms: SecurityServerHeader,
@@ -709,29 +777,29 @@ struct SecureUas {
 }
 
 impl SecureUas {
-    fn new() -> Self {
+    fn new() -> Result<Self> {
         // Define supported mechanisms
         let mut tls = SecurityEntry::tls();
-        tls.set_preference(0.9);
+        tls.set_preference(0.9)?;
 
-        let mut digest = SecurityEntry::digest("MD5", Some("auth"));
-        digest.set_preference(0.3);
+        let mut digest = SecurityEntry::digest("MD5", Some("auth"))?;
+        digest.set_preference(0.3)?;
 
-        Self {
-            supported_mechanisms: SecurityServerHeader::new(vec![tls, digest]),
+        Ok(Self {
+            supported_mechanisms: SecurityServerHeader::new(vec![tls, digest])?,
             client_agreements: HashMap::new(),
-        }
+        })
     }
 
     fn process_request(&mut self, request: &Request) -> Result<Response> {
         // Check if Security-Verify is present
-        if let Some(verify_value) = request.headers.get("Security-Verify") {
+        if request.headers().get("Security-Verify").is_some() {
             // Subsequent request - verify
             return self.verify_and_process(request);
         }
 
         // Check if Security-Client is present
-        if let Some(client_value) = request.headers.get("Security-Client") {
+        if request.headers().get("Security-Client").is_some() {
             // Initial request - send 494
             return self.send_494_response(request);
         }
@@ -743,7 +811,10 @@ impl SecureUas {
     fn send_494_response(&mut self, request: &Request) -> Result<Response> {
         // Parse Security-Client
         let client_header = parse_security_client(
-            request.headers.get("Security-Client")?
+            request
+                .headers()
+                .get("Security-Client")
+                .ok_or("Missing Security-Client")?
         )?;
 
         // Find best match
@@ -756,23 +827,28 @@ impl SecureUas {
 
         // Create 494 response
         let mut response = Response::new(
-            StatusLine::new(494, SmolStr::new("Security Agreement Required")),
+            StatusLine::new(494, SmolStr::new("Security Agreement Required"))?,
             Headers::new(),
             Bytes::new()
-        );
+        )?;
 
         // Add Security-Server
-        response.headers.push(
-            SmolStr::new("Security-Server"),
-            SmolStr::new(self.supported_mechanisms.to_string())
-        );
+        response
+            .headers_mut()
+            .push(
+                SmolStr::new("Security-Server"),
+                SmolStr::new(self.supported_mechanisms.to_string()),
+            )?;
 
         Ok(response)
     }
 
     fn verify_and_process(&self, request: &Request) -> Result<Response> {
         let verify_header = parse_security_verify(
-            request.headers.get("Security-Verify")?
+            request
+                .headers()
+                .get("Security-Verify")
+                .ok_or("Missing Security-Verify")?
         )?;
 
         // Get agreed mechanism for this client
