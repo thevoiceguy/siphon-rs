@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use dashmap::DashMap;
 use sip_core::{Headers, Method, Request, Response};
+use sip_parse::serialize_response;
 use sip_transport::pool::ConnectionPool;
 use smol_str::SmolStr;
 use tokio::{
@@ -404,8 +405,29 @@ fn transport_kind_to_transport(kind: TransportKind) -> Transport {
 
 impl TransactionManager {
     async fn dispatch_with_pool(&self, ctx: &TransportContext, bytes: Bytes) -> Result<()> {
+        // Extract first line for logging
+        let first_line = bytes
+            .split(|&b| b == b'\r' || b == b'\n')
+            .next()
+            .and_then(|line| std::str::from_utf8(line).ok())
+            .unwrap_or("<invalid>");
+
+        debug!(
+            transport = ?ctx.transport,
+            peer = %ctx.peer,
+            size = bytes.len(),
+            first_line = %first_line,
+            has_stream = ctx.stream.is_some(),
+            "dispatch_with_pool called"
+        );
+
         match ctx.transport {
             TransportKind::Tcp if ctx.stream.is_none() => {
+                debug!(
+                    first_line = %first_line,
+                    peer = %ctx.peer,
+                    "sending via pool.send_tcp (bypass dispatcher)"
+                );
                 self.inner.pool.send_tcp(ctx.peer, bytes).await
             }
             _ => self.inner.dispatcher.dispatch(ctx, bytes).await,
@@ -922,7 +944,26 @@ impl TransactionManager {
     }
 
     async fn apply_server_actions(&self, key: &TransactionKey, actions: Vec<ServerInviteAction>) {
-        for action in actions {
+        debug!(
+            key = ?key,
+            num_actions = actions.len(),
+            "apply_server_actions called with {} actions",
+            actions.len()
+        );
+
+        for (index, action) in actions.into_iter().enumerate() {
+            debug!(
+                key = ?key,
+                action_index = index,
+                action_type = match &action {
+                    ServerInviteAction::Transmit { .. } => "Transmit",
+                    ServerInviteAction::Schedule { .. } => "Schedule",
+                    ServerInviteAction::Cancel(_) => "Cancel",
+                    ServerInviteAction::Terminate { .. } => "Terminate",
+                },
+                "processing action"
+            );
+
             match action {
                 ServerInviteAction::Transmit {
                     bytes,
@@ -1234,6 +1275,23 @@ impl TransactionManager {
     }
 
     pub async fn send_final(&self, key: &TransactionKey, response: Response) {
+        // Extract first line for logging
+        let first_line = {
+            let bytes = serialize_response(&response);
+            bytes
+                .split(|&b| b == b'\r' || b == b'\n')
+                .next()
+                .and_then(|line| std::str::from_utf8(line).ok())
+                .unwrap_or("<invalid>")
+                .to_string()
+        };
+
+        debug!(
+            key = ?key,
+            first_line = %first_line,
+            "send_final called"
+        );
+
         if let Some(mut entry) = self.inner.server.get_mut(key) {
             let actions = match &mut entry.kind {
                 ServerKind::Invite(fsm) => fsm.on_event(ServerInviteEvent::SendFinal(response)),
@@ -1241,6 +1299,15 @@ impl TransactionManager {
                     map_server_actions(fsm.on_event(ServerNonInviteEvent::SendFinal(response)))
                 }
             };
+
+            debug!(
+                key = ?key,
+                first_line = %first_line,
+                num_actions = actions.len(),
+                "send_final: FSM returned {} actions",
+                actions.len()
+            );
+
             drop(entry);
             self.apply_server_actions(key, actions).await;
         }

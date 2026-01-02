@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
@@ -16,10 +17,9 @@ use tokio::{
         Mutex,
     },
 };
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::{drain_sip_frames, InboundPacket, TransportKind, MAX_BUFFER_SIZE};
-use tracing::debug;
 
 /// Maximum number of pooled TCP connections (prevents file descriptor exhaustion).
 const MAX_POOL_SIZE: usize = 1000;
