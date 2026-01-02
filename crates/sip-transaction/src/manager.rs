@@ -1030,7 +1030,29 @@ impl TransactionManager {
         key: &TransactionKey,
         actions: Vec<ClientInviteAction>,
     ) {
-        for action in actions {
+        debug!(
+            key = ?key,
+            num_actions = actions.len(),
+            "apply_client_invite_actions called with {} actions",
+            actions.len()
+        );
+
+        for (index, action) in actions.into_iter().enumerate() {
+            debug!(
+                key = ?key,
+                action_index = index,
+                action_type = match &action {
+                    ClientInviteAction::Transmit { .. } => "Transmit",
+                    ClientInviteAction::Deliver(_) => "Deliver",
+                    ClientInviteAction::ExpectPrack(_) => "ExpectPrack",
+                    ClientInviteAction::GenerateAck { .. } => "GenerateAck",
+                    ClientInviteAction::Schedule { .. } => "Schedule",
+                    ClientInviteAction::Cancel(_) => "Cancel",
+                    ClientInviteAction::Terminate { .. } => "Terminate",
+                },
+                "processing client action"
+            );
+
             match action {
                 ClientInviteAction::Transmit { bytes, .. } => {
                     if let Some(entry) = self.inner.client.get(key) {
