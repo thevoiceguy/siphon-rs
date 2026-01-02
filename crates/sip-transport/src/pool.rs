@@ -151,6 +151,10 @@ impl ConnectionPool {
                 if stream.write_all(&buf).await.is_err() {
                     break;
                 }
+                // Flush the stream to ensure data is sent on the wire
+                if stream.flush().await.is_err() {
+                    break;
+                }
             }
         });
 
@@ -292,6 +296,10 @@ impl TlsPool {
         tokio::spawn(async move {
             while let Some(buf) = rx.recv().await {
                 if tls_stream.write_all(&buf).await.is_err() {
+                    break;
+                }
+                // Flush the stream to ensure data is sent on the wire
+                if tls_stream.flush().await.is_err() {
                     break;
                 }
             }
