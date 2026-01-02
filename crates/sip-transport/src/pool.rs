@@ -6,13 +6,19 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use dashmap::DashMap;
 use tokio::{
-    io::AsyncWriteExt,
+    io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
-    sync::mpsc::{self, Sender},
+    sync::{
+        mpsc::{self, Sender},
+        Mutex,
+    },
 };
+use tracing::warn;
+
+use crate::{drain_sip_frames, InboundPacket, TransportKind, MAX_BUFFER_SIZE};
 use tracing::debug;
 
 /// Maximum number of pooled TCP connections (prevents file descriptor exhaustion).
@@ -46,11 +52,12 @@ impl PoolEntry {
 }
 
 /// TCP connection pool with idle timeout and size limits.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ConnectionPool {
     tcp: DashMap<SocketAddr, PoolEntry>,
     max_size: usize,
     idle_timeout: Duration,
+    inbound_tx: Arc<Mutex<Option<Sender<InboundPacket>>>>,
 }
 
 impl ConnectionPool {
@@ -59,6 +66,7 @@ impl ConnectionPool {
             tcp: DashMap::new(),
             max_size: MAX_POOL_SIZE,
             idle_timeout: IDLE_TIMEOUT,
+            inbound_tx: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -68,7 +76,15 @@ impl ConnectionPool {
             tcp: DashMap::new(),
             max_size,
             idle_timeout,
+            inbound_tx: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Registers an inbound packet sink so responses on outbound TCP connections
+    /// get routed back into the SIP handler/transaction layer.
+    pub async fn set_inbound_tx(&self, tx: Sender<InboundPacket>) {
+        let mut guard = self.inbound_tx.lock().await;
+        *guard = Some(tx);
     }
 
     /// Returns the current number of pooled connections.
@@ -142,21 +158,77 @@ impl ConnectionPool {
         }
 
         // Create new connection
-        let mut stream = TcpStream::connect(addr).await?;
+        let stream = TcpStream::connect(addr).await?;
+        let (mut reader, mut writer) = stream.into_split();
         let (tx, mut rx) = mpsc::channel::<Bytes>(64);
         self.tcp.insert(addr, PoolEntry::new(tx.clone()));
 
+        // Writer task (existing behavior)
+        let writer_tx = tx.clone();
         tokio::spawn(async move {
             while let Some(buf) = rx.recv().await {
-                if stream.write_all(&buf).await.is_err() {
+                if writer.write_all(&buf).await.is_err() {
                     break;
                 }
                 // Flush the stream to ensure data is sent on the wire
-                if stream.flush().await.is_err() {
+                if writer.flush().await.is_err() {
                     break;
                 }
             }
         });
+
+        // Optional reader task to deliver responses back to the inbound pipeline
+        if let Some(inbound_tx) = self.inbound_tx.lock().await.clone() {
+            let peer = addr;
+            tokio::spawn(async move {
+                let mut buf = BytesMut::with_capacity(4096);
+                loop {
+                    if buf.len() >= MAX_BUFFER_SIZE {
+                        warn!(
+                            peer = %peer,
+                            buffer_size = buf.len(),
+                            "tcp client buffer exceeded MAX_BUFFER_SIZE, closing connection"
+                        );
+                        break;
+                    }
+
+                    match reader.read_buf(&mut buf).await {
+                        Ok(0) => break, // connection closed
+                        Ok(_) => match drain_sip_frames(&mut buf) {
+                            Ok(frames) => {
+                                for payload in frames {
+                                    let packet = InboundPacket {
+                                        transport: TransportKind::Tcp,
+                                        peer,
+                                        payload,
+                                        stream: Some(writer_tx.clone()),
+                                    };
+                                    if inbound_tx.send(packet).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                warn!(
+                                    peer = %peer,
+                                    error = %e,
+                                    "tcp client framing error, closing connection"
+                                );
+                                break;
+                            }
+                        },
+                        Err(e) => {
+                            warn!(
+                                peer = %peer,
+                                error = %e,
+                                "tcp client read error, closing connection"
+                            );
+                            break;
+                        }
+                    }
+                }
+            });
+        }
 
         let result = tx
             .send(payload)
@@ -166,6 +238,12 @@ impl ConnectionPool {
             self.tcp.remove(&addr);
         }
         result
+    }
+}
+
+impl Default for ConnectionPool {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

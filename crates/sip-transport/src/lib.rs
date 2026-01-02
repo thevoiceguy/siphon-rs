@@ -57,7 +57,7 @@ const MAX_BODY_SIZE: usize = 10 * 1024 * 1024;
 
 /// Maximum total buffer size before we stop reading from peer (16 MB).
 /// Protects against accumulation of multiple large messages in buffer.
-const MAX_BUFFER_SIZE: usize = 16 * 1024 * 1024;
+pub(crate) const MAX_BUFFER_SIZE: usize = 16 * 1024 * 1024;
 
 /// Maximum number of concurrent inbound sessions per listener.
 const MAX_CONCURRENT_SESSIONS: usize = 1024;
@@ -1042,7 +1042,7 @@ async fn spawn_stream_session<S>(
 ///
 /// Enforces MAX_HEADER_SIZE and MAX_BODY_SIZE limits to prevent memory exhaustion attacks.
 /// Returns an error if limits are exceeded, causing the connection to be closed.
-fn drain_sip_frames(buf: &mut BytesMut) -> Result<Vec<Bytes>> {
+pub(crate) fn drain_sip_frames(buf: &mut BytesMut) -> Result<Vec<Bytes>> {
     let mut frames = Vec::new();
     loop {
         // Handle CRLF keep-alive pings (RFC 5626)
