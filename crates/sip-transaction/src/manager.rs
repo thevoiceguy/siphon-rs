@@ -385,7 +385,7 @@ struct ManagerInner {
     client: DashMap<TransactionKey, ClientEntry>,
     // Removed client_index - build TransactionKey directly from response
     timer_defaults: TimerDefaults,
-    pool: ConnectionPool,
+    pool: Arc<ConnectionPool>,
     metrics: TransactionMetrics,
     limits: TransactionLimits,
 }
@@ -435,8 +435,37 @@ impl TransactionManager {
     }
 
     /// Creates a new transaction manager using the supplied dispatcher.
+    ///
+    /// This creates an internal ConnectionPool. For better resource sharing,
+    /// consider using `new_with_pool()` to provide an external pool.
     pub fn new(dispatcher: Arc<dyn TransportDispatcher>) -> Self {
         Self::with_timers(dispatcher, T1_DEFAULT, T2_DEFAULT, T4_DEFAULT)
+    }
+
+    /// Creates a transaction manager with an external connection pool.
+    ///
+    /// **Recommended for production**: This allows sharing a single ConnectionPool
+    /// between the transaction manager and dispatcher, avoiding duplicate connections
+    /// and better resource utilization at scale.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let pool = Arc::new(ConnectionPool::new());
+    /// let dispatcher = create_dispatcher_with_pool(Arc::clone(&pool));
+    /// let manager = TransactionManager::new_with_pool(dispatcher, pool);
+    /// ```
+    pub fn new_with_pool(
+        dispatcher: Arc<dyn TransportDispatcher>,
+        pool: Arc<ConnectionPool>,
+    ) -> Self {
+        Self::with_timers_pool_and_limits(
+            dispatcher,
+            pool,
+            T1_DEFAULT,
+            T2_DEFAULT,
+            T4_DEFAULT,
+            TransactionLimits::default(),
+        )
     }
 
     /// Creates a transaction manager with custom limits for DoS protection.
@@ -445,6 +474,22 @@ impl TransactionManager {
         limits: TransactionLimits,
     ) -> Self {
         Self::with_timers_and_limits(dispatcher, T1_DEFAULT, T2_DEFAULT, T4_DEFAULT, limits)
+    }
+
+    /// Creates a transaction manager with an external pool and custom limits.
+    pub fn with_pool_and_limits(
+        dispatcher: Arc<dyn TransportDispatcher>,
+        pool: Arc<ConnectionPool>,
+        limits: TransactionLimits,
+    ) -> Self {
+        Self::with_timers_pool_and_limits(
+            dispatcher,
+            pool,
+            T1_DEFAULT,
+            T2_DEFAULT,
+            T4_DEFAULT,
+            limits,
+        )
     }
 
     /// Creates a transaction manager using custom T1/T2/T4 timers (test hook).
@@ -465,6 +510,27 @@ impl TransactionManager {
         t4: Duration,
         limits: TransactionLimits,
     ) -> Self {
+        Self::with_timers_pool_and_limits(
+            dispatcher,
+            Arc::new(ConnectionPool::new()),
+            t1,
+            t2,
+            t4,
+            limits,
+        )
+    }
+
+    /// Creates a transaction manager with custom timers, external pool, and limits.
+    ///
+    /// This is the most flexible constructor. All other constructors delegate to this.
+    fn with_timers_pool_and_limits(
+        dispatcher: Arc<dyn TransportDispatcher>,
+        pool: Arc<ConnectionPool>,
+        t1: Duration,
+        t2: Duration,
+        t4: Duration,
+        limits: TransactionLimits,
+    ) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel(128);
         let manager = Self {
             inner: Arc::new(ManagerInner {
@@ -472,7 +538,7 @@ impl TransactionManager {
                 server: DashMap::new(),
                 client: DashMap::new(),
                 timer_defaults: TimerDefaults { t1, t2, t4 },
-                pool: ConnectionPool::new(),
+                pool,
                 metrics: TransactionMetrics::new(),
                 limits,
             }),
