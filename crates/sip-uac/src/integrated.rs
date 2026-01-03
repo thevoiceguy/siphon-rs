@@ -632,7 +632,10 @@ impl CallHandle {
     /// If multiple provisional responses arrive from different endpoints (forking),
     /// each response will be delivered through this channel. Early dialogs are
     /// automatically tracked internally.
-    pub async fn await_provisional(&mut self) -> Option<Response> {
+    /// Waits for the next provisional response (1xx).
+    ///
+    /// Returns None when no more provisionals will arrive (final response received).
+    pub async fn await_provisional(&self) -> Option<Response> {
         self.provisional_rx.lock().await.recv().await
     }
 
@@ -662,13 +665,17 @@ impl CallHandle {
 
     /// Waits for the final response (200, 486, etc).
     ///
-    /// This will consume the handle and return the final response.
+    /// This will consume the internal receiver and return the final response.
     ///
     /// # Forking Behavior
     /// - If multiple 2xx responses arrive (rare), only the first is returned
     /// - The winning dialog is updated in the handle
     /// - Non-winning early dialogs are automatically discarded
-    pub async fn await_final(self) -> Result<Response> {
+    ///
+    /// # Concurrency
+    /// - This method takes `&self` to allow concurrent access with `cancel()`
+    /// - Internal synchronization via Mutex ensures thread-safe receiver access
+    pub async fn await_final(&self) -> Result<Response> {
         // Stop keepalives if running
         if let Some(handle) = self.keepalive_cancel.lock().await.take() {
             handle.abort();
@@ -2008,13 +2015,11 @@ impl CallHandle {
         for header in self.invite_request.headers().iter() {
             match header.name() {
                 "Via" => {
-                    // Generate new branch for CANCEL
-                    let new_branch = crate::generate_branch();
+                    // RFC 3261 §9.1: CANCEL MUST have the same Via branch as the INVITE
+                    // "A CANCEL constructed by a client MUST have only a single Via header
+                    // field value matching the top Via value in the request being cancelled"
                     cancel_headers
-                        .push(
-                            SmolStr::new("Via"),
-                            SmolStr::new(crate::replace_via_branch(header.value(), &new_branch)),
-                        )
+                        .push(header.name_smol().clone(), header.value_smol().clone())
                         .unwrap();
                 }
                 "From" | "To" | "Call-ID" => {
@@ -2063,6 +2068,14 @@ impl CallHandle {
             Bytes::new(),
         )
         .expect("valid CANCEL request");
+
+        // Debug: log the CANCEL request details
+        debug!(
+            "CANCEL request - Request-URI: {}, Call-ID: {:?}, CSeq: {:?}",
+            cancel_request.uri(),
+            cancel_request.headers().get("Call-ID"),
+            cancel_request.headers().get("CSeq")
+        );
 
         // Send CANCEL as a new non-INVITE transaction
         let (final_tx, final_rx) = oneshot::channel();
