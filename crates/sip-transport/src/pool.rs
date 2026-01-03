@@ -136,16 +136,23 @@ impl ConnectionPool {
 
     /// Sends bytes over a pooled TCP connection; opens one if missing.
     pub async fn send_tcp(&self, addr: SocketAddr, payload: Bytes) -> Result<()> {
+        debug!(peer = %addr, "send_tcp called");
+
         // Try to use existing connection
         if let Some(mut entry) = self.tcp.get_mut(&addr) {
+            debug!(peer = %addr, "found existing TCP connection, reusing");
             entry.touch(); // Update last activity time
             if entry.sender.send(payload.clone()).await.is_ok() {
+                debug!(peer = %addr, "reused existing TCP connection successfully");
                 return Ok(());
             }
             // Connection failed, remove it
+            debug!(peer = %addr, "existing TCP connection failed, removing");
             drop(entry);
             self.tcp.remove(&addr);
         }
+
+        debug!(peer = %addr, "no existing connection found, creating new TCP connection");
 
         // Check if we need to make room
         if self.tcp.len() >= self.max_size {
@@ -159,10 +166,13 @@ impl ConnectionPool {
         }
 
         // Create new connection
+        debug!(peer = %addr, "connecting to TCP peer");
         let stream = TcpStream::connect(addr).await?;
+        debug!(peer = %addr, "TCP connection established");
         let (mut reader, mut writer) = stream.into_split();
         let (tx, mut rx) = mpsc::channel::<Bytes>(64);
         self.tcp.insert(addr, PoolEntry::new(tx.clone()));
+        debug!(peer = %addr, "inserted connection into pool");
 
         // Writer task (existing behavior)
         let writer_tx = tx.clone();
@@ -179,7 +189,12 @@ impl ConnectionPool {
         });
 
         // Optional reader task to deliver responses back to the inbound pipeline
-        if let Some(inbound_tx) = self.inbound_tx.lock().await.clone() {
+        let inbound_tx_guard = self.inbound_tx.lock().await;
+        let has_inbound_tx = inbound_tx_guard.is_some();
+        debug!(peer = %addr, has_inbound_tx = %has_inbound_tx, "checking if inbound_tx is set");
+
+        if let Some(inbound_tx) = inbound_tx_guard.clone() {
+            drop(inbound_tx_guard);
             let peer = addr;
             debug!(peer = %peer, "spawning TCP client reader task for outbound connection");
             tokio::spawn(async move {
@@ -247,6 +262,9 @@ impl ConnectionPool {
                     }
                 }
             });
+        } else {
+            drop(inbound_tx_guard);
+            debug!(peer = %addr, "inbound_tx is None, skipping TCP client reader task");
         }
 
         let result = tx

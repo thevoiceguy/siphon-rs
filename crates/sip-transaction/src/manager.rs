@@ -487,6 +487,15 @@ impl TransactionManager {
         &self.inner.metrics
     }
 
+    /// Register an inbound packet sink for client-initiated TCP/TLS connections.
+    ///
+    /// This allows responses on outbound TCP connections to be routed back into the
+    /// transaction manager. Must be called to enable response handling for
+    /// client transactions that initiate new TCP connections.
+    pub async fn set_inbound_tx(&self, tx: mpsc::Sender<sip_transport::InboundPacket>) {
+        self.inner.pool.set_inbound_tx(tx).await;
+    }
+
     /// Enforces server transaction limits by evicting oldest transaction if at limit.
     ///
     /// Returns true if a transaction was evicted (limit reached), false otherwise.
