@@ -83,6 +83,7 @@ impl ConnectionPool {
     /// Registers an inbound packet sink so responses on outbound TCP connections
     /// get routed back into the SIP handler/transaction layer.
     pub async fn set_inbound_tx(&self, tx: Sender<InboundPacket>) {
+        debug!("ConnectionPool: set_inbound_tx called, enabling TCP client reader tasks");
         let mut guard = self.inbound_tx.lock().await;
         *guard = Some(tx);
     }
@@ -180,8 +181,10 @@ impl ConnectionPool {
         // Optional reader task to deliver responses back to the inbound pipeline
         if let Some(inbound_tx) = self.inbound_tx.lock().await.clone() {
             let peer = addr;
+            debug!(peer = %peer, "spawning TCP client reader task for outbound connection");
             tokio::spawn(async move {
                 let mut buf = BytesMut::with_capacity(4096);
+                debug!(peer = %peer, "TCP client reader task started");
                 loop {
                     if buf.len() >= MAX_BUFFER_SIZE {
                         warn!(
@@ -193,22 +196,37 @@ impl ConnectionPool {
                     }
 
                     match reader.read_buf(&mut buf).await {
-                        Ok(0) => break, // connection closed
-                        Ok(_) => match drain_sip_frames(&mut buf) {
-                            Ok(frames) => {
-                                for payload in frames {
-                                    let packet = InboundPacket {
-                                        transport: TransportKind::Tcp,
-                                        peer,
-                                        payload,
-                                        stream: Some(writer_tx.clone()),
-                                    };
-                                    if inbound_tx.send(packet).await.is_err() {
-                                        break;
+                        Ok(0) => {
+                            debug!(peer = %peer, "TCP client connection closed by peer");
+                            break;
+                        }
+                        Ok(n) => {
+                            debug!(peer = %peer, bytes = n, "TCP client read {} bytes", n);
+                            match drain_sip_frames(&mut buf) {
+                                Ok(frames) => {
+                                    debug!(peer = %peer, frame_count = frames.len(), "TCP client drained {} SIP frames", frames.len());
+                                    for payload in frames {
+                                        // Extract first line for logging
+                                        let first_line = payload
+                                            .split(|&b| b == b'\r' || b == b'\n')
+                                            .next()
+                                            .and_then(|line| std::str::from_utf8(line).ok())
+                                            .unwrap_or("<invalid>");
+                                        debug!(peer = %peer, first_line = %first_line, "TCP client sending frame to inbound_tx");
+
+                                        let packet = InboundPacket {
+                                            transport: TransportKind::Tcp,
+                                            peer,
+                                            payload,
+                                            stream: Some(writer_tx.clone()),
+                                        };
+                                        if inbound_tx.send(packet).await.is_err() {
+                                            warn!(peer = %peer, "TCP client inbound_tx channel closed");
+                                            break;
+                                        }
                                     }
                                 }
-                            }
-                            Err(e) => {
+                                Err(e) => {
                                 warn!(
                                     peer = %peer,
                                     error = %e,
@@ -216,6 +234,7 @@ impl ConnectionPool {
                                 );
                                 break;
                             }
+                        }
                         },
                         Err(e) => {
                             warn!(
