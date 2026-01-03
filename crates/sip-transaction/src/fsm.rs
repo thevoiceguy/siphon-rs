@@ -520,20 +520,30 @@ impl ClientInviteFsm {
         let bytes = serialize_request(&request);
         self.last_invite = Some(bytes.clone());
         self.state = crate::ClientInviteState::Calling;
-        vec![
+
+        let mut actions = vec![
             ClientInviteAction::Transmit {
                 bytes,
                 transport: TransportKind::Udp,
             },
-            ClientInviteAction::Schedule {
+        ];
+
+        // Only schedule Timer A if duration is non-zero (UDP only)
+        let timer_a_duration = self.timers.duration(TransactionTimer::A);
+        if !timer_a_duration.is_zero() {
+            actions.push(ClientInviteAction::Schedule {
                 timer: TransactionTimer::A,
-                duration: self.timers.duration(TransactionTimer::A),
-            },
-            ClientInviteAction::Schedule {
-                timer: TransactionTimer::B,
-                duration: self.timers.duration(TransactionTimer::B),
-            },
-        ]
+                duration: timer_a_duration,
+            });
+        }
+
+        // Always schedule Timer B (transaction timeout)
+        actions.push(ClientInviteAction::Schedule {
+            timer: TransactionTimer::B,
+            duration: self.timers.duration(TransactionTimer::B),
+        });
+
+        actions
     }
 
     fn handle_provisional(&mut self, response: Response) -> Vec<ClientInviteAction> {
@@ -602,6 +612,13 @@ impl ClientInviteFsm {
         if !matches!(self.state, crate::ClientInviteState::Calling) {
             return Vec::new();
         }
+
+        // Timer A should only fire on unreliable transports (UDP)
+        // If we're here on a reliable transport, don't retransmit or reschedule
+        if self.timers.duration(TransactionTimer::A).is_zero() {
+            return Vec::new();
+        }
+
         let t2 = self.timers.duration(TransactionTimer::T2);
         self.a_interval = (self.a_interval * 2).min(t2);
         if let Some(invite) = &self.last_invite {
@@ -697,20 +714,30 @@ impl ClientNonInviteFsm {
         let bytes = serialize_request(&request);
         self.last_request = Some(bytes.clone());
         self.state = ClientNonInviteState::Trying;
-        vec![
+
+        let mut actions = vec![
             ClientAction::Transmit {
                 bytes,
                 transport: TransportKind::Udp,
             },
-            ClientAction::Schedule {
+        ];
+
+        // Only schedule Timer E if duration is non-zero (UDP only)
+        let timer_e_duration = self.timers.duration(TransactionTimer::E);
+        if !timer_e_duration.is_zero() {
+            actions.push(ClientAction::Schedule {
                 timer: TransactionTimer::E,
-                duration: self.timers.duration(TransactionTimer::E),
-            },
-            ClientAction::Schedule {
-                timer: TransactionTimer::F,
-                duration: self.timers.duration(TransactionTimer::F),
-            },
-        ]
+                duration: timer_e_duration,
+            });
+        }
+
+        // Always schedule Timer F (transaction timeout)
+        actions.push(ClientAction::Schedule {
+            timer: TransactionTimer::F,
+            duration: self.timers.duration(TransactionTimer::F),
+        });
+
+        actions
     }
 
     fn handle_provisional(&mut self, response: Response) -> Vec<ClientAction> {
@@ -735,6 +762,13 @@ impl ClientNonInviteFsm {
         if self.state == ClientNonInviteState::Completed {
             return Vec::new();
         }
+
+        // Timer E should only fire on unreliable transports (UDP)
+        // If we're here on a reliable transport, don't retransmit or reschedule
+        if self.timers.duration(TransactionTimer::E).is_zero() {
+            return Vec::new();
+        }
+
         let t2 = self.timers.duration(TransactionTimer::T2);
         self.e_interval = (self.e_interval * 2).min(t2);
         if let Some(payload) = &self.last_request {
@@ -1059,20 +1093,29 @@ impl ServerInviteFsm {
             self.state = crate::ServerInviteState::Completed;
             self.last_final = Some(bytes.clone());
             self.g_interval = self.timers.duration(TransactionTimer::G);
-            vec![
+
+            let mut actions = vec![
                 ServerInviteAction::Transmit {
                     bytes,
                     transport: TransportKind::Udp,
                 },
-                ServerInviteAction::Schedule {
+            ];
+
+            // Only schedule Timer G if duration is non-zero (UDP only)
+            if !self.g_interval.is_zero() {
+                actions.push(ServerInviteAction::Schedule {
                     timer: TransactionTimer::G,
                     duration: self.g_interval,
-                },
-                ServerInviteAction::Schedule {
-                    timer: TransactionTimer::H,
-                    duration: self.timers.duration(TransactionTimer::H),
-                },
-            ]
+                });
+            }
+
+            // Always schedule Timer H (transaction timeout)
+            actions.push(ServerInviteAction::Schedule {
+                timer: TransactionTimer::H,
+                duration: self.timers.duration(TransactionTimer::H),
+            });
+
+            actions
         }
     }
 
@@ -1095,6 +1138,13 @@ impl ServerInviteFsm {
         if self.state != crate::ServerInviteState::Completed {
             return Vec::new();
         }
+
+        // Timer G should only fire on unreliable transports (UDP)
+        // If we're here on a reliable transport, don't retransmit or reschedule
+        if self.timers.duration(TransactionTimer::G).is_zero() {
+            return Vec::new();
+        }
+
         if let Some(bytes) = &self.last_final {
             let action = ServerInviteAction::Transmit {
                 bytes: bytes.clone(),
