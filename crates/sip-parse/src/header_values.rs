@@ -8,13 +8,14 @@ use bytes::Bytes;
 use sip_core::geolocation::{GeolocationError, MAX_GEO_VALUES};
 use sip_core::history_info::{HistoryInfoError, MAX_ENTRIES as MAX_HISTORY_ENTRIES};
 use sip_core::{
-    p_headers::PHeaderError, service_route::{MAX_ROUTES, RouteError}, AllowHeader, AuthorizationHeader,
-    ContactHeader, DateHeader, EventHeader, FromHeader, GeolocationErrorHeader, GeolocationHeader,
-    GeolocationRoutingHeader, GeolocationValue, Headers, HistoryInfoEntry, HistoryInfoHeader,
-    MimeType, MinSessionExpires, NameAddr, NameAddrHeader, PAccessNetworkInfo,
-    PAssertedIdentityHeader, PPreferredIdentityHeader, PVisitedNetworkIdHeader, PathHeader,
-    PriorityValue, RAckHeader, RSeqHeader, ReasonHeader, ResourcePriorityHeader, RouteHeader,
-    SdpSession, ServiceRouteHeader, SessionExpires, SipETagHeader, SubjectHeader,
+    p_headers::PHeaderError,
+    service_route::{RouteError, MAX_ROUTES},
+    AllowHeader, AuthorizationHeader, ContactHeader, DateHeader, EventHeader, FromHeader,
+    GeolocationErrorHeader, GeolocationHeader, GeolocationRoutingHeader, GeolocationValue, Headers,
+    HistoryInfoEntry, HistoryInfoHeader, MimeType, MinSessionExpires, NameAddr, NameAddrHeader,
+    PAccessNetworkInfo, PAssertedIdentityHeader, PPreferredIdentityHeader, PVisitedNetworkIdHeader,
+    PathHeader, PriorityValue, RAckHeader, RSeqHeader, ReasonHeader, ResourcePriorityHeader,
+    RouteHeader, SdpSession, ServiceRouteHeader, SessionExpires, SipETagHeader, SubjectHeader,
     SubscriptionState, SubscriptionStateHeader, SupportedHeader, ToHeader, TokenList, Uri,
     ViaHeader,
 };
@@ -323,8 +324,9 @@ pub fn parse_geolocation_routing(
     value: &SmolStr,
 ) -> Result<GeolocationRoutingHeader, GeolocationError> {
     let mut header = GeolocationRoutingHeader::new();
-    let params = parse_params(value.as_str()).ok_or_else(|| {
-        GeolocationError::TooManyParams { max: MAX_PARAMS, actual: MAX_PARAMS + 1 }
+    let params = parse_params(value.as_str()).ok_or_else(|| GeolocationError::TooManyParams {
+        max: MAX_PARAMS,
+        actual: MAX_PARAMS + 1,
     })?;
     for (name, param_value) in params.iter() {
         let value_str = param_value.as_ref().map(|s| s.as_str());

@@ -1969,12 +1969,8 @@ mod tests {
 
         // Create a mock subscription
         let remote_uri = SipUri::parse("sip:alice@example.com").unwrap();
-        let subscription_id = sip_dialog::SubscriptionId::unchecked_new(
-            "test-call-id",
-            "abc123",
-            "def456",
-            "refer",
-        );
+        let subscription_id =
+            sip_dialog::SubscriptionId::unchecked_new("test-call-id", "abc123", "def456", "refer");
         let mut subscription = Subscription::unchecked_new(
             subscription_id,
             SubscriptionState::Active,
@@ -1982,8 +1978,8 @@ mod tests {
             remote_uri.clone(),
             remote_uri,
             Duration::from_secs(3600),
-            1,  // local_cseq
-            1,  // remote_cseq
+            1, // local_cseq
+            1, // remote_cseq
         );
 
         // Test with 100 Trying (should be active)
@@ -2139,14 +2135,14 @@ mod tests {
             local_uri.clone(),
             remote_uri,
             SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
-            0,  // local_cseq
-            1,  // remote_cseq
-            None,  // last_ack_cseq
-            vec![],  // route_set
-            false,  // secure
-            Some(Duration::from_secs(1800)),  // session_expires
-            Some(RefresherRole::Uas),  // refresher
-            false,  // is_uac
+            0,                               // local_cseq
+            1,                               // remote_cseq
+            None,                            // last_ack_cseq
+            vec![],                          // route_set
+            false,                           // secure
+            Some(Duration::from_secs(1800)), // session_expires
+            Some(RefresherRole::Uas),        // refresher
+            false,                           // is_uac
         );
 
         // Create reliable provisional response (180 Ringing)
@@ -2232,14 +2228,14 @@ mod tests {
             local_uri.clone(),
             remote_uri,
             SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
-            0,  // local_cseq
-            1,  // remote_cseq
-            None,  // last_ack_cseq
-            vec![],  // route_set
-            false,  // secure
-            Some(Duration::from_secs(1800)),  // session_expires
-            Some(RefresherRole::Uas),  // refresher
-            false,  // is_uac
+            0,                               // local_cseq
+            1,                               // remote_cseq
+            None,                            // last_ack_cseq
+            vec![],                          // route_set
+            false,                           // secure
+            Some(Duration::from_secs(1800)), // session_expires
+            Some(RefresherRole::Uas),        // refresher
+            false,                           // is_uac
         );
 
         let _provisional = uas
@@ -2539,13 +2535,13 @@ mod tests {
             local_uri.clone(),
             remote_uri,
             SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
-            0,  // local_cseq
-            1,  // remote_cseq
-            None,  // last_ack_cseq
-            vec![],  // route_set
+            0,      // local_cseq
+            1,      // remote_cseq
+            None,   // last_ack_cseq
+            vec![], // route_set
             false,  // secure
-            None,  // session_expires
-            None,  // refresher
+            None,   // session_expires
+            None,   // refresher
             false,  // is_uac
         );
 
@@ -2629,13 +2625,13 @@ mod tests {
             local_uri.clone(),
             remote_uri,
             SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
-            0,  // local_cseq
-            5,  // remote_cseq
-            None,  // last_ack_cseq
-            vec![],  // route_set
+            0,      // local_cseq
+            5,      // remote_cseq
+            None,   // last_ack_cseq
+            vec![], // route_set
             false,  // secure
-            None,  // session_expires
-            None,  // refresher
+            None,   // session_expires
+            None,   // refresher
             false,  // is_uac
         );
 
@@ -2716,13 +2712,13 @@ mod tests {
             local_uri.clone(),
             remote_uri,
             SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
-            0,  // local_cseq
-            1,  // remote_cseq
-            None,  // last_ack_cseq
-            vec![],  // route_set
+            0,      // local_cseq
+            1,      // remote_cseq
+            None,   // last_ack_cseq
+            vec![], // route_set
             false,  // secure
-            None,  // session_expires
-            None,  // refresher
+            None,   // session_expires
+            None,   // refresher
             false,  // is_uac
         );
 
@@ -2790,13 +2786,13 @@ mod tests {
             local_uri.clone(),
             remote_uri,
             SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
-            0,  // local_cseq
-            1,  // remote_cseq
-            None,  // last_ack_cseq
-            vec![],  // route_set
+            0,      // local_cseq
+            1,      // remote_cseq
+            None,   // last_ack_cseq
+            vec![], // route_set
             false,  // secure
-            None,  // session_expires
-            None,  // refresher
+            None,   // session_expires
+            None,   // refresher
             false,  // is_uac
         );
 

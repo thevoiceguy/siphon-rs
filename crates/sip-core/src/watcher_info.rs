@@ -75,7 +75,9 @@ impl std::error::Error for WatcherinfoError {}
 /// Validates a state value.
 fn validate_state(state: &str) -> Result<(), WatcherinfoError> {
     if state.is_empty() {
-        return Err(WatcherinfoError::InvalidState("state cannot be empty".to_string()));
+        return Err(WatcherinfoError::InvalidState(
+            "state cannot be empty".to_string(),
+        ));
     }
 
     if state.len() > MAX_STATE_LENGTH {
@@ -98,7 +100,9 @@ fn validate_state(state: &str) -> Result<(), WatcherinfoError> {
 /// Validates a URI.
 fn validate_uri(uri: &str) -> Result<(), WatcherinfoError> {
     if uri.is_empty() {
-        return Err(WatcherinfoError::InvalidUri("URI cannot be empty".to_string()));
+        return Err(WatcherinfoError::InvalidUri(
+            "URI cannot be empty".to_string(),
+        ));
     }
 
     if uri.len() > MAX_URI_LENGTH {
@@ -123,7 +127,9 @@ fn validate_uri(uri: &str) -> Result<(), WatcherinfoError> {
 /// Validates an ID.
 fn validate_id(id: &str) -> Result<(), WatcherinfoError> {
     if id.is_empty() {
-        return Err(WatcherinfoError::InvalidId("ID cannot be empty".to_string()));
+        return Err(WatcherinfoError::InvalidId(
+            "ID cannot be empty".to_string(),
+        ));
     }
 
     if id.len() > MAX_ID_LENGTH {
@@ -654,7 +660,10 @@ fn xml_unescape(s: &str) -> Result<String, WatcherinfoError> {
             };
             if let Some(ch) = decoded {
                 out.push(ch);
-            } else if let Some(hex) = entity.strip_prefix("#x").or_else(|| entity.strip_prefix("#X")) {
+            } else if let Some(hex) = entity
+                .strip_prefix("#x")
+                .or_else(|| entity.strip_prefix("#X"))
+            {
                 let value = u32::from_str_radix(hex, 16).map_err(|_| {
                     WatcherinfoError::XmlParseError("invalid hex character reference".to_string())
                 })?;
@@ -707,9 +716,11 @@ pub fn parse_watcherinfo(xml: &str) -> Result<WatcherinfoDocument, WatcherinfoEr
     let mut pos = 0;
     while let Some(list_start) = xml[pos..].find("<watcher-list") {
         let abs_start = pos + list_start;
-        let list_end = xml[abs_start..].find("</watcher-list>")
+        let list_end = xml[abs_start..]
+            .find("</watcher-list>")
             .ok_or_else(|| WatcherinfoError::XmlParseError("unclosed watcher-list".to_string()))?
-            + abs_start + 15;
+            + abs_start
+            + 15;
         let list_xml = &xml[abs_start..list_end];
 
         let list = parse_watcher_list(list_xml)?;
@@ -732,9 +743,11 @@ fn parse_watcher_list(xml: &str) -> Result<WatcherList, WatcherinfoError> {
     let mut pos = 0;
     while let Some(watcher_start) = xml[pos..].find("<watcher ") {
         let abs_start = pos + watcher_start;
-        let watcher_end = xml[abs_start..].find("</watcher>")
+        let watcher_end = xml[abs_start..]
+            .find("</watcher>")
             .ok_or_else(|| WatcherinfoError::XmlParseError("unclosed watcher".to_string()))?
-            + abs_start + 10;
+            + abs_start
+            + 10;
         let watcher_xml = &xml[abs_start..watcher_end];
 
         let watcher = parse_watcher(watcher_xml)?;
@@ -754,8 +767,9 @@ fn parse_watcher(xml: &str) -> Result<Watcher, WatcherinfoError> {
     let event_str = extract_attribute(xml, "<watcher", "event")?
         .ok_or_else(|| WatcherinfoError::XmlParseError("missing event".to_string()))?;
 
-    let status = WatcherStatus::parse(&status_str)
-        .ok_or_else(|| WatcherinfoError::XmlParseError(format!("invalid status: {}", status_str)))?;
+    let status = WatcherStatus::parse(&status_str).ok_or_else(|| {
+        WatcherinfoError::XmlParseError(format!("invalid status: {}", status_str))
+    })?;
     let event = WatcherEvent::parse(&event_str)
         .ok_or_else(|| WatcherinfoError::XmlParseError(format!("invalid event: {}", event_str)))?;
 
@@ -799,9 +813,9 @@ fn extract_attribute(
         None => return Ok(None),
     };
     let tag_content = &xml[tag_start..];
-    let tag_end = tag_content.find('>').ok_or_else(|| {
-        WatcherinfoError::XmlParseError("unterminated tag".to_string())
-    })?;
+    let tag_end = tag_content
+        .find('>')
+        .ok_or_else(|| WatcherinfoError::XmlParseError("unterminated tag".to_string()))?;
     let tag_str = &tag_content[..tag_end];
 
     let mut search_idx = 0;
@@ -858,9 +872,7 @@ fn extract_attribute(
         }
 
         let quote = tag_str[idx..].chars().next().ok_or_else(|| {
-            WatcherinfoError::XmlParseError(
-                "invalid UTF-8 sequence in quote character".to_string(),
-            )
+            WatcherinfoError::XmlParseError("invalid UTF-8 sequence in quote character".to_string())
         })?;
         if quote != '"' && quote != '\'' {
             return Err(WatcherinfoError::XmlParseError(
@@ -870,9 +882,9 @@ fn extract_attribute(
         idx += quote.len_utf8();
 
         let rest = &tag_str[idx..];
-        let end_rel = rest.find(quote).ok_or_else(|| {
-            WatcherinfoError::XmlParseError("unterminated attribute".to_string())
-        })?;
+        let end_rel = rest
+            .find(quote)
+            .ok_or_else(|| WatcherinfoError::XmlParseError("unterminated attribute".to_string()))?;
         let value = &rest[..end_rel];
         return xml_unescape(value).map(Some);
     }
@@ -926,10 +938,15 @@ mod tests {
     fn watcher_list_rejects_too_many_watchers() {
         let mut list = WatcherList::new("sip:alice@example.com", "presence").unwrap();
         for i in 0..MAX_WATCHERS_PER_LIST {
-            let watcher = Watcher::new(format!("w{}", i), WatcherStatus::Active, WatcherEvent::Approved).unwrap();
+            let watcher = Watcher::new(
+                format!("w{}", i),
+                WatcherStatus::Active,
+                WatcherEvent::Approved,
+            )
+            .unwrap();
             list.add_watcher(watcher).unwrap();
         }
-        
+
         let extra = Watcher::new("extra", WatcherStatus::Active, WatcherEvent::Approved).unwrap();
         assert!(list.add_watcher(extra).is_err());
     }
@@ -941,7 +958,7 @@ mod tests {
             let list = WatcherList::new(format!("sip:user{}@example.com", i), "presence").unwrap();
             doc.add_watcher_list(list).unwrap();
         }
-        
+
         let extra = WatcherList::new("sip:extra@example.com", "presence").unwrap();
         assert!(doc.add_watcher_list(extra).is_err());
     }
@@ -950,8 +967,10 @@ mod tests {
     fn watcher_creation() {
         let watcher = Watcher::new("w1", WatcherStatus::Active, WatcherEvent::Approved)
             .unwrap()
-            .with_uri("sip:bob@example.com").unwrap()
-            .with_display_name("Bob").unwrap()
+            .with_uri("sip:bob@example.com")
+            .unwrap()
+            .with_display_name("Bob")
+            .unwrap()
             .with_expiration(3600);
 
         assert_eq!(watcher.id(), "w1");
@@ -1003,8 +1022,10 @@ mod tests {
         list.add_watcher(
             Watcher::new("w1", WatcherStatus::Active, WatcherEvent::Approved)
                 .unwrap()
-                .with_uri("sip:bob@example.com").unwrap(),
-        ).unwrap();
+                .with_uri("sip:bob@example.com")
+                .unwrap(),
+        )
+        .unwrap();
         doc.add_watcher_list(list).unwrap();
 
         let xml = doc.to_xml();
@@ -1064,8 +1085,10 @@ mod tests {
         list.add_watcher(
             Watcher::new("w1", WatcherStatus::Active, WatcherEvent::Approved)
                 .unwrap()
-                .with_uri("sip:bob@example.com").unwrap(),
-        ).unwrap();
+                .with_uri("sip:bob@example.com")
+                .unwrap(),
+        )
+        .unwrap();
         doc.add_watcher_list(list).unwrap();
 
         let xml = doc.to_xml();
@@ -1079,12 +1102,12 @@ mod tests {
     #[test]
     fn fields_are_private() {
         let doc = WatcherinfoDocument::new(0, "full").unwrap();
-        
+
         // These should compile (read access via getters)
         let _ = doc.version();
         let _ = doc.state();
         let _ = doc.watcher_lists();
-        
+
         // These should NOT compile:
         // doc.version = 5;                     // ← Does not compile!
         // doc.watcher_lists.push(...);         // ← Does not compile!
@@ -1094,7 +1117,7 @@ mod tests {
     fn error_display() {
         let err1 = WatcherinfoError::InvalidState("test".to_string());
         assert_eq!(err1.to_string(), "Invalid state: test");
-        
+
         let err2 = WatcherinfoError::TooManyItems {
             field: "watchers",
             max: 1000,

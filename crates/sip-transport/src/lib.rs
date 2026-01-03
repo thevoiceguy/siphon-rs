@@ -267,7 +267,14 @@ impl InboundPacket {
     }
 
     /// Consumes the packet and returns all components.
-    pub fn into_parts(self) -> (TransportKind, SocketAddr, Bytes, Option<mpsc::Sender<Bytes>>) {
+    pub fn into_parts(
+        self,
+    ) -> (
+        TransportKind,
+        SocketAddr,
+        Bytes,
+        Option<mpsc::Sender<Bytes>>,
+    ) {
         (self.transport, self.peer, self.payload, self.stream)
     }
 }
@@ -423,7 +430,10 @@ pub struct TlsConfig {
 #[cfg(feature = "tls")]
 impl TlsConfig {
     /// Creates a new TLS configuration.
-    pub fn new(server_name: String, client_config: std::sync::Arc<tokio_rustls::rustls::ClientConfig>) -> Self {
+    pub fn new(
+        server_name: String,
+        client_config: std::sync::Arc<tokio_rustls::rustls::ClientConfig>,
+    ) -> Self {
         Self {
             server_name,
             client_config,

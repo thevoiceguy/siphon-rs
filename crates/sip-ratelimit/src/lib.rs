@@ -510,7 +510,9 @@ impl RateLimiter {
         if let Err(e) = validate_key(key) {
             debug!(key, error = %e, "invalid rate limit key");
             // Block invalid keys (fail closed for security)
-            self.metrics.blocked_requests.fetch_add(1, Ordering::Relaxed);
+            self.metrics
+                .blocked_requests
+                .fetch_add(1, Ordering::Relaxed);
             return false;
         }
 
@@ -537,7 +539,9 @@ impl RateLimiter {
                 max = MAX_TRACKED_KEYS,
                 "rate limiter at max capacity, rejecting new key"
             );
-            self.metrics.blocked_requests.fetch_add(1, Ordering::Relaxed);
+            self.metrics
+                .blocked_requests
+                .fetch_add(1, Ordering::Relaxed);
             return false;
         }
 
@@ -816,7 +820,10 @@ mod tests {
 
     #[test]
     fn get_limit_info_returns_correct_values() {
-        let config = RateLimitConfig::new(10, 60).unwrap().with_burst_capacity(10).unwrap();
+        let config = RateLimitConfig::new(10, 60)
+            .unwrap()
+            .with_burst_capacity(10)
+            .unwrap();
         let limiter = RateLimiter::new(config);
 
         // No info before first request
@@ -866,7 +873,10 @@ mod tests {
 
     #[test]
     fn token_bucket_allows_burst() {
-        let config = RateLimitConfig::new(10, 60).unwrap().with_burst_capacity(5).unwrap();
+        let config = RateLimitConfig::new(10, 60)
+            .unwrap()
+            .with_burst_capacity(5)
+            .unwrap();
         let limiter = RateLimiter::new(config);
 
         // Should allow burst up to capacity
@@ -888,7 +898,10 @@ mod tests {
     #[test]
     fn token_bucket_refills_over_time() {
         // 10 requests per second (100ms per token)
-        let config = RateLimitConfig::new(10, 1).unwrap().with_burst_capacity(2).unwrap();
+        let config = RateLimitConfig::new(10, 1)
+            .unwrap()
+            .with_burst_capacity(2)
+            .unwrap();
         let limiter = RateLimiter::new(config);
 
         // Consume all tokens
@@ -1091,7 +1104,9 @@ mod tests {
 
     #[test]
     fn rejects_excessive_burst_capacity() {
-        let result = RateLimitConfig::new(10, 60).unwrap().with_burst_capacity(MAX_BURST_CAPACITY + 1);
+        let result = RateLimitConfig::new(10, 60)
+            .unwrap()
+            .with_burst_capacity(MAX_BURST_CAPACITY + 1);
         assert!(matches!(
             result,
             Err(RateLimitError::BurstCapacityTooLarge { .. })
@@ -1106,7 +1121,9 @@ mod tests {
 
     #[test]
     fn accepts_valid_burst_capacity() {
-        let result = RateLimitConfig::new(100, 60).unwrap().with_burst_capacity(200);
+        let result = RateLimitConfig::new(100, 60)
+            .unwrap()
+            .with_burst_capacity(200);
         assert!(result.is_ok());
     }
 

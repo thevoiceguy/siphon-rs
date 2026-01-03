@@ -450,7 +450,8 @@ async fn handle_packet(
             header(req.headers(), "Route").and_then(|route| {
                 let raw = route.trim_matches('<').trim_matches('>');
                 SipUri::parse(raw).ok().map(|uri| {
-                    let scheme = if matches!(packet.transport(), sip_transport::TransportKind::Wss) {
+                    let scheme = if matches!(packet.transport(), sip_transport::TransportKind::Wss)
+                    {
                         "wss"
                     } else {
                         "ws"

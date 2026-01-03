@@ -25,9 +25,9 @@
 //! Via: SIP/2.0/TCP [2001:db8::1]:5060;branch=z9hG4bK776asdhds
 //! ```
 
+use smol_str::SmolStr;
 use std::collections::BTreeMap;
 use std::fmt;
-use smol_str::SmolStr;
 
 // Security: Input size limits
 const MAX_TRANSPORT_LENGTH: usize = 32;
@@ -124,9 +124,9 @@ fn validate_sent_by(sent_by: &str) -> Result<(), ViaError> {
     }
 
     if sent_by.starts_with('[') {
-        let end = sent_by.find(']').ok_or_else(|| {
-            ViaError::InvalidSentBy("mismatched IPv6 brackets".to_string())
-        })?;
+        let end = sent_by
+            .find(']')
+            .ok_or_else(|| ViaError::InvalidSentBy("mismatched IPv6 brackets".to_string()))?;
         let host = &sent_by[1..end];
         if host.is_empty() {
             return Err(ViaError::InvalidSentBy(
@@ -137,9 +137,7 @@ fn validate_sent_by(sent_by: &str) -> Result<(), ViaError> {
             .chars()
             .all(|c| c.is_ascii_hexdigit() || matches!(c, ':' | '.'))
         {
-            return Err(ViaError::InvalidSentBy(
-                "invalid IPv6 address".to_string(),
-            ));
+            return Err(ViaError::InvalidSentBy("invalid IPv6 address".to_string()));
         }
         let remainder = &sent_by[end + 1..];
         if remainder.is_empty() {
@@ -236,22 +234,16 @@ fn validate_param_value(value: &str) -> Result<(), ViaError> {
 
 fn validate_port(port: &str) -> Result<(), ViaError> {
     if port.is_empty() {
-        return Err(ViaError::InvalidSentBy(
-            "port cannot be empty".to_string(),
-        ));
+        return Err(ViaError::InvalidSentBy("port cannot be empty".to_string()));
     }
     if !port.chars().all(|c| c.is_ascii_digit()) {
-        return Err(ViaError::InvalidSentBy(
-            "port must be numeric".to_string(),
-        ));
+        return Err(ViaError::InvalidSentBy("port must be numeric".to_string()));
     }
     let port_num = port
         .parse::<u32>()
         .map_err(|_| ViaError::InvalidSentBy("invalid port".to_string()))?;
     if !(1..=65535).contains(&port_num) {
-        return Err(ViaError::InvalidSentBy(
-            "port out of range".to_string(),
-        ));
+        return Err(ViaError::InvalidSentBy("port out of range".to_string()));
     }
     Ok(())
 }
@@ -320,7 +312,10 @@ impl ViaHeader {
     /// let via = ViaHeader::new("UDP", "host.example.com:5060").unwrap();
     /// assert_eq!(via.transport(), "UDP");
     /// ```
-    pub fn new(transport: impl Into<SmolStr>, sent_by: impl Into<SmolStr>) -> Result<Self, ViaError> {
+    pub fn new(
+        transport: impl Into<SmolStr>,
+        sent_by: impl Into<SmolStr>,
+    ) -> Result<Self, ViaError> {
         let transport = transport.into();
         let sent_by = sent_by.into();
 
@@ -603,7 +598,10 @@ mod tests {
 
     #[test]
     fn via_parse_multiple_params() {
-        let via = ViaHeader::parse("SIP/2.0/UDP host:5060;branch=z9hG4bK776;received=192.0.2.1;rport=5061").unwrap();
+        let via = ViaHeader::parse(
+            "SIP/2.0/UDP host:5060;branch=z9hG4bK776;received=192.0.2.1;rport=5061",
+        )
+        .unwrap();
         assert_eq!(via.params().len(), 3);
         assert!(via.param("branch").is_some());
         assert!(via.param("received").is_some());

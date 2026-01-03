@@ -59,14 +59,14 @@ fn main() {
         bob_uri.clone(),
         alice_uri.clone(),
         alice_contact.clone(),
-        1,  // local_cseq
-        1,  // remote_cseq
-        None,  // last_ack_cseq
-        vec![],  // route_set
-        false,  // secure
-        Some(Duration::from_secs(1800)),  // session_expires
-        Some(RefresherRole::Uac),  // refresher
-        false,  // is_uac - Bob is UAS (Alice called Bob)
+        1,                               // local_cseq
+        1,                               // remote_cseq
+        None,                            // last_ack_cseq
+        vec![],                          // route_set
+        false,                           // secure
+        Some(Duration::from_secs(1800)), // session_expires
+        Some(RefresherRole::Uac),        // refresher
+        false,                           // is_uac - Bob is UAS (Alice called Bob)
     );
 
     // Step 2: Bob puts Alice on hold
@@ -91,21 +91,22 @@ fn main() {
         .expect("valid display name");
 
     // Mock Call B dialog from Bob's perspective
-    let dialog_b_id = DialogId::unchecked_new("call-bob-charlie-456", "bob-tag-333", "charlie-tag-444");
+    let dialog_b_id =
+        DialogId::unchecked_new("call-bob-charlie-456", "bob-tag-333", "charlie-tag-444");
     let dialog_b = Dialog::unchecked_new(
         dialog_b_id,
         DialogStateType::Confirmed,
         bob_uri.clone(),
         charlie_uri.clone(),
         charlie_contact.clone(),
-        1,  // local_cseq
-        1,  // remote_cseq
-        None,  // last_ack_cseq
-        vec![],  // route_set
-        false,  // secure
-        Some(Duration::from_secs(1800)),  // session_expires
-        Some(RefresherRole::Uac),  // refresher
-        true,  // is_uac - Bob is UAC (Bob called Charlie)
+        1,                               // local_cseq
+        1,                               // remote_cseq
+        None,                            // last_ack_cseq
+        vec![],                          // route_set
+        false,                           // secure
+        Some(Duration::from_secs(1800)), // session_expires
+        Some(RefresherRole::Uac),        // refresher
+        true,                            // is_uac - Bob is UAC (Bob called Charlie)
     );
 
     println!("Bob talks to Charlie: \"I have Alice on the line, can you take the call?\"");
@@ -174,7 +175,12 @@ fn main() {
     println!("--- Step 8: Transfer Progress Notifications ---");
 
     // Mock subscription from REFER
-    let subscription_id = SubscriptionId::unchecked_new("call-alice-bob-123", "bob-tag-222", "alice-tag-111", "refer");
+    let subscription_id = SubscriptionId::unchecked_new(
+        "call-alice-bob-123",
+        "bob-tag-222",
+        "alice-tag-111",
+        "refer",
+    );
     let subscription = Subscription::unchecked_new(
         subscription_id,
         SubscriptionState::Active,
@@ -182,8 +188,8 @@ fn main() {
         bob_uri.clone(),
         bob_contact.clone(),
         Duration::from_secs(300),
-        1,  // local_cseq
-        2,  // remote_cseq
+        1, // local_cseq
+        2, // remote_cseq
     );
 
     println!("Alice -> Bob: NOTIFY (sipfrag: 100 Trying)");

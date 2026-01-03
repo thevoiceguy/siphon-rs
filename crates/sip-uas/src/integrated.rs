@@ -360,11 +360,7 @@ impl IntegratedUAS {
             "CANCEL" => {
                 self.request_handler.on_cancel(request, handle).await?;
                 if let Some(cancel_key) = TransactionKey::from_request(request, true) {
-                    let invite_key = TransactionKey::new(
-                        cancel_key.branch(),
-                        Method::Invite,
-                        true,
-                    );
+                    let invite_key = TransactionKey::new(cancel_key.branch(), Method::Invite, true);
                     let mut response =
                         UserAgentServer::create_request_terminated_from_cancel(request);
                     self.auto_fill_headers(&mut response, ctx).await;

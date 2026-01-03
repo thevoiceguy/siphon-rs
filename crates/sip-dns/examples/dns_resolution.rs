@@ -25,7 +25,11 @@ async fn main() -> anyhow::Result<()> {
     let resolver = SipResolver::from_system()?.disable_naptr();
     let targets = resolver.resolve(&uri).await.unwrap_or_else(|e| {
         println!("   Note: DNS lookup failed (expected in example): {}", e);
-        vec![DnsTarget::unchecked_new("secure.example.com", 5061, Transport::Tls)]
+        vec![DnsTarget::unchecked_new(
+            "secure.example.com",
+            5061,
+            Transport::Tls,
+        )]
     });
     print_targets(&targets);
 
@@ -34,7 +38,11 @@ async fn main() -> anyhow::Result<()> {
     let uri = SipUri::parse("sip:server.example.com;transport=tcp").unwrap();
     let targets = resolver.resolve(&uri).await.unwrap_or_else(|e| {
         println!("   Note: DNS lookup failed (expected in example): {}", e);
-        vec![DnsTarget::unchecked_new("server.example.com", 5060, Transport::Tcp)]
+        vec![DnsTarget::unchecked_new(
+            "server.example.com",
+            5060,
+            Transport::Tcp,
+        )]
     });
     print_targets(&targets);
 

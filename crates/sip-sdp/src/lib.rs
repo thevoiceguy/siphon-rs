@@ -105,11 +105,7 @@ impl std::fmt::Display for SdpError {
                 )
             }
             SdpError::InvalidClockRate { rate, min, max } => {
-                write!(
-                    f,
-                    "clock rate {} out of range ({}-{})",
-                    rate, min, max
-                )
+                write!(f, "clock rate {} out of range ({}-{})", rate, min, max)
             }
             SdpError::InvalidPayloadType { payload_type, max } => {
                 write!(f, "payload type {} exceeds max {}", payload_type, max)
@@ -124,11 +120,7 @@ impl std::fmt::Display for SdpError {
 impl std::error::Error for SdpError {}
 
 /// Validates a string field for length and control characters
-fn validate_field(
-    value: &str,
-    field: &'static str,
-    max_length: usize,
-) -> Result<(), SdpError> {
+fn validate_field(value: &str, field: &'static str, max_length: usize) -> Result<(), SdpError> {
     if value.is_empty() {
         return Err(SdpError::EmptyField { field });
     }
@@ -810,19 +802,28 @@ mod tests {
     #[test]
     fn rejects_crlf_in_username() {
         let result = Origin::new("alice\r\ninjected", "123", "192.168.1.100");
-        assert!(matches!(result, Err(SdpError::FieldContainsControlChars { .. })));
+        assert!(matches!(
+            result,
+            Err(SdpError::FieldContainsControlChars { .. })
+        ));
     }
 
     #[test]
     fn rejects_crlf_in_session_id() {
         let result = Origin::new("alice", "123\r\n456", "192.168.1.100");
-        assert!(matches!(result, Err(SdpError::FieldContainsControlChars { .. })));
+        assert!(matches!(
+            result,
+            Err(SdpError::FieldContainsControlChars { .. })
+        ));
     }
 
     #[test]
     fn rejects_crlf_in_address() {
         let result = Origin::new("alice", "123", "192.168.1.100\r\n");
-        assert!(matches!(result, Err(SdpError::FieldContainsControlChars { .. })));
+        assert!(matches!(
+            result,
+            Err(SdpError::FieldContainsControlChars { .. })
+        ));
     }
 
     #[test]
@@ -831,7 +832,10 @@ mod tests {
             .origin("alice", "123", "192.168.1.100")
             .unwrap()
             .session_name("Test\r\nCall");
-        assert!(matches!(result, Err(SdpError::FieldContainsControlChars { .. })));
+        assert!(matches!(
+            result,
+            Err(SdpError::FieldContainsControlChars { .. })
+        ));
     }
 
     #[test]
@@ -842,7 +846,10 @@ mod tests {
             .session_name("Test")
             .unwrap()
             .attribute("send\r\nrecv", None);
-        assert!(matches!(result, Err(SdpError::FieldContainsControlChars { .. })));
+        assert!(matches!(
+            result,
+            Err(SdpError::FieldContainsControlChars { .. })
+        ));
     }
 
     #[test]
@@ -853,7 +860,10 @@ mod tests {
             .session_name("Test")
             .unwrap()
             .attribute("fmtp", Some("101\r\n0-16"));
-        assert!(matches!(result, Err(SdpError::FieldContainsControlChars { .. })));
+        assert!(matches!(
+            result,
+            Err(SdpError::FieldContainsControlChars { .. })
+        ));
     }
 
     // Security tests: Field length limits

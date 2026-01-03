@@ -40,8 +40,8 @@ use trust_dns_resolver::{
 };
 
 // Security constants for DNS resolution
-const MAX_HOSTNAME_LENGTH: usize = 253;  // RFC 1035 §2.3.4
-const MAX_TARGETS_PER_QUERY: usize = 100;  // Prevent DoS via excessive results
+const MAX_HOSTNAME_LENGTH: usize = 253; // RFC 1035 §2.3.4
+const MAX_TARGETS_PER_QUERY: usize = 100; // Prevent DoS via excessive results
 
 /// DNS resolution errors with security-aware validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,11 +67,7 @@ impl fmt::Display for DnsError {
                 write!(f, "invalid hostname: {}", hostname)
             }
             DnsError::TooManyTargets { max, actual } => {
-                write!(
-                    f,
-                    "too many DNS targets: {} targets (max {})",
-                    actual, max
-                )
+                write!(f, "too many DNS targets: {} targets (max {})", actual, max)
             }
         }
     }
@@ -191,7 +187,11 @@ impl DnsTarget {
     /// - Hostname is empty
     /// - Hostname exceeds 253 bytes (RFC 1035 limit)
     /// - Hostname contains control characters
-    pub fn new(host: impl Into<SmolStr>, port: u16, transport: Transport) -> Result<Self, DnsError> {
+    pub fn new(
+        host: impl Into<SmolStr>,
+        port: u16,
+        transport: Transport,
+    ) -> Result<Self, DnsError> {
         let host_str: SmolStr = host.into();
         validate_hostname(host_str.as_str())?;
 
@@ -395,10 +395,11 @@ impl SipResolver {
         if let Some(port) = uri.port() {
             let ips = self.lookup_a_aaaa(host).await?;
             return enforce_target_limit(
-                ips
-                .into_iter()
-                .map(|ip| DnsTarget::unchecked_new(ip.to_string(), port, Self::default_transport(uri)))
-                .collect(),
+                ips.into_iter()
+                    .map(|ip| {
+                        DnsTarget::unchecked_new(ip.to_string(), port, Self::default_transport(uri))
+                    })
+                    .collect(),
             );
         }
 
@@ -595,7 +596,8 @@ impl SipResolver {
         for (priority, records) in priority_groups {
             let weighted = select_by_weight(records);
             for (host, port) in weighted {
-                targets.push(DnsTarget::unchecked_new(host, port, transport).with_priority(priority));
+                targets
+                    .push(DnsTarget::unchecked_new(host, port, transport).with_priority(priority));
             }
         }
 
@@ -1187,7 +1189,11 @@ impl<D: DhcpProvider, R: Resolver> Resolver for HybridResolver<D, R> {
                         DhcpSipServer::Ipv4(addr) => {
                             let port = if uri.is_sips() { 5061 } else { 5060 };
                             let transport = SipResolver::default_transport(uri);
-                            all_targets.push(DnsTarget::unchecked_new(addr.to_string(), port, transport));
+                            all_targets.push(DnsTarget::unchecked_new(
+                                addr.to_string(),
+                                port,
+                                transport,
+                            ));
                         }
                         DhcpSipServer::Domain(domain) => {
                             let temp_uri = uri

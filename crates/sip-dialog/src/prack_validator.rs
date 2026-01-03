@@ -136,7 +136,10 @@ impl PrackValidator {
         let do_cleanup = self
             .last_cleanup
             .get(dialog_id)
-            .map(|last| now.duration_since(*last.value()) >= Duration::from_secs(PENDING_PRACK_CLEANUP_INTERVAL_SECS))
+            .map(|last| {
+                now.duration_since(*last.value())
+                    >= Duration::from_secs(PENDING_PRACK_CLEANUP_INTERVAL_SECS)
+            })
             .unwrap_or(true);
 
         if !do_cleanup {

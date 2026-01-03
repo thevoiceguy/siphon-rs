@@ -521,12 +521,10 @@ impl ClientInviteFsm {
         self.last_invite = Some(bytes.clone());
         self.state = crate::ClientInviteState::Calling;
 
-        let mut actions = vec![
-            ClientInviteAction::Transmit {
-                bytes,
-                transport: TransportKind::Udp,
-            },
-        ];
+        let mut actions = vec![ClientInviteAction::Transmit {
+            bytes,
+            transport: TransportKind::Udp,
+        }];
 
         // Only schedule Timer A if duration is non-zero (UDP only)
         let timer_a_duration = self.timers.duration(TransactionTimer::A);
@@ -715,12 +713,10 @@ impl ClientNonInviteFsm {
         self.last_request = Some(bytes.clone());
         self.state = ClientNonInviteState::Trying;
 
-        let mut actions = vec![
-            ClientAction::Transmit {
-                bytes,
-                transport: TransportKind::Udp,
-            },
-        ];
+        let mut actions = vec![ClientAction::Transmit {
+            bytes,
+            transport: TransportKind::Udp,
+        }];
 
         // Only schedule Timer E if duration is non-zero (UDP only)
         let timer_e_duration = self.timers.duration(TransactionTimer::E);
@@ -1094,12 +1090,10 @@ impl ServerInviteFsm {
             self.last_final = Some(bytes.clone());
             self.g_interval = self.timers.duration(TransactionTimer::G);
 
-            let mut actions = vec![
-                ServerInviteAction::Transmit {
-                    bytes,
-                    transport: TransportKind::Udp,
-                },
-            ];
+            let mut actions = vec![ServerInviteAction::Transmit {
+                bytes,
+                transport: TransportKind::Udp,
+            }];
 
             // Only schedule Timer G if duration is non-zero (UDP only)
             if !self.g_interval.is_zero() {

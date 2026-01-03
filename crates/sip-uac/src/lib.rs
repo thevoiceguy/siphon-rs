@@ -106,7 +106,11 @@ impl std::fmt::Display for UacError {
                 write!(f, "Too many registrars tracked (max: {})", max)
             }
             UacError::TooManyEarlyDialogs { max } => {
-                write!(f, "Too many early dialogs - forking limit exceeded (max: {})", max)
+                write!(
+                    f,
+                    "Too many early dialogs - forking limit exceeded (max: {})",
+                    max
+                )
             }
             UacError::TooManyAuthParams { max } => {
                 write!(f, "Too many auth parameters (max: {})", max)
@@ -462,7 +466,10 @@ impl UserAgentClient {
         let service_route = match parse_service_route(register_response.headers()) {
             Ok(service_route) => service_route,
             Err(err) => {
-                info!("Invalid Service-Route header, clearing stored routes: {}", err);
+                info!(
+                    "Invalid Service-Route header, clearing stored routes: {}",
+                    err
+                );
                 self.service_route = None;
                 return;
             }
@@ -3480,14 +3487,14 @@ mod tests {
             local_uri.clone(),
             remote_uri.clone(),
             SipUri::parse("sip:bob@192.168.1.200:5060").unwrap(),
-            1,  // local_cseq
-            0,  // remote_cseq
-            None,  // last_ack_cseq
-            vec![],  // route_set
-            false,  // secure
-            Some(Duration::from_secs(1800)),  // session_expires
-            Some(RefresherRole::Uac),  // refresher
-            true,  // is_uac
+            1,                               // local_cseq
+            0,                               // remote_cseq
+            None,                            // last_ack_cseq
+            vec![],                          // route_set
+            false,                           // secure
+            Some(Duration::from_secs(1800)), // session_expires
+            Some(RefresherRole::Uac),        // refresher
+            true,                            // is_uac
         );
 
         // Create reliable provisional response (180 Ringing with RSeq)
@@ -3576,19 +3583,21 @@ mod tests {
             local_uri.clone(),
             remote_uri.clone(),
             SipUri::parse("sip:bob@192.168.1.200:5060").unwrap(),
-            1,  // local_cseq
-            0,  // remote_cseq
-            None,  // last_ack_cseq
-            vec![],  // route_set
+            1,      // local_cseq
+            0,      // remote_cseq
+            None,   // last_ack_cseq
+            vec![], // route_set
             false,  // secure
-            None,  // session_expires
-            None,  // refresher
-            true,  // is_uac
+            None,   // session_expires
+            None,   // refresher
+            true,   // is_uac
         );
 
         // Create INFO with DTMF payload
         let dtmf_body = "Signal=1\r\nDuration=100\r\n";
-        let info = uac.create_info(&dialog, "application/dtmf-relay", dtmf_body).unwrap();
+        let info = uac
+            .create_info(&dialog, "application/dtmf-relay", dtmf_body)
+            .unwrap();
 
         // Verify INFO request
         assert_eq!(info.method(), &Method::Info);
@@ -3637,19 +3646,21 @@ mod tests {
             local_uri.clone(),
             remote_uri.clone(),
             SipUri::parse("sip:bob@192.168.1.200:5060").unwrap(),
-            5,  // local_cseq
-            0,  // remote_cseq
-            None,  // last_ack_cseq
-            vec![],  // route_set
+            5,      // local_cseq
+            0,      // remote_cseq
+            None,   // last_ack_cseq
+            vec![], // route_set
             false,  // secure
-            None,  // session_expires
-            None,  // refresher
-            true,  // is_uac
+            None,   // session_expires
+            None,   // refresher
+            true,   // is_uac
         );
 
         // Create INFO with JSON payload
         let json_body = r#"{"action":"mute","value":true}"#;
-        let info = uac.create_info(&dialog, "application/json", json_body).unwrap();
+        let info = uac
+            .create_info(&dialog, "application/json", json_body)
+            .unwrap();
 
         // Verify method
         assert_eq!(info.method(), &Method::Info);
@@ -3771,14 +3782,14 @@ mod tests {
             local_uri.clone(),
             remote_uri.clone(),
             SipUri::parse("sip:bob@192.168.1.200:5060").unwrap(),
-            1,  // local_cseq
-            0,  // remote_cseq
-            None,  // last_ack_cseq
-            vec![],  // route_set
+            1,      // local_cseq
+            0,      // remote_cseq
+            None,   // last_ack_cseq
+            vec![], // route_set
             false,  // secure
-            None,  // session_expires
-            None,  // refresher
-            true,  // is_uac
+            None,   // session_expires
+            None,   // refresher
+            true,   // is_uac
         );
 
         let mut bye = uac.create_bye(&dialog);
@@ -3814,14 +3825,14 @@ mod tests {
             local_uri.clone(),
             remote_uri.clone(),
             SipUri::parse("sip:bob@192.168.1.200:5060").unwrap(),
-            5,  // local_cseq
-            0,  // remote_cseq
-            None,  // last_ack_cseq
-            vec![],  // route_set
+            5,      // local_cseq
+            0,      // remote_cseq
+            None,   // last_ack_cseq
+            vec![], // route_set
             false,  // secure
-            None,  // session_expires
-            None,  // refresher
-            true,  // is_uac
+            None,   // session_expires
+            None,   // refresher
+            true,   // is_uac
         );
 
         // Create BYE with reason
@@ -3861,14 +3872,14 @@ mod tests {
             local_uri.clone(),
             remote_uri.clone(),
             SipUri::parse("sip:bob@192.168.1.200:5060").unwrap(),
-            1,  // local_cseq
-            0,  // remote_cseq
-            None,  // last_ack_cseq
-            vec![],  // route_set
+            1,      // local_cseq
+            0,      // remote_cseq
+            None,   // last_ack_cseq
+            vec![], // route_set
             false,  // secure
-            None,  // session_expires
-            None,  // refresher
-            true,  // is_uac
+            None,   // session_expires
+            None,   // refresher
+            true,   // is_uac
         );
 
         // Create BYE with SIP reason code
@@ -4456,14 +4467,14 @@ mod tests {
             local_uri,
             SipUri::parse("sip:bob@example.com").unwrap(),
             SipUri::parse("sip:bob@example.com").unwrap(),
-            4,  // local_cseq
-            1,  // remote_cseq
-            None,  // last_ack_cseq
-            vec![],  // route_set
-            false,  // secure
-            Some(Duration::from_secs(60)),  // session_expires
-            None,  // refresher
-            true,  // is_uac
+            4,                             // local_cseq
+            1,                             // remote_cseq
+            None,                          // last_ack_cseq
+            vec![],                        // route_set
+            false,                         // secure
+            Some(Duration::from_secs(60)), // session_expires
+            None,                          // refresher
+            true,                          // is_uac
         );
 
         let mut headers = Headers::new();
@@ -4547,7 +4558,7 @@ mod tests {
 
         assert!(result.is_err());
         match result {
-            Err(UacError::DisplayNameContainsControlChars) => {},
+            Err(UacError::DisplayNameContainsControlChars) => {}
             _ => panic!("Expected DisplayNameContainsControlChars error"),
         }
     }
@@ -4586,10 +4597,7 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err(),
-            UacError::EventNameContainsControlChars
-        );
+        assert_eq!(result.unwrap_err(), UacError::EventNameContainsControlChars);
     }
 
     #[test]
@@ -4600,7 +4608,8 @@ mod tests {
 
         let target = SipUri::parse("sip:presence@example.com").unwrap();
         let long_event = "x".repeat(65); // MAX_EVENT_NAME_LENGTH is 64
-        let result = uac.create_publish(&target, &long_event, "application/pidf+xml", "<presence/>");
+        let result =
+            uac.create_publish(&target, &long_event, "application/pidf+xml", "<presence/>");
 
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -4626,14 +4635,14 @@ mod tests {
             local_uri.clone(),
             remote_uri.clone(),
             SipUri::parse("sip:bob@192.168.1.200:5060").unwrap(),
-            1,  // local_cseq
-            0,  // remote_cseq
-            None,  // last_ack_cseq
-            vec![],  // route_set
+            1,      // local_cseq
+            0,      // remote_cseq
+            None,   // last_ack_cseq
+            vec![], // route_set
             false,  // secure
-            None,  // session_expires
-            None,  // refresher
-            true,  // is_uac
+            None,   // session_expires
+            None,   // refresher
+            true,   // is_uac
         );
 
         let result = uac.create_info(&dialog, "application/json\r\nInjected: evil", "{}");
@@ -4659,14 +4668,14 @@ mod tests {
             local_uri.clone(),
             remote_uri.clone(),
             SipUri::parse("sip:bob@192.168.1.200:5060").unwrap(),
-            1,  // local_cseq
-            0,  // remote_cseq
-            None,  // last_ack_cseq
-            vec![],  // route_set
+            1,      // local_cseq
+            0,      // remote_cseq
+            None,   // last_ack_cseq
+            vec![], // route_set
             false,  // secure
-            None,  // session_expires
-            None,  // refresher
-            true,  // is_uac
+            None,   // session_expires
+            None,   // refresher
+            true,   // is_uac
         );
 
         let long_content_type = "application/".to_string() + &"x".repeat(120); // MAX is 128
@@ -4696,14 +4705,14 @@ mod tests {
             local_uri.clone(),
             remote_uri.clone(),
             SipUri::parse("sip:bob@192.168.1.200:5060").unwrap(),
-            1,  // local_cseq
-            0,  // remote_cseq
-            None,  // last_ack_cseq
-            vec![],  // route_set
+            1,      // local_cseq
+            0,      // remote_cseq
+            None,   // last_ack_cseq
+            vec![], // route_set
             false,  // secure
-            None,  // session_expires
-            None,  // refresher
-            true,  // is_uac
+            None,   // session_expires
+            None,   // refresher
+            true,   // is_uac
         );
 
         // Create body exceeding MAX_BODY_LENGTH (1 MB)
@@ -4740,4 +4749,3 @@ mod tests {
             .contains("Too many authentication parameters"));
     }
 }
-

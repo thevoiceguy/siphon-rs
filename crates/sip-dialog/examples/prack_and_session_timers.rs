@@ -357,10 +357,7 @@ async fn demonstrate_session_timer_refresh() {
             match event {
                 SessionTimerEvent::RefreshNeeded(id) => {
                     println!("┌─ RefreshNeeded Event Fired ───────────────────────────────┐");
-                    println!(
-                        "│ Dialog: {}                            │",
-                        id.call_id()
-                    );
+                    println!("│ Dialog: {}                            │", id.call_id());
                     println!("│ Time: ~100ms (Session-Expires/2)                          │");
                     println!("│                                                           │");
                     println!("│ Action: UAC should send session refresh                  │");
@@ -387,10 +384,7 @@ async fn demonstrate_session_timer_refresh() {
             match event {
                 SessionTimerEvent::SessionExpired(id) => {
                     println!("┌─ SessionExpired Event Fired ──────────────────────────────┐");
-                    println!(
-                        "│ Dialog: {}                            │",
-                        id.call_id()
-                    );
+                    println!("│ Dialog: {}                            │", id.call_id());
                     println!("│ Time: ~200ms (Session-Expires)                            │");
                     println!("│                                                           │");
                     println!("│ Action: Session timed out - send BYE                      │");

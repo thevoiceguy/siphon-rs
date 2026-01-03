@@ -483,12 +483,7 @@ impl TransactionManager {
         limits: TransactionLimits,
     ) -> Self {
         Self::with_timers_pool_and_limits(
-            dispatcher,
-            pool,
-            T1_DEFAULT,
-            T2_DEFAULT,
-            T4_DEFAULT,
-            limits,
+            dispatcher, pool, T1_DEFAULT, T2_DEFAULT, T4_DEFAULT, limits,
         )
     }
 

@@ -62,14 +62,14 @@ fn main() {
         bob_uri.clone(),
         alice_uri.clone(),
         alice_contact.clone(),
-        1,  // local_cseq
-        1,  // remote_cseq
-        None,  // last_ack_cseq
-        vec![],  // route_set
-        false,  // secure
-        Some(Duration::from_secs(1800)),  // session_expires
-        Some(RefresherRole::Uac),  // refresher
-        false,  // is_uac - Bob is UAS in original call (Alice called Bob)
+        1,                               // local_cseq
+        1,                               // remote_cseq
+        None,                            // last_ack_cseq
+        vec![],                          // route_set
+        false,                           // secure
+        Some(Duration::from_secs(1800)), // session_expires
+        Some(RefresherRole::Uac),        // refresher
+        false,                           // is_uac - Bob is UAS in original call (Alice called Bob)
     );
 
     // Step 2: Bob creates REFER request to Alice
@@ -125,7 +125,8 @@ fn main() {
 
     // Mock subscription created from REFER (implicit subscription)
     use sip_dialog::{Subscription, SubscriptionId, SubscriptionState};
-    let subscription_id = SubscriptionId::unchecked_new("call-abc-123", "bob-tag-456", "alice-tag-789", "refer");
+    let subscription_id =
+        SubscriptionId::unchecked_new("call-abc-123", "bob-tag-456", "alice-tag-789", "refer");
     let subscription = Subscription::unchecked_new(
         subscription_id,
         SubscriptionState::Active,
@@ -133,8 +134,8 @@ fn main() {
         bob_uri.clone(),
         bob_contact.clone(),
         Duration::from_secs(300),
-        1,  // local_cseq
-        2,  // remote_cseq (REFER was CSeq 2)
+        1, // local_cseq
+        2, // remote_cseq (REFER was CSeq 2)
     );
 
     // Alice sends NOTIFY with 100 Trying

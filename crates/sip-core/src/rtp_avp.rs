@@ -66,7 +66,10 @@ impl fmt::Display for StaticPayloadType {
         write!(
             f,
             "PT {} {} {}/{}",
-            self.payload_type(), self.encoding_name(), self.media_type(), self.clock_rate()
+            self.payload_type(),
+            self.encoding_name(),
+            self.media_type(),
+            self.clock_rate()
         )?;
         if let Some(ch) = self.channels() {
             write!(f, "/{}", ch)?;
@@ -542,7 +545,8 @@ pub fn get_payload_type_with_rate(encoding_name: &str, clock_rate: u32) -> Optio
         .enumerate()
         .find_map(|(pt, opt_info)| {
             opt_info.and_then(|info| {
-                if info.encoding_name().to_uppercase() == name_upper && info.clock_rate() == clock_rate
+                if info.encoding_name().to_uppercase() == name_upper
+                    && info.clock_rate() == clock_rate
                 {
                     Some(pt as u8)
                 } else {

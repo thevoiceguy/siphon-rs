@@ -724,11 +724,8 @@ impl DialogManager {
         // Try to construct dialog ID from request
         if let Some(req_id) = DialogId::from_request(req) {
             // For incoming requests, swap tags (From=remote, To=local)
-            let search_id = DialogId::unchecked_new(
-                req_id.call_id(),
-                req_id.remote_tag(),
-                req_id.local_tag(),
-            );
+            let search_id =
+                DialogId::unchecked_new(req_id.call_id(), req_id.remote_tag(), req_id.local_tag());
             return self.get(&search_id);
         }
         None
@@ -862,16 +859,12 @@ impl std::fmt::Display for DialogError {
             DialogError::TooManyDialogs { max } => {
                 write!(f, "Too many dialogs (max: {})", max)
             }
-            DialogError::SessionExpiresTooSmall { min, actual } => write!(
-                f,
-                "Session expires too small: {}s (min: {}s)",
-                actual, min
-            ),
-            DialogError::SessionExpiresTooLarge { max, actual } => write!(
-                f,
-                "Session expires too large: {}s (max: {}s)",
-                actual, max
-            ),
+            DialogError::SessionExpiresTooSmall { min, actual } => {
+                write!(f, "Session expires too small: {}s (min: {}s)", actual, min)
+            }
+            DialogError::SessionExpiresTooLarge { max, actual } => {
+                write!(f, "Session expires too large: {}s (max: {}s)", actual, max)
+            }
             DialogError::ContainsControlCharacters { field } => {
                 write!(f, "{} contains control characters", field)
             }
@@ -1124,9 +1117,7 @@ fn validate_subscription_call_id(call_id: &str) -> Result<(), SubscriptionError>
         });
     }
     if call_id.chars().any(|c| c.is_control()) {
-        return Err(SubscriptionError::ContainsControlCharacters {
-            field: "call_id",
-        });
+        return Err(SubscriptionError::ContainsControlCharacters { field: "call_id" });
     }
     Ok(())
 }
@@ -1134,10 +1125,7 @@ fn validate_subscription_call_id(call_id: &str) -> Result<(), SubscriptionError>
 /// Validates tag for subscriptions.
 fn validate_subscription_tag(tag: &str, field: &'static str) -> Result<(), SubscriptionError> {
     if tag.is_empty() {
-        return Err(SubscriptionError::InvalidTag(format!(
-            "{} is empty",
-            field
-        )));
+        return Err(SubscriptionError::InvalidTag(format!("{} is empty", field)));
     }
     if tag.len() > MAX_TAG_LENGTH {
         return Err(SubscriptionError::TagTooLong {

@@ -965,7 +965,10 @@ mod tests {
             Instant::now(),
             BranchState::Trying,
         );
-        assert!(matches!(result, Err(ProxyError::BranchIdContainsControlChars)));
+        assert!(matches!(
+            result,
+            Err(ProxyError::BranchIdContainsControlChars)
+        ));
     }
 
     #[test]
@@ -976,7 +979,10 @@ mod tests {
             Instant::now(),
             BranchState::Trying,
         );
-        assert!(matches!(result, Err(ProxyError::BranchIdContainsControlChars)));
+        assert!(matches!(
+            result,
+            Err(ProxyError::BranchIdContainsControlChars)
+        ));
     }
 
     #[test]
@@ -987,7 +993,10 @@ mod tests {
             Instant::now(),
             BranchState::Trying,
         );
-        assert!(matches!(result, Err(ProxyError::BranchIdContainsControlChars)));
+        assert!(matches!(
+            result,
+            Err(ProxyError::BranchIdContainsControlChars)
+        ));
     }
 
     // ===========================================
@@ -1065,7 +1074,10 @@ mod tests {
                 let mut headers = Headers::new();
                 headers.push("Call-ID", format!("call-{}", i)).unwrap();
                 headers
-                    .push("Via", format!("SIP/2.0/UDP client;branch=z9hG4bKclient{}", i))
+                    .push(
+                        "Via",
+                        format!("SIP/2.0/UDP client;branch=z9hG4bKclient{}", i),
+                    )
                     .unwrap();
                 headers.push("Max-Forwards", "70").unwrap();
 

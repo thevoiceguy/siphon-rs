@@ -250,7 +250,9 @@ impl ByeHandler {
 
                                 // Copy base headers
                                 for header in bye_headers_base.iter() {
-                                    if let Err(e) = bye_headers_tcp.push(header.name(), header.value()) {
+                                    if let Err(e) =
+                                        bye_headers_tcp.push(header.name(), header.value())
+                                    {
                                         warn!(
                                             header = %header.name(),
                                             error = %e,
@@ -482,7 +484,9 @@ impl ByeHandler {
                     outgoing_call_id = %call_leg.outgoing_call_id,
                     "Failed to create BYE request for callee, cleaning up"
                 );
-                services.b2bua_state.remove_call_leg(&call_leg.outgoing_call_id);
+                services
+                    .b2bua_state
+                    .remove_call_leg(&call_leg.outgoing_call_id);
                 return Ok(());
             }
         };

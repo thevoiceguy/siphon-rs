@@ -159,7 +159,10 @@ impl ProxyService {
                 .map_err(|e| anyhow!(e))?;
                 forwarded.push((branch.clone(), request.clone()));
                 // Track branch in context
-                context.add_branch(branch_info).await.map_err(|e| anyhow!(e))?;
+                context
+                    .add_branch(branch_info)
+                    .await
+                    .map_err(|e| anyhow!(e))?;
             }
         }
 

@@ -150,7 +150,11 @@ async fn multiple_transports_for_failover() {
 #[tokio::test]
 async fn websocket_transport_support() {
     let ws_uri = SipUri::parse("sip:example.com;transport=ws").unwrap();
-    let targets = vec![DnsTarget::unchecked_new("ws.example.com", 80, Transport::Ws)];
+    let targets = vec![DnsTarget::unchecked_new(
+        "ws.example.com",
+        80,
+        Transport::Ws,
+    )];
     let resolver = StaticResolver::new(targets);
 
     let result = resolver.resolve(&ws_uri).await.expect("resolve");
@@ -158,7 +162,11 @@ async fn websocket_transport_support() {
     assert_eq!(result[0].transport(), Transport::Ws);
 
     let wss_uri = SipUri::parse("sip:example.com;transport=wss").unwrap();
-    let targets = vec![DnsTarget::unchecked_new("wss.example.com", 443, Transport::Wss)];
+    let targets = vec![DnsTarget::unchecked_new(
+        "wss.example.com",
+        443,
+        Transport::Wss,
+    )];
     let resolver = StaticResolver::new(targets);
 
     let result = resolver.resolve(&wss_uri).await.expect("resolve");

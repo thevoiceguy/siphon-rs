@@ -19,7 +19,12 @@ impl SessionDescriptionBuilder {
     }
 
     /// Sets the origin line with validation
-    pub fn origin(mut self, username: &str, session_id: &str, addr: &str) -> Result<Self, SdpError> {
+    pub fn origin(
+        mut self,
+        username: &str,
+        session_id: &str,
+        addr: &str,
+    ) -> Result<Self, SdpError> {
         self.sdp.origin = Origin::new(username, session_id, addr)?;
         Ok(self)
     }
@@ -80,8 +85,16 @@ impl SessionDescriptionBuilder {
     }
 
     /// Adds a time zone adjustment with validation
-    pub fn time_zone_adjustment(mut self, adjustment_time: &str, offset: &str) -> Result<Self, SdpError> {
-        validate_field(adjustment_time, "adjustment_time", MAX_ATTRIBUTE_NAME_LENGTH)?;
+    pub fn time_zone_adjustment(
+        mut self,
+        adjustment_time: &str,
+        offset: &str,
+    ) -> Result<Self, SdpError> {
+        validate_field(
+            adjustment_time,
+            "adjustment_time",
+            MAX_ATTRIBUTE_NAME_LENGTH,
+        )?;
         validate_field(offset, "offset", MAX_ATTRIBUTE_NAME_LENGTH)?;
 
         if self.sdp.time_zones.len() >= MAX_TIME_ZONES {

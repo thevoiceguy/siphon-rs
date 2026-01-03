@@ -57,7 +57,11 @@ pub struct Credentials {
 
 impl Credentials {
     /// Creates new credentials with the given username, password, and realm.
-    pub fn new(username: impl Into<SmolStr>, password: impl Into<SmolStr>, realm: impl Into<SmolStr>) -> Self {
+    pub fn new(
+        username: impl Into<SmolStr>,
+        password: impl Into<SmolStr>,
+        realm: impl Into<SmolStr>,
+    ) -> Self {
         Self {
             username: username.into(),
             password: password.into(),
@@ -67,7 +71,11 @@ impl Credentials {
 
     /// Creates credentials without validation (for internal use and tests).
     #[cfg(test)]
-    pub fn unchecked_new(username: impl Into<SmolStr>, password: impl Into<SmolStr>, realm: impl Into<SmolStr>) -> Self {
+    pub fn unchecked_new(
+        username: impl Into<SmolStr>,
+        password: impl Into<SmolStr>,
+        realm: impl Into<SmolStr>,
+    ) -> Self {
         Self {
             username: username.into(),
             password: password.into(),
@@ -295,7 +303,7 @@ pub struct Nonce {
     value: SmolStr,
     created_at: Instant,
     ttl: Duration,
-    last_nc: u32, // Last nonce-count seen (for replay protection)
+    last_nc: u32,                      // Last nonce-count seen (for replay protection)
     last_request_hash: Option<String>, // Hash of last request (method:uri:body) for retransmission detection
     last_used: Instant, // Timestamp of last successful authentication (for request age validation)
 }
@@ -455,7 +463,8 @@ impl NonceManager {
         }
 
         let nonce = Nonce::new(self.ttl);
-        self.nonces.insert(SmolStr::new(nonce.value()), nonce.clone());
+        self.nonces
+            .insert(SmolStr::new(nonce.value()), nonce.clone());
         nonce
     }
 
@@ -612,7 +621,7 @@ pub struct DigestAuthenticator<S> {
     store: S,
     nonce_manager: NonceManager,
     proxy_auth: bool,
-    opaque: SmolStr, // Opaque session token for additional security
+    opaque: SmolStr,                   // Opaque session token for additional security
     rate_limiter: Option<RateLimiter>, // Optional rate limiting
 }
 
@@ -2292,7 +2301,10 @@ mod tests {
 
         // Parser should reject this because username is > MAX_PARAM_VALUE_LENGTH (256)
         let parsed = parse_authorization_header(&auth_header_value);
-        assert!(parsed.is_none(), "Parser should reject oversized username parameter");
+        assert!(
+            parsed.is_none(),
+            "Parser should reject oversized username parameter"
+        );
     }
 
     #[test]

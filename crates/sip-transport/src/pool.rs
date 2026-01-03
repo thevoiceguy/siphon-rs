@@ -242,15 +242,15 @@ impl ConnectionPool {
                                     }
                                 }
                                 Err(e) => {
-                                warn!(
-                                    peer = %peer,
-                                    error = %e,
-                                    "tcp client framing error, closing connection"
-                                );
-                                break;
+                                    warn!(
+                                        peer = %peer,
+                                        error = %e,
+                                        "tcp client framing error, closing connection"
+                                    );
+                                    break;
+                                }
                             }
                         }
-                        },
                         Err(e) => {
                             warn!(
                                 peer = %peer,

@@ -1169,7 +1169,10 @@ impl IntegratedUAC {
                 };
                 Some(format!(
                     "{}://{}:{}{}",
-                    scheme, dns_target.host(), dns_target.port(), normalized_path
+                    scheme,
+                    dns_target.host(),
+                    dns_target.port(),
+                    normalized_path
                 ))
             }
         } else {
@@ -1801,7 +1804,8 @@ impl IntegratedUAC {
 
         info!(
             "Started INVITE transaction {} for dialog {}",
-            key.branch(), dialog.id().call_id()
+            key.branch(),
+            dialog.id().call_id()
         );
 
         Ok(CallHandle {
@@ -1850,14 +1854,14 @@ mod tests {
             SipUri::parse("sip:local@example.com").unwrap(),
             SipUri::parse("sip:remote@example.com").unwrap(),
             SipUri::parse("sip:remote@example.com").unwrap(),
-            1,  // local_cseq
-            0,  // remote_cseq
-            None,  // last_ack_cseq
-            vec![],  // route_set
-            false,  // secure
-            Some(Duration::from_secs(30)),  // session_expires
-            None,  // refresher
-            true,  // is_uac
+            1,                             // local_cseq
+            0,                             // remote_cseq
+            None,                          // last_ack_cseq
+            vec![],                        // route_set
+            false,                         // secure
+            Some(Duration::from_secs(30)), // session_expires
+            None,                          // refresher
+            true,                          // is_uac
         )
     }
 
@@ -1870,14 +1874,14 @@ mod tests {
             SipUri::parse("sip:local@example.com").unwrap(),
             SipUri::parse("sip:remote@example.com").unwrap(),
             SipUri::parse("sip:remote@example.com").unwrap(),
-            1,  // local_cseq
-            0,  // remote_cseq
-            None,  // last_ack_cseq
-            route_set,  // custom route_set
-            false,  // secure
-            Some(Duration::from_secs(30)),  // session_expires
-            None,  // refresher
-            true,  // is_uac
+            1,                             // local_cseq
+            0,                             // remote_cseq
+            None,                          // last_ack_cseq
+            route_set,                     // custom route_set
+            false,                         // secure
+            Some(Duration::from_secs(30)), // session_expires
+            None,                          // refresher
+            true,                          // is_uac
         )
     }
 
@@ -1949,7 +1953,10 @@ mod tests {
         .expect("valid response");
 
         apply_in_dialog_response(&manager, &mut dialog, &response).unwrap();
-        assert_eq!(dialog.remote_target().as_str(), "sip:new-remote@example.com");
+        assert_eq!(
+            dialog.remote_target().as_str(),
+            "sip:new-remote@example.com"
+        );
         assert_eq!(dialog.state(), DialogStateType::Confirmed);
     }
 

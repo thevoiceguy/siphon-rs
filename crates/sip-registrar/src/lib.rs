@@ -417,7 +417,11 @@ pub struct Binding {
 
 impl Binding {
     /// Create a new Binding with validation
-    pub fn new(aor: SmolStr, contact: SmolStr, expires: Duration) -> Result<Self, RegistrationError> {
+    pub fn new(
+        aor: SmolStr,
+        contact: SmolStr,
+        expires: Duration,
+    ) -> Result<Self, RegistrationError> {
         validate_aor(&aor)?;
         validate_contact(&contact)?;
         validate_expires(expires)?;
@@ -680,7 +684,10 @@ impl LocationStore for MemoryLocationStore {
 
         // Check per-AOR bindings limit (DoS prevention)
         // Don't count the binding we're about to replace
-        let existing_count = list.iter().filter(|b| b.contact != binding.contact()).count();
+        let existing_count = list
+            .iter()
+            .filter(|b| b.contact != binding.contact())
+            .count();
         if existing_count >= MAX_BINDINGS_PER_AOR {
             return Err(anyhow::anyhow!(RegistrationError::TooManyBindingsForAor {
                 max: MAX_BINDINGS_PER_AOR,
@@ -1102,8 +1109,7 @@ impl<S, A> BasicRegistrar<S, A> {
             headers.push(SmolStr::new("CSeq"), cseq)?;
         }
 
-        headers
-            .push(SmolStr::new("Content-Length"), SmolStr::new("0"))?;
+        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"))?;
 
         Ok(Response::new(
             StatusLine::new(code, reason)?,
@@ -1114,12 +1120,10 @@ impl<S, A> BasicRegistrar<S, A> {
 
     fn build_interval_too_brief(&self, request: &Request, min_expires: u64) -> Result<Response> {
         let mut response = self.build_error_response(request, 423, "Interval Too Brief")?;
-        response
-            .headers_mut()
-            .push(
-                SmolStr::new("Min-Expires"),
-                SmolStr::new(min_expires.to_string()),
-            )?;
+        response.headers_mut().push(
+            SmolStr::new("Min-Expires"),
+            SmolStr::new(min_expires.to_string()),
+        )?;
         Ok(response)
     }
 }
@@ -1300,12 +1304,9 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
                 headers.push(SmolStr::new("CSeq"), cseq)?;
             }
 
-            headers
-                .push(SmolStr::new("Contact"), SmolStr::new("*"))?;
-            headers
-                .push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()))?;
-            headers
-                .push(SmolStr::new("Content-Length"), SmolStr::new("0"))?;
+            headers.push(SmolStr::new("Contact"), SmolStr::new("*"))?;
+            headers.push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()))?;
+            headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"))?;
 
             return Ok(Response::new(
                 StatusLine::new(200, "OK")?,
@@ -1386,10 +1387,11 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
                 self.store.remove(&aor, contact_uri.as_str()).await?;
                 info!(aor = %aor, contact = %contact_uri, "REGISTER removed binding");
             } else {
-                let binding = Binding::new(SmolStr::new(aor.clone()), contact_uri.clone(), expires)?
-                    .with_call_id(call_id.clone())?
-                    .with_cseq(cseq)?
-                    .with_q_value(q_value)?;
+                let binding =
+                    Binding::new(SmolStr::new(aor.clone()), contact_uri.clone(), expires)?
+                        .with_call_id(call_id.clone())?
+                        .with_cseq(cseq)?
+                        .with_q_value(q_value)?;
 
                 self.store.upsert(binding).await?;
                 info!(aor = %aor, contact = %contact_uri, expires = %expires.as_secs(), "REGISTER stored binding");
@@ -1416,17 +1418,14 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
 
         let bindings = self.store.lookup(&aor).await?;
         for binding in &bindings {
-            headers
-                .push(
-                    SmolStr::new("Contact"),
-                    format_contact(&binding.contact, binding.expires, binding.q_value),
-                )?;
+            headers.push(
+                SmolStr::new("Contact"),
+                format_contact(&binding.contact, binding.expires, binding.q_value),
+            )?;
         }
 
-        headers
-            .push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()))?;
-        headers
-            .push(SmolStr::new("Content-Length"), SmolStr::new("0"))?;
+        headers.push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()))?;
+        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"))?;
 
         Ok(Response::new(
             StatusLine::new(200, "OK")?,
@@ -1579,12 +1578,9 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
                 headers.push(SmolStr::new("CSeq"), cseq)?;
             }
 
-            headers
-                .push(SmolStr::new("Contact"), SmolStr::new("*"))?;
-            headers
-                .push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()))?;
-            headers
-                .push(SmolStr::new("Content-Length"), SmolStr::new("0"))?;
+            headers.push(SmolStr::new("Contact"), SmolStr::new("*"))?;
+            headers.push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()))?;
+            headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"))?;
 
             return Ok(Response::new(
                 StatusLine::new(200, "OK")?,
@@ -1668,10 +1664,11 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
                 info!(aor = %aor, contact = %contact_uri, "REGISTER removed binding");
             } else {
                 // Add or update binding
-                let binding = Binding::new(SmolStr::new(aor.clone()), contact_uri.clone(), expires)?
-                    .with_call_id(call_id.clone())?
-                    .with_cseq(cseq)?
-                    .with_q_value(q_value)?;
+                let binding =
+                    Binding::new(SmolStr::new(aor.clone()), contact_uri.clone(), expires)?
+                        .with_call_id(call_id.clone())?
+                        .with_cseq(cseq)?
+                        .with_q_value(q_value)?;
 
                 self.store.upsert(binding)?;
                 info!(aor = %aor, contact = %contact_uri, expires = %expires.as_secs(), "REGISTER stored binding");
@@ -1701,17 +1698,14 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
 
         let bindings = self.store.lookup(&aor)?;
         for binding in &bindings {
-            headers
-                .push(
-                    SmolStr::new("Contact"),
-                    format_contact(&binding.contact, binding.expires, binding.q_value),
-                )?;
+            headers.push(
+                SmolStr::new("Contact"),
+                format_contact(&binding.contact, binding.expires, binding.q_value),
+            )?;
         }
 
-        headers
-            .push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()))?;
-        headers
-            .push(SmolStr::new("Content-Length"), SmolStr::new("0"))?;
+        headers.push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()))?;
+        headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"))?;
 
         Ok(Response::new(
             StatusLine::new(200, "OK")?,
@@ -1849,11 +1843,14 @@ mod tests {
     fn memory_store_adds_and_removes() {
         let store = MemoryLocationStore::new();
         store
-            .upsert(Binding::new(
-                "sip:alice@example.com".into(),
-                "sip:ua.example.com".into(),
-                Duration::from_secs(60),
-            ).unwrap())
+            .upsert(
+                Binding::new(
+                    "sip:alice@example.com".into(),
+                    "sip:ua.example.com".into(),
+                    Duration::from_secs(60),
+                )
+                .unwrap(),
+            )
             .unwrap();
 
         assert_eq!(store.lookup("sip:alice@example.com").unwrap().len(), 1);
@@ -1871,11 +1868,14 @@ mod tests {
 
         // Add first binding
         store
-            .upsert(Binding::new(
-                "sip:alice@example.com".into(),
-                "sip:ua.example.com".into(),
-                Duration::from_secs(60),
-            ).unwrap())
+            .upsert(
+                Binding::new(
+                    "sip:alice@example.com".into(),
+                    "sip:ua.example.com".into(),
+                    Duration::from_secs(60),
+                )
+                .unwrap(),
+            )
             .unwrap();
 
         assert_eq!(store.lookup("sip:alice@example.com").unwrap().len(), 1);
@@ -1905,19 +1905,25 @@ mod tests {
         let store = MemoryLocationStore::new();
 
         store
-            .upsert(Binding::new(
-                "sip:alice@example.com".into(),
-                "sip:ua1.example.com".into(),
-                Duration::from_secs(60),
-            ).unwrap())
+            .upsert(
+                Binding::new(
+                    "sip:alice@example.com".into(),
+                    "sip:ua1.example.com".into(),
+                    Duration::from_secs(60),
+                )
+                .unwrap(),
+            )
             .unwrap();
 
         store
-            .upsert(Binding::new(
-                "sip:alice@example.com".into(),
-                "sip:ua2.example.com".into(),
-                Duration::from_secs(60),
-            ).unwrap())
+            .upsert(
+                Binding::new(
+                    "sip:alice@example.com".into(),
+                    "sip:ua2.example.com".into(),
+                    Duration::from_secs(60),
+                )
+                .unwrap(),
+            )
             .unwrap();
 
         assert_eq!(store.lookup("sip:alice@example.com").unwrap().len(), 2);
@@ -1951,19 +1957,25 @@ mod tests {
         let store = MemoryLocationStore::new();
 
         store
-            .upsert(Binding::new(
-                "sip:alice@example.com".into(),
-                "sip:ua1.example.com".into(),
-                Duration::from_secs(60),
-            ).unwrap())
+            .upsert(
+                Binding::new(
+                    "sip:alice@example.com".into(),
+                    "sip:ua1.example.com".into(),
+                    Duration::from_secs(60),
+                )
+                .unwrap(),
+            )
             .unwrap();
 
         store
-            .upsert(Binding::new(
-                "sip:alice@example.com".into(),
-                "sip:ua2.example.com".into(),
-                Duration::from_secs(60),
-            ).unwrap())
+            .upsert(
+                Binding::new(
+                    "sip:alice@example.com".into(),
+                    "sip:ua2.example.com".into(),
+                    Duration::from_secs(60),
+                )
+                .unwrap(),
+            )
             .unwrap();
 
         assert_eq!(store.lookup("sip:alice@example.com").unwrap().len(), 2);
@@ -3627,10 +3639,7 @@ mod tests {
             SmolStr::new("sip:contact@example.com"),
             Duration::from_secs(3600),
         );
-        assert!(matches!(
-            result,
-            Err(RegistrationError::AorTooLong { .. })
-        ));
+        assert!(matches!(result, Err(RegistrationError::AorTooLong { .. })));
     }
 
     #[test]
@@ -3766,7 +3775,10 @@ mod tests {
 
         // q-value must be between 0.0 and 1.0
         let result = binding1.with_q_value(1.5);
-        assert!(matches!(result, Err(RegistrationError::InvalidQValue { .. })));
+        assert!(matches!(
+            result,
+            Err(RegistrationError::InvalidQValue { .. })
+        ));
 
         let result2 = binding2.with_q_value(-0.1);
         assert!(matches!(
