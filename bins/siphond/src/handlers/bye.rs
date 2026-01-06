@@ -429,10 +429,16 @@ impl ByeHandler {
 
         // Via
         let branch = generate_branch_id();
-        let _ = bye_headers.push(
-            SmolStr::new("Via"),
-            SmolStr::new(format!("SIP/2.0/TCP placeholder;branch={}", branch)),
+        let via = format!(
+            "SIP/2.0/TCP {};branch={}",
+            services
+                .config
+                .local_uri
+                .as_str()
+                .trim_start_matches("sip:"),
+            branch
         );
+        let _ = bye_headers.push(SmolStr::new("Via"), SmolStr::new(via));
 
         // From - same as our outgoing INVITE
         if let Some(from) = call_leg.outgoing_invite.headers().get("From") {
@@ -440,7 +446,14 @@ impl ByeHandler {
         }
 
         // To - with callee's tag
-        if let Some(to_tag) = &call_leg.callee_to_tag {
+        // Prefer UAC dialog's remote tag (from confirmed dialog), fallback to callee_to_tag
+        let to_tag = call_leg
+            .uac_dialog
+            .as_ref()
+            .map(|d| d.id().remote_tag().to_string())
+            .or_else(|| call_leg.callee_to_tag.clone());
+
+        if let Some(to_tag) = to_tag {
             if let Some(to) = call_leg.outgoing_invite.headers().get("To") {
                 let to_with_tag = format!("{};tag={}", to, to_tag);
                 let _ = bye_headers.push(SmolStr::new("To"), SmolStr::new(to_with_tag));
