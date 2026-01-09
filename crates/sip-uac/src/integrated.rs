@@ -70,7 +70,7 @@ use sip_transaction::{
 use smol_str::SmolStr;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
 use crate::{auth_utils::extract_realm, UserAgentClient};
@@ -449,7 +449,7 @@ impl From<&str> for RequestTarget {
 /// Handle for an outgoing call with dialog state and response channels.
 pub struct CallHandle {
     /// The dialog for this call (updated to winning dialog when final response arrives)
-    pub dialog: Dialog,
+    pub dialog: Arc<RwLock<Dialog>>,
 
     /// Transaction key for this call
     transaction_key: TransactionKey,
@@ -1289,6 +1289,33 @@ impl IntegratedUAC {
         // Create early dialogs map for forking support
         let early_dialogs = Arc::new(Mutex::new(std::collections::HashMap::new()));
 
+        // Create placeholder dialog (will be updated when 2xx arrives)
+        let helper = self.helper.lock().await;
+        let dialog_id = sip_dialog::DialogId::unchecked_new(
+            request.headers().get_smol("Call-ID").unwrap().clone(),
+            helper.local_tag.clone(),
+            SmolStr::new("pending"),
+        );
+        let placeholder_dialog = Dialog::unchecked_new(
+            dialog_id,
+            sip_dialog::DialogStateType::Early,
+            helper.local_uri.clone(),
+            target_uri.clone(),
+            target_uri.clone(),
+            1,
+            0,
+            None,
+            vec![],
+            false,
+            None,
+            None,
+            true,
+        );
+        drop(helper);
+
+        // Wrap dialog in Arc<RwLock> for sharing between CallHandle and transaction user
+        let shared_dialog = Arc::new(RwLock::new(placeholder_dialog));
+
         // Create INVITE transaction user
         let tu = Arc::new(InviteTransactionUser {
             prov_tx,
@@ -1303,6 +1330,7 @@ impl IntegratedUAC {
             transaction_manager: self.transaction_manager.clone(),
             dispatcher: self.transport_dispatcher.clone(),
             early_dialogs: early_dialogs.clone(),
+            dialog: shared_dialog.clone(),
             local_addr: self.local_addr,
             public_addr: self.public_addr,
         });
@@ -1319,32 +1347,8 @@ impl IntegratedUAC {
             target_uri.as_str()
         );
 
-        // Create placeholder dialog (will be updated when 1xx/2xx arrives)
-        let helper = self.helper.lock().await;
-        let dialog_id = sip_dialog::DialogId::unchecked_new(
-            request.headers().get_smol("Call-ID").unwrap().clone(),
-            helper.local_tag.clone(),
-            SmolStr::new("pending"),
-        );
-        let placeholder_dialog = Dialog::unchecked_new(
-            dialog_id,
-            sip_dialog::DialogStateType::Early,
-            helper.local_uri.clone(),
-            target_uri.clone(),
-            target_uri,
-            1,
-            0,
-            None,
-            vec![],
-            false,
-            None,
-            None,
-            true,
-        );
-        drop(helper);
-
         Ok(CallHandle {
-            dialog: placeholder_dialog,
+            dialog: shared_dialog,
             transaction_key: key,
             provisional_rx: Arc::new(Mutex::new(prov_rx)),
             final_rx: Arc::new(Mutex::new(Some(final_rx))),
@@ -1780,6 +1784,9 @@ impl IntegratedUAC {
         let ctx = self.create_transport_context(&dns_target).await?;
         let early_dialogs = Arc::new(Mutex::new(std::collections::HashMap::new()));
 
+        // Wrap dialog in Arc<RwLock> for sharing between CallHandle and transaction user
+        let shared_dialog = Arc::new(RwLock::new(dialog));
+
         let tu = Arc::new(InviteTransactionUser {
             prov_tx,
             final_tx: Mutex::new(Some(final_tx)),
@@ -1793,6 +1800,7 @@ impl IntegratedUAC {
             transaction_manager: self.transaction_manager.clone(),
             dispatcher: self.transport_dispatcher.clone(),
             early_dialogs: early_dialogs.clone(),
+            dialog: shared_dialog.clone(),
             local_addr: self.local_addr,
             public_addr: self.public_addr,
         });
@@ -1805,11 +1813,11 @@ impl IntegratedUAC {
         info!(
             "Started INVITE transaction {} for dialog {}",
             key.branch(),
-            dialog.id().call_id()
+            shared_dialog.read().await.id().call_id()
         );
 
         Ok(CallHandle {
-            dialog,
+            dialog: shared_dialog,
             transaction_key: key,
             provisional_rx: Arc::new(Mutex::new(prov_rx)),
             final_rx: Arc::new(Mutex::new(Some(final_rx))),
@@ -2127,6 +2135,8 @@ struct InviteTransactionUser {
     dispatcher: Arc<dyn TransportDispatcher>,
     /// Track early dialogs for forking support (shared with CallHandle)
     early_dialogs: Arc<Mutex<std::collections::HashMap<SmolStr, Dialog>>>,
+    /// Dialog reference (shared with CallHandle) - updated when 200 OK arrives
+    dialog: Arc<RwLock<Dialog>>,
     local_addr: SocketAddr,
     public_addr: Option<SocketAddr>,
 }
@@ -2182,15 +2192,19 @@ impl ClientTransactionUser for InviteTransactionUser {
     async fn on_final(&self, _key: &TransactionKey, response: &Response) {
         info!("Received final response: {}", response.code());
 
-        // Create or confirm dialog from 2xx
+        // Create or confirm dialog from 2xx and update CallHandle's dialog
         if response.code() >= 200 && response.code() < 300 {
             let helper = self.helper.lock().await;
-            if let Some(dialog) = helper.process_invite_response(&self.request, response) {
+            if let Some(confirmed_dialog) = helper.process_invite_response(&self.request, response) {
                 info!(
-                    "Confirmed dialog from {}: {}",
+                    "Confirmed dialog from {}: {} (to-tag={})",
                     response.code(),
-                    dialog.id().call_id()
+                    confirmed_dialog.id().call_id(),
+                    confirmed_dialog.id().remote_tag()
                 );
+
+                // Update the shared dialog (fixes the "pending" tag issue)
+                *self.dialog.write().await = confirmed_dialog;
             }
         }
 
