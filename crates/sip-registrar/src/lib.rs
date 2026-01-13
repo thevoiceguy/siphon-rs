@@ -43,6 +43,7 @@ use tracing::{info, warn};
 const MAX_AOR_LENGTH: usize = 512;
 const MAX_CONTACT_LENGTH: usize = 512;
 const MAX_CALL_ID_LENGTH: usize = 256;
+const MAX_USER_AGENT_LENGTH: usize = 256;
 const MAX_BINDINGS_PER_AOR: usize = 20;
 const MAX_TOTAL_BINDINGS: usize = 100_000;
 const MAX_CSEQ_VALUE: u32 = 2_147_483_647; // i32::MAX
@@ -64,6 +65,10 @@ pub enum RegistrationError {
     CallIdTooLong { max: usize, actual: usize },
     /// Call-ID contains control characters (CRLF injection)
     CallIdContainsControlChars,
+    /// User-Agent too long (DoS prevention)
+    UserAgentTooLong { max: usize, actual: usize },
+    /// User-Agent contains control characters (CRLF injection)
+    UserAgentContainsControlChars,
     /// CSeq too large (DoS prevention)
     CSeqTooLarge { max: u32, actual: u32 },
     /// Q-value out of range (must be 0.0-1.0)
@@ -98,6 +103,12 @@ impl std::fmt::Display for RegistrationError {
             }
             RegistrationError::CallIdContainsControlChars => {
                 write!(f, "Call-ID contains control characters (CRLF injection)")
+            }
+            RegistrationError::UserAgentTooLong { max, actual } => {
+                write!(f, "User-Agent length {} exceeds max {}", actual, max)
+            }
+            RegistrationError::UserAgentContainsControlChars => {
+                write!(f, "User-Agent contains control characters (CRLF injection)")
             }
             RegistrationError::CSeqTooLarge { max, actual } => {
                 write!(f, "CSeq {} exceeds max {}", actual, max)
@@ -180,6 +191,20 @@ fn validate_cseq(cseq: u32) -> Result<(), RegistrationError> {
 fn validate_q_value(q: f32) -> Result<(), RegistrationError> {
     if !(0.0..=1.0).contains(&q) || q.is_nan() {
         return Err(RegistrationError::InvalidQValue { value: q });
+    }
+    Ok(())
+}
+
+/// Validates a User-Agent string for length and control characters
+fn validate_user_agent(user_agent: &str) -> Result<(), RegistrationError> {
+    if user_agent.len() > MAX_USER_AGENT_LENGTH {
+        return Err(RegistrationError::UserAgentTooLong {
+            max: MAX_USER_AGENT_LENGTH,
+            actual: user_agent.len(),
+        });
+    }
+    if user_agent.chars().any(|c| c.is_control()) {
+        return Err(RegistrationError::UserAgentContainsControlChars);
     }
     Ok(())
 }
@@ -413,6 +438,10 @@ pub struct Binding {
 
     /// Quality value (q parameter, 0.0 to 1.0)
     q_value: f32,
+
+    /// User-Agent header from the REGISTER request
+    /// Identifies the client software making the registration
+    user_agent: Option<SmolStr>,
 }
 
 impl Binding {
@@ -433,6 +462,7 @@ impl Binding {
             call_id: SmolStr::new(""),
             cseq: 0,
             q_value: 1.0,
+            user_agent: None,
         })
     }
 
@@ -454,6 +484,13 @@ impl Binding {
     pub fn with_q_value(mut self, q_value: f32) -> Result<Self, RegistrationError> {
         validate_q_value(q_value)?;
         self.q_value = q_value.clamp(0.0, 1.0);
+        Ok(self)
+    }
+
+    /// Set User-Agent (validates)
+    pub fn with_user_agent(mut self, user_agent: SmolStr) -> Result<Self, RegistrationError> {
+        validate_user_agent(&user_agent)?;
+        self.user_agent = Some(user_agent);
         Ok(self)
     }
 
@@ -482,6 +519,10 @@ impl Binding {
         self.q_value
     }
 
+    pub fn user_agent(&self) -> Option<&str> {
+        self.user_agent.as_deref()
+    }
+
     /// Test builder (cfg(test) only) - bypasses validation
     #[cfg(test)]
     pub fn test(aor: &str, contact: &str, expires: Duration) -> Self {
@@ -492,6 +533,7 @@ impl Binding {
             call_id: SmolStr::new(""),
             cseq: 0,
             q_value: 1.0,
+            user_agent: None,
         }
     }
 }
@@ -630,6 +672,7 @@ struct StoredBinding {
     call_id: SmolStr,
     cseq: u32,
     q_value: f32,
+    user_agent: Option<SmolStr>,
 }
 
 impl MemoryLocationStore {
@@ -705,6 +748,7 @@ impl LocationStore for MemoryLocationStore {
             call_id: SmolStr::new(binding.call_id()),
             cseq: binding.cseq(),
             q_value: binding.q_value(),
+            user_agent: binding.user_agent().map(SmolStr::new),
         });
 
         Ok(())
@@ -742,6 +786,7 @@ impl LocationStore for MemoryLocationStore {
                             call_id: b.call_id.clone(),
                             cseq: b.cseq,
                             q_value: b.q_value,
+                            user_agent: b.user_agent.clone(),
                         })
                     } else {
                         None
@@ -1243,6 +1288,8 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
             .cloned()
             .unwrap_or_else(|| SmolStr::new(""));
 
+        let user_agent = header(request.headers(), "User-Agent").cloned();
+
         let cseq = match self.parse_cseq_number(request) {
             Ok(cseq) => cseq,
             Err(response) => return Ok(response),
@@ -1387,11 +1434,15 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
                 self.store.remove(&aor, contact_uri.as_str()).await?;
                 info!(aor = %aor, contact = %contact_uri, "REGISTER removed binding");
             } else {
-                let binding =
+                let mut binding =
                     Binding::new(SmolStr::new(aor.clone()), contact_uri.clone(), expires)?
                         .with_call_id(call_id.clone())?
                         .with_cseq(cseq)?
                         .with_q_value(q_value)?;
+
+                if let Some(ua) = &user_agent {
+                    binding = binding.with_user_agent(ua.clone())?;
+                }
 
                 self.store.upsert(binding).await?;
                 info!(aor = %aor, contact = %contact_uri, expires = %expires.as_secs(), "REGISTER stored binding");
@@ -1511,6 +1562,8 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
         let call_id = header(request.headers(), "Call-ID")
             .cloned()
             .unwrap_or_else(|| SmolStr::new(""));
+
+        let user_agent = header(request.headers(), "User-Agent").cloned();
 
         let cseq = match self.parse_cseq_number(request) {
             Ok(cseq) => cseq,
@@ -1664,11 +1717,15 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
                 info!(aor = %aor, contact = %contact_uri, "REGISTER removed binding");
             } else {
                 // Add or update binding
-                let binding =
+                let mut binding =
                     Binding::new(SmolStr::new(aor.clone()), contact_uri.clone(), expires)?
                         .with_call_id(call_id.clone())?
                         .with_cseq(cseq)?
                         .with_q_value(q_value)?;
+
+                if let Some(ua) = &user_agent {
+                    binding = binding.with_user_agent(ua.clone())?;
+                }
 
                 self.store.upsert(binding)?;
                 info!(aor = %aor, contact = %contact_uri, expires = %expires.as_secs(), "REGISTER stored binding");
