@@ -488,6 +488,11 @@ pub struct CallHandle {
 }
 
 impl CallHandle {
+    /// Get a reference to the original INVITE request.
+    pub fn invite_request(&self) -> &Request {
+        &self.invite_request
+    }
+
     /// Stop keepalives on drop if still running.
     fn stop_keepalives_sync(&self) {
         if let Ok(mut guard) = self.keepalive_cancel.try_lock() {
@@ -766,6 +771,11 @@ impl IntegratedUAC {
     /// Creates a builder for IntegratedUAC.
     pub fn builder() -> IntegratedUACBuilder {
         IntegratedUACBuilder::new()
+    }
+
+    /// Get a reference to the dialog manager.
+    pub fn dialog_manager(&self) -> Option<&Arc<DialogManager>> {
+        Some(&self.dialog_manager)
     }
 
     /// Sends a REGISTER request.
@@ -1343,6 +1353,120 @@ impl IntegratedUAC {
 
         info!(
             "Started INVITE client transaction {} to {}",
+            key.branch(),
+            target_uri.as_str()
+        );
+
+        Ok(CallHandle {
+            dialog: shared_dialog,
+            transaction_key: key,
+            provisional_rx: Arc::new(Mutex::new(prov_rx)),
+            final_rx: Arc::new(Mutex::new(Some(final_rx))),
+            termination_rx: Arc::new(Mutex::new(Some(term_rx))),
+            invite_request: Arc::new(request),
+            transport_ctx: Arc::new(ctx),
+            dispatcher: self.transport_dispatcher.clone(),
+            transaction_manager: self.transaction_manager.clone(),
+            early_dialogs,
+            keepalive_cancel: Arc::new(Mutex::new(None)),
+            session_timer_cancel: Arc::new(Mutex::new(None)),
+        })
+    }
+
+    /// Send an INVITE with custom body and Content-Type.
+    ///
+    /// Used for SIPREC (multipart/mixed) and other non-SDP extensions.
+    ///
+    /// # Arguments
+    /// * `target` - URI or resolved target of the callee
+    /// * `body` - The request body
+    /// * `content_type` - The Content-Type header value
+    pub async fn invite_with_body(
+        &self,
+        target: impl Into<RequestTarget>,
+        body: &str,
+        content_type: &str,
+    ) -> Result<CallHandle> {
+        let target = target.into();
+
+        // Generate request using helper
+        let helper = self.helper.lock().await;
+        let target_uri = self.extract_uri(&target)?;
+        let mut request = helper.create_invite_with_body(&target_uri, body, content_type);
+        drop(helper);
+
+        // Resolve target
+        let dns_target = self.resolve_target(&target).await?;
+
+        // Auto-fill Via/Contact using resolved transport
+        self.auto_fill_headers(&mut request, Some(dns_target.transport()))
+            .await;
+
+        // Create channels for responses
+        let (prov_tx, prov_rx) = mpsc::channel(16);
+        let (final_tx, final_rx) = oneshot::channel();
+        let (term_tx, term_rx) = oneshot::channel();
+
+        // Create transport context
+        let ctx = self.create_transport_context(&dns_target).await?;
+
+        // Create early dialogs map for forking support
+        let early_dialogs = Arc::new(Mutex::new(std::collections::HashMap::new()));
+
+        // Create placeholder dialog (will be updated when 2xx arrives)
+        let helper = self.helper.lock().await;
+        let dialog_id = sip_dialog::DialogId::unchecked_new(
+            request.headers().get_smol("Call-ID").unwrap().clone(),
+            helper.local_tag.clone(),
+            SmolStr::new("pending"),
+        );
+        let placeholder_dialog = Dialog::unchecked_new(
+            dialog_id,
+            sip_dialog::DialogStateType::Early,
+            helper.local_uri.clone(),
+            target_uri.clone(),
+            target_uri.clone(),
+            1,
+            0,
+            None,
+            vec![],
+            false,
+            None,
+            None,
+            true,
+        );
+        drop(helper);
+
+        // Wrap dialog in Arc<RwLock> for sharing between CallHandle and transaction user
+        let shared_dialog = Arc::new(RwLock::new(placeholder_dialog));
+
+        // Create INVITE transaction user
+        let tu = Arc::new(InviteTransactionUser {
+            prov_tx,
+            final_tx: Mutex::new(Some(final_tx)),
+            term_tx: Mutex::new(Some(term_tx)),
+            dialog_manager: self.dialog_manager.clone(),
+            helper: self.helper.clone(),
+            request: request.clone(),
+            config: self.config.clone(),
+            ctx: ctx.clone(),
+            auto_retry_auth: self.config.auto_retry_auth,
+            transaction_manager: self.transaction_manager.clone(),
+            dispatcher: self.transport_dispatcher.clone(),
+            early_dialogs: early_dialogs.clone(),
+            dialog: shared_dialog.clone(),
+            local_addr: self.local_addr,
+            public_addr: self.public_addr,
+        });
+
+        // Start client transaction
+        let key = self
+            .transaction_manager
+            .start_client_transaction(request.clone(), ctx.clone(), tu)
+            .await?;
+
+        info!(
+            "Started INVITE (custom body) client transaction {} to {}",
             key.branch(),
             target_uri.as_str()
         );

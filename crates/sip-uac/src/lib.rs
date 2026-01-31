@@ -815,6 +815,96 @@ impl UserAgentClient {
         .expect("valid INVITE request")
     }
 
+    /// Creates an INVITE request with a custom body and Content-Type.
+    ///
+    /// Like `create_invite()` but allows specifying an arbitrary Content-Type
+    /// and body. Used for SIPREC (multipart/mixed) and other non-SDP extensions.
+    ///
+    /// # Arguments
+    /// * `target_uri` - The target SIP URI
+    /// * `body` - The request body
+    /// * `content_type` - The Content-Type header value (e.g., "multipart/mixed;boundary=...")
+    pub fn create_invite_with_body(
+        &self,
+        target_uri: &SipUri,
+        body: &str,
+        content_type: &str,
+    ) -> Request {
+        let mut headers = Headers::new();
+
+        // Via
+        let branch = generate_branch();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
+            )
+            .unwrap();
+
+        // From
+        let from = self.format_from_header();
+        headers
+            .push(SmolStr::new("From"), SmolStr::new(from))
+            .unwrap();
+
+        // To
+        headers
+            .push(
+                SmolStr::new("To"),
+                SmolStr::new(format!("<{}>", target_uri.as_str())),
+            )
+            .unwrap();
+
+        // Call-ID
+        let call_id = generate_call_id();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new(call_id))
+            .unwrap();
+
+        // CSeq
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"))
+            .unwrap();
+
+        // Contact
+        headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
+            )
+            .unwrap();
+
+        // Max-Forwards
+        headers
+            .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
+            .unwrap();
+
+        // User-Agent
+        headers
+            .push(SmolStr::new("User-Agent"), SmolStr::new("siphon-rs/0.1.0"))
+            .unwrap();
+
+        // Content-Type
+        headers
+            .push(SmolStr::new("Content-Type"), SmolStr::new(content_type))
+            .unwrap();
+
+        // Content-Length
+        headers
+            .push(
+                SmolStr::new("Content-Length"),
+                SmolStr::new(body.len().to_string()),
+            )
+            .unwrap();
+
+        Request::new(
+            RequestLine::new(Method::Invite, target_uri.clone()),
+            headers,
+            Bytes::from(body.as_bytes().to_vec()),
+        )
+        .expect("valid INVITE request")
+    }
+
     /// Creates an ACK request for an INVITE response.
     ///
     /// # Arguments

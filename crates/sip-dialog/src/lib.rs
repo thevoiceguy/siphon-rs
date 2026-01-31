@@ -751,6 +751,18 @@ impl DialogManager {
             .retain(|_, dialog| dialog.state != DialogStateType::Terminated);
     }
 
+    /// Finds a dialog by its SIP Call-ID header value.
+    ///
+    /// Returns the first dialog whose `DialogId` Call-ID matches the given value.
+    /// If multiple dialogs share the same Call-ID (e.g., forking), only the first
+    /// found is returned.
+    pub fn find_by_call_id(&self, call_id: &str) -> Option<Dialog> {
+        self.dialogs
+            .iter()
+            .find(|entry| entry.key().call_id() == call_id)
+            .map(|entry| entry.value().clone())
+    }
+
     /// Returns all dialog IDs.
     pub fn all_ids(&self) -> Vec<DialogId> {
         self.dialogs
