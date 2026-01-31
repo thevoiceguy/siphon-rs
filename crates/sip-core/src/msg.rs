@@ -97,6 +97,11 @@ impl RequestLine {
         self.uri.as_sip()
     }
 
+    /// Sets the request URI.
+    pub fn set_uri(&mut self, uri: impl Into<Uri>) {
+        self.uri = uri.into();
+    }
+
     /// Consumes self and returns the components.
     pub fn into_parts(self) -> (Method, Uri, SipVersion) {
         (self.method, self.uri, self.version)
@@ -333,6 +338,16 @@ impl Request {
         self.body.len()
     }
 
+    /// Sets the request URI.
+    pub fn set_uri(&mut self, uri: impl Into<Uri>) {
+        self.start.set_uri(uri);
+    }
+
+    /// Sets the message body.
+    pub fn set_body(&mut self, body: Bytes) {
+        self.body = body;
+    }
+
     /// Consumes self and returns the components.
     pub fn into_parts(self) -> (RequestLine, Headers, Bytes) {
         (self.start, self.headers, self.body)
@@ -468,6 +483,11 @@ impl Response {
     /// Returns true if this is an error response (4xx, 5xx, or 6xx).
     pub fn is_error(&self) -> bool {
         self.start.is_error()
+    }
+
+    /// Sets the message body.
+    pub fn set_body(&mut self, body: Bytes) {
+        self.body = body;
     }
 
     /// Consumes self and returns the components.
@@ -803,5 +823,52 @@ mod tests {
         assert_eq!(method, Method::Invite);
         assert_eq!(returned_uri, uri);
         assert_eq!(version, SipVersion::V2);
+    }
+
+    #[test]
+    fn test_request_line_set_uri() {
+        let uri1 = Uri::parse("sip:alice@example.com").unwrap();
+        let uri2 = Uri::parse("sip:bob@other.com").unwrap();
+        let mut rl = RequestLine::new(Method::Invite, uri1);
+        assert_eq!(rl.uri().to_string(), "sip:alice@example.com");
+
+        rl.set_uri(uri2.clone());
+        assert_eq!(rl.uri(), &uri2);
+    }
+
+    #[test]
+    fn test_request_set_uri() {
+        let uri1 = Uri::parse("sip:alice@example.com").unwrap();
+        let uri2 = Uri::parse("sip:bob@other.com").unwrap();
+        let rl = RequestLine::new(Method::Invite, uri1);
+        let mut req = Request::new(rl, Headers::new(), Bytes::new()).unwrap();
+
+        req.set_uri(uri2.clone());
+        assert_eq!(req.uri(), &uri2);
+    }
+
+    #[test]
+    fn test_request_set_body() {
+        let uri = mock_uri();
+        let rl = RequestLine::new(Method::Invite, uri);
+        let mut req = Request::new(rl, Headers::new(), Bytes::new()).unwrap();
+        assert!(!req.has_body());
+
+        let body = Bytes::from("new body content");
+        req.set_body(body.clone());
+        assert!(req.has_body());
+        assert_eq!(req.body(), &body);
+    }
+
+    #[test]
+    fn test_response_set_body() {
+        let sl = StatusLine::new(200, "OK").unwrap();
+        let mut resp = Response::new(sl, Headers::new(), Bytes::new()).unwrap();
+        assert!(!resp.has_body());
+
+        let body = Bytes::from("response body");
+        resp.set_body(body.clone());
+        assert!(resp.has_body());
+        assert_eq!(resp.body(), &body);
     }
 }
