@@ -1591,6 +1591,36 @@ impl IntegratedUAC {
         self.send_non_invite_request(request, dns_target).await
     }
 
+    /// Sends an unsolicited NOTIFY request (e.g., for MWI per RFC 3842 §5).
+    ///
+    /// Unlike `notify()` which requires a `Subscription`, this sends an
+    /// out-of-dialog NOTIFY suitable for unsolicited event notifications.
+    ///
+    /// # Arguments
+    /// * `target` - URI of the recipient
+    /// * `event` - Event package (e.g., "message-summary")
+    /// * `content_type` - MIME type for the body
+    /// * `body` - Notification payload
+    pub async fn send_unsolicited_notify(
+        &self,
+        target: &SipUri,
+        event: &str,
+        content_type: &str,
+        body: &str,
+    ) -> Result<Response> {
+        let request_target = RequestTarget::Uri(target.clone());
+        let dns_target = self.resolve_target(&request_target).await?;
+
+        let helper = self.helper.lock().await;
+        let mut request = helper.create_unsolicited_notify(target, event, content_type, body);
+        drop(helper);
+
+        self.auto_fill_headers(&mut request, Some(dns_target.transport()))
+            .await;
+
+        self.send_non_invite_request(request, dns_target).await
+    }
+
     /// Sends an OPTIONS ping for connectivity checks.
     pub async fn ping_options(&self, target: impl Into<RequestTarget>) -> Result<Response> {
         let target = target.into();
