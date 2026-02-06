@@ -30,7 +30,7 @@ use chrono::Utc;
 use dashmap::DashMap;
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use sip_auth::Authenticator;
-use sip_core::{Headers, Request, Response, SipUri, StatusLine, TelUri, Uri};
+use sip_core::{Headers, PathHeader, Request, Response, SipUri, StatusLine, TelUri, Uri};
 use sip_parse::{header, parse_to_header};
 use sip_ratelimit::RateLimiter;
 use smol_str::SmolStr;
@@ -442,6 +442,12 @@ pub struct Binding {
     /// User-Agent header from the REGISTER request
     /// Identifies the client software making the registration
     user_agent: Option<SmolStr>,
+
+    /// Path header from REGISTER request (RFC 3327)
+    /// Records the sequence of proxies traversed by the request.
+    /// The registrar stores this and uses it to build route sets for requests
+    /// sent to the registered UA.
+    path: Option<PathHeader>,
 }
 
 impl Binding {
@@ -463,6 +469,7 @@ impl Binding {
             cseq: 0,
             q_value: 1.0,
             user_agent: None,
+            path: None,
         })
     }
 
@@ -494,6 +501,16 @@ impl Binding {
         Ok(self)
     }
 
+    /// Set Path header (RFC 3327)
+    ///
+    /// Records the sequence of proxies traversed by the REGISTER request.
+    /// The registrar stores this and uses it to build route sets for requests
+    /// sent to the registered UA.
+    pub fn with_path(mut self, path: PathHeader) -> Self {
+        self.path = Some(path);
+        self
+    }
+
     /// Public accessors
     pub fn aor(&self) -> &str {
         &self.aor
@@ -523,6 +540,13 @@ impl Binding {
         self.user_agent.as_deref()
     }
 
+    /// Get the Path header (RFC 3327)
+    ///
+    /// Returns the sequence of proxies traversed by the REGISTER request.
+    pub fn path(&self) -> Option<&PathHeader> {
+        self.path.as_ref()
+    }
+
     /// Test builder (cfg(test) only) - bypasses validation
     #[cfg(test)]
     pub fn test(aor: &str, contact: &str, expires: Duration) -> Self {
@@ -534,6 +558,7 @@ impl Binding {
             cseq: 0,
             q_value: 1.0,
             user_agent: None,
+            path: None,
         }
     }
 }
@@ -673,6 +698,7 @@ struct StoredBinding {
     cseq: u32,
     q_value: f32,
     user_agent: Option<SmolStr>,
+    path: Option<PathHeader>,
 }
 
 impl MemoryLocationStore {
@@ -749,6 +775,7 @@ impl LocationStore for MemoryLocationStore {
             cseq: binding.cseq(),
             q_value: binding.q_value(),
             user_agent: binding.user_agent().map(SmolStr::new),
+            path: binding.path().cloned(),
         });
 
         Ok(())
@@ -787,6 +814,7 @@ impl LocationStore for MemoryLocationStore {
                             cseq: b.cseq,
                             q_value: b.q_value,
                             user_agent: b.user_agent.clone(),
+                            path: b.path.clone(),
                         })
                     } else {
                         None
