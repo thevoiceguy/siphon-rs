@@ -752,21 +752,10 @@ pub async fn run_tls(
 
 #[cfg(feature = "tls")]
 /// Loads a rustls server config from PEM certificate and key files.
-/// A certificate resolver that always returns the same certificate regardless of SNI.
-/// This is needed because SIP clients often send IP addresses as SNI, which rustls
-/// rejects by default (per RFC 6066, SNI should be DNS names only).
-#[derive(Debug)]
-struct AlwaysResolveCert(Arc<tokio_rustls::rustls::sign::CertifiedKey>);
-
-impl tokio_rustls::rustls::server::ResolvesServerCert for AlwaysResolveCert {
-    fn resolve(
-        &self,
-        _client_hello: tokio_rustls::rustls::server::ClientHello<'_>,
-    ) -> Option<Arc<tokio_rustls::rustls::sign::CertifiedKey>> {
-        Some(Arc::clone(&self.0))
-    }
-}
-
+///
+/// Uses `with_single_cert` which ignores SNI entirely. This is important for SIP
+/// because clients often send IP addresses as SNI, which would be rejected by
+/// SNI-aware configurations (per RFC 6066, SNI should be DNS names only).
 pub fn load_rustls_server_config(
     cert_path: &str,
     key_path: &str,
@@ -777,7 +766,6 @@ pub fn load_rustls_server_config(
     use tokio_rustls::rustls::{
         self,
         pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs1KeyDer, PrivatePkcs8KeyDer},
-        sign::CertifiedKey,
     };
 
     let mut cert_reader = BufReader::new(File::open(cert_path)?);
@@ -809,16 +797,6 @@ pub fn load_rustls_server_config(
         .next()
         .ok_or_else(|| anyhow!("no private keys found in {}", key_path))?;
 
-    // Create a signing key from the private key
-    let signing_key = rustls::crypto::ring::sign::any_supported_type(&key)
-        .map_err(|e| anyhow!("failed to create signing key: {e}"))?;
-
-    // Create a CertifiedKey that bundles the cert chain with the signing key
-    let certified_key = Arc::new(CertifiedKey::new(certs, signing_key));
-
-    // Use our custom resolver that accepts any SNI (including IP addresses)
-    let cert_resolver = Arc::new(AlwaysResolveCert(certified_key));
-
     let tls12_only = std::env::var("SIPHON_TLS12_ONLY")
         .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE"))
         .unwrap_or(false);
@@ -829,9 +807,12 @@ pub fn load_rustls_server_config(
         rustls::ServerConfig::builder()
     };
 
+    // Use with_single_cert which ignores SNI entirely (per rustls issue #130).
+    // This is necessary for SIP clients that send IP addresses as SNI.
     let config = builder
         .with_no_client_auth()
-        .with_cert_resolver(cert_resolver);
+        .with_single_cert(certs, key)
+        .map_err(|e| anyhow!("failed to create TLS config: {e}"))?;
 
     Ok(std::sync::Arc::new(config))
 }
