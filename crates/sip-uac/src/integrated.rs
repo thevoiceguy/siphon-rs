@@ -1373,6 +1373,132 @@ impl IntegratedUAC {
         })
     }
 
+    /// Send an INVITE using an existing connection (RFC 5626 flow support).
+    ///
+    /// This method allows sending INVITEs to TLS/TCP clients that registered
+    /// through an inbound connection (NAT traversal scenario). Instead of
+    /// opening a new connection to the client's ephemeral port, the INVITE
+    /// is sent through the existing connection identified by the flow stream.
+    ///
+    /// # Arguments
+    /// * `target` - URI or resolved target of the callee
+    /// * `sdp_body` - Optional SDP offer (None for late offer)
+    /// * `flow_stream` - The mpsc::Sender for the existing connection
+    /// * `peer_addr` - The peer's socket address for the TransportContext
+    pub async fn invite_via_flow(
+        &self,
+        target: impl Into<RequestTarget>,
+        sdp_body: Option<&str>,
+        flow_stream: mpsc::Sender<Bytes>,
+        peer_addr: std::net::SocketAddr,
+    ) -> Result<CallHandle> {
+        let target = target.into();
+
+        // Generate request using helper
+        let helper = self.helper.lock().await;
+        let target_uri = self.extract_uri(&target)?;
+        let mut request = helper.create_invite(&target_uri, sdp_body);
+        drop(helper);
+
+        // Resolve target to get transport type
+        let dns_target = self.resolve_target(&target).await?;
+
+        // Auto-fill Via/Contact using resolved transport
+        self.auto_fill_headers(&mut request, Some(dns_target.transport()))
+            .await;
+
+        // Create channels for responses
+        let (prov_tx, prov_rx) = mpsc::channel(16);
+        let (final_tx, final_rx) = oneshot::channel();
+        let (term_tx, term_rx) = oneshot::channel();
+
+        // Create transport context WITH the flow stream for connection reuse
+        use sip_transaction::TransportKind;
+        let transport = match dns_target.transport() {
+            sip_dns::Transport::Tls => TransportKind::Tls,
+            sip_dns::Transport::Tcp => TransportKind::Tcp,
+            _ => TransportKind::Tls, // Default to TLS for flow-based routing
+        };
+        let ctx = TransportContext::new(transport, peer_addr, Some(flow_stream))
+            .with_server_name(Some(dns_target.host().to_string()));
+
+        // Create early dialogs map for forking support
+        let early_dialogs = Arc::new(Mutex::new(std::collections::HashMap::new()));
+
+        // Create placeholder dialog (will be updated when 2xx arrives)
+        let helper = self.helper.lock().await;
+        let dialog_id = sip_dialog::DialogId::unchecked_new(
+            request.headers().get_smol("Call-ID").unwrap().clone(),
+            helper.local_tag.clone(),
+            SmolStr::new("pending"),
+        );
+        let placeholder_dialog = Dialog::unchecked_new(
+            dialog_id,
+            sip_dialog::DialogStateType::Early,
+            helper.local_uri.clone(),
+            target_uri.clone(),
+            target_uri.clone(),
+            1,
+            0,
+            None,
+            vec![],
+            false,
+            None,
+            None,
+            true,
+        );
+        drop(helper);
+
+        // Wrap dialog in Arc<RwLock> for sharing between CallHandle and transaction user
+        let shared_dialog = Arc::new(RwLock::new(placeholder_dialog));
+
+        // Create INVITE transaction user
+        let tu = Arc::new(InviteTransactionUser {
+            prov_tx,
+            final_tx: Mutex::new(Some(final_tx)),
+            term_tx: Mutex::new(Some(term_tx)),
+            dialog_manager: self.dialog_manager.clone(),
+            helper: self.helper.clone(),
+            request: request.clone(),
+            config: self.config.clone(),
+            ctx: ctx.clone(),
+            auto_retry_auth: self.config.auto_retry_auth,
+            transaction_manager: self.transaction_manager.clone(),
+            dispatcher: self.transport_dispatcher.clone(),
+            early_dialogs: early_dialogs.clone(),
+            dialog: shared_dialog.clone(),
+            local_addr: self.local_addr,
+            public_addr: self.public_addr,
+        });
+
+        // Start client transaction
+        let key = self
+            .transaction_manager
+            .start_client_transaction(request.clone(), ctx.clone(), tu)
+            .await?;
+
+        info!(
+            "Started INVITE client transaction {} to {} via flow",
+            key.branch(),
+            target_uri.as_str()
+        );
+
+        Ok(CallHandle {
+            dialog: shared_dialog,
+            transaction_key: key,
+            provisional_rx: Arc::new(Mutex::new(prov_rx)),
+            final_rx: Arc::new(Mutex::new(Some(final_rx))),
+            termination_rx: Arc::new(Mutex::new(Some(term_rx))),
+            invite_request: Arc::new(request),
+            transport_ctx: Arc::new(ctx),
+            dispatcher: self.transport_dispatcher.clone(),
+            transaction_manager: self.transaction_manager.clone(),
+            early_dialogs,
+            keepalive_cancel: Arc::new(Mutex::new(None)),
+            session_timer_cancel: Arc::new(Mutex::new(None)),
+        })
+    }
+
     /// Send an INVITE with custom body and Content-Type.
     ///
     /// Used for SIPREC (multipart/mixed) and other non-SDP extensions.
@@ -1516,6 +1642,82 @@ impl IntegratedUAC {
 
         // Send and wait for response
         self.send_non_invite_request(request, dns_target).await
+    }
+
+    /// Sends a BYE request using an existing connection (RFC 5626 flow support).
+    ///
+    /// This method allows sending BYE to TLS/TCP clients that registered
+    /// through an inbound connection (NAT traversal scenario). Instead of
+    /// opening a new connection to the client's ephemeral port, the BYE
+    /// is sent through the existing connection identified by the flow stream.
+    ///
+    /// # Arguments
+    /// * `dialog` - The dialog to terminate
+    /// * `flow_stream` - The mpsc::Sender for the existing connection
+    /// * `peer_addr` - The peer's socket address for the TransportContext
+    ///
+    /// # Returns
+    /// The final response (typically 200 OK)
+    pub async fn bye_via_flow(
+        &self,
+        dialog: &Dialog,
+        flow_stream: mpsc::Sender<Bytes>,
+        peer_addr: std::net::SocketAddr,
+    ) -> Result<Response> {
+        // Generate BYE using helper
+        let helper = self.helper.lock().await;
+        let mut request = helper.create_bye(dialog);
+        drop(helper);
+
+        // Determine transport type from dialog's remote target
+        let target = RequestTarget::Uri(dialog.remote_target().clone());
+        let dns_target = self.resolve_target(&target).await?;
+
+        // Auto-fill Via with resolved transport
+        self.auto_fill_headers(&mut request, Some(dns_target.transport()))
+            .await;
+
+        // Create transport context WITH the flow stream for connection reuse
+        use sip_transaction::TransportKind;
+        let transport = match dns_target.transport() {
+            sip_dns::Transport::Tls => TransportKind::Tls,
+            sip_dns::Transport::Tcp => TransportKind::Tcp,
+            _ => TransportKind::Tls, // Default to TLS for flow-based routing
+        };
+        let ctx = TransportContext::new(transport, peer_addr, Some(flow_stream))
+            .with_server_name(Some(dns_target.host().to_string()));
+
+        // Create channels for response
+        let (final_tx, final_rx) = oneshot::channel();
+        let (term_tx, term_rx) = oneshot::channel();
+
+        // Create transaction user
+        let tu = Arc::new(SimpleTransactionUser {
+            final_tx: Mutex::new(Some(final_tx)),
+            term_tx: Mutex::new(Some(term_tx)),
+        });
+
+        // Start client transaction
+        let key = self
+            .transaction_manager
+            .start_client_transaction(request.clone(), ctx, tu)
+            .await?;
+
+        info!(
+            "Started BYE via flow transaction {} for dialog {:?}",
+            key.branch(),
+            dialog.id()
+        );
+
+        // Wait for response
+        tokio::select! {
+            Ok(response) = final_rx => {
+                debug!("BYE via flow response: {}", response.code());
+                Ok(response)
+            }
+            Ok(reason) = term_rx => Err(anyhow!("BYE transaction terminated: {}", reason)),
+            else => Err(anyhow!("BYE response channels closed")),
+        }
     }
 
     /// Sends a SUBSCRIBE request to establish an event subscription.

@@ -448,6 +448,11 @@ pub struct Binding {
     /// The registrar stores this and uses it to build route sets for requests
     /// sent to the registered UA.
     path: Option<PathHeader>,
+
+    /// Flow token for RFC 5626 Outbound support.
+    /// Identifies the TLS/TCP connection for reusing inbound connections
+    /// when routing requests to NAT'd clients.
+    flow_token: Option<SmolStr>,
 }
 
 impl Binding {
@@ -470,6 +475,7 @@ impl Binding {
             q_value: 1.0,
             user_agent: None,
             path: None,
+            flow_token: None,
         })
     }
 
@@ -547,6 +553,22 @@ impl Binding {
         self.path.as_ref()
     }
 
+    /// Set flow token (RFC 5626)
+    ///
+    /// Stores a token identifying the TLS/TCP connection for the registration.
+    /// This enables connection reuse when routing requests to NAT'd clients.
+    pub fn with_flow_token(mut self, flow_token: SmolStr) -> Self {
+        self.flow_token = Some(flow_token);
+        self
+    }
+
+    /// Get the flow token (RFC 5626)
+    ///
+    /// Returns the token identifying the TLS/TCP connection for this registration.
+    pub fn flow_token(&self) -> Option<&str> {
+        self.flow_token.as_deref()
+    }
+
     /// Test builder (cfg(test) only) - bypasses validation
     #[cfg(test)]
     pub fn test(aor: &str, contact: &str, expires: Duration) -> Self {
@@ -559,6 +581,7 @@ impl Binding {
             q_value: 1.0,
             user_agent: None,
             path: None,
+            flow_token: None,
         }
     }
 }
@@ -699,6 +722,7 @@ struct StoredBinding {
     q_value: f32,
     user_agent: Option<SmolStr>,
     path: Option<PathHeader>,
+    flow_token: Option<SmolStr>,
 }
 
 impl MemoryLocationStore {
@@ -776,6 +800,7 @@ impl LocationStore for MemoryLocationStore {
             q_value: binding.q_value(),
             user_agent: binding.user_agent().map(SmolStr::new),
             path: binding.path().cloned(),
+            flow_token: binding.flow_token().map(SmolStr::new),
         });
 
         Ok(())
@@ -815,6 +840,7 @@ impl LocationStore for MemoryLocationStore {
                             q_value: b.q_value,
                             user_agent: b.user_agent.clone(),
                             path: b.path.clone(),
+                            flow_token: b.flow_token.clone(),
                         })
                     } else {
                         None

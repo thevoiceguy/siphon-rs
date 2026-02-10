@@ -276,6 +276,13 @@ impl TransportContext {
         self.udp_socket = socket;
         self
     }
+
+    /// Builder-style helper to set the stream sender.
+    /// Used for RFC 5626 outbound flow support to reuse existing TLS/TCP connections.
+    pub fn with_stream(mut self, stream: Option<mpsc::Sender<Bytes>>) -> Self {
+        self.stream = stream;
+        self
+    }
 }
 
 enum ManagerCommand {
