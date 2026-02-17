@@ -115,6 +115,7 @@ pub fn request_branch_id(req: &Request) -> Option<SmolStr> {
 
 /// Generates a new RFC 3261 magic-cookie branch identifier.
 pub fn generate_branch_id() -> SmolStr {
+    #[cfg(test)]
     if let Some(counter) = deterministic_counter() {
         return SmolStr::new(format!("z9hG4bK{:016x}", counter));
     }
@@ -128,6 +129,10 @@ pub fn generate_branch_id() -> SmolStr {
     SmolStr::new(format!("z9hG4bK{}", suffix))
 }
 
+/// Deterministic counter for reproducible branch IDs in tests only.
+/// SECURITY: This MUST NOT be available in release builds — predictable branch IDs
+/// enable transaction collision and hijacking attacks.
+#[cfg(test)]
 fn deterministic_counter() -> Option<u64> {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::OnceLock;

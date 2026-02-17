@@ -5,9 +5,10 @@
 /// Request dispatcher that routes SIP requests to appropriate handlers.
 use std::{collections::HashMap, sync::Arc};
 
+use sip_auth::Authenticator;
 use sip_core::{Method, Request};
 use sip_transaction::{ServerTransactionHandle, TransportContext};
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::{
     handlers::{
@@ -69,6 +70,59 @@ impl RequestDispatcher {
         Self { handlers, services }
     }
 
+    /// Check if the request requires authentication and if so, verify credentials.
+    ///
+    /// Per RFC 3261:
+    /// - ACK cannot be challenged (no response can be sent)
+    /// - CANCEL must be processed without authentication
+    /// - REGISTER has its own auth via the registrar (handled in RegisterHandler)
+    /// - OPTIONS is informational and exempt
+    /// - All other methods are challenged when `--auth` is enabled
+    ///
+    /// Returns `true` if the request is authenticated or exempt; `false` if a
+    /// 401 challenge was sent and the request should not be processed further.
+    async fn check_auth(
+        &self,
+        request: &Request,
+        handle: &ServerTransactionHandle,
+    ) -> bool {
+        let authenticator = match &self.services.authenticator {
+            Some(auth) => auth,
+            None => return true, // No auth configured, allow all
+        };
+
+        // Methods exempt from authentication per RFC 3261
+        let method = request.method();
+        if matches!(
+            method,
+            &Method::Ack | &Method::Cancel | &Method::Options | &Method::Register
+        ) {
+            return true;
+        }
+
+        // Try to verify the Authorization header
+        match authenticator.verify(request, request.headers()) {
+            Ok(true) => true, // Authenticated
+            Ok(false) => {
+                // No valid credentials — send 401 challenge
+                info!(method = ?method, "Authentication required, sending 401 challenge");
+                match authenticator.challenge(request) {
+                    Ok(challenge_response) => {
+                        handle.send_final(challenge_response).await;
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Failed to generate auth challenge");
+                    }
+                }
+                false
+            }
+            Err(e) => {
+                warn!(error = %e, "Authentication verification error");
+                false
+            }
+        }
+    }
+
     /// Dispatch an incoming request to the appropriate handler.
     ///
     /// If no handler is registered for the method, sends 501 Not Implemented.
@@ -93,6 +147,11 @@ impl RequestDispatcher {
                     return;
                 }
             }
+        }
+
+        // Authenticate non-exempt methods when auth is enabled
+        if !self.check_auth(request, &handle).await {
+            return;
         }
 
         let method = request.method();

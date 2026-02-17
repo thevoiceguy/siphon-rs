@@ -2947,6 +2947,7 @@ impl UserAgentClient {
     }
 }
 fn generate_tag() -> SmolStr {
+    #[cfg(test)]
     if let Some(counter) = deterministic_counter() {
         return SmolStr::new(format!("t{:010x}", counter));
     }
@@ -2959,6 +2960,7 @@ fn generate_tag() -> SmolStr {
     SmolStr::new(tag)
 }
 fn generate_branch() -> String {
+    #[cfg(test)]
     if let Some(counter) = deterministic_counter() {
         return format!("z9hG4bK{:016x}", counter);
     }
@@ -2971,6 +2973,7 @@ fn generate_branch() -> String {
     format!("z9hG4bK{}", random)
 }
 fn generate_call_id() -> String {
+    #[cfg(test)]
     if let Some(counter) = deterministic_counter() {
         return format!("call{:016x}@localhost", counter);
     }
@@ -2983,6 +2986,10 @@ fn generate_call_id() -> String {
     format!("{}@localhost", random)
 }
 
+/// Deterministic counter for reproducible IDs in tests only.
+/// SECURITY: This MUST NOT be available in release builds — predictable Call-IDs
+/// and tags enable dialog hijacking and request forgery attacks.
+#[cfg(test)]
 fn deterministic_counter() -> Option<u64> {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::OnceLock;

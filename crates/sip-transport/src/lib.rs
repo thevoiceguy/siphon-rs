@@ -62,6 +62,11 @@ pub(crate) const MAX_BUFFER_SIZE: usize = 16 * 1024 * 1024;
 /// Maximum number of concurrent inbound sessions per listener.
 const MAX_CONCURRENT_SESSIONS: usize = 1024;
 
+/// Maximum idle time (no data received) before closing a TCP/TLS session.
+/// Protects against Slowloris-style attacks where a client holds a session
+/// slot by sending data very slowly or not at all.
+const SESSION_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Indicates which transport carried an inbound or outbound message.
 ///
 /// # SCTP Support (RFC 4168)
@@ -902,12 +907,14 @@ async fn spawn_tls_session(
             break;
         }
 
-        match reader.read_buf(&mut buf).await {
-            Ok(0) => {
+        // Apply idle timeout to prevent Slowloris-style DoS attacks.
+        // If no data is received within SESSION_IDLE_TIMEOUT, close the connection.
+        match tokio::time::timeout(SESSION_IDLE_TIMEOUT, reader.read_buf(&mut buf)).await {
+            Ok(Ok(0)) => {
                 info!(%peer, "tls connection closed by peer (EOF)");
                 break;
             }
-            Ok(n) => {
+            Ok(Ok(n)) => {
                 info!(%peer, bytes_read = n, buffer_len = buf.len(), "tls data received");
                 transport_metrics().on_packet_received(TransportLabel::Tls);
 
@@ -940,8 +947,14 @@ async fn spawn_tls_session(
                     }
                 }
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 error!(%e, "tls read error");
+                transport_metrics().on_error(TransportLabel::Tls, StageLabel::Read);
+                break;
+            }
+            Err(_) => {
+                warn!(peer = %peer, timeout_secs = SESSION_IDLE_TIMEOUT.as_secs(),
+                    "tls session idle timeout, closing connection");
                 transport_metrics().on_error(TransportLabel::Tls, StageLabel::Read);
                 break;
             }
@@ -1006,9 +1019,11 @@ async fn spawn_stream_session<S>(
             break;
         }
 
-        match reader.read_buf(&mut buf).await {
-            Ok(0) => break,
-            Ok(_) => {
+        // Apply idle timeout to prevent Slowloris-style DoS attacks.
+        // If no data is received within SESSION_IDLE_TIMEOUT, close the connection.
+        match tokio::time::timeout(SESSION_IDLE_TIMEOUT, reader.read_buf(&mut buf)).await {
+            Ok(Ok(0)) => break,
+            Ok(Ok(_)) => {
                 transport_metrics().on_packet_received(transport.into());
 
                 // Try to extract complete SIP messages
@@ -1040,8 +1055,14 @@ async fn spawn_stream_session<S>(
                     }
                 }
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 error!(%e, "{}", read_label);
+                transport_metrics().on_error(transport.into(), StageLabel::Read);
+                break;
+            }
+            Err(_) => {
+                warn!(peer = %peer, timeout_secs = SESSION_IDLE_TIMEOUT.as_secs(),
+                    "stream session idle timeout, closing connection");
                 transport_metrics().on_error(transport.into(), StageLabel::Read);
                 break;
             }

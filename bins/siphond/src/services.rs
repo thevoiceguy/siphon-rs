@@ -55,6 +55,10 @@ pub struct ServiceRegistry {
     /// Invite state manager for tracking pending INVITE transactions (for CANCEL)
     pub invite_state: Arc<InviteStateManager>,
 
+    /// Optional authenticator for non-REGISTER requests (INVITE, SUBSCRIBE, etc.)
+    /// When authentication is enabled, all methods are challenged, not just REGISTER.
+    pub authenticator: Option<Arc<DigestAuthenticator<MemoryCredentialStore>>>,
+
     /// Optional registrar for REGISTER handling
     pub registrar: Option<
         Arc<BasicRegistrar<MemoryLocationStore, DigestAuthenticator<MemoryCredentialStore>>>,
@@ -91,48 +95,70 @@ impl ServiceRegistry {
         let b2bua_state = Arc::new(B2BUAStateManager::new());
         let invite_state = Arc::new(InviteStateManager::new());
 
-        // Create registrar if enabled (it includes authenticator)
+        // Create authenticator if authentication is enabled (for any mode)
+        let authenticator = if config.features.authentication {
+            let mut cred_store = MemoryCredentialStore::new();
+
+            // Load users from file if provided
+            if let Some(ref users_file) = config.auth.users_file {
+                match load_users_file(users_file) {
+                    Ok(users) => {
+                        let count = users.len();
+                        for (username, password) in users {
+                            cred_store.add(sip_auth::Credentials::new(
+                                username,
+                                password,
+                                &config.auth.realm,
+                            ));
+                        }
+                        tracing::info!(
+                            file = %users_file.display(),
+                            count = count,
+                            "Loaded authentication users from file"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            file = %users_file.display(),
+                            error = %e,
+                            "Failed to load users file, starting with empty credential store"
+                        );
+                    }
+                }
+            }
+
+            Some(Arc::new(DigestAuthenticator::new(
+                &config.auth.realm,
+                cred_store,
+            )))
+        } else {
+            None
+        };
+
+        // Create registrar if enabled (uses its own authenticator instance for REGISTER auth)
         let registrar = if config.enable_registrar() {
             let store = MemoryLocationStore::new();
 
-            // Create authenticator if authentication is enabled
-            let authenticator = if config.requires_auth() {
+            // Create a separate authenticator for the registrar
+            let reg_auth = if config.features.authentication {
                 let mut cred_store = MemoryCredentialStore::new();
-
-                // Load users from file if provided
                 if let Some(ref users_file) = config.auth.users_file {
-                    match load_users_file(users_file) {
-                        Ok(users) => {
-                            let count = users.len();
-                            for (username, password) in users {
-                                cred_store.add(sip_auth::Credentials::new(
-                                    username,
-                                    password,
-                                    &config.auth.realm,
-                                ));
-                            }
-                            tracing::info!(
-                                file = %users_file.display(),
-                                count = count,
-                                "Loaded authentication users from file"
-                            );
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                file = %users_file.display(),
-                                error = %e,
-                                "Failed to load users file, starting with empty credential store"
-                            );
+                    if let Ok(users) = load_users_file(users_file) {
+                        for (username, password) in users {
+                            cred_store.add(sip_auth::Credentials::new(
+                                username,
+                                password,
+                                &config.auth.realm,
+                            ));
                         }
                     }
                 }
-
                 Some(DigestAuthenticator::new(&config.auth.realm, cred_store))
             } else {
                 None
             };
 
-            let reg = BasicRegistrar::new(store, authenticator)
+            let reg = BasicRegistrar::new(store, reg_auth)
                 .with_default_expires(std::time::Duration::from_secs(
                     config.registrar.default_expiry as u64,
                 ))
@@ -157,6 +183,7 @@ impl ServiceRegistry {
             proxy_state,
             b2bua_state,
             invite_state,
+            authenticator,
             registrar,
             transaction_mgr: OnceLock::new(),
             transport_dispatcher: OnceLock::new(),

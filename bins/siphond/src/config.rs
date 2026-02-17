@@ -200,13 +200,12 @@ impl Default for DaemonConfig {
 }
 
 impl DaemonConfig {
-    /// Check if authentication is required for this mode
+    /// Check if authentication is required for this mode.
+    ///
+    /// When `--auth` is enabled, authentication applies to all modes that
+    /// accept requests (not just Registrar/Proxy/B2BUA).
     pub fn requires_auth(&self) -> bool {
         self.features.authentication
-            && matches!(
-                self.mode,
-                DaemonMode::Registrar | DaemonMode::Proxy | DaemonMode::B2bua | DaemonMode::FullUas
-            )
     }
 
     /// Check if registrar should be enabled

@@ -46,20 +46,52 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::{runtime::Handle, task};
 use tracing::{info, warn};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Credentials used for SIP authentication with private fields for security.
-#[derive(Debug, Clone)]
+///
+/// The password field is zeroized on drop to prevent it from lingering in memory.
+/// Debug output redacts the password to prevent accidental exposure in logs.
+///
+/// # Breaking changes (v0.3)
+/// - `Credentials` no longer derives `Clone`. Use `Credentials::new()` to create
+///   a new instance if you need a copy. This prevents password data from being
+///   silently duplicated in memory.
+/// - `Debug` output now redacts the password field.
+#[derive(ZeroizeOnDrop)]
 pub struct Credentials {
+    #[zeroize(skip)]
     username: SmolStr,
-    password: SmolStr,
+    password: String,
+    #[zeroize(skip)]
     realm: SmolStr,
+}
+
+impl std::fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Credentials")
+            .field("username", &self.username)
+            .field("password", &"[REDACTED]")
+            .field("realm", &self.realm)
+            .finish()
+    }
+}
+
+impl Clone for Credentials {
+    fn clone(&self) -> Self {
+        Self {
+            username: self.username.clone(),
+            password: self.password.clone(),
+            realm: self.realm.clone(),
+        }
+    }
 }
 
 impl Credentials {
     /// Creates new credentials with the given username, password, and realm.
     pub fn new(
         username: impl Into<SmolStr>,
-        password: impl Into<SmolStr>,
+        password: impl Into<String>,
         realm: impl Into<SmolStr>,
     ) -> Self {
         Self {
@@ -73,7 +105,7 @@ impl Credentials {
     #[cfg(test)]
     pub fn unchecked_new(
         username: impl Into<SmolStr>,
-        password: impl Into<SmolStr>,
+        password: impl Into<String>,
         realm: impl Into<SmolStr>,
     ) -> Self {
         Self {
@@ -923,8 +955,10 @@ impl<S> DigestAuthenticator<S> {
     }
 
     fn compute_ha1(&self, username: &str, password: &str) -> String {
-        let ha1_input = format!("{}:{}:{}", username, self.realm, password);
-        Self::hash(&self.algorithm, ha1_input.as_bytes())
+        let mut ha1_input = format!("{}:{}:{}", username, self.realm, password);
+        let result = Self::hash(&self.algorithm, ha1_input.as_bytes());
+        ha1_input.zeroize();
+        result
     }
 
     fn compute_ha2(&self, method: &Method, uri: &str, body: &[u8]) -> String {
@@ -1098,10 +1132,29 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 
 /// Client-side authentication helper for generating Authorization headers.
 /// All fields are private to protect sensitive credential data.
+///
+/// The password field is zeroized on drop to prevent it from lingering in memory.
+/// Debug output redacts the password to prevent accidental exposure in logs.
+///
+/// # Breaking changes (v0.3)
+/// - `Debug` output now redacts the password field.
+#[derive(ZeroizeOnDrop)]
 pub struct DigestClient {
+    #[zeroize(skip)]
     username: SmolStr,
-    password: SmolStr,
+    password: String,
+    #[zeroize(skip)]
     nc: u32,
+}
+
+impl std::fmt::Debug for DigestClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DigestClient")
+            .field("username", &self.username)
+            .field("password", &"[REDACTED]")
+            .field("nc", &self.nc)
+            .finish()
+    }
 }
 
 impl DigestClient {
@@ -1144,7 +1197,7 @@ impl DigestClient {
     pub fn new(username: &str, password: &str) -> Self {
         Self {
             username: SmolStr::new(username),
-            password: SmolStr::new(password),
+            password: password.to_string(),
             nc: 0,
         }
     }
@@ -1293,7 +1346,7 @@ mod tests {
         let mut store = MemoryCredentialStore::new();
         store.add(Credentials {
             username: SmolStr::new("alice"),
-            password: SmolStr::new("secret"),
+            password: "secret".to_string(),
             realm: SmolStr::new("example.com"),
         });
 
@@ -1346,7 +1399,7 @@ mod tests {
     fn digest_auth_verifies_md5() {
         let creds = Credentials {
             username: SmolStr::new("alice"),
-            password: SmolStr::new("secret"),
+            password: "secret".to_string(),
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
@@ -1394,7 +1447,7 @@ mod tests {
     fn digest_auth_verifies_sha256() {
         let creds = Credentials {
             username: SmolStr::new("alice"),
-            password: SmolStr::new("secret"),
+            password: "secret".to_string(),
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
@@ -1442,7 +1495,7 @@ mod tests {
     fn digest_auth_verifies_sha512() {
         let creds = Credentials {
             username: SmolStr::new("bob"),
-            password: SmolStr::new("password123"),
+            password: "password123".to_string(),
             realm: SmolStr::new("test.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
@@ -1490,7 +1543,7 @@ mod tests {
     fn digest_auth_rejects_invalid_nonce() {
         let creds = Credentials {
             username: SmolStr::new("alice"),
-            password: SmolStr::new("secret"),
+            password: "secret".to_string(),
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
@@ -1522,7 +1575,7 @@ mod tests {
     fn digest_auth_rejects_wrong_realm() {
         let creds = Credentials {
             username: SmolStr::new("alice"),
-            password: SmolStr::new("secret"),
+            password: "secret".to_string(),
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds]);
@@ -1556,7 +1609,7 @@ mod tests {
     fn digest_auth_rejects_mismatched_uri() {
         let creds = Credentials {
             username: SmolStr::new("alice"),
-            password: SmolStr::new("secret"),
+            password: "secret".to_string(),
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
@@ -1605,7 +1658,7 @@ mod tests {
     fn digest_auth_rejects_missing_qop() {
         let creds = Credentials {
             username: SmolStr::new("alice"),
-            password: SmolStr::new("secret"),
+            password: "secret".to_string(),
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
@@ -1707,7 +1760,7 @@ mod tests {
         // Setup server
         let creds = Credentials {
             username: SmolStr::new("testuser"),
-            password: SmolStr::new("testpass"),
+            password: "testpass".to_string(),
             realm: SmolStr::new("sip.example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
@@ -1752,7 +1805,7 @@ mod tests {
     fn digest_auth_with_auth_int_qop() {
         let creds = Credentials {
             username: SmolStr::new("alice"),
-            password: SmolStr::new("secret"),
+            password: "secret".to_string(),
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
@@ -1802,7 +1855,7 @@ mod tests {
     fn digest_auth_accepts_retransmission() {
         let creds = Credentials {
             username: SmolStr::new("alice"),
-            password: SmolStr::new("secret"),
+            password: "secret".to_string(),
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
@@ -1864,7 +1917,7 @@ mod tests {
     fn digest_auth_rejects_replay_with_decreasing_nc() {
         let creds = Credentials {
             username: SmolStr::new("alice"),
-            password: SmolStr::new("secret"),
+            password: "secret".to_string(),
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
@@ -1954,7 +2007,7 @@ mod tests {
     fn digest_auth_rejects_different_request_same_nc() {
         let creds = Credentials {
             username: SmolStr::new("alice"),
-            password: SmolStr::new("secret"),
+            password: "secret".to_string(),
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
@@ -2041,7 +2094,7 @@ mod tests {
     fn digest_auth_rejects_different_body_same_nc() {
         let creds = Credentials {
             username: SmolStr::new("alice"),
-            password: SmolStr::new("secret"),
+            password: "secret".to_string(),
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
@@ -2129,7 +2182,7 @@ mod tests {
     fn digest_auth_rejects_same_length_different_body_same_nc() {
         let creds = Credentials {
             username: SmolStr::new("alice"),
-            password: SmolStr::new("secret"),
+            password: "secret".to_string(),
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
@@ -2194,7 +2247,7 @@ mod tests {
     fn digest_auth_rejects_missing_opaque() {
         let creds = Credentials {
             username: SmolStr::new("alice"),
-            password: SmolStr::new("secret"),
+            password: "secret".to_string(),
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
@@ -2243,7 +2296,7 @@ mod tests {
     fn digest_auth_rejects_wrong_opaque() {
         let creds = Credentials {
             username: SmolStr::new("alice"),
-            password: SmolStr::new("secret"),
+            password: "secret".to_string(),
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
@@ -2311,7 +2364,7 @@ mod tests {
     fn reject_large_nc_value() {
         let creds = Credentials {
             username: SmolStr::new("alice"),
-            password: SmolStr::new("secret"),
+            password: "secret".to_string(),
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds]);
@@ -2366,7 +2419,7 @@ mod tests {
     fn reject_suspicious_nc_jump() {
         let creds = Credentials {
             username: SmolStr::new("alice"),
-            password: SmolStr::new("secret"),
+            password: "secret".to_string(),
             realm: SmolStr::new("example.com"),
         };
         let store = MemoryCredentialStore::with(vec![creds.clone()]);
