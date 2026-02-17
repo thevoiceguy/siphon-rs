@@ -745,6 +745,9 @@ impl TransactionManager {
         if let Some(via) = top_via(&request) {
             self.inner.metrics.record_via_transport(via);
         }
+        // Enforce transaction limits (evict oldest if at limit) before creating new entry
+        self.enforce_server_transaction_limit();
+
         let mut entry = ServerEntry {
             kind: match method {
                 Method::Invite => ServerKind::Invite(ServerInviteFsm::new(timers)),
@@ -762,9 +765,6 @@ impl TransactionManager {
                 map_server_actions(fsm.on_event(ServerNonInviteEvent::ReceiveRequest(request)))
             }
         };
-
-        // Enforce transaction limits (evict oldest if at limit)
-        self.enforce_server_transaction_limit();
 
         self.inner.server.insert(key.clone(), entry);
         self.apply_server_actions(&key, actions).await;
@@ -804,6 +804,9 @@ impl TransactionManager {
         let timers = TransportAwareTimers::with_defaults(transport, self.inner.timer_defaults);
         let transport_type = TransportType::from(transport);
 
+        // Enforce transaction limits (evict oldest if at limit) before creating new entry
+        self.enforce_client_transaction_limit();
+
         let (kind, actions) = if method == Method::Invite {
             let mut fsm = ClientInviteFsm::new(timers);
             let actions = fsm.on_event(ClientInviteEvent::SendInvite(request));
@@ -828,9 +831,6 @@ impl TransactionManager {
             start_time: Instant::now(),
             method: key.method.clone(),
         };
-
-        // Enforce transaction limits (evict oldest if at limit)
-        self.enforce_client_transaction_limit();
 
         self.inner.client.insert(key.clone(), entry);
         self.inner.metrics.record_start(

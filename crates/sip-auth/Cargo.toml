@@ -1,6 +1,6 @@
 [package]
 name = "sip-auth"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 license.workspace = true
 description = "Digest authentication for SIP (RFC 7616/7617)."
@@ -26,6 +26,7 @@ dashmap = { workspace = true }
 async-trait = "0.1"
 tokio = { workspace = true }
 zeroize = { version = "1", features = ["derive"] }
+subtle = "2"
 
 [dev-dependencies]
 bytes = { workspace = true }

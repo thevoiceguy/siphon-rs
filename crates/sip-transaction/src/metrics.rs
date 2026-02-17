@@ -237,6 +237,9 @@ pub struct MetricsSnapshot {
     pub client_transactions_rejected: u64,
 }
 
+/// Maximum number of duration samples stored per transport/method to prevent unbounded growth.
+const MAX_DURATION_SAMPLES: usize = 10_000;
+
 /// Internal metrics storage.
 #[derive(Debug, Default)]
 struct MetricsData {
@@ -289,17 +292,19 @@ impl TransactionMetrics {
     ) {
         let mut data = self.data.write();
 
-        // Record by transport
-        data.durations_by_transport
-            .entry(transport)
-            .or_default()
-            .push(duration);
+        // Record by transport (cap to prevent unbounded growth)
+        let transport_durations = data.durations_by_transport.entry(transport).or_default();
+        if transport_durations.len() >= MAX_DURATION_SAMPLES {
+            transport_durations.remove(0);
+        }
+        transport_durations.push(duration);
 
-        // Record by method
-        data.durations_by_method
-            .entry(method.to_string())
-            .or_default()
-            .push(duration);
+        // Record by method (cap to prevent unbounded growth)
+        let method_durations = data.durations_by_method.entry(method.to_string()).or_default();
+        if method_durations.len() >= MAX_DURATION_SAMPLES {
+            method_durations.remove(0);
+        }
+        method_durations.push(duration);
 
         data.total_count += 1;
     }

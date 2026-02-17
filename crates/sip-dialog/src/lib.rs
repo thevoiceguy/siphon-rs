@@ -137,8 +137,11 @@ impl DialogId {
 
     /// Unchecked constructor for use by parser methods and internal construction.
     ///
-    /// **Warning**: This bypasses validation and should only be used when values are already trusted
-    /// (e.g., from parsed SIP messages or internal construction).
+    /// # Safety (logical)
+    ///
+    /// This bypasses validation. Callers **must** ensure that the provided values
+    /// come from trusted sources (e.g., parsed SIP messages or internal construction).
+    /// Do **not** use with untrusted/user-supplied input.
     pub fn unchecked_new(
         call_id: impl Into<SmolStr>,
         local_tag: impl Into<SmolStr>,
@@ -486,8 +489,11 @@ impl Dialog {
 
     /// Creates a Dialog without validation.
     ///
-    /// **Warning**: This bypasses validation and should only be used when values are already trusted
-    /// (e.g., from parsed SIP messages or internal construction).
+    /// # Safety (logical)
+    ///
+    /// This bypasses validation. Callers **must** ensure that the provided values
+    /// come from trusted sources (e.g., parsed SIP messages or internal construction).
+    /// Do **not** use with untrusted/user-supplied input.
     #[allow(clippy::too_many_arguments)]
     pub fn unchecked_new(
         id: DialogId,
@@ -547,8 +553,9 @@ impl Dialog {
     }
 
     /// Returns the next CSeq number to use for outgoing requests.
+    /// Uses saturating arithmetic to prevent overflow at u32::MAX.
     pub fn next_local_cseq(&mut self) -> u32 {
-        self.local_cseq += 1;
+        self.local_cseq = self.local_cseq.saturating_add(1);
         self.local_cseq
     }
 

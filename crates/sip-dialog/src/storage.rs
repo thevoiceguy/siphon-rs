@@ -25,9 +25,14 @@ pub trait DialogStore: Send + Sync + 'static {
 }
 
 /// In-memory dialog store (default).
+///
+/// Uses a secondary index on Call-ID for efficient `list_by_call_id` lookups
+/// (O(k) where k = dialogs sharing the Call-ID, instead of O(n) full scan).
 #[derive(Default)]
 pub struct InMemoryDialogStore {
     inner: dashmap::DashMap<DialogId, Dialog>,
+    /// Secondary index: Call-ID → set of DialogIds sharing that Call-ID.
+    by_call_id: dashmap::DashMap<SmolStr, Vec<DialogId>>,
 }
 
 impl InMemoryDialogStore {
@@ -53,19 +58,36 @@ impl DialogStore for InMemoryDialogStore {
             );
             return;
         }
+        let call_id = dialog.id.call_id.clone();
+        let dialog_id = dialog.id.clone();
         self.inner.insert(dialog.id.clone(), dialog);
+        // Update secondary index
+        self.by_call_id
+            .entry(call_id)
+            .or_default()
+            .push(dialog_id);
     }
 
     async fn remove(&self, id: &DialogId) {
         self.inner.remove(id);
+        // Update secondary index
+        if let Some(mut ids) = self.by_call_id.get_mut(&id.call_id) {
+            ids.retain(|did| did != id);
+            if ids.is_empty() {
+                drop(ids);
+                self.by_call_id.remove(&id.call_id);
+            }
+        }
     }
 
     async fn list_by_call_id(&self, call_id: &SmolStr) -> Vec<Dialog> {
-        self.inner
-            .iter()
-            .filter(|d| d.key().call_id == *call_id)
-            .map(|d| d.value().clone())
-            .collect()
+        if let Some(ids) = self.by_call_id.get(call_id) {
+            ids.iter()
+                .filter_map(|id| self.inner.get(id).map(|d| d.clone()))
+                .collect()
+        } else {
+            Vec::new()
+        }
     }
 
     async fn len(&self) -> usize {

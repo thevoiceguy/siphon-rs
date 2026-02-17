@@ -28,10 +28,20 @@ const MAX_POOL_SIZE: usize = 1000;
 const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Connection entry with activity tracking for eviction.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct PoolEntry {
     sender: Sender<Bytes>,
     last_used: Instant,
+    /// Abort handles for spawned tasks (writer + reader) to clean up on eviction.
+    task_handles: Vec<tokio::task::AbortHandle>,
+}
+
+impl Drop for PoolEntry {
+    fn drop(&mut self) {
+        for handle in &self.task_handles {
+            handle.abort();
+        }
+    }
 }
 
 impl PoolEntry {
@@ -39,6 +49,7 @@ impl PoolEntry {
         Self {
             sender,
             last_used: Instant::now(),
+            task_handles: Vec::new(),
         }
     }
 
@@ -177,12 +188,12 @@ impl ConnectionPool {
         debug!(peer = %addr, "TCP connection established");
         let (mut reader, mut writer) = stream.into_split();
         let (tx, mut rx) = mpsc::channel::<Bytes>(64);
-        self.tcp.insert(addr, PoolEntry::new(tx.clone()));
-        debug!(peer = %addr, "inserted connection into pool");
+        let mut entry = PoolEntry::new(tx.clone());
+        debug!(peer = %addr, "creating new pool entry");
 
-        // Writer task (existing behavior)
+        // Writer task
         let writer_tx = tx.clone();
-        tokio::spawn(async move {
+        let writer_handle = tokio::spawn(async move {
             while let Some(buf) = rx.recv().await {
                 if writer.write_all(&buf).await.is_err() {
                     break;
@@ -193,6 +204,7 @@ impl ConnectionPool {
                 }
             }
         });
+        entry.task_handles.push(writer_handle.abort_handle());
 
         // Optional reader task to deliver responses back to the inbound pipeline
         let inbound_tx_guard = self.inbound_tx.lock().await;
@@ -203,7 +215,7 @@ impl ConnectionPool {
             drop(inbound_tx_guard);
             let peer = addr;
             debug!(peer = %peer, "spawning TCP client reader task for outbound connection");
-            tokio::spawn(async move {
+            let reader_handle = tokio::spawn(async move {
                 let mut buf = BytesMut::with_capacity(4096);
                 debug!(peer = %peer, "TCP client reader task started");
                 loop {
@@ -268,10 +280,14 @@ impl ConnectionPool {
                     }
                 }
             });
+            entry.task_handles.push(reader_handle.abort_handle());
         } else {
             drop(inbound_tx_guard);
             debug!(peer = %addr, "inbound_tx is None, skipping TCP client reader task");
         }
+
+        self.tcp.insert(addr, entry);
+        debug!(peer = %addr, "inserted connection into pool");
 
         let result = tx
             .send(payload)
@@ -418,9 +434,9 @@ impl TlsPool {
         let mut tls_stream = connector.connect(server_name, stream).await?;
 
         let (tx, mut rx) = mpsc::channel::<Bytes>(64);
-        self.inner.insert(key.clone(), PoolEntry::new(tx.clone()));
+        let mut entry = PoolEntry::new(tx.clone());
 
-        tokio::spawn(async move {
+        let writer_handle = tokio::spawn(async move {
             while let Some(buf) = rx.recv().await {
                 if tls_stream.write_all(&buf).await.is_err() {
                     break;
@@ -433,6 +449,9 @@ impl TlsPool {
             // Perform proper TLS shutdown when connection closes
             let _ = tls_stream.shutdown().await;
         });
+        entry.task_handles.push(writer_handle.abort_handle());
+
+        self.inner.insert(key.clone(), entry);
 
         let result = tx
             .send(payload)
@@ -472,10 +491,9 @@ mod tests {
         assert!(!entry.is_idle(Duration::from_secs(1)));
 
         // Simulate old entry
-        let old_entry = PoolEntry {
-            sender: entry.sender,
-            last_used: Instant::now() - Duration::from_secs(10),
-        };
+        let (tx2, _rx2) = mpsc::channel::<Bytes>(1);
+        let mut old_entry = PoolEntry::new(tx2);
+        old_entry.last_used = Instant::now() - Duration::from_secs(10);
 
         assert!(old_entry.is_idle(Duration::from_secs(5)));
     }

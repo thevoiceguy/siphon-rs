@@ -292,15 +292,40 @@ impl InboundPacket {
     }
 }
 
+/// Maximum UDP packets per source IP per second before rate limiting kicks in.
+const UDP_RATE_LIMIT_PPS: u64 = 200;
+
 /// Runs a UDP receive loop and forwards packets to the provided channel.
 pub async fn run_udp(socket: Arc<UdpSocket>, tx: mpsc::Sender<InboundPacket>) -> Result<()> {
     let bind = socket.local_addr()?;
     info!(%bind, "listening (udp)");
     transport_metrics().on_accept(TransportLabel::Udp);
     let mut buf = vec![0u8; 65_535];
+    // Per-source rate limiting: (packet_count, window_start)
+    let rate_map: dashmap::DashMap<std::net::IpAddr, (u64, std::time::Instant)> =
+        dashmap::DashMap::new();
     loop {
         match socket.recv_from(&mut buf).await {
             Ok((n, peer)) => {
+                // Per-source rate limiting
+                let ip = peer.ip();
+                let now = std::time::Instant::now();
+                {
+                    let mut entry = rate_map.entry(ip).or_insert((0, now));
+                    // Reset counter if window has elapsed (1 second window)
+                    if now.duration_since(entry.1) >= std::time::Duration::from_secs(1) {
+                        entry.0 = 0;
+                        entry.1 = now;
+                    }
+                    entry.0 += 1;
+                    if entry.0 > UDP_RATE_LIMIT_PPS {
+                        if entry.0 == UDP_RATE_LIMIT_PPS + 1 {
+                            warn!(%peer, pps = entry.0, "UDP per-source rate limit exceeded, dropping packets");
+                        }
+                        continue;
+                    }
+                }
+
                 transport_metrics().on_latency(TransportLabel::Udp, OpLabel::Recv, 0);
                 let span = span_with_transport("udp_packet", TransportLabel::Udp);
                 let _entered = span.enter();
@@ -593,6 +618,10 @@ where
             inbound = stream.next() => {
                 match inbound {
                     Some(Ok(tungstenite::Message::Binary(data))) => {
+                        if data.len() > MAX_BODY_SIZE {
+                            warn!(%peer, len = data.len(), max = MAX_BODY_SIZE, "websocket binary message too large, dropping");
+                            break;
+                        }
                         transport_metrics().on_packet_received(transport.into());
                         let packet = InboundPacket {
                             transport,
@@ -606,6 +635,10 @@ where
                         }
                     }
                     Some(Ok(tungstenite::Message::Text(text))) => {
+                        if text.len() > MAX_BODY_SIZE {
+                            warn!(%peer, len = text.len(), max = MAX_BODY_SIZE, "websocket text message too large, dropping");
+                            break;
+                        }
                         transport_metrics().on_packet_received(transport.into());
                         let packet = InboundPacket {
                             transport,

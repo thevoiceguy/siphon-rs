@@ -403,7 +403,8 @@ impl<'a> IntoIterator for &'a Headers {
 
 impl FromIterator<Header> for Headers {
     fn from_iter<T: IntoIterator<Item = Header>>(iter: T) -> Self {
-        let headers: Vec<Header> = iter.into_iter().collect();
+        // Enforce MAX_HEADERS limit to prevent resource exhaustion
+        let headers: Vec<Header> = iter.into_iter().take(MAX_HEADERS).collect();
         Self { inner: headers }
     }
 }

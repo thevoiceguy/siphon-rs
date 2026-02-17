@@ -14,6 +14,8 @@ documentation.workspace = true
 anyhow = { workspace = true }
 smol_str = { workspace = true }
 sip-core = { path = "../sip-core" }
+# TODO: Migrate to hickory-resolver when a stable release is available (0.26+ expected).
+# trust-dns-resolver 0.23 is the last stable release before the rename to hickory-dns.
 trust-dns-resolver = { version = "0.23", default-features = false, features = ["tokio-runtime", "system-config"] }
 tokio = { workspace = true }
 rand = { workspace = true }

@@ -44,6 +44,7 @@ use smol_str::SmolStr;
 use std::fmt::Write;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use subtle::ConstantTimeEq;
 use tokio::{runtime::Handle, task};
 use tracing::{info, warn};
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -403,8 +404,10 @@ impl Nonce {
             true
         } else if nc == self.last_nc {
             // Potential retransmission - accept only if request hash matches
+            // Use constant-time comparison to avoid timing side-channels
             if let Some(ref last_hash) = self.last_request_hash {
-                if last_hash == &request_hash {
+                let hashes_match: bool = last_hash.as_bytes().ct_eq(request_hash.as_bytes()).into();
+                if hashes_match {
                     // Valid retransmission, update last used time
                     self.last_used = Instant::now();
                     true
@@ -531,6 +534,16 @@ impl NonceManager {
         }
     }
 
+    /// Returns true if the nonce exists but has expired (stale).
+    /// Used to send stale=true in re-challenges per RFC 7616 §3.5.
+    pub fn is_stale(&self, value: &str) -> bool {
+        if let Some(entry) = self.nonces.get(value) {
+            !entry.is_valid()
+        } else {
+            false
+        }
+    }
+
     /// Removes expired nonces from the map.
     pub fn cleanup(&self) {
         self.nonces.retain(|_, nonce| nonce.is_valid());
@@ -589,6 +602,22 @@ pub fn extract_auth_username(headers: &Headers) -> Option<SmolStr> {
         return None;
     }
     parsed.param("username").cloned()
+}
+
+/// Extracts the nonce from the Authorization or Proxy-Authorization header.
+///
+/// Useful for checking `DigestAuthenticator::is_nonce_stale()` to decide
+/// whether to issue a stale=true challenge per RFC 7616 §3.5.
+pub fn extract_auth_nonce(headers: &Headers) -> Option<SmolStr> {
+    let auth_header = headers
+        .get_smol("Authorization")
+        .or_else(|| headers.get_smol("Proxy-Authorization"))?;
+
+    let parsed = parse_authorization_header(auth_header)?;
+    if !parsed.scheme().eq_ignore_ascii_case("Digest") {
+        return None;
+    }
+    parsed.param("nonce").cloned()
 }
 
 /// Extract rate-limiting key from the top Via header.
@@ -811,7 +840,12 @@ impl<S> DigestAuthenticator<S> {
         }
 
         if let Some(client_opaque) = opaque {
-            if client_opaque.as_str() != self.opaque.as_str() {
+            // Use constant-time comparison to avoid timing side-channels on opaque token
+            let opaque_match: bool = client_opaque
+                .as_bytes()
+                .ct_eq(self.opaque.as_bytes())
+                .into();
+            if !opaque_match {
                 info!("digest opaque mismatch");
                 return Ok(None);
             }
@@ -932,9 +966,53 @@ impl<S> DigestAuthenticator<S> {
         self
     }
 
+    /// Returns true if the given nonce is known but expired (stale).
+    /// Useful for determining whether to issue a stale=true challenge.
+    pub fn is_nonce_stale(&self, nonce: &str) -> bool {
+        self.nonce_manager.is_stale(nonce)
+    }
+
+    /// Issues a challenge response with stale=true (RFC 7616 §3.5).
+    /// The client can re-authenticate with a new nonce without re-prompting the user.
+    pub fn challenge_stale(&self, request: &Request) -> Result<Response> {
+        let mut headers = self.build_challenge_with_stale(true);
+
+        if let Some(via) = request.headers().get("Via") {
+            headers.push(SmolStr::new("Via"), via)?;
+        }
+        if let Some(from) = request.headers().get("From") {
+            headers.push(SmolStr::new("From"), from)?;
+        }
+        if let Some(to) = request.headers().get("To") {
+            headers.push(SmolStr::new("To"), ensure_to_tag(to))?;
+        }
+        if let Some(call_id) = request.headers().get("Call-ID") {
+            headers.push(SmolStr::new("Call-ID"), call_id)?;
+        }
+        if let Some(cseq) = request.headers().get("CSeq") {
+            headers.push(SmolStr::new("CSeq"), cseq)?;
+        }
+
+        info!(realm = %self.realm, proxy = self.proxy_auth, "issuing stale digest challenge");
+        Ok(Response::new(
+            StatusLine::new(
+                if self.proxy_auth { 407 } else { 401 },
+                if self.proxy_auth {
+                    "Proxy Authentication Required"
+                } else {
+                    "Unauthorized"
+                },
+            )?,
+            headers,
+            Bytes::new(),
+        )?)
+    }
+
     /// Configure rate limiting for authentication attempts
     ///
     /// Rate limiting is applied per IP address extracted from the Via header.
+    /// **Note**: The Via header can be spoofed; for stronger per-source limiting,
+    /// use transport-layer IP addresses instead.
     /// This helps prevent brute force authentication attacks.
     ///
     /// # Example
@@ -954,6 +1032,13 @@ impl<S> DigestAuthenticator<S> {
     }
 
     fn build_challenge(&self) -> Headers {
+        self.build_challenge_with_stale(false)
+    }
+
+    /// Builds a challenge with the stale=true parameter (RFC 7616 §3.5).
+    /// Used when a nonce has expired but the credentials were otherwise valid,
+    /// allowing the client to re-authenticate without re-prompting the user.
+    fn build_challenge_with_stale(&self, stale: bool) -> Headers {
         let mut hdrs = Headers::new();
         let nonce = self.nonce_manager().generate();
         let mut value = String::new();
@@ -966,6 +1051,9 @@ impl<S> DigestAuthenticator<S> {
             self.qop.as_str(),
             self.opaque
         );
+        if stale {
+            let _ = write!(value, ", stale=true");
+        }
 
         let header_name = if self.proxy_auth {
             "Proxy-Authenticate"
@@ -1143,15 +1231,7 @@ impl<S: AsyncCredentialStore> DigestAuthenticator<S> {
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b) {
-        diff |= x ^ y;
-    }
-    diff == 0
+    a.ct_eq(b).into()
 }
 
 /// Client-side authentication helper for generating Authorization headers.
@@ -1239,7 +1319,7 @@ impl DigestClient {
         opaque: Option<&str>,
         body: &[u8],
     ) -> String {
-        self.nc += 1;
+        self.nc = self.nc.saturating_add(1);
         let nc_str = format!("{:08x}", self.nc);
         let cnonce: String = thread_rng()
             .sample_iter(&Alphanumeric)

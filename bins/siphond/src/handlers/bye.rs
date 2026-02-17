@@ -149,7 +149,7 @@ impl ByeHandler {
                         if let Ok(cseq_num) = num.parse::<u32>() {
                             let _ = bye_headers_base.push(
                                 SmolStr::new("CSeq"),
-                                SmolStr::new(format!("{} BYE", cseq_num + 1)),
+                                SmolStr::new(format!("{} BYE", cseq_num.saturating_add(1))),
                             );
                         }
                     }
@@ -472,7 +472,7 @@ impl ByeHandler {
                 if let Ok(cseq_num) = num.parse::<u32>() {
                     let _ = bye_headers.push(
                         SmolStr::new("CSeq"),
-                        SmolStr::new(format!("{} BYE", cseq_num + 1)),
+                        SmolStr::new(format!("{} BYE", cseq_num.saturating_add(1))),
                     );
                 }
             }
