@@ -1338,6 +1338,37 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
             }
         };
 
+        // AOR-to-identity authorization: If authentication is enabled, verify that the
+        // authenticated user has authority to register for this AOR.
+        // RFC 3261 §10.3 step 4: The registrar SHOULD verify that the authenticated
+        // user is authorized to modify registrations for the To address-of-record.
+        if self.authenticator.is_some() {
+            if let Some(auth_user) = sip_auth::extract_auth_username(request.headers()) {
+                // Extract user part from AOR for comparison
+                // AOR format: "sip:user@host" or "sips:user@host"
+                let aor_user = aor
+                    .split_once(':')
+                    .and_then(|(_, rest)| rest.split_once('@'))
+                    .map(|(user, _)| user);
+
+                if let Some(aor_user) = aor_user {
+                    if !aor_user.eq_ignore_ascii_case(auth_user.as_str()) {
+                        warn!(
+                            auth_user = %auth_user,
+                            aor_user = %aor_user,
+                            aor = %aor,
+                            "REGISTER rejected: authenticated user does not match AOR"
+                        );
+                        return self.build_error_response(
+                            request,
+                            403,
+                            "Forbidden - Not authorized for this address-of-record",
+                        );
+                    }
+                }
+            }
+        }
+
         let call_id = header(request.headers(), "Call-ID")
             .cloned()
             .unwrap_or_else(|| SmolStr::new(""));
@@ -1611,6 +1642,37 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
                 );
             }
         };
+
+        // AOR-to-identity authorization: If authentication is enabled, verify that the
+        // authenticated user has authority to register for this AOR.
+        // RFC 3261 §10.3 step 4: The registrar SHOULD verify that the authenticated
+        // user is authorized to modify registrations for the To address-of-record.
+        if self.authenticator.is_some() {
+            if let Some(auth_user) = sip_auth::extract_auth_username(request.headers()) {
+                // Extract user part from AOR for comparison
+                // AOR format: "sip:user@host" or "sips:user@host"
+                let aor_user = aor
+                    .split_once(':')
+                    .and_then(|(_, rest)| rest.split_once('@'))
+                    .map(|(user, _)| user);
+
+                if let Some(aor_user) = aor_user {
+                    if !aor_user.eq_ignore_ascii_case(auth_user.as_str()) {
+                        warn!(
+                            auth_user = %auth_user,
+                            aor_user = %aor_user,
+                            aor = %aor,
+                            "REGISTER rejected: authenticated user does not match AOR"
+                        );
+                        return self.build_error_response(
+                            request,
+                            403,
+                            "Forbidden - Not authorized for this address-of-record",
+                        );
+                    }
+                }
+            }
+        }
 
         // Extract Call-ID and CSeq
         let call_id = header(request.headers(), "Call-ID")

@@ -1518,7 +1518,7 @@ impl IntegratedUAC {
         // Generate request using helper
         let helper = self.helper.lock().await;
         let target_uri = self.extract_uri(&target)?;
-        let mut request = helper.create_invite_with_body(&target_uri, body, content_type);
+        let mut request = helper.create_invite_with_body(&target_uri, body, content_type)?;
         drop(helper);
 
         // Resolve target

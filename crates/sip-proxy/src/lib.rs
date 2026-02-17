@@ -36,6 +36,10 @@ use sip_transaction::generate_branch_id;
 /// - Policy decisions
 pub struct ProxyHelpers;
 
+/// Maximum number of Via hops before assuming a routing loop.
+/// Most deployments have < 10 hops; 70 matches the default Max-Forwards.
+const MAX_VIA_HOPS: usize = 70;
+
 impl ProxyHelpers {
     /// Prepends a Via header to the request with a new branch parameter.
     ///
@@ -124,6 +128,54 @@ impl ProxyHelpers {
             *headers =
                 Headers::from_vec(new_headers).expect("via header list should be within limits");
         }
+    }
+
+    /// Checks for routing loops by inspecting Via headers.
+    ///
+    /// RFC 3261 §16.3: A proxy MUST detect if it is the target of a loop. A
+    /// proxy can detect this by checking if any existing Via header contains
+    /// the proxy's own address and branch parameter.
+    ///
+    /// This method checks:
+    /// 1. Whether the number of Via hops exceeds a sane limit (loop indicator)
+    /// 2. Whether any existing Via header matches the proxy's own host
+    ///
+    /// # Arguments
+    /// * `request` - The request to check
+    /// * `proxy_host` - The proxy's own hostname or IP address
+    ///
+    /// # Returns
+    /// * `Ok(())` - No loop detected
+    /// * `Err(_)` - Loop detected (respond with 482 Loop Detected)
+    pub fn detect_loop(request: &Request, proxy_host: &str) -> Result<()> {
+        let mut via_count = 0;
+        for header in request.headers().iter() {
+            if header.name().eq_ignore_ascii_case("Via") || header.name().eq_ignore_ascii_case("v")
+            {
+                via_count += 1;
+                if via_count > MAX_VIA_HOPS {
+                    return Err(anyhow!(
+                        "Via hop count {} exceeds maximum {} - possible routing loop",
+                        via_count,
+                        MAX_VIA_HOPS
+                    ));
+                }
+                // Check if this Via contains our own host
+                let value = header.value();
+                // Via format: SIP/2.0/TRANSPORT host[:port];params
+                if let Some(host_part) = value.split_whitespace().nth(1) {
+                    let host = host_part.split(';').next().unwrap_or(host_part);
+                    let host = host.split(':').next().unwrap_or(host);
+                    if host.eq_ignore_ascii_case(proxy_host) {
+                        return Err(anyhow!(
+                            "Via header contains proxy host {} - routing loop detected (482)",
+                            proxy_host
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Updates the Request-URI to point to the target.
@@ -251,6 +303,34 @@ mod tests {
         assert_eq!(vias.len(), 1);
         assert!(vias[0].value().contains("client"));
         assert!(!vias[0].value().contains("proxy"));
+    }
+
+    #[test]
+    fn detects_loop_when_proxy_host_in_via() {
+        let mut headers = Headers::new();
+        headers
+            .push("Via", "SIP/2.0/UDP proxy.example.com;branch=z9hG4bK123")
+            .unwrap();
+        headers
+            .push("Via", "SIP/2.0/UDP client.example.com;branch=z9hG4bK456")
+            .unwrap();
+        headers.push("Max-Forwards", "70").unwrap();
+
+        let req = Request::new(
+            RequestLine::new(
+                Method::Invite,
+                SipUri::parse("sip:bob@example.com").unwrap(),
+            ),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid request");
+
+        // Proxy host matches an existing Via
+        assert!(ProxyHelpers::detect_loop(&req, "proxy.example.com").is_err());
+
+        // Different host - no loop
+        assert!(ProxyHelpers::detect_loop(&req, "other.example.com").is_ok());
     }
 
     #[test]

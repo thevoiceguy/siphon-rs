@@ -344,8 +344,13 @@ impl Request {
     }
 
     /// Sets the message body.
-    pub fn set_body(&mut self, body: Bytes) {
+    ///
+    /// # Errors
+    /// Returns an error if the body exceeds MAX_BODY_SIZE.
+    pub fn set_body(&mut self, body: Bytes) -> Result<(), MessageError> {
+        validate_body_size(&body)?;
         self.body = body;
+        Ok(())
     }
 
     /// Consumes self and returns the components.
@@ -486,8 +491,13 @@ impl Response {
     }
 
     /// Sets the message body.
-    pub fn set_body(&mut self, body: Bytes) {
+    ///
+    /// # Errors
+    /// Returns an error if the body exceeds MAX_BODY_SIZE.
+    pub fn set_body(&mut self, body: Bytes) -> Result<(), MessageError> {
+        validate_body_size(&body)?;
         self.body = body;
+        Ok(())
     }
 
     /// Consumes self and returns the components.
@@ -855,7 +865,7 @@ mod tests {
         assert!(!req.has_body());
 
         let body = Bytes::from("new body content");
-        req.set_body(body.clone());
+        req.set_body(body.clone()).unwrap();
         assert!(req.has_body());
         assert_eq!(req.body(), &body);
     }
@@ -867,7 +877,7 @@ mod tests {
         assert!(!resp.has_body());
 
         let body = Bytes::from("response body");
-        resp.set_body(body.clone());
+        resp.set_body(body.clone()).unwrap();
         assert!(resp.has_body());
         assert_eq!(resp.body(), &body);
     }

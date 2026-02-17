@@ -11,6 +11,7 @@ use sip_core::Request;
 use sip_parse::header;
 use sip_transaction::ServerTransactionHandle;
 use smol_str::SmolStr;
+use std::time::{Duration, Instant};
 
 /// Pending INVITE transaction information.
 #[derive(Clone)]
@@ -27,6 +28,8 @@ pub struct PendingInvite {
     pub call_id: SmolStr,
     /// Cached CSeq header for 487 response (INVITE CSeq)
     pub cseq: SmolStr,
+    /// When this pending INVITE was stored
+    pub created_at: Instant,
 }
 
 /// Manager for tracking pending INVITE transactions that can be canceled.
@@ -106,6 +109,7 @@ impl InviteStateManager {
                 to,
                 call_id,
                 cseq,
+                created_at: Instant::now(),
             },
         ))
     }
@@ -155,5 +159,14 @@ impl InviteStateManager {
     #[allow(dead_code)]
     pub fn pending_count(&self) -> usize {
         self.pending.len()
+    }
+
+    /// Clean up old pending INVITEs (older than max_age).
+    /// Prevents unbounded state growth if INVITEs are never completed/canceled.
+    #[allow(dead_code)]
+    pub fn cleanup_old(&self, max_age: Duration) {
+        let now = Instant::now();
+        self.pending
+            .retain(|_, invite| now.duration_since(invite.created_at) < max_age);
     }
 }

@@ -926,12 +926,17 @@ impl UserAgentClient {
     /// * `target_uri` - The target SIP URI
     /// * `body` - The request body
     /// * `content_type` - The Content-Type header value (e.g., "multipart/mixed;boundary=...")
+    ///
+    /// # Errors
+    /// Returns an error if the body exceeds the maximum allowed size.
     pub fn create_invite_with_body(
         &self,
         target_uri: &SipUri,
         body: &str,
         content_type: &str,
-    ) -> Request {
+    ) -> Result<Request> {
+        validate_body(body).map_err(|e| anyhow!("{}", e))?;
+        validate_content_type(content_type).map_err(|e| anyhow!("{}", e))?;
         let mut headers = Headers::new();
 
         // Via
@@ -1004,7 +1009,7 @@ impl UserAgentClient {
             headers,
             Bytes::from(body.as_bytes().to_vec()),
         )
-        .expect("valid INVITE request")
+        .map_err(|e| anyhow!("invalid INVITE request: {}", e))
     }
 
     /// Creates an ACK request for an INVITE response.

@@ -67,6 +67,14 @@ const MAX_CONCURRENT_SESSIONS: usize = 1024;
 /// slot by sending data very slowly or not at all.
 const SESSION_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// Timeout for outbound TCP/TLS connection establishment.
+/// Prevents indefinite blocking when a peer is unreachable or firewalled.
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Maximum number of concurrent sessions allowed from a single IP address.
+/// Prevents a single source from exhausting the global session limit.
+const MAX_SESSIONS_PER_IP: usize = 64;
+
 /// Indicates which transport carried an inbound or outbound message.
 ///
 /// # SCTP Support (RFC 4168)
@@ -359,6 +367,7 @@ pub async fn run_tcp(bind: &str, tx: mpsc::Sender<InboundPacket>) -> Result<()> 
     info!(%bind, "listening (tcp)");
     transport_metrics().on_accept(TransportLabel::Tcp);
     let limiter = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_SESSIONS));
+    let per_ip: Arc<dashmap::DashMap<std::net::IpAddr, usize>> = Arc::new(dashmap::DashMap::new());
 
     loop {
         let start = Instant::now();
@@ -375,15 +384,33 @@ pub async fn run_tcp(bind: &str, tx: mpsc::Sender<InboundPacket>) -> Result<()> 
             OpLabel::Accept,
             start.elapsed().as_nanos() as u64,
         );
+
+        // Per-IP session limit check
+        let ip = peer.ip();
+        {
+            let mut ip_count = per_ip.entry(ip).or_insert(0);
+            if *ip_count >= MAX_SESSIONS_PER_IP {
+                warn!(%peer, count = *ip_count, "per-IP tcp session limit reached; dropping connection");
+                transport_metrics().on_error(TransportLabel::Tcp, StageLabel::SessionLimit);
+                continue;
+            }
+            *ip_count += 1;
+        }
+
         let permit = match limiter.clone().try_acquire_owned() {
             Ok(permit) => permit,
             Err(_) => {
+                // Undo per-IP increment
+                if let Some(mut count) = per_ip.get_mut(&ip) {
+                    *count = count.saturating_sub(1);
+                }
                 warn!(%peer, "tcp session limit reached; dropping connection");
                 transport_metrics().on_error(TransportLabel::Tcp, StageLabel::SessionLimit);
                 continue;
             }
         };
         let tx = tx.clone();
+        let per_ip_clone = per_ip.clone();
         tokio::spawn(async move {
             let _permit = permit;
             let span = span_with_transport("tcp_session", TransportLabel::Tcp);
@@ -397,13 +424,24 @@ pub async fn run_tcp(bind: &str, tx: mpsc::Sender<InboundPacket>) -> Result<()> 
                 "tcp write error",
             )
             .await;
+            // Decrement per-IP counter when session ends
+            if let Some(mut count) = per_ip_clone.get_mut(&ip) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    drop(count);
+                    per_ip_clone.remove(&ip);
+                }
+            }
         });
     }
 }
 
 /// Connects to the destination and writes the bytes over TCP.
 pub async fn send_tcp(to: &SocketAddr, data: &[u8]) -> Result<()> {
-    let mut stream = TcpStream::connect(to).await?;
+    let mut stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(to))
+        .await
+        .map_err(|_| anyhow!("TCP connect timeout after {:?} to {}", CONNECT_TIMEOUT, to))?
+        ?;
     transport_metrics().on_connect(TransportLabel::Tcp);
     stream.write_all(data).await?;
     transport_metrics().on_packet_sent(TransportLabel::Tcp);
@@ -694,7 +732,10 @@ pub async fn send_tls(to: &SocketAddr, data: &[u8], config: &TlsConfig) -> Resul
     let connector = TlsConnector::from(config.client_config.clone());
     let server_name = ServerName::try_from(config.server_name.clone())
         .map_err(|_| anyhow!("invalid TLS server name"))?;
-    let stream = TcpStream::connect(to).await?;
+    let stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(to))
+        .await
+        .map_err(|_| anyhow!("TLS connect timeout after {:?} to {}", CONNECT_TIMEOUT, to))?
+        ?;
     let mut tls_stream = connector.connect(server_name, stream).await?;
     tls_stream.write_all(data).await?;
     transport_metrics().on_packet_sent(TransportLabel::Tls);
@@ -715,6 +756,7 @@ pub async fn run_tls(
     info!(%bind, "listening (tls)");
     transport_metrics().on_accept(TransportLabel::Tls);
     let limiter = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_SESSIONS));
+    let per_ip: Arc<dashmap::DashMap<std::net::IpAddr, usize>> = Arc::new(dashmap::DashMap::new());
 
     loop {
         let (stream, peer) = match listener.accept().await {
@@ -725,9 +767,26 @@ pub async fn run_tls(
                 continue;
             }
         };
+
+        // Per-IP session limit check
+        let ip = peer.ip();
+        {
+            let mut ip_count = per_ip.entry(ip).or_insert(0);
+            if *ip_count >= MAX_SESSIONS_PER_IP {
+                warn!(%peer, count = *ip_count, "per-IP tls session limit reached; dropping connection");
+                transport_metrics().on_error(TransportLabel::Tls, StageLabel::SessionLimit);
+                continue;
+            }
+            *ip_count += 1;
+        }
+
         let permit = match limiter.clone().try_acquire_owned() {
             Ok(permit) => permit,
             Err(_) => {
+                // Undo per-IP increment
+                if let Some(mut count) = per_ip.get_mut(&ip) {
+                    *count = count.saturating_sub(1);
+                }
                 warn!(%peer, "tls session limit reached; dropping connection");
                 transport_metrics().on_error(TransportLabel::Tls, StageLabel::SessionLimit);
                 continue;
@@ -735,6 +794,7 @@ pub async fn run_tls(
         };
         let tx = tx.clone();
         let acceptor = acceptor.clone();
+        let per_ip_clone = per_ip.clone();
         tokio::spawn(async move {
             let _permit = permit;
             let span = span_with_transport("tls_session", TransportLabel::Tls);
@@ -744,6 +804,14 @@ pub async fn run_tls(
                 Err(e) => {
                     error!(%e, "tls handshake error");
                     transport_metrics().on_error(TransportLabel::Tls, StageLabel::Handshake);
+                    // Decrement per-IP counter on early return
+                    if let Some(mut count) = per_ip_clone.get_mut(&ip) {
+                        *count = count.saturating_sub(1);
+                        if *count == 0 {
+                            drop(count);
+                            per_ip_clone.remove(&ip);
+                        }
+                    }
                     return;
                 }
             };
@@ -751,6 +819,14 @@ pub async fn run_tls(
 
             // Use TLS-specific session handler with proper shutdown support
             spawn_tls_session(peer, tls_stream, tx).await;
+            // Decrement per-IP counter when session ends
+            if let Some(mut count) = per_ip_clone.get_mut(&ip) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    drop(count);
+                    per_ip_clone.remove(&ip);
+                }
+            }
         });
     }
 }
@@ -1126,7 +1202,21 @@ pub(crate) fn drain_sip_frames(buf: &mut BytesMut) -> Result<Vec<Bytes>> {
             }
         }
 
-        let needed = head_end + 4 + content_length.unwrap_or(0);
+        // RFC 3261 §18.3: Content-Length is mandatory for stream transports.
+        // If missing, assume zero-length body but log a warning since this may
+        // indicate a smuggling attempt or a broken peer.
+        let body_length = match content_length {
+            Some(cl) => cl,
+            None => {
+                warn!(
+                    "SIP message missing Content-Length header on stream transport; \
+                     assuming zero-length body (RFC 3261 §18.3 violation)"
+                );
+                0
+            }
+        };
+
+        let needed = head_end + 4 + body_length;
         if buf.len() < needed {
             // Don't have complete message yet
             break;
@@ -1167,7 +1257,8 @@ fn parse_content_length(headers: &[u8]) -> Result<Option<usize>> {
             continue;
         };
         let name = trim_ascii_whitespace(&line[..colon]);
-        if !ascii_eq_ignore_case(name, b"content-length") {
+        // RFC 3261 §7.3.3: "l" is the compact form of "Content-Length"
+        if !ascii_eq_ignore_case(name, b"content-length") && !ascii_eq_ignore_case(name, b"l") {
             continue;
         }
         let value = trim_ascii_whitespace(&line[colon + 1..]);
@@ -1504,5 +1595,33 @@ mod tests {
             let parsed = TransportKind::parse(via_str).unwrap();
             assert_eq!(parsed, transport);
         }
+    }
+
+    #[test]
+    fn parses_compact_content_length_header() {
+        // RFC 3261 §7.3.3: "l" is the compact form of "Content-Length"
+        let msg = b"OPTIONS sip:a SIP/2.0\r\nl: 4\r\n\r\nbody";
+        let mut buf = BytesMut::from(&msg[..]);
+        let frames = drain_sip_frames(&mut buf).unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].as_ref(), msg.as_slice());
+    }
+
+    #[test]
+    fn parses_compact_content_length_case_insensitive() {
+        let msg = b"OPTIONS sip:a SIP/2.0\r\nL: 3\r\n\r\nabc";
+        let mut buf = BytesMut::from(&msg[..]);
+        let frames = drain_sip_frames(&mut buf).unwrap();
+        assert_eq!(frames.len(), 1);
+    }
+
+    #[test]
+    fn missing_content_length_assumes_zero_body() {
+        // Missing Content-Length on stream transport should assume zero body
+        let msg = b"OPTIONS sip:a SIP/2.0\r\nVia: SIP/2.0/TCP host\r\n\r\n";
+        let mut buf = BytesMut::from(&msg[..]);
+        let frames = drain_sip_frames(&mut buf).unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].as_ref(), msg.as_slice());
     }
 }

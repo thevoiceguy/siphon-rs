@@ -573,6 +573,24 @@ impl Default for NonceManager {
     }
 }
 
+/// Extracts the authenticated username from the Authorization or Proxy-Authorization header.
+///
+/// Returns `None` if no Authorization header is present or if it's not a Digest scheme.
+/// This is useful for AOR-to-identity authorization (verifying the authenticated user
+/// has permission to register for the requested AOR).
+pub fn extract_auth_username(headers: &Headers) -> Option<SmolStr> {
+    // Try Authorization first, then Proxy-Authorization
+    let auth_header = headers
+        .get_smol("Authorization")
+        .or_else(|| headers.get_smol("Proxy-Authorization"))?;
+
+    let parsed = parse_authorization_header(auth_header)?;
+    if !parsed.scheme().eq_ignore_ascii_case("Digest") {
+        return None;
+    }
+    parsed.param("username").cloned()
+}
+
 /// Extract rate-limiting key from the top Via header.
 ///
 /// Prefer the `received` parameter if present (added by the receiving server),
@@ -883,6 +901,12 @@ impl<S> DigestAuthenticator<S> {
     }
 
     pub fn with_algorithm(mut self, algorithm: DigestAlgorithm) -> Self {
+        if algorithm == DigestAlgorithm::Md5 {
+            warn!(
+                "MD5 digest authentication is cryptographically weak and deprecated \
+                 per RFC 7616 §3. Use SHA-256 or SHA-512 for new deployments."
+            );
+        }
         self.algorithm = algorithm;
         self
     }

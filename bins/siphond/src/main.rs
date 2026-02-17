@@ -323,6 +323,32 @@ async fn main() -> Result<()> {
         });
     }
 
+    // Spawn periodic cleanup task to prevent unbounded state growth
+    {
+        let proxy_state = services.proxy_state.clone();
+        let b2bua_state = services.b2bua_state.clone();
+        let invite_state = services.invite_state.clone();
+        let registrar = services.registrar.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                // Clean up stale proxy transactions (> 5 min)
+                proxy_state.cleanup_old(std::time::Duration::from_secs(300));
+                // Clean up stale B2BUA call legs (> 5 min)
+                b2bua_state.cleanup_old(std::time::Duration::from_secs(300));
+                // Clean up stale pending INVITEs (> 5 min)
+                invite_state.cleanup_old(std::time::Duration::from_secs(300));
+                // Clean up expired registrar bindings
+                if let Some(ref reg) = registrar {
+                    if let Err(e) = reg.location_store().cleanup_expired() {
+                        tracing::warn!(error = %e, "registrar binding cleanup failed");
+                    }
+                }
+            }
+        });
+    }
+
     info!("siphond ready - listening for requests");
 
     // Set up graceful shutdown signal handling

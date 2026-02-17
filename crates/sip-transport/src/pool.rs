@@ -165,9 +165,15 @@ impl ConnectionPool {
             }
         }
 
-        // Create new connection
+        // Create new connection with timeout
         debug!(peer = %addr, "connecting to TCP peer");
-        let stream = TcpStream::connect(addr).await?;
+        let stream = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            TcpStream::connect(addr),
+        )
+        .await
+        .map_err(|_| anyhow!("TCP pool connect timeout after 5s to {}", addr))?
+        ?;
         debug!(peer = %addr, "TCP connection established");
         let (mut reader, mut writer) = stream.into_split();
         let (tx, mut rx) = mpsc::channel::<Bytes>(64);
@@ -398,11 +404,17 @@ impl TlsPool {
             }
         }
 
-        // Create new connection
+        // Create new connection with timeout
         let connector = TlsConnector::from(config.clone());
         let server_name =
             ServerName::try_from(server_name).map_err(|_| anyhow!("invalid TLS server name"))?;
-        let stream = TcpStream::connect(addr).await?;
+        let stream = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            TcpStream::connect(addr),
+        )
+        .await
+        .map_err(|_| anyhow!("TLS pool connect timeout after 5s to {}", addr))?
+        ?;
         let mut tls_stream = connector.connect(server_name, stream).await?;
 
         let (tx, mut rx) = mpsc::channel::<Bytes>(64);
