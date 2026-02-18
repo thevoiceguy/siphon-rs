@@ -362,6 +362,93 @@ impl UserAgentClient {
         .expect("valid unsolicited NOTIFY request")
     }
 
+    /// Creates an unsolicited NOTIFY with a custom Subscription-State value.
+    ///
+    /// Identical to `create_unsolicited_notify` but allows specifying the
+    /// Subscription-State header (e.g., `"active;expires=3600"` or
+    /// `"terminated;reason=deactivated"`).
+    pub fn create_unsolicited_notify_with_state(
+        &self,
+        target: &SipUri,
+        event: &str,
+        content_type: &str,
+        body: &str,
+        subscription_state: &str,
+    ) -> Request {
+        let mut headers = Headers::new();
+
+        let branch = generate_branch();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
+            )
+            .unwrap();
+
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new(format!(
+                    "<{}>;tag={}",
+                    self.local_uri.as_str(),
+                    self.local_tag
+                )),
+            )
+            .unwrap();
+
+        headers
+            .push(
+                SmolStr::new("To"),
+                SmolStr::new(format!("<{}>", target.as_str())),
+            )
+            .unwrap();
+
+        let call_id = generate_call_id();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new(call_id))
+            .unwrap();
+
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 NOTIFY"))
+            .unwrap();
+
+        headers
+            .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
+            .unwrap();
+
+        headers
+            .push(SmolStr::new("Event"), SmolStr::new(event))
+            .unwrap();
+
+        headers
+            .push(
+                SmolStr::new("Subscription-State"),
+                SmolStr::new(subscription_state),
+            )
+            .unwrap();
+
+        headers
+            .push(SmolStr::new("User-Agent"), SmolStr::new("siphon-rs/0.1.0"))
+            .unwrap();
+
+        headers
+            .push(SmolStr::new("Content-Type"), SmolStr::new(content_type))
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("Content-Length"),
+                SmolStr::new(body.len().to_string()),
+            )
+            .unwrap();
+
+        Request::new(
+            RequestLine::new(Method::Notify, target.clone()),
+            headers,
+            Bytes::from(body.as_bytes().to_vec()),
+        )
+        .expect("valid unsolicited NOTIFY request")
+    }
+
     /// Creates a minimal OPTIONS request for connectivity/keepalive.
     pub fn create_options(&self, target: &SipUri) -> Request {
         let mut headers = Headers::new();

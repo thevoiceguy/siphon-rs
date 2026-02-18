@@ -1823,6 +1823,33 @@ impl IntegratedUAC {
         self.send_non_invite_request(request, dns_target).await
     }
 
+    /// Sends an unsolicited NOTIFY with a custom Subscription-State value.
+    ///
+    /// Identical to `send_unsolicited_notify` but allows specifying the
+    /// Subscription-State header (e.g., `"active;expires=3600"` or
+    /// `"terminated;reason=deactivated"`).
+    pub async fn send_unsolicited_notify_with_state(
+        &self,
+        target: &SipUri,
+        event: &str,
+        content_type: &str,
+        body: &str,
+        subscription_state: &str,
+    ) -> Result<Response> {
+        let request_target = RequestTarget::Uri(target.clone());
+        let dns_target = self.resolve_target(&request_target).await?;
+
+        let helper = self.helper.lock().await;
+        let mut request =
+            helper.create_unsolicited_notify_with_state(target, event, content_type, body, subscription_state);
+        drop(helper);
+
+        self.auto_fill_headers(&mut request, Some(dns_target.transport()))
+            .await;
+
+        self.send_non_invite_request(request, dns_target).await
+    }
+
     /// Sends an OPTIONS ping for connectivity checks.
     pub async fn ping_options(&self, target: impl Into<RequestTarget>) -> Result<Response> {
         let target = target.into();
