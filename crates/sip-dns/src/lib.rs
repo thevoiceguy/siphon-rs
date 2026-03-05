@@ -33,10 +33,10 @@ use smol_str::SmolStr;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::net::IpAddr;
-use trust_dns_resolver::{
+use hickory_resolver::{
     config::{ResolverConfig, ResolverOpts},
     proto::rr::RecordType,
-    TokioAsyncResolver,
+    TokioResolver,
 };
 
 // Security constants for DNS resolution
@@ -302,15 +302,14 @@ pub trait Resolver: Send + Sync {
 /// 5. Fallback to A/AAAA with default port
 #[derive(Clone)]
 pub struct SipResolver {
-    resolver: TokioAsyncResolver,
+    resolver: TokioResolver,
     enable_naptr: bool,
 }
 
 impl SipResolver {
     /// Creates a resolver using system DNS configuration.
     pub fn from_system() -> Result<Self> {
-        let resolver =
-            TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default());
+        let resolver = TokioResolver::builder_tokio()?.build();
         Ok(Self {
             resolver,
             enable_naptr: true,
@@ -319,7 +318,10 @@ impl SipResolver {
 
     /// Creates a resolver with custom configuration.
     pub fn with_config(config: ResolverConfig, opts: ResolverOpts) -> Result<Self> {
-        let resolver = TokioAsyncResolver::tokio(config, opts);
+        use hickory_resolver::name_server::TokioConnectionProvider;
+        let resolver = TokioResolver::builder_with_config(config, TokioConnectionProvider::default())
+            .with_options(opts)
+            .build();
         Ok(Self {
             resolver,
             enable_naptr: true,
