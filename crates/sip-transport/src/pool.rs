@@ -62,10 +62,12 @@ impl PoolEntry {
     }
 }
 
-/// TCP connection pool with idle timeout and size limits.
+/// Connection pool with idle timeout and size limits for TCP and WebSocket.
 #[derive(Debug)]
 pub struct ConnectionPool {
     tcp: DashMap<SocketAddr, PoolEntry>,
+    #[cfg(feature = "ws")]
+    ws: DashMap<String, PoolEntry>,
     max_size: usize,
     idle_timeout: Duration,
     inbound_tx: Arc<Mutex<Option<Sender<InboundPacket>>>>,
@@ -75,6 +77,8 @@ impl ConnectionPool {
     pub fn new() -> Self {
         Self {
             tcp: DashMap::new(),
+            #[cfg(feature = "ws")]
+            ws: DashMap::new(),
             max_size: MAX_POOL_SIZE,
             idle_timeout: IDLE_TIMEOUT,
             inbound_tx: Arc::new(Mutex::new(None)),
@@ -85,6 +89,8 @@ impl ConnectionPool {
     pub fn with_limits(max_size: usize, idle_timeout: Duration) -> Self {
         Self {
             tcp: DashMap::new(),
+            #[cfg(feature = "ws")]
+            ws: DashMap::new(),
             max_size,
             idle_timeout,
             inbound_tx: Arc::new(Mutex::new(None)),
@@ -99,14 +105,20 @@ impl ConnectionPool {
         *guard = Some(tx);
     }
 
-    /// Returns the current number of pooled connections.
+    /// Returns the current number of pooled connections (TCP + WS).
     pub fn len(&self) -> usize {
-        self.tcp.len()
+        let count = self.tcp.len();
+        #[cfg(feature = "ws")]
+        let count = count + self.ws.len();
+        count
     }
 
     /// Returns true if the pool is empty.
     pub fn is_empty(&self) -> bool {
-        self.tcp.is_empty()
+        let empty = self.tcp.is_empty();
+        #[cfg(feature = "ws")]
+        let empty = empty && self.ws.is_empty();
+        empty
     }
 
     /// Removes idle connections that exceed the idle timeout.
@@ -114,7 +126,17 @@ impl ConnectionPool {
         let mut removed = 0;
         self.tcp.retain(|addr, entry| {
             if entry.is_idle(self.idle_timeout) {
-                debug!(peer = %addr, "removing idle connection");
+                debug!(peer = %addr, "removing idle TCP connection");
+                removed += 1;
+                false
+            } else {
+                true
+            }
+        });
+        #[cfg(feature = "ws")]
+        self.ws.retain(|url, entry| {
+            if entry.is_idle(self.idle_timeout) {
+                debug!(url = %url, "removing idle WS connection");
                 removed += 1;
                 false
             } else {
@@ -298,6 +320,150 @@ impl ConnectionPool {
         }
         result
     }
+
+    /// Sends bytes over a pooled WebSocket connection; opens one if missing.
+    ///
+    /// The connection is keyed by `url` (e.g. `ws://host:port/`). If an
+    /// existing connection is cached and alive, the payload is sent as a
+    /// `Binary` WebSocket frame on that connection. If the cached connection
+    /// has dropped, or no cached connection exists, a new connection is
+    /// opened (with the RFC 7118 `sip` subprotocol negotiation) and cached.
+    ///
+    /// A background reader task is spawned per connection (when
+    /// `set_inbound_tx` has been called) to route WS frames received from
+    /// the peer back into the inbound handler, so that responses on the
+    /// same WS connection are processed correctly.
+    #[cfg(feature = "ws")]
+    pub async fn send_ws(&self, url: &str, payload: Bytes) -> Result<()> {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::{
+            client::IntoClientRequest, http::header::HeaderValue, Message,
+        };
+
+        let key = url.to_string();
+        debug!(url = %key, "send_ws called");
+
+        // Try to use existing connection
+        if let Some(mut entry) = self.ws.get_mut(&key) {
+            entry.touch();
+            if entry.sender.send(payload.clone()).await.is_ok() {
+                debug!(url = %key, "reused existing WS connection successfully");
+                return Ok(());
+            }
+            drop(entry);
+            self.ws.remove(&key);
+            debug!(url = %key, "existing WS connection failed, removed");
+        }
+
+        // Evict if at capacity
+        let total = self.tcp.len() + self.ws.len();
+        if total >= self.max_size {
+            self.cleanup_idle();
+            if self.tcp.len() + self.ws.len() >= self.max_size {
+                self.evict_lru();
+            }
+        }
+
+        // Open new WS connection
+        debug!(url = %key, "opening new WS connection");
+        let mut request = key.as_str().into_client_request()?;
+        request
+            .headers_mut()
+            .insert("Sec-WebSocket-Protocol", HeaderValue::from_static("sip"));
+
+        let (ws_stream, _response) = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            tokio_tungstenite::connect_async(request),
+        )
+        .await
+        .map_err(|_| anyhow!("WS connect timeout after 5s to {}", key))?
+        ?;
+
+        crate::transport_metrics().on_connect(crate::TransportLabel::Ws);
+        debug!(url = %key, "WS connection established");
+
+        let (mut sink, mut stream) = ws_stream.split();
+        let (tx, mut rx) = mpsc::channel::<Bytes>(64);
+        let mut entry = PoolEntry::new(tx.clone());
+
+        // Writer task — reads from channel and sends WS Binary frames
+        let writer_key = key.clone();
+        let writer_handle = tokio::spawn(async move {
+            while let Some(buf) = rx.recv().await {
+                if sink.send(Message::Binary(buf.to_vec())).await.is_err() {
+                    debug!(url = %writer_key, "WS writer: send failed, exiting");
+                    break;
+                }
+                crate::transport_metrics().on_packet_sent(crate::TransportLabel::Ws);
+            }
+        });
+        entry.task_handles.push(writer_handle.abort_handle());
+
+        // Optional reader task — feeds received frames back to inbound handler
+        let inbound_tx_guard = self.inbound_tx.lock().await;
+        if let Some(inbound_tx) = inbound_tx_guard.clone() {
+            drop(inbound_tx_guard);
+            // We need the peer SocketAddr for the InboundPacket. Parse it
+            // from the URL host:port. If that fails (unlikely for a just-
+            // connected URL), skip the reader — outbound-only is still useful.
+            let peer_addr = parse_ws_peer_addr(&key);
+            if let Some(peer) = peer_addr {
+                let reader_key = key.clone();
+                let reader_handle = tokio::spawn(async move {
+                    while let Some(msg) = stream.next().await {
+                        match msg {
+                            Ok(Message::Binary(data)) => {
+                                let packet = InboundPacket {
+                                    transport: TransportKind::Ws,
+                                    peer,
+                                    payload: Bytes::from(data),
+                                    stream: None,
+                                };
+                                if inbound_tx.send(packet).await.is_err() {
+                                    debug!(url = %reader_key, "WS reader: inbound channel closed");
+                                    break;
+                                }
+                            }
+                            Ok(Message::Text(text)) => {
+                                let packet = InboundPacket {
+                                    transport: TransportKind::Ws,
+                                    peer,
+                                    payload: Bytes::from(text.into_bytes()),
+                                    stream: None,
+                                };
+                                if inbound_tx.send(packet).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Ok(Message::Close(_)) => {
+                                debug!(url = %reader_key, "WS reader: peer sent Close");
+                                break;
+                            }
+                            Ok(_) => {} // Ping/Pong handled by tungstenite
+                            Err(e) => {
+                                debug!(url = %reader_key, error = %e, "WS reader: error");
+                                break;
+                            }
+                        }
+                    }
+                });
+                entry.task_handles.push(reader_handle.abort_handle());
+            }
+        } else {
+            drop(inbound_tx_guard);
+        }
+
+        self.ws.insert(key.clone(), entry);
+
+        let result = tx
+            .send(payload)
+            .await
+            .map_err(|_| anyhow!("WS connection writer closed"));
+        if result.is_err() {
+            self.ws.remove(&key);
+        }
+        result
+    }
 }
 
 impl Default for ConnectionPool {
@@ -311,6 +477,40 @@ use tokio_rustls::{
     rustls::{pki_types::ServerName, ClientConfig},
     TlsConnector,
 };
+
+/// Parse the peer SocketAddr from a ws[s]://host:port/ URL.
+///
+/// Returns `None` when the host cannot be resolved to an IP or the port is
+/// missing and not inferable from the scheme.
+#[cfg(feature = "ws")]
+fn parse_ws_peer_addr(url: &str) -> Option<SocketAddr> {
+    // Strip scheme: ws:// or wss://
+    let rest = url
+        .strip_prefix("wss://")
+        .or_else(|| url.strip_prefix("ws://"))?;
+    let default_port: u16 = if url.starts_with("wss") { 443 } else { 80 };
+    // Strip path / query
+    let authority = rest.split('/').next().unwrap_or(rest);
+    // Handle IPv6 brackets: [::1]:port
+    if let Some(bracketed) = authority.strip_prefix('[') {
+        let (host, port_str) = bracketed.split_once(']')?;
+        let port = port_str
+            .strip_prefix(':')
+            .and_then(|p| p.parse::<u16>().ok())
+            .unwrap_or(default_port);
+        let ip: std::net::IpAddr = host.parse().ok()?;
+        Some(SocketAddr::new(ip, port))
+    } else {
+        // IPv4 or hostname — if it's a hostname we can't resolve it without
+        // async DNS, so just try parsing as an IP.
+        let (host, port) = match authority.rsplit_once(':') {
+            Some((h, p)) => (h, p.parse::<u16>().unwrap_or(default_port)),
+            None => (authority, default_port),
+        };
+        let ip: std::net::IpAddr = host.parse().ok()?;
+        Some(SocketAddr::new(ip, port))
+    }
+}
 
 #[cfg(feature = "tls")]
 /// TLS connection pool with idle timeout and size limits.
