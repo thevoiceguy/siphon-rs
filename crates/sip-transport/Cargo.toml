@@ -17,7 +17,7 @@ bytes = { workspace = true }
 anyhow = { workspace = true }
 tokio-rustls = { version = "0.26", optional = true }
 rustls = { version = "0.23", optional = true }
-rustls-pemfile = { version = "2", optional = true }
+rustls-pki-types = { version = "1.2", optional = true }
 sip-observe = { path = "../sip-observe" }
 memchr = "2.7"
 dashmap = { workspace = true }
@@ -32,5 +32,5 @@ tokio-tungstenite = { version = "0.21" }
 
 [features]
 default = []
-tls = ["tokio-rustls", "rustls", "rustls-pemfile"]
+tls = ["tokio-rustls", "rustls", "rustls-pki-types"]
 ws = ["tokio-tungstenite", "futures-util"]

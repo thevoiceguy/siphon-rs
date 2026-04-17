@@ -874,42 +874,22 @@ pub fn load_rustls_server_config(
     cert_path: &str,
     key_path: &str,
 ) -> Result<std::sync::Arc<tokio_rustls::rustls::ServerConfig>> {
-    use rustls_pemfile::{certs, pkcs8_private_keys, rsa_private_keys};
-    use std::fs::File;
-    use std::io::BufReader;
+    use rustls_pki_types::pem::PemObject;
     use tokio_rustls::rustls::{
         self,
-        pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs1KeyDer, PrivatePkcs8KeyDer},
+        pki_types::{CertificateDer, PrivateKeyDer},
     };
 
-    let mut cert_reader = BufReader::new(File::open(cert_path)?);
-    let certs = certs(&mut cert_reader)
-        .collect::<Result<Vec<CertificateDer<'static>>, _>>()
+    let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(cert_path)
+        .map_err(|e| anyhow!("failed to read certificate file: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
         .map_err(|e| anyhow!("invalid certificate: {e}"))?;
     if certs.is_empty() {
         return Err(anyhow!("no certificates found in {}", cert_path));
     }
 
-    let mut key_reader = BufReader::new(File::open(key_path)?);
-    let mut keys = pkcs8_private_keys(&mut key_reader)
-        .collect::<Result<Vec<PrivatePkcs8KeyDer<'static>>, _>>()
-        .map_err(|e| anyhow!("invalid private key: {e}"))?
-        .into_iter()
-        .map(PrivateKeyDer::from)
-        .collect::<Vec<_>>();
-    if keys.is_empty() {
-        let mut key_reader = BufReader::new(File::open(key_path)?);
-        keys = rsa_private_keys(&mut key_reader)
-            .collect::<Result<Vec<PrivatePkcs1KeyDer<'static>>, _>>()
-            .map_err(|e| anyhow!("invalid private key: {e}"))?
-            .into_iter()
-            .map(PrivateKeyDer::from)
-            .collect();
-    }
-    let key = keys
-        .into_iter()
-        .next()
-        .ok_or_else(|| anyhow!("no private keys found in {}", key_path))?;
+    let key = PrivateKeyDer::from_pem_file(key_path)
+        .map_err(|e| anyhow!("no private keys found in {}: {e}", key_path))?;
 
     let tls12_only = std::env::var("SIPHON_TLS12_ONLY")
         .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE"))
