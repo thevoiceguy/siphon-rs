@@ -266,15 +266,39 @@ impl ReferHandler {
         })
     }
 
+    /// Extract the Replaces URI-header value from a Refer-To target and
+    /// URL-decode it into its on-the-wire SIP header form.
+    ///
+    /// RFC 3891 Replaces value: `call-id;to-tag=...;from-tag=...[;early-only]`
+    /// inside a URI is %-encoded (`;` → `%3B`, `=` → `%3D`). Earlier code
+    /// only decoded `%3D`, leaving `%3B` literals that broke the receiving
+    /// side's parser.
+    ///
+    /// The returned value is rejected unless it has both `to-tag` and
+    /// `from-tag` parameters, so a malformed Refer-To cannot turn into an
+    /// INVITE that misleads the transfer target.
     fn extract_replaces(value: &str) -> Option<String> {
-        let decoded = value.replace("%3D", "=");
-        let start = decoded.find("Replaces=")? + "Replaces=".len();
-        let tail = &decoded[start..];
-        #[allow(clippy::manual_pattern_char_comparison)]
-        let end = tail
-            .find(|c: char| c == ';' || c == '>' || c == '&')
-            .unwrap_or(tail.len());
-        Some(tail[..end].to_string())
+        // Find the URI-headers segment (after `?`) so we don't accidentally
+        // match `Replaces=` inside the user/host portion.
+        let headers_start = value.find('?')? + 1;
+        let after_q = &value[headers_start..];
+        // Trim a trailing `>` if the caller passed a name-addr verbatim.
+        let after_q = after_q.strip_suffix('>').unwrap_or(after_q);
+
+        for pair in after_q.split('&') {
+            let (name, raw_value) = pair.split_once('=')?;
+            if !name.eq_ignore_ascii_case("Replaces") {
+                continue;
+            }
+            let decoded = percent_decode(raw_value);
+            // Defensive shape check: must contain to-tag and from-tag.
+            let lower = decoded.to_ascii_lowercase();
+            if !lower.contains("to-tag=") || !lower.contains("from-tag=") {
+                return None;
+            }
+            return Some(decoded);
+        }
+        None
     }
 
     fn build_refer_subscription(
@@ -507,8 +531,15 @@ impl RequestHandler for ReferHandler {
 
                 Self::send_notify(&uas, &mut subscription, 100, "Trying", services, _ctx).await;
 
+                // Strip URI headers (?Route=, ?From=, etc.) before using the
+                // Refer-To target as a request URI. RFC 3261 §19.1.5 forbids
+                // copying URI headers into outgoing fields, and an attacker
+                // who controls the Refer-To string would otherwise inject
+                // arbitrary SIP headers into the triggered INVITE's
+                // Request-URI / To / Route. Replaces is extracted separately
+                // below from the original (still-encoded) refer-to string.
                 let refer_uri = match sdp_utils::parse_name_addr_uri(&refer_to_target) {
-                    Some(uri) => uri,
+                    Some(uri) => uri.without_uri_headers(),
                     None => {
                         warn!(call_id, "Invalid Refer-To URI, sending failure NOTIFY");
                         Self::send_notify(
@@ -675,6 +706,29 @@ impl RequestHandler for ReferHandler {
     }
 }
 
+/// Minimal percent-decoder for ASCII URI segments. Bytes that fail to form
+/// valid UTF-8 are dropped (Replaces values are ASCII per RFC 3891).
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(hi), Some(lo)) = (
+                (bytes[i + 1] as char).to_digit(16),
+                (bytes[i + 2] as char).to_digit(16),
+            ) {
+                out.push(((hi << 4) | lo) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// Copy essential headers from request to response
 fn copy_headers(request: &Request, headers: &mut sip_core::Headers) {
     if let Some(via) = header(request.headers(), "Via") {
@@ -691,5 +745,48 @@ fn copy_headers(request: &Request, headers: &mut sip_core::Headers) {
     }
     if let Some(cseq) = header(request.headers(), "CSeq") {
         let _ = headers.push("CSeq", cseq.clone());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_replaces_decodes_semicolons() {
+        // RFC 3891 form, percent-encoded as it would appear in a Refer-To URI.
+        let refer_to =
+            "<sip:t@example.com?Replaces=callid42%3Bto-tag%3Daaa%3Bfrom-tag%3Dbbb>";
+        let got = ReferHandler::extract_replaces(refer_to).expect("decoded");
+        assert_eq!(got, "callid42;to-tag=aaa;from-tag=bbb");
+    }
+
+    #[test]
+    fn extract_replaces_rejects_missing_tags() {
+        // Only call-id, no to-tag/from-tag → reject as malformed.
+        let refer_to = "<sip:t@example.com?Replaces=callid42>";
+        assert!(ReferHandler::extract_replaces(refer_to).is_none());
+    }
+
+    #[test]
+    fn extract_replaces_returns_none_when_absent() {
+        assert!(ReferHandler::extract_replaces("<sip:t@example.com>").is_none());
+        assert!(ReferHandler::extract_replaces("<sip:t@example.com?Subject=hi>").is_none());
+    }
+
+    #[test]
+    fn extract_replaces_does_not_match_in_user_part() {
+        // The user-part contains the literal string "Replaces=" but we only
+        // look in the URI-headers segment after `?`.
+        let refer_to = "<sip:Replaces=foo@example.com>";
+        assert!(ReferHandler::extract_replaces(refer_to).is_none());
+    }
+
+    #[test]
+    fn percent_decode_basics() {
+        assert_eq!(percent_decode("foo%3Bbar%3Dbaz"), "foo;bar=baz");
+        assert_eq!(percent_decode("plain"), "plain");
+        // Truncated escape is passed through literally rather than panicking.
+        assert_eq!(percent_decode("ab%2"), "ab%2");
     }
 }

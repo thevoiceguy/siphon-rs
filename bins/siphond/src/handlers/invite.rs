@@ -14,7 +14,7 @@
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use sip_core::Request;
-use sip_dialog::Dialog;
+use sip_dialog::{Dialog, DialogId};
 use sip_parse::header;
 use sip_transaction::{ServerTransactionHandle, TransportContext};
 use sip_uas::UserAgentServer;
@@ -1158,6 +1158,43 @@ impl RequestHandler for InviteHandler {
             return Ok(());
         }
 
+        // RFC 3891 §3 / §5: an INVITE with a Replaces header must reference
+        // an existing dialog known to this UA. Without this check, anyone who
+        // can guess (Call-ID, to-tag, from-tag) could hijack a call by
+        // sending an unsolicited INVITE-with-Replaces. Reject with 481 so we
+        // also leak as little as possible about which calls exist.
+        if let Some(replaces) = header(request.headers(), "Replaces") {
+            match parse_replaces_dialog_id(replaces.as_str()) {
+                None => {
+                    warn!(call_id, raw = %replaces, "Replaces header malformed, rejecting 400");
+                    let response = UserAgentServer::create_response(request, 400, "Bad Request");
+                    handle.send_final(response).await;
+                    return Ok(());
+                }
+                Some(target_id) => {
+                    if services.dialog_mgr.get(&target_id).is_none() {
+                        warn!(
+                            call_id,
+                            replaces_call_id = %target_id.call_id(),
+                            "Replaces target dialog not found, rejecting 481 (RFC 3891 §5)"
+                        );
+                        let response = UserAgentServer::create_response(
+                            request,
+                            481,
+                            "Call/Transaction Does Not Exist",
+                        );
+                        handle.send_final(response).await;
+                        return Ok(());
+                    }
+                    // NOTE: actually replacing the dialog (terminating the
+                    // matched leg, swapping in the new one) is not yet
+                    // implemented. The auth check still prevents the hijack
+                    // primitive; if this code path is reached the call will
+                    // proceed as a parallel dialog, which is benign.
+                }
+            }
+        }
+
         // Check auto-accept configuration
         if !services.config.features.auto_accept_calls {
             info!(call_id, "INVITE rejected: auto-accept disabled");
@@ -1423,6 +1460,37 @@ impl RequestHandler for InviteHandler {
     }
 }
 
+/// Parses an RFC 3891 Replaces header value into a `DialogId`.
+///
+/// Header form (after URL-decoding by the parser): `call-id;to-tag=...;from-tag=...[;early-only]`.
+/// From the perspective of this UA receiving the new INVITE, the matched
+/// dialog has `local_tag = to-tag` and `remote_tag = from-tag` (RFC 3891 §3).
+///
+/// Returns `None` if the value is malformed: missing call-id, missing
+/// to-tag, missing from-tag, or any field empty.
+fn parse_replaces_dialog_id(value: &str) -> Option<DialogId> {
+    let mut parts = value.split(';');
+    let call_id = parts.next()?.trim();
+    if call_id.is_empty() {
+        return None;
+    }
+    let mut to_tag: Option<&str> = None;
+    let mut from_tag: Option<&str> = None;
+    for part in parts {
+        let part = part.trim();
+        if let Some(v) = part.strip_prefix("to-tag=") {
+            to_tag = Some(v.trim());
+        } else if let Some(v) = part.strip_prefix("from-tag=") {
+            from_tag = Some(v.trim());
+        }
+        // Other parameters (e.g. early-only) are ignored here; they're not
+        // needed for the dialog lookup.
+    }
+    let to_tag = to_tag.filter(|s| !s.is_empty())?;
+    let from_tag = from_tag.filter(|s| !s.is_empty())?;
+    Some(DialogId::unchecked_new(call_id, to_tag, from_tag))
+}
+
 /// Copy dialog-forming headers from request to response headers
 fn copy_dialog_headers(request: &Request, headers: &mut sip_core::Headers) {
     if let Some(via) = header(request.headers(), "Via") {
@@ -1439,5 +1507,51 @@ fn copy_dialog_headers(request: &Request, headers: &mut sip_core::Headers) {
     }
     if let Some(cseq) = header(request.headers(), "CSeq") {
         let _ = headers.push("CSeq", cseq.clone());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_replaces_extracts_call_id_and_tags() {
+        let id = parse_replaces_dialog_id("abc123;to-tag=local;from-tag=remote")
+            .expect("well-formed");
+        assert_eq!(id.call_id(), "abc123");
+        assert_eq!(id.local_tag(), "local");
+        assert_eq!(id.remote_tag(), "remote");
+    }
+
+    #[test]
+    fn parse_replaces_accepts_early_only_param() {
+        let id = parse_replaces_dialog_id(
+            "abc123;to-tag=local;from-tag=remote;early-only",
+        )
+        .expect("well-formed");
+        assert_eq!(id.local_tag(), "local");
+    }
+
+    #[test]
+    fn parse_replaces_rejects_missing_tags() {
+        assert!(parse_replaces_dialog_id("abc123").is_none());
+        assert!(parse_replaces_dialog_id("abc123;to-tag=only").is_none());
+        assert!(parse_replaces_dialog_id("abc123;from-tag=only").is_none());
+    }
+
+    #[test]
+    fn parse_replaces_rejects_empty_fields() {
+        assert!(parse_replaces_dialog_id(";to-tag=a;from-tag=b").is_none());
+        assert!(parse_replaces_dialog_id("abc;to-tag=;from-tag=b").is_none());
+        assert!(parse_replaces_dialog_id("abc;to-tag=a;from-tag=").is_none());
+    }
+
+    #[test]
+    fn parse_replaces_tolerates_whitespace() {
+        let id = parse_replaces_dialog_id("abc ; to-tag=local ; from-tag=remote")
+            .expect("well-formed");
+        assert_eq!(id.call_id(), "abc");
+        assert_eq!(id.local_tag(), "local");
+        assert_eq!(id.remote_tag(), "remote");
     }
 }

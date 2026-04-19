@@ -13,9 +13,9 @@ use tracing::{info, warn};
 use crate::{
     handlers::{
         bye::ByeHandler, cancel::CancelHandler, info::InfoHandler, invite::InviteHandler,
-        message::MessageHandler, options::OptionsHandler, prack::PrackHandler, refer::ReferHandler,
-        register::RegisterHandler, subscribe::SubscribeHandler, update::UpdateHandler,
-        RequestHandler,
+        message::MessageHandler, notify::NotifyHandler, options::OptionsHandler,
+        prack::PrackHandler, refer::ReferHandler, register::RegisterHandler,
+        subscribe::SubscribeHandler, update::UpdateHandler, RequestHandler,
     },
     services::ServiceRegistry,
 };
@@ -57,7 +57,11 @@ impl RequestDispatcher {
             handlers.insert(Method::Register, Arc::new(RegisterHandler::new()));
         }
 
-        // SUBSCRIBE for event subscriptions
+        // SUBSCRIBE for event subscriptions. NOTIFY is always registered
+        // alongside so we can reply 481 (RFC 6665 §4.1.4) to unsolicited
+        // NOTIFYs even when SUBSCRIBE itself is disabled — otherwise the
+        // dispatcher returns 501 and leaks support information.
+        handlers.insert(Method::Notify, Arc::new(NotifyHandler::new()));
         if services.config.enable_subscriptions() {
             handlers.insert(Method::Subscribe, Arc::new(SubscribeHandler::new()));
         }
