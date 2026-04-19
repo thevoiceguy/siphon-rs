@@ -14,7 +14,7 @@ use tokio::{
     net::TcpStream,
     sync::{
         mpsc::{self, Sender},
-        Mutex,
+        Mutex, OwnedSemaphorePermit, Semaphore,
     },
 };
 use tracing::{debug, warn};
@@ -34,6 +34,10 @@ struct PoolEntry {
     last_used: Instant,
     /// Abort handles for spawned tasks (writer + reader) to clean up on eviction.
     task_handles: Vec<tokio::task::AbortHandle>,
+    /// Semaphore permit reserving this entry's slot in the pool. Dropping
+    /// the PoolEntry releases the permit, which is what enforces the cap
+    /// atomically across concurrent inserts.
+    _permit: OwnedSemaphorePermit,
 }
 
 impl Drop for PoolEntry {
@@ -45,12 +49,23 @@ impl Drop for PoolEntry {
 }
 
 impl PoolEntry {
-    fn new(sender: Sender<Bytes>) -> Self {
+    fn new(sender: Sender<Bytes>, permit: OwnedSemaphorePermit) -> Self {
         Self {
             sender,
             last_used: Instant::now(),
             task_handles: Vec::new(),
+            _permit: permit,
         }
+    }
+
+    /// Test-only constructor that mints a fresh semaphore permit. Tests that
+    /// poke the pool's internals directly don't go through `reserve_slot`,
+    /// so this gives them a no-op permit to satisfy the type.
+    #[cfg(test)]
+    fn for_tests(sender: Sender<Bytes>) -> Self {
+        let sema = Arc::new(Semaphore::new(1));
+        let permit = sema.try_acquire_owned().expect("permit available");
+        Self::new(sender, permit)
     }
 
     fn touch(&mut self) {
@@ -71,6 +86,12 @@ pub struct ConnectionPool {
     max_size: usize,
     idle_timeout: Duration,
     inbound_tx: Arc<Mutex<Option<Sender<InboundPacket>>>>,
+    /// One permit per pool slot. Held by `PoolEntry::_permit` so the cap is
+    /// enforced atomically: callers must successfully `try_acquire_owned`
+    /// before opening a new connection, and the slot is freed automatically
+    /// when the entry is dropped (eviction, send failure, idle cleanup).
+    /// Shared across TCP and WS so the total connection count is the cap.
+    permits: Arc<Semaphore>,
 }
 
 impl ConnectionPool {
@@ -82,6 +103,7 @@ impl ConnectionPool {
             max_size: MAX_POOL_SIZE,
             idle_timeout: IDLE_TIMEOUT,
             inbound_tx: Arc::new(Mutex::new(None)),
+            permits: Arc::new(Semaphore::new(MAX_POOL_SIZE)),
         }
     }
 
@@ -94,7 +116,25 @@ impl ConnectionPool {
             max_size,
             idle_timeout,
             inbound_tx: Arc::new(Mutex::new(None)),
+            permits: Arc::new(Semaphore::new(max_size)),
         }
+    }
+
+    /// Reserves a slot in the pool, atomically. Tries to acquire a permit;
+    /// if none is available, runs `cleanup_idle` (which drops idle entries
+    /// and releases their permits) and retries; if still saturated, evicts
+    /// LRU entries and retries one last time. Returns `None` only when even
+    /// after eviction every slot is held by a fresh, in-use connection.
+    fn reserve_slot(&self) -> Option<OwnedSemaphorePermit> {
+        if let Ok(p) = Arc::clone(&self.permits).try_acquire_owned() {
+            return Some(p);
+        }
+        self.cleanup_idle();
+        if let Ok(p) = Arc::clone(&self.permits).try_acquire_owned() {
+            return Some(p);
+        }
+        self.evict_lru();
+        Arc::clone(&self.permits).try_acquire_owned().ok()
     }
 
     /// Registers an inbound packet sink so responses on outbound TCP connections
@@ -187,16 +227,13 @@ impl ConnectionPool {
 
         debug!(peer = %addr, "no existing connection found, creating new TCP connection");
 
-        // Check if we need to make room
-        if self.tcp.len() >= self.max_size {
-            // Try cleanup first
-            self.cleanup_idle();
-
-            // If still at capacity, evict LRU
-            if self.tcp.len() >= self.max_size {
-                self.evict_lru();
-            }
-        }
+        // Atomically reserve a slot before doing anything expensive (DNS,
+        // TCP connect, TLS handshake). If we cannot reserve — even after
+        // dropping idle entries and evicting LRU — bail out *before*
+        // opening a socket so concurrent callers can't blow the pool cap.
+        let permit = self
+            .reserve_slot()
+            .ok_or_else(|| anyhow!("connection pool exhausted ({} slots)", self.max_size))?;
 
         // Create new connection with timeout
         debug!(peer = %addr, "connecting to TCP peer");
@@ -210,7 +247,7 @@ impl ConnectionPool {
         debug!(peer = %addr, "TCP connection established");
         let (mut reader, mut writer) = stream.into_split();
         let (tx, mut rx) = mpsc::channel::<Bytes>(64);
-        let mut entry = PoolEntry::new(tx.clone());
+        let mut entry = PoolEntry::new(tx.clone(), permit);
         debug!(peer = %addr, "creating new pool entry");
 
         // Writer task
@@ -355,14 +392,11 @@ impl ConnectionPool {
             debug!(url = %key, "existing WS connection failed, removed");
         }
 
-        // Evict if at capacity
-        let total = self.tcp.len() + self.ws.len();
-        if total >= self.max_size {
-            self.cleanup_idle();
-            if self.tcp.len() + self.ws.len() >= self.max_size {
-                self.evict_lru();
-            }
-        }
+        // Atomically reserve a slot (shared semaphore across TCP and WS) so
+        // we can't blow the pool cap by racing concurrent callers.
+        let permit = self
+            .reserve_slot()
+            .ok_or_else(|| anyhow!("connection pool exhausted ({} slots)", self.max_size))?;
 
         // Open new WS connection
         debug!(url = %key, "opening new WS connection");
@@ -384,7 +418,7 @@ impl ConnectionPool {
 
         let (mut sink, mut stream) = ws_stream.split();
         let (tx, mut rx) = mpsc::channel::<Bytes>(64);
-        let mut entry = PoolEntry::new(tx.clone());
+        let mut entry = PoolEntry::new(tx.clone(), permit);
 
         // Writer task — reads from channel and sends WS Binary frames
         let writer_key = key.clone();
@@ -514,11 +548,13 @@ fn parse_ws_peer_addr(url: &str) -> Option<SocketAddr> {
 
 #[cfg(feature = "tls")]
 /// TLS connection pool with idle timeout and size limits.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct TlsPool {
     inner: DashMap<(SocketAddr, String), PoolEntry>,
     max_size: usize,
     idle_timeout: Duration,
+    /// Permits enforcing the pool cap atomically; see ConnectionPool.
+    permits: Arc<Semaphore>,
 }
 
 #[cfg(feature = "tls")]
@@ -531,6 +567,7 @@ impl TlsPool {
             inner: DashMap::new(),
             max_size: MAX_POOL_SIZE,
             idle_timeout: IDLE_TIMEOUT,
+            permits: Arc::new(Semaphore::new(MAX_POOL_SIZE)),
         }
     }
 
@@ -540,7 +577,21 @@ impl TlsPool {
             inner: DashMap::new(),
             max_size,
             idle_timeout,
+            permits: Arc::new(Semaphore::new(max_size)),
         }
+    }
+
+    /// Atomic permit reservation; see `ConnectionPool::reserve_slot`.
+    fn reserve_slot(&self) -> Option<OwnedSemaphorePermit> {
+        if let Ok(p) = Arc::clone(&self.permits).try_acquire_owned() {
+            return Some(p);
+        }
+        self.cleanup_idle();
+        if let Ok(p) = Arc::clone(&self.permits).try_acquire_owned() {
+            return Some(p);
+        }
+        self.evict_lru();
+        Arc::clone(&self.permits).try_acquire_owned().ok()
     }
 
     /// Returns the current number of pooled connections.
@@ -609,16 +660,10 @@ impl TlsPool {
             self.inner.remove(&key);
         }
 
-        // Check if we need to make room
-        if self.inner.len() >= self.max_size {
-            // Try cleanup first
-            self.cleanup_idle();
-
-            // If still at capacity, evict LRU
-            if self.inner.len() >= self.max_size {
-                self.evict_lru();
-            }
-        }
+        // Atomically reserve a slot before connecting; see ConnectionPool.
+        let permit = self
+            .reserve_slot()
+            .ok_or_else(|| anyhow!("TLS pool exhausted ({} slots)", self.max_size))?;
 
         // Create new connection with timeout
         let connector = TlsConnector::from(config.clone());
@@ -634,7 +679,7 @@ impl TlsPool {
         let mut tls_stream = connector.connect(server_name, stream).await?;
 
         let (tx, mut rx) = mpsc::channel::<Bytes>(64);
-        let mut entry = PoolEntry::new(tx.clone());
+        let mut entry = PoolEntry::new(tx.clone(), permit);
 
         let writer_handle = tokio::spawn(async move {
             while let Some(buf) = rx.recv().await {
@@ -673,7 +718,7 @@ mod tests {
     #[test]
     fn pool_entry_tracks_activity() {
         let (tx, _rx) = mpsc::channel::<Bytes>(1);
-        let mut entry = PoolEntry::new(tx);
+        let mut entry = PoolEntry::for_tests(tx);
 
         let initial = entry.last_used;
         std::thread::sleep(Duration::from_millis(10));
@@ -685,14 +730,14 @@ mod tests {
     #[test]
     fn pool_entry_detects_idle() {
         let (tx, _rx) = mpsc::channel::<Bytes>(1);
-        let entry = PoolEntry::new(tx);
+        let entry = PoolEntry::for_tests(tx);
 
         // Should not be idle immediately
         assert!(!entry.is_idle(Duration::from_secs(1)));
 
         // Simulate old entry
         let (tx2, _rx2) = mpsc::channel::<Bytes>(1);
-        let mut old_entry = PoolEntry::new(tx2);
+        let mut old_entry = PoolEntry::for_tests(tx2);
         old_entry.last_used = Instant::now() - Duration::from_secs(10);
 
         assert!(old_entry.is_idle(Duration::from_secs(5)));
@@ -706,7 +751,7 @@ mod tests {
         for i in 0..15 {
             let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 5060 + i);
             let (tx, _rx) = mpsc::channel::<Bytes>(1);
-            pool.tcp.insert(addr, PoolEntry::new(tx));
+            pool.tcp.insert(addr, PoolEntry::for_tests(tx));
         }
 
         assert_eq!(pool.len(), 15);
@@ -727,7 +772,7 @@ mod tests {
         for i in 0..5 {
             let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 5060 + i);
             let (tx, _rx) = mpsc::channel::<Bytes>(1);
-            pool.tcp.insert(addr, PoolEntry::new(tx));
+            pool.tcp.insert(addr, PoolEntry::for_tests(tx));
         }
 
         assert_eq!(pool.len(), 5);
@@ -749,7 +794,7 @@ mod tests {
         for i in 0..5 {
             let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 5060 + i);
             let (tx, _rx) = mpsc::channel::<Bytes>(1);
-            pool.tcp.insert(addr, PoolEntry::new(tx));
+            pool.tcp.insert(addr, PoolEntry::for_tests(tx));
         }
 
         // Keep some active by touching them
@@ -779,6 +824,56 @@ mod tests {
         }
     }
 
+    /// Hammer `reserve_slot` from many threads to confirm the semaphore
+    /// never permits more than `max_size` entries to be alive at once.
+    /// Without the semaphore the previous len()-then-insert could be
+    /// raced; this is the regression test for that.
+    #[test]
+    fn reserve_slot_caps_concurrent_acquisitions() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use std::thread;
+
+        let max = 8;
+        let pool = Arc::new(ConnectionPool::with_limits(max, Duration::from_secs(60)));
+        let alive = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+
+        let mut handles = Vec::new();
+        for _ in 0..32 {
+            let pool = Arc::clone(&pool);
+            let alive = Arc::clone(&alive);
+            let peak = Arc::clone(&peak);
+            handles.push(thread::spawn(move || {
+                for _ in 0..50 {
+                    if let Some(_permit) = pool.reserve_slot() {
+                        let now = alive.fetch_add(1, Ordering::AcqRel) + 1;
+                        peak.fetch_max(now, Ordering::AcqRel);
+                        // Hold the permit briefly to actually contend.
+                        std::thread::sleep(Duration::from_micros(50));
+                        alive.fetch_sub(1, Ordering::AcqRel);
+                    }
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let observed_peak = peak.load(Ordering::Acquire);
+        assert!(
+            observed_peak <= max,
+            "pool cap breached: peak {observed_peak} > {max}"
+        );
+        // We expect the cap to actually be reached under contention; if not,
+        // the test isn't actually exercising the semaphore. Tolerate a small
+        // gap in case scheduling stays unfair on tiny machines.
+        assert!(
+            observed_peak >= max / 2,
+            "test didn't contend enough; peak={observed_peak}"
+        );
+    }
+
     #[test]
     fn connection_pool_len_and_empty() {
         let pool = ConnectionPool::new();
@@ -787,7 +882,7 @@ mod tests {
 
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 5060);
         let (tx, _rx) = mpsc::channel::<Bytes>(1);
-        pool.tcp.insert(addr, PoolEntry::new(tx));
+        pool.tcp.insert(addr, PoolEntry::for_tests(tx));
 
         assert_eq!(pool.len(), 1);
         assert!(!pool.is_empty());
@@ -803,7 +898,7 @@ mod tests {
             let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 5061 + i);
             let key = (addr, format!("host{}.example.com", i));
             let (tx, _rx) = mpsc::channel::<Bytes>(1);
-            pool.inner.insert(key, PoolEntry::new(tx));
+            pool.inner.insert(key, PoolEntry::for_tests(tx));
         }
 
         assert_eq!(pool.len(), 15);
@@ -825,7 +920,7 @@ mod tests {
             let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 5061 + i);
             let key = (addr, format!("host{}.example.com", i));
             let (tx, _rx) = mpsc::channel::<Bytes>(1);
-            pool.inner.insert(key, PoolEntry::new(tx));
+            pool.inner.insert(key, PoolEntry::for_tests(tx));
         }
 
         assert_eq!(pool.len(), 5);

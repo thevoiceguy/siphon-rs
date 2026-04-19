@@ -295,6 +295,73 @@ impl InboundPacket {
 /// Maximum UDP packets per source IP per second before rate limiting kicks in.
 const UDP_RATE_LIMIT_PPS: u64 = 200;
 
+/// Maximum SIP frames per source IP per second across TCP/TLS/WS streams.
+///
+/// UDP is already rate-limited at the datagram level; without an equivalent
+/// for stream transports a peer that opens a TCP/TLS connection can pump
+/// arbitrary frames-per-second because we only cap concurrent connections,
+/// not message rate. This applies the same per-IP cap as UDP, evaluated
+/// after framing so each completed SIP message counts as one frame.
+const STREAM_RATE_LIMIT_FPS: u64 = 200;
+
+/// Cleanup IPs from the rate map every N checks to bound memory.
+const STREAM_RATE_CLEANUP_EVERY: u64 = 1024;
+
+/// Drop rate-map entries older than this when cleaning up.
+const STREAM_RATE_IDLE_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Per-source frame counter shared across all stream sessions. Lives for the
+/// process lifetime; opportunistically cleaned in `check_stream_rate`.
+fn stream_rate_map() -> &'static dashmap::DashMap<std::net::IpAddr, (u64, Instant)> {
+    static MAP: std::sync::OnceLock<dashmap::DashMap<std::net::IpAddr, (u64, Instant)>> =
+        std::sync::OnceLock::new();
+    MAP.get_or_init(dashmap::DashMap::new)
+}
+
+/// Returns `true` if the frame from `peer` should be processed; `false` if
+/// the per-IP rate limit has been exceeded for the current 1-second window.
+///
+/// On rate-limit transition (first frame past the cap) a warning is emitted
+/// once per window so logs aren't spammed. The returned boolean is the
+/// hot-path signal; callers should drop the frame on `false`.
+pub(crate) fn check_stream_rate(peer: SocketAddr) -> bool {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static CHECKS: AtomicU64 = AtomicU64::new(0);
+
+    let map = stream_rate_map();
+    let ip = peer.ip();
+    let now = Instant::now();
+
+    let allowed = {
+        let mut entry = map.entry(ip).or_insert((0, now));
+        if now.duration_since(entry.1) >= std::time::Duration::from_secs(1) {
+            entry.0 = 0;
+            entry.1 = now;
+        }
+        entry.0 += 1;
+        if entry.0 > STREAM_RATE_LIMIT_FPS {
+            if entry.0 == STREAM_RATE_LIMIT_FPS + 1 {
+                warn!(
+                    %peer,
+                    fps = entry.0,
+                    "stream per-source frame rate limit exceeded, dropping frames"
+                );
+            }
+            false
+        } else {
+            true
+        }
+    };
+
+    // Opportunistic cleanup so the map stays bounded under churn.
+    let n = CHECKS.fetch_add(1, Ordering::Relaxed);
+    if n % STREAM_RATE_CLEANUP_EVERY == 0 {
+        map.retain(|_, (_, last)| now.duration_since(*last) < STREAM_RATE_IDLE_TTL);
+    }
+
+    allowed
+}
+
 /// Runs a UDP receive loop and forwards packets to the provided channel.
 pub async fn run_udp(socket: Arc<UdpSocket>, tx: mpsc::Sender<InboundPacket>) -> Result<()> {
     let bind = socket.local_addr()?;
@@ -622,6 +689,9 @@ where
                             warn!(%peer, len = data.len(), max = MAX_BODY_SIZE, "websocket binary message too large, dropping");
                             break;
                         }
+                        if !check_stream_rate(peer) {
+                            continue;
+                        }
                         transport_metrics().on_packet_received(transport.into());
                         let packet = InboundPacket {
                             transport,
@@ -638,6 +708,9 @@ where
                         if text.len() > MAX_BODY_SIZE {
                             warn!(%peer, len = text.len(), max = MAX_BODY_SIZE, "websocket text message too large, dropping");
                             break;
+                        }
+                        if !check_stream_rate(peer) {
+                            continue;
                         }
                         transport_metrics().on_packet_received(transport.into());
                         let packet = InboundPacket {
@@ -1011,6 +1084,11 @@ async fn spawn_tls_session(
                 match drain_sip_frames(&mut buf) {
                     Ok(frames) => {
                         for payload in frames {
+                            // Per-IP frame rate limit shared with the
+                            // plain-TCP and WS paths.
+                            if !check_stream_rate(peer) {
+                                continue;
+                            }
                             let packet = InboundPacket {
                                 transport: TransportKind::Tls,
                                 peer,
@@ -1119,6 +1197,14 @@ async fn spawn_stream_session<S>(
                 match drain_sip_frames(&mut buf) {
                     Ok(frames) => {
                         for payload in frames {
+                            // Per-IP frame rate limit shared across all
+                            // stream sessions: a peer can hold up to 64
+                            // concurrent connections, so without this
+                            // they could pump arbitrary frames-per-second
+                            // and exhaust CPU at the parser/dispatcher.
+                            if !check_stream_rate(peer) {
+                                continue;
+                            }
                             let packet = InboundPacket {
                                 transport,
                                 peer,
@@ -1651,5 +1737,36 @@ mod tests {
         let mut buf = BytesMut::from(&msg[..]);
         let result = drain_sip_frames(&mut buf);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn stream_rate_limit_drops_after_threshold() {
+        // Use an IP that no other test will hit so we don't see cross-test
+        // pollution from the global stream_rate_map.
+        let peer: SocketAddr = "203.0.113.77:5060".parse().unwrap();
+        let mut allowed = 0u64;
+        // Fire enough frames in one window to overrun the cap.
+        for _ in 0..(STREAM_RATE_LIMIT_FPS + 50) {
+            if check_stream_rate(peer) {
+                allowed += 1;
+            }
+        }
+        assert_eq!(
+            allowed, STREAM_RATE_LIMIT_FPS,
+            "expected exactly cap allowed in one window, got {allowed}"
+        );
+    }
+
+    #[test]
+    fn stream_rate_limit_resets_after_window() {
+        let peer: SocketAddr = "203.0.113.78:5060".parse().unwrap();
+        // Saturate
+        for _ in 0..STREAM_RATE_LIMIT_FPS {
+            assert!(check_stream_rate(peer));
+        }
+        assert!(!check_stream_rate(peer), "should be over cap");
+        // Wait past the 1-second window and try again.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        assert!(check_stream_rate(peer), "window should have reset");
     }
 }

@@ -676,6 +676,11 @@ impl Dialog {
 /// Dialog manager for tracking active dialogs.
 pub struct DialogManager {
     dialogs: Arc<DashMap<DialogId, Dialog>>,
+    /// Serializes the cap-check + insert sequence so concurrent inserts cannot
+    /// breach `MAX_CONFIRMED_DIALOGS` or `MAX_EARLY_DIALOGS_PER_CALL_ID`.
+    /// Read paths (get / find_by_request / find_by_call_id / iteration) do
+    /// not take this lock — only mutating operations do.
+    insert_lock: Arc<parking_lot::Mutex<()>>,
     pub metrics: Arc<metrics::DialogMetrics>,
 }
 
@@ -683,6 +688,7 @@ impl DialogManager {
     pub fn new() -> Self {
         Self {
             dialogs: Arc::new(DashMap::new()),
+            insert_lock: Arc::new(parking_lot::Mutex::new(())),
             metrics: Arc::new(metrics::DialogMetrics::default()),
         }
     }
@@ -694,7 +700,12 @@ impl DialogManager {
     ///
     /// Returns `DialogError::TooManyDialogs` if the maximum number of dialogs is exceeded.
     pub fn insert(&self, dialog: Dialog) -> Result<(), DialogError> {
-        // Security: Enforce maximum dialog limit (DoS prevention)
+        // Hold the insert lock across the cap check AND the actual insert so
+        // two concurrent callers cannot both observe `len < cap` and then
+        // both insert (which previously let MAX_CONFIRMED_DIALOGS and
+        // MAX_EARLY_DIALOGS_PER_CALL_ID be exceeded under load).
+        let _guard = self.insert_lock.lock();
+
         if self.dialogs.len() >= MAX_CONFIRMED_DIALOGS {
             return Err(DialogError::TooManyDialogs {
                 max: MAX_CONFIRMED_DIALOGS,
@@ -1602,12 +1613,16 @@ impl Subscription {
 #[derive(Debug, Clone)]
 pub struct SubscriptionManager {
     subscriptions: Arc<DashMap<SubscriptionId, Subscription>>,
+    /// Serializes the cap-check + insert sequence so concurrent inserts cannot
+    /// breach `MAX_SUBSCRIPTIONS`. Read paths do not take this lock.
+    insert_lock: Arc<parking_lot::Mutex<()>>,
 }
 
 impl SubscriptionManager {
     pub fn new() -> Self {
         Self {
             subscriptions: Arc::new(DashMap::new()),
+            insert_lock: Arc::new(parking_lot::Mutex::new(())),
         }
     }
 
@@ -1617,7 +1632,10 @@ impl SubscriptionManager {
     ///
     /// Returns `SubscriptionError::TooManySubscriptions` if the maximum number is exceeded.
     pub fn insert(&self, subscription: Subscription) -> Result<(), SubscriptionError> {
-        // Security: Enforce maximum subscription limit (DoS prevention)
+        // Hold the lock across cap check + insert so the hard cap can't be
+        // breached by concurrent callers (previously `len()` and `insert()`
+        // were separate operations).
+        let _guard = self.insert_lock.lock();
         if self.subscriptions.len() >= MAX_SUBSCRIPTIONS {
             return Err(SubscriptionError::TooManySubscriptions {
                 max: MAX_SUBSCRIPTIONS,
@@ -2252,5 +2270,112 @@ mod tests {
         let bye = make_request(Method::Bye, "call123", "alice-tag", Some("bob-tag"), 11);
         assert!(dialog.update_from_request(&bye).is_ok());
         assert_eq!(dialog.remote_cseq, 11);
+    }
+
+    /// Hammer DialogManager.insert from many threads with early dialogs that
+    /// all share the same Call-ID. Without the insert lock, concurrent
+    /// `len()`-then-`insert()` would let the per-Call-ID early-dialog cap
+    /// be exceeded.
+    #[test]
+    fn concurrent_inserts_respect_early_dialog_cap() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let manager = Arc::new(DialogManager::new());
+        // Try to insert TWICE the cap from many threads simultaneously.
+        let attempts = MAX_EARLY_DIALOGS_PER_CALL_ID * 2;
+        let threads = 32;
+        let per_thread = attempts.div_ceil(threads);
+
+        let mut handles = Vec::with_capacity(threads);
+        for t in 0..threads {
+            let manager = Arc::clone(&manager);
+            handles.push(thread::spawn(move || {
+                for i in 0..per_thread {
+                    let n = t * per_thread + i;
+                    // Distinct dialog IDs (different to-tag) but same Call-ID,
+                    // so each one counts as another early dialog for that
+                    // Call-ID.
+                    let req = make_request(Method::Invite, "shared-call", "uac-tag", None, 1);
+                    let resp = make_response(180, &req, &format!("uas-tag-{n}"));
+                    let dialog = Dialog::new_uac(
+                        &req,
+                        &resp,
+                        SipUri::parse("sip:alice@example.com").unwrap(),
+                        SipUri::parse("sip:bob@example.com").unwrap(),
+                    )
+                    .unwrap();
+                    let _ = manager.insert(dialog);
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let early = manager
+            .all_ids()
+            .into_iter()
+            .filter_map(|id| manager.get(&id))
+            .filter(|d| d.state == DialogStateType::Early)
+            .count();
+        // Allow exactly the cap. The atomic insert lock makes this an exact
+        // equality; without it the count routinely overshoots on multi-core
+        // hardware.
+        assert!(
+            early <= MAX_EARLY_DIALOGS_PER_CALL_ID,
+            "early dialog cap breached: {early} > {MAX_EARLY_DIALOGS_PER_CALL_ID}"
+        );
+    }
+
+    #[test]
+    fn concurrent_subscription_inserts_respect_global_cap() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let manager = Arc::new(SubscriptionManager::new());
+        // Use a small cap virtually by inserting a moderate number; we can't
+        // change MAX_SUBSCRIPTIONS, so just assert no panic / never exceeds.
+        let threads = 16;
+        let per_thread = 200;
+
+        let mut handles = Vec::with_capacity(threads);
+        for t in 0..threads {
+            let manager = Arc::clone(&manager);
+            handles.push(thread::spawn(move || {
+                for i in 0..per_thread {
+                    let n = t * per_thread + i;
+                    let id = SubscriptionId::unchecked_new(
+                        format!("call-{n}"),
+                        format!("from-{n}"),
+                        format!("to-{n}"),
+                        "presence",
+                    );
+                    let sub = Subscription::unchecked_new(
+                        id,
+                        SubscriptionState::Active,
+                        SipUri::parse("sip:a@example.com").unwrap(),
+                        SipUri::parse("sip:b@example.com").unwrap(),
+                        SipUri::parse("sip:a@client").unwrap(),
+                        Duration::from_secs(60),
+                        1,
+                        0,
+                    );
+                    let _ = manager.insert(sub);
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let count = manager.all().len();
+        assert!(
+            count <= MAX_SUBSCRIPTIONS,
+            "subscription cap breached: {count} > {MAX_SUBSCRIPTIONS}"
+        );
+        // We expect exactly threads*per_thread since IDs are distinct and
+        // (threads*per_thread = 3200) < MAX_SUBSCRIPTIONS.
+        assert_eq!(count, threads * per_thread);
     }
 }
