@@ -72,11 +72,24 @@ impl ProxyHelpers {
     /// RFC 3261 §16.6 step 4: The proxy MAY insert a Record-Route header
     /// field value in order to remain on the signaling path for future requests.
     ///
+    /// The URI is emitted with the `;lr` parameter (RFC 3261 §16.4 / §19.1.1)
+    /// so downstream UAs and proxies use loose routing. Without it, peers will
+    /// treat the next-hop as a strict router and rewrite the Request-URI,
+    /// breaking the dialog.
+    ///
     /// # Arguments
     /// * `request` - The request to modify
     /// * `proxy_uri` - The proxy's SIP URI (will be in Route headers of future requests)
     pub fn add_record_route(request: &mut Request, proxy_uri: &SipUri) {
-        let rr_value = format!("<{}>", proxy_uri.as_str());
+        let has_lr = proxy_uri
+            .params()
+            .keys()
+            .any(|k| k.eq_ignore_ascii_case("lr"));
+        let rr_value = if has_lr {
+            format!("<{}>", proxy_uri.as_str())
+        } else {
+            format!("<{};lr>", proxy_uri.as_str())
+        };
         request
             .headers_mut()
             .push("Record-Route", rr_value)
@@ -247,6 +260,32 @@ mod tests {
 
         let rr = req.headers().get("Record-Route").unwrap();
         assert!(rr.contains("sip:proxy.example.com"));
+        // RFC 3261 §16.4 / §19.1.1: Record-Route URI MUST carry ;lr so peers
+        // use loose routing.
+        assert!(rr.contains(";lr"), "missing ;lr in Record-Route: {rr}");
+    }
+
+    #[test]
+    fn record_route_does_not_double_lr() {
+        let mut req = Request::new(
+            RequestLine::new(
+                Method::Invite,
+                SipUri::parse("sip:bob@example.com").unwrap(),
+            ),
+            Headers::new(),
+            Bytes::new(),
+        )
+        .expect("valid request");
+
+        let proxy_uri = SipUri::parse("sip:proxy.example.com;lr").unwrap();
+        ProxyHelpers::add_record_route(&mut req, &proxy_uri);
+
+        let rr = req.headers().get("Record-Route").unwrap();
+        assert_eq!(
+            rr.matches(";lr").count(),
+            1,
+            "Record-Route should not duplicate ;lr: {rr}"
+        );
     }
 
     #[test]

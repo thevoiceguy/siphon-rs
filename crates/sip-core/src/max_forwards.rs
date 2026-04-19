@@ -8,12 +8,17 @@ const MAX_BRANCH_LENGTH: usize = 256;
 const MAGIC_COOKIE: &str = "z9hG4bK";
 const MIN_BRANCH_LENGTH: usize = MAGIC_COOKIE.len() + 1; // cookie + at least one char
 
+/// Maximum permitted Max-Forwards value per RFC 3261 §20.34
+/// (single 8-bit unsigned integer).
+pub const MAX_FORWARDS_MAX: u32 = 255;
+
 /// Errors returned when attempting to adjust Max-Forwards.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MaxForwardsError {
     /// Max-Forwards has reached zero and cannot be decremented further
     Exhausted,
-    /// Max-Forwards value is not a valid number
+    /// Max-Forwards value is not a valid number, out of range (>255), or
+    /// otherwise malformed per RFC 3261 §20.34.
     Invalid,
 }
 
@@ -57,24 +62,32 @@ impl std::error::Error for MaxForwardsError {}
 ///
 /// Returns an error if:
 /// - Max-Forwards is already 0 (exhausted)
-/// - Max-Forwards contains an invalid value
+/// - Max-Forwards is malformed, has a leading sign, or exceeds 255
 pub fn decrement_max_forwards(headers: &mut Headers) -> Result<u32, MaxForwardsError> {
     if let Some(value) = headers.get("Max-Forwards") {
-        // Parse the current value
-        let value = value.trim();
-        let current = value
-            .parse::<u32>()
-            .map_err(|_| MaxForwardsError::Invalid)?;
+        let trimmed = value.trim();
 
-        // Check if exhausted
+        // Reject leading '+' / '-' / whitespace inside; RFC 3261 §20.34 ABNF
+        // is `1*DIGIT`, so anything but ASCII digits is malformed.
+        if trimmed.is_empty() || !trimmed.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(MaxForwardsError::Invalid);
+        }
+
+        // Parse via u16 to avoid silently accepting >65535. Then enforce the
+        // RFC 3261 §20.34 8-bit cap.
+        let current: u32 = trimmed
+            .parse::<u16>()
+            .map_err(|_| MaxForwardsError::Invalid)?
+            .into();
+        if current > MAX_FORWARDS_MAX {
+            return Err(MaxForwardsError::Invalid);
+        }
+
         if current == 0 {
             return Err(MaxForwardsError::Exhausted);
         }
 
-        // Decrement (using saturating_sub for safety)
-        let decremented = current.saturating_sub(1);
-
-        // Update the header value
+        let decremented = current - 1;
         headers
             .set_or_push("Max-Forwards", decremented.to_string())
             .map_err(|_| MaxForwardsError::Invalid)?;
@@ -183,6 +196,40 @@ mod tests {
             decrement_max_forwards(&mut headers),
             Err(MaxForwardsError::Invalid)
         );
+    }
+
+    #[test]
+    fn rejects_value_over_255() {
+        // RFC 3261 §20.34: Max-Forwards is a single 8-bit unsigned integer.
+        for v in ["256", "1000", "65535", "4294967295", "99999999999999999999"] {
+            let mut headers = Headers::new();
+            headers.push("Max-Forwards", v).unwrap();
+            assert_eq!(
+                decrement_max_forwards(&mut headers),
+                Err(MaxForwardsError::Invalid),
+                "value {v} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_boundary_255() {
+        let mut headers = Headers::new();
+        headers.push("Max-Forwards", "255").unwrap();
+        assert_eq!(decrement_max_forwards(&mut headers).unwrap(), 254);
+    }
+
+    #[test]
+    fn rejects_signed_or_non_digit() {
+        for v in ["+5", "-1", " 5 5 ", "5x", ""] {
+            let mut headers = Headers::new();
+            headers.push("Max-Forwards", v).unwrap();
+            assert_eq!(
+                decrement_max_forwards(&mut headers),
+                Err(MaxForwardsError::Invalid),
+                "value {v:?} should be rejected"
+            );
+        }
     }
 
     #[test]
