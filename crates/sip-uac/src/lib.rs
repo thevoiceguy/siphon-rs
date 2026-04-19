@@ -209,6 +209,12 @@ pub struct UserAgentClient {
 
     /// Stored Call-ID per registrar for REGISTER refreshes.
     register_call_ids: Mutex<HashMap<String, SmolStr>>,
+
+    /// Stored monotonic CSeq per registrar. Paired with `register_call_ids` so
+    /// refresh / unregister REGISTERs satisfy RFC 3261 §10.2 ("If the same
+    /// Call-ID is reused, the CSeq value MUST be greater than in the previous
+    /// request").
+    register_cseqs: Mutex<HashMap<String, u32>>,
 }
 
 impl UserAgentClient {
@@ -227,6 +233,7 @@ impl UserAgentClient {
             local_tag,
             service_route: None,
             register_call_ids: Mutex::new(HashMap::new()),
+            register_cseqs: Mutex::new(HashMap::new()),
         }
     }
 
@@ -552,9 +559,16 @@ impl UserAgentClient {
         let call_id = self.register_call_id(registrar_uri);
         headers.push(SmolStr::new("Call-ID"), call_id).unwrap();
 
-        // CSeq
+        // CSeq — monotonic per registrar. RFC 3261 §10.2 requires the CSeq
+        // on a REGISTER to be greater than any previously-used value for
+        // the same Call-ID, and `register_call_id` above reuses Call-IDs
+        // per registrar to support refreshes.
+        let cseq = self.next_register_cseq(registrar_uri);
         headers
-            .push(SmolStr::new("CSeq"), SmolStr::new("1 REGISTER"))
+            .push(
+                SmolStr::new("CSeq"),
+                SmolStr::new(format!("{} REGISTER", cseq)),
+            )
             .unwrap();
 
         // Contact
@@ -3023,6 +3037,46 @@ impl UserAgentClient {
         call_id
     }
 
+    /// Returns the next CSeq to use on a REGISTER for this registrar. Starts
+    /// at 1 for the first request, increments monotonically on each
+    /// subsequent call. Paired with `register_call_id` so refresh and
+    /// unregister flows satisfy RFC 3261 §10.2.
+    ///
+    /// The map is capped at the same `MAX_REGISTRAR_CALL_IDS` limit so an
+    /// attacker can't exhaust memory by cycling registrar URIs; once the cap
+    /// is reached, new registrars fall back to 1 (matching the Call-ID path,
+    /// which also generates fresh uncached values when full). In practice a
+    /// UAC talks to O(1) registrars.
+    fn next_register_cseq(&self, registrar_uri: &SipUri) -> u32 {
+        let key = registrar_uri.as_str().to_string();
+        let mut map = self
+            .register_cseqs
+            .lock()
+            .expect("register_cseqs lock poisoned");
+
+        if let Some(current) = map.get_mut(&key) {
+            *current = current.wrapping_add(1);
+            if *current == 0 {
+                // CSeq is a 32-bit unsigned integer (RFC 3261 §8.1.1.5); if we
+                // somehow wrap, start over at 1 to avoid sending CSeq: 0.
+                *current = 1;
+            }
+            return *current;
+        }
+
+        if map.len() >= MAX_REGISTRAR_CALL_IDS {
+            tracing::warn!(
+                registrar = %registrar_uri.as_str(),
+                max = MAX_REGISTRAR_CALL_IDS,
+                "Max registrar CSeq tracking limit reached, not caching"
+            );
+            return 1;
+        }
+
+        map.insert(key, 1);
+        1
+    }
+
     fn format_from_header(&self) -> String {
         let uri = self.from_uri_override.as_ref().unwrap_or(&self.local_uri);
 
@@ -3258,6 +3312,48 @@ mod tests {
             first.headers().get("Call-ID"),
             second.headers().get("Call-ID")
         );
+    }
+
+    /// RFC 3261 §10.2: "If the same Call-ID is reused, the CSeq value MUST be
+    /// greater than in the previous request." Since `create_register` reuses
+    /// Call-IDs per registrar for RFC-compliant refresh / unregister flows,
+    /// the CSeq must increment across successive calls.
+    #[test]
+    fn register_cseq_increments_across_calls_to_same_registrar() {
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+
+        let registrar = SipUri::parse("sip:registrar.example.com").unwrap();
+        let first = uac.create_register(&registrar, 3600);
+        let second = uac.create_register(&registrar, 3600); // refresh
+        let third = uac.create_register(&registrar, 0); // unregister
+
+        assert_eq!(first.headers().get("CSeq"), Some("1 REGISTER"));
+        assert_eq!(second.headers().get("CSeq"), Some("2 REGISTER"));
+        assert_eq!(third.headers().get("CSeq"), Some("3 REGISTER"));
+    }
+
+    /// CSeq counters are scoped per registrar so unrelated registrars don't
+    /// share sequence space.
+    #[test]
+    fn register_cseq_is_per_registrar() {
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+
+        let registrar_a = SipUri::parse("sip:a.example.com").unwrap();
+        let registrar_b = SipUri::parse("sip:b.example.com").unwrap();
+
+        let a1 = uac.create_register(&registrar_a, 3600);
+        let b1 = uac.create_register(&registrar_b, 3600);
+        let a2 = uac.create_register(&registrar_a, 3600);
+        let b2 = uac.create_register(&registrar_b, 3600);
+
+        assert_eq!(a1.headers().get("CSeq"), Some("1 REGISTER"));
+        assert_eq!(b1.headers().get("CSeq"), Some("1 REGISTER"));
+        assert_eq!(a2.headers().get("CSeq"), Some("2 REGISTER"));
+        assert_eq!(b2.headers().get("CSeq"), Some("2 REGISTER"));
     }
 
     #[test]
