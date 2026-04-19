@@ -1216,16 +1216,18 @@ pub(crate) fn drain_sip_frames(buf: &mut BytesMut) -> Result<Vec<Bytes>> {
         }
 
         // RFC 3261 §18.3: Content-Length is mandatory for stream transports.
-        // If missing, assume zero-length body but log a warning since this may
-        // indicate a smuggling attempt or a broken peer.
+        // Treating a missing Content-Length as zero is a request-smuggling
+        // primitive: an attacker can send a body that downstream parsers see
+        // but we ignore (or vice-versa). Hard reject so the connection is
+        // torn down by the caller.
         let body_length = match content_length {
             Some(cl) => cl,
             None => {
-                warn!(
-                    "SIP message missing Content-Length header on stream transport; \
-                     assuming zero-length body (RFC 3261 §18.3 violation)"
-                );
-                0
+                return Err(anyhow!(
+                    "SIP message on stream transport missing Content-Length \
+                     header (RFC 3261 §18.3 requires it on TCP/TLS); \
+                     rejecting to avoid request smuggling"
+                ));
             }
         };
 
@@ -1629,12 +1631,25 @@ mod tests {
     }
 
     #[test]
-    fn missing_content_length_assumes_zero_body() {
-        // Missing Content-Length on stream transport should assume zero body
+    fn missing_content_length_is_rejected() {
+        // RFC 3261 §18.3: Content-Length is mandatory on TCP/TLS. Treating
+        // a missing value as 0 enabled request smuggling, so we now hard-fail.
         let msg = b"OPTIONS sip:a SIP/2.0\r\nVia: SIP/2.0/TCP host\r\n\r\n";
         let mut buf = BytesMut::from(&msg[..]);
-        let frames = drain_sip_frames(&mut buf).unwrap();
-        assert_eq!(frames.len(), 1);
-        assert_eq!(frames[0].as_ref(), msg.as_slice());
+        let result = drain_sip_frames(&mut buf);
+        assert!(
+            result.is_err(),
+            "missing Content-Length on stream transport must be rejected"
+        );
+    }
+
+    #[test]
+    fn missing_content_length_with_trailing_body_is_rejected() {
+        // Same case but with attacker-controlled trailing bytes that a downstream
+        // parser might interpret as a smuggled message body.
+        let msg = b"OPTIONS sip:a SIP/2.0\r\nVia: SIP/2.0/TCP host\r\n\r\nSMUGGLED";
+        let mut buf = BytesMut::from(&msg[..]);
+        let result = drain_sip_frames(&mut buf);
+        assert!(result.is_err());
     }
 }

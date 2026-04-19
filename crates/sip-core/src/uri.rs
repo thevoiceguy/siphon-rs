@@ -470,6 +470,21 @@ impl SipUri {
         Ok(self)
     }
 
+    /// Removes any embedded URI headers (the `?key=value&...` portion).
+    ///
+    /// RFC 3261 §19.1.5 forbids URI headers from being copied verbatim into
+    /// outgoing request fields like Request-URI or To. Use this when
+    /// constructing a request from an externally-supplied URI (e.g. a
+    /// Refer-To target) so that an attacker cannot smuggle Route, From,
+    /// Call-ID, Authorization, etc. through the URI-headers channel.
+    pub fn without_uri_headers(mut self) -> Self {
+        if !self.headers.is_empty() {
+            self.headers.clear();
+            self.raw = build_raw_sip_uri(&self);
+        }
+        self
+    }
+
     /// Adds a parameter with validation.
     pub fn with_param(
         mut self,
@@ -838,6 +853,30 @@ mod tests {
         let uri = SipUri::parse("sip:alice@example.com?subject=test&priority=urgent").unwrap();
         assert_eq!(uri.headers().get("subject").unwrap().as_str(), "test");
         assert_eq!(uri.headers().get("priority").unwrap().as_str(), "urgent");
+    }
+
+    #[test]
+    fn without_uri_headers_strips_embedded_headers() {
+        let uri = SipUri::parse(
+            "sip:victim@example.com;transport=tcp?Route=%3Csip:attacker.com%3E&Subject=hi",
+        )
+        .unwrap();
+        assert!(!uri.headers().is_empty());
+        let stripped = uri.without_uri_headers();
+        assert!(stripped.headers().is_empty());
+        // Address parameters survive; only the ?headers portion goes away.
+        assert!(stripped.params().contains_key("transport"));
+        let s = stripped.as_str();
+        assert!(!s.contains('?'), "stripped URI must not contain ?: {s}");
+        assert!(!s.contains("Route"), "Route must be gone: {s}");
+    }
+
+    #[test]
+    fn without_uri_headers_is_noop_when_clean() {
+        let uri = SipUri::parse("sip:bob@example.com:5060").unwrap();
+        let raw_before = uri.as_str().to_string();
+        let stripped = uri.without_uri_headers();
+        assert_eq!(stripped.as_str(), raw_before);
     }
 
     #[test]
