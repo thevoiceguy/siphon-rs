@@ -140,6 +140,9 @@ pub fn parse_response(datagram: &Bytes) -> Option<Response> {
 
     let status = parse_status_line(first)?;
     let headers = parse_headers(lines)?;
+    if !validate_response_cseq(&headers) {
+        return None;
+    }
     let body = extract_body(body_bytes, &headers)?;
 
     Response::new(status, headers, body).ok()
@@ -159,6 +162,9 @@ pub fn parse_response_strict(datagram: &Bytes) -> Option<Response> {
 
     let status = parse_status_line(first)?;
     let headers = parse_headers(lines)?;
+    if !validate_response_cseq(&headers) {
+        return None;
+    }
     let declared = match strict_content_length(&headers).ok()? {
         Some(length) => length,
         None => {
@@ -522,15 +528,60 @@ fn is_uri_char(c: char) -> bool {
     !c.is_whitespace()
 }
 
+/// Maximum CSeq sequence number permitted by RFC 3261 §8.1.1.5.
+///
+/// The CSeq number is "a 32-bit unsigned integer" but the sequence number
+/// MUST be expressible as a signed 32-bit value, i.e. less than 2^31 - 1.
+/// Stay strict: anything larger is malformed and we reject it at parse time
+/// so the transaction/dialog layers never see a CSeq they can't safely
+/// increment.
+const MAX_CSEQ_NUMBER: u32 = (1u32 << 31) - 1;
+
+/// Parses and validates a CSeq header value per RFC 3261 §8.1.1.5.
+/// Returns `(number, method_token)` on success; `None` if the value is
+/// malformed, out of range, or contains extra tokens.
+fn parse_and_validate_cseq(value: &str) -> Option<(u32, &str)> {
+    let mut parts = value.split_whitespace();
+    let number_token = parts.next()?;
+    let method_token = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+
+    // Strict ABNF: 1*DIGIT. Reject leading sign, whitespace, and overflow
+    // (parse to u64 first so we don't silently accept >u32::MAX values that
+    // happen to wrap).
+    if number_token.is_empty() || !number_token.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let number: u64 = number_token.parse().ok()?;
+    if number == 0 || number > MAX_CSEQ_NUMBER as u64 {
+        return None;
+    }
+
+    Some((number as u32, method_token))
+}
+
+/// Validates the CSeq header per RFC 3261 §8.1.1.5 and returns whether the
+/// method matches the request line. Returns `None` if the CSeq is malformed
+/// or out of range, in which case the caller MUST reject the message.
 fn cseq_matches(headers: &Headers, method: &Method) -> Option<bool> {
     let cseq = match headers.get("CSeq") {
         Some(v) => v,
         None => return Some(true),
     };
-    let mut parts = cseq.split_whitespace();
-    let _number = parts.next()?;
-    let m = parts.next().unwrap_or("");
-    Some(method.as_str().eq_ignore_ascii_case(m))
+    let (_, method_token) = parse_and_validate_cseq(cseq)?;
+    Some(method.as_str().eq_ignore_ascii_case(method_token))
+}
+
+/// Validates the CSeq header on a response. RFC 3261 §8.1.1.5 mandates the
+/// same numeric range as requests; method token is preserved as the client
+/// transaction layer needs it for matching but is not checked here.
+fn validate_response_cseq(headers: &Headers) -> bool {
+    match headers.get("CSeq") {
+        Some(v) => parse_and_validate_cseq(v).is_some(),
+        None => true,
+    }
 }
 
 fn canonical_name(name: &SmolStr) -> SmolStr {
@@ -848,6 +899,51 @@ CSeq: 1 BAR\r\n\
 Content-Length: 0\r\n\r\n",
         );
         assert!(parse_request(&raw).is_none());
+    }
+
+    #[test]
+    fn parse_request_rejects_cseq_overflow() {
+        // RFC 3261 §8.1.1.5: CSeq number is bounded to 2^31 - 1.
+        for n in ["2147483648", "4294967295", "99999999999999999999"] {
+            let raw = Bytes::from(format!(
+                "OPTIONS sip:example.com SIP/2.0\r\n\
+CSeq: {n} OPTIONS\r\n\
+Content-Length: 0\r\n\r\n"
+            ));
+            assert!(parse_request(&raw).is_none(), "CSeq {n} must be rejected");
+        }
+    }
+
+    #[test]
+    fn parse_request_rejects_cseq_zero_or_signed() {
+        for v in ["0 OPTIONS", "+1 OPTIONS", "-1 OPTIONS", "1 OPTIONS extra"] {
+            let raw = Bytes::from(format!(
+                "OPTIONS sip:example.com SIP/2.0\r\n\
+CSeq: {v}\r\n\
+Content-Length: 0\r\n\r\n"
+            ));
+            assert!(parse_request(&raw).is_none(), "CSeq {v:?} must be rejected");
+        }
+    }
+
+    #[test]
+    fn parse_request_accepts_cseq_max() {
+        let raw = Bytes::from_static(
+            b"OPTIONS sip:example.com SIP/2.0\r\n\
+CSeq: 2147483647 OPTIONS\r\n\
+Content-Length: 0\r\n\r\n",
+        );
+        assert!(parse_request(&raw).is_some());
+    }
+
+    #[test]
+    fn parse_response_rejects_cseq_overflow() {
+        let raw = Bytes::from_static(
+            b"SIP/2.0 200 OK\r\n\
+CSeq: 4294967296 INVITE\r\n\
+Content-Length: 0\r\n\r\n",
+        );
+        assert!(parse_response(&raw).is_none());
     }
 
     #[test]
