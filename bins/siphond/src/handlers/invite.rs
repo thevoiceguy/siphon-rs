@@ -549,6 +549,15 @@ impl InviteHandler {
             "Transforming response from callee to caller"
         );
 
+        // RFC 3261 §22 / §26.3.2.1: a 407 on the B-leg references a
+        // proxy upstream of *us*, but the A-leg caller has no
+        // relationship with that proxy and cannot answer its challenge.
+        // B2BUA semantics are that we terminate auth contexts at the
+        // bridge: convert 407 → 502 Bad Gateway for the caller and
+        // never relay Proxy-Authenticate. Proper retry belongs on
+        // this side (provide creds on the outgoing INVITE).
+        let is_proxy_auth_required = callee_response.code() == 407;
+
         // Extract headers from caller's original request
         let caller_call_id = header(call_leg.caller_request.headers(), "Call-ID")?;
         let caller_from = header(call_leg.caller_request.headers(), "From")?;
@@ -739,7 +748,11 @@ impl InviteHandler {
             let _ = new_headers.push("Content-Length", "0");
         }
 
-        // Copy other useful headers
+        // Copy other useful headers. Note: Proxy-Authenticate and
+        // Proxy-Authorization are intentionally NOT in this list — the
+        // B-leg's upstream proxy has no trust relationship with the
+        // A-leg caller. The defensive scrub below also removes them
+        // in case anything slipped in via header-copying paths above.
         for header_name in &[
             "Allow",
             "Supported",
@@ -752,18 +765,34 @@ impl InviteHandler {
                 let _ = new_headers.push(*header_name, value.clone());
             }
         }
+        crate::proxy_utils::strip_hop_by_hop_response_headers(&mut new_headers);
 
-        // Create transformed response
-        let transformed = sip_core::Response::new(
-            callee_response.start_line().clone(),
-            new_headers,
-            callee_response.body().clone(), // Preserve SDP from callee
-        )
-        .expect("valid response");
+        // Convert B-leg 407 to A-leg 502: the caller cannot answer a
+        // proxy challenge from a downstream we dialled on their behalf.
+        let (start_line, body) = if is_proxy_auth_required {
+            tracing::warn!(
+                outgoing_call_id,
+                "B2BUA: converting B-leg 407 to A-leg 502 (downstream proxy auth is ours, not the caller's)"
+            );
+            // Rewrite Content-Length we already pushed, drop the body.
+            let _ = new_headers.set_or_push("Content-Length", "0");
+            (
+                sip_core::StatusLine::new(502, "Bad Gateway").expect("valid status line"),
+                bytes::Bytes::new(),
+            )
+        } else {
+            (
+                callee_response.start_line().clone(),
+                callee_response.body().clone(),
+            )
+        };
+
+        let transformed = sip_core::Response::new(start_line, new_headers, body)
+            .expect("valid response");
 
         tracing::debug!(
             outgoing_call_id,
-            status_code = callee_response.code(),
+            status_code = transformed.code(),
             "Response transformation complete"
         );
 

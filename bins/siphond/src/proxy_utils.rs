@@ -17,6 +17,47 @@ pub struct ProxyForwardOptions {
     pub rewrite_request_uri: bool,
 }
 
+/// Strip hop-by-hop auth headers from a request before forwarding.
+///
+/// RFC 3261 §22: Proxy-Authorization is consumed by the proxy the
+/// credentials are intended for and MUST NOT propagate. Proxy-Authenticate
+/// has no meaning in a request; strip defensively. `Authorization` /
+/// `WWW-Authenticate` are end-to-end and left alone.
+pub fn strip_hop_by_hop_request_headers(headers: &mut Headers) {
+    let mut out = Headers::new();
+    for h in headers.iter() {
+        let name = h.name();
+        if name.eq_ignore_ascii_case("Proxy-Authorization")
+            || name.eq_ignore_ascii_case("Proxy-Authenticate")
+        {
+            continue;
+        }
+        let _ = out.push(h.name(), h.value());
+    }
+    *headers = out;
+}
+
+/// Strip hop-by-hop auth headers from a response before forwarding
+/// upstream.
+///
+/// For a B2BUA this runs on the A-leg response: Proxy-Authenticate /
+/// Proxy-Authorization must not cross the bridge — the caller has no
+/// trust relationship with the downstream proxy that issued the
+/// challenge.
+pub fn strip_hop_by_hop_response_headers(headers: &mut Headers) {
+    let mut out = Headers::new();
+    for h in headers.iter() {
+        let name = h.name();
+        if name.eq_ignore_ascii_case("Proxy-Authenticate")
+            || name.eq_ignore_ascii_case("Proxy-Authorization")
+        {
+            continue;
+        }
+        let _ = out.push(h.name(), h.value());
+    }
+    *headers = out;
+}
+
 fn extract_first_route(headers: &Headers) -> Option<String> {
     let route = header(headers, "Route")?;
     let raw = route.as_str().trim();
@@ -107,6 +148,11 @@ pub async fn forward_request(
     options: ProxyForwardOptions,
 ) -> Result<()> {
     let mut proxied_req = request.clone();
+
+    // RFC 3261 §22: Proxy-Authorization is hop-by-hop. We either
+    // consumed it (auth layer ran) or we're ignoring it — either way
+    // it must not propagate to the next proxy.
+    strip_hop_by_hop_request_headers(proxied_req.headers_mut());
 
     ProxyHelpers::check_max_forwards(&mut proxied_req)?;
 
@@ -221,4 +267,67 @@ pub async fn forward_request(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod hop_by_hop_tests {
+    use super::*;
+
+    fn headers_with(pairs: &[(&str, &str)]) -> Headers {
+        let mut h = Headers::new();
+        for (name, value) in pairs {
+            h.push(*name, *value).unwrap();
+        }
+        h
+    }
+
+    #[test]
+    fn request_strip_removes_proxy_authorization_only() {
+        let mut h = headers_with(&[
+            ("Via", "SIP/2.0/UDP host;branch=z9hG4bKx"),
+            ("Authorization", "Digest username=\"alice\""),
+            ("Proxy-Authorization", "Digest username=\"alice\""),
+            ("Proxy-Authenticate", "Digest realm=\"x\""),
+            ("From", "<sip:a@b>"),
+        ]);
+        strip_hop_by_hop_request_headers(&mut h);
+        assert!(h.get("Via").is_some());
+        assert!(h.get("From").is_some());
+        assert!(
+            h.get("Authorization").is_some(),
+            "Authorization is end-to-end, must survive"
+        );
+        assert!(
+            h.get("Proxy-Authorization").is_none(),
+            "Proxy-Authorization is hop-by-hop, must be stripped"
+        );
+        assert!(
+            h.get("Proxy-Authenticate").is_none(),
+            "Proxy-Authenticate must be stripped"
+        );
+    }
+
+    #[test]
+    fn response_strip_removes_proxy_auth_headers() {
+        let mut h = headers_with(&[
+            ("Via", "SIP/2.0/UDP host;branch=z9hG4bKx"),
+            ("WWW-Authenticate", "Digest realm=\"end-to-end\""),
+            ("Proxy-Authenticate", "Digest realm=\"hop-by-hop\""),
+            ("Proxy-Authorization", "Digest username=\"alice\""),
+        ]);
+        strip_hop_by_hop_response_headers(&mut h);
+        assert!(h.get("Via").is_some());
+        assert!(
+            h.get("WWW-Authenticate").is_some(),
+            "WWW-Authenticate is end-to-end, must survive"
+        );
+        assert!(
+            h.get("Proxy-Authenticate").is_none(),
+            "Proxy-Authenticate must not cross B2BUA bridge"
+        );
+        assert!(
+            h.get("Proxy-Authorization").is_none(),
+            "Proxy-Authorization must not cross B2BUA bridge"
+        );
+    }
 }
