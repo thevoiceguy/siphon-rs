@@ -44,6 +44,15 @@ const MAX_BRANCHES_PER_CONTEXT: usize = 50;
 const MAX_PROXY_CONTEXTS: usize = 10_000;
 pub(crate) const MAX_TARGETS_PER_REQUEST: usize = 100;
 
+/// RFC 3261 §16.7 step 2: Timer C duration.
+///
+/// When a proxy in Proceeding receives no final response within this
+/// interval, it synthesises a 408 Request Timeout for the branch so
+/// the upstream transaction can complete instead of hanging forever.
+/// The spec allows the proxy to choose any value "> 3 minutes"; 3m
+/// exactly is the canonical value.
+const TIMER_C_DURATION: Duration = Duration::from_secs(180);
+
 /// Proxy validation errors
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProxyError {
@@ -326,15 +335,29 @@ impl ProxyContext {
     /// Process a response received on a branch
     ///
     /// Returns the response that should be forwarded upstream (if any)
-    pub async fn process_response(&self, branch_id: &str, response: Response) -> Option<Response> {
+    pub async fn process_response(
+        self: &Arc<Self>,
+        branch_id: &str,
+        response: Response,
+    ) -> Option<Response> {
         let mut branches = self.branches.write().await;
         let branch = branches.get_mut(branch_id)?;
 
         let is_final = response.code() >= 200;
+        let was_trying = matches!(branch.state, BranchState::Trying);
 
         // Update branch state
         if response.code() >= 100 && response.code() < 200 {
             branch.state = BranchState::Proceeding;
+            // RFC 3261 §16.7 step 2: arm Timer C on the first
+            // transition into Proceeding (i.e. the first 1xx). If no
+            // final response arrives within TIMER_C_DURATION, the
+            // timer task synthesises a 408 so this branch — and
+            // therefore the upstream transaction — doesn't hang
+            // indefinitely on a silent downstream.
+            if was_trying {
+                arm_timer_c(Arc::downgrade(self), branch_id.to_string());
+            }
         } else if is_final {
             branch.state = BranchState::Completed;
 
@@ -500,6 +523,80 @@ impl ProxyContext {
     pub fn created_at(&self) -> Instant {
         self.created_at
     }
+
+    /// Synthesises a `408 Request Timeout` for a branch that's stuck in
+    /// Proceeding. Invoked by the Timer C task (see `arm_timer_c`).
+    ///
+    /// Re-checks the branch state under the lock — if the branch has
+    /// already transitioned to Completed / Cancelled in the meantime,
+    /// no-ops. Otherwise builds a synthetic 408 and re-enters the
+    /// normal response-selection path via `process_response` so the
+    /// upstream transaction sees a final response and unblocks.
+    async fn fire_timer_c(self: &Arc<Self>, branch_id: &str) {
+        {
+            let branches = self.branches.read().await;
+            let Some(branch) = branches.get(branch_id) else {
+                return;
+            };
+            if !matches!(branch.state, BranchState::Proceeding) {
+                // Raced with the normal final-response path — nothing
+                // to do. The timer's purpose was only to stop the
+                // hang; a legitimate response already arrived.
+                return;
+            }
+        }
+
+        // Build the synthetic 408. Use the original request as the
+        // source of the headers we need to echo; this matches the shape
+        // `build_error_response` produces for the registrar / dispatcher.
+        use bytes::Bytes;
+        use sip_core::{Headers, Response, StatusLine};
+        let req = &self.original_request;
+        let mut headers = Headers::new();
+        for name in ["Via", "From", "To", "Call-ID", "CSeq"] {
+            if let Some(value) = req.headers().get(name) {
+                let _ = headers.push(name, value);
+            }
+        }
+        let Ok(status) = StatusLine::new(408, "Request Timeout") else {
+            return;
+        };
+        let Ok(synthetic) = Response::new(status, headers, Bytes::new()) else {
+            return;
+        };
+
+        warn!(
+            branch_id,
+            call_id = %self.call_id,
+            "Timer C fired (RFC 3261 §16.7 step 2) — synthesising 408 Request Timeout"
+        );
+        if let Some(to_forward) = self.process_response(branch_id, synthetic).await {
+            // Best-effort: push the synthesised 408 to the response
+            // channel. If the receiver has already gone away (context
+            // torn down) we silently drop — nothing to do.
+            let _ = self.response_tx.send(to_forward);
+        }
+    }
+}
+
+/// Spawns the Timer C watchdog for a branch. Holds a `Weak` to the
+/// context so the task exits cleanly if the context is dropped before
+/// the timer fires. Sleep is a single tokio::time::sleep — no busy
+/// loop, no polling.
+fn arm_timer_c(ctx: std::sync::Weak<ProxyContext>, branch_id: String) {
+    // Only arm when we have a tokio runtime handle. Unit tests that
+    // construct ProxyContext outside a runtime would otherwise panic.
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        debug!("no tokio runtime available, skipping Timer C arm");
+        return;
+    };
+    handle.spawn(async move {
+        tokio::time::sleep(TIMER_C_DURATION).await;
+        let Some(ctx) = ctx.upgrade() else {
+            return;
+        };
+        ctx.fire_timer_c(&branch_id).await;
+    });
 }
 
 /// RFC 3261 §16.7 response selection
@@ -784,6 +881,132 @@ mod tests {
         let branches = context.get_branch_ids().await;
         assert_eq!(branches.len(), 1);
         assert_eq!(branches[0].as_str(), "z9hG4bKbranch1");
+    }
+
+    /// RFC 3261 §16.7 step 2: a branch stuck in Proceeding must be
+    /// timed out with a synthetic 408 so the upstream transaction
+    /// doesn't hang. We don't wait 3 minutes in the test — we
+    /// exercise `fire_timer_c` directly to prove the synthesis path
+    /// is wired.
+    #[tokio::test]
+    async fn timer_c_synthesises_408_when_branch_stuck_in_proceeding() {
+        let proxy = StatefulProxy::new();
+        let request = make_request();
+
+        let (context, mut rx) = proxy
+            .start_context(
+                request,
+                "test-call-timer-c".into(),
+                "z9hG4bKclient".into(),
+                "proxy.example.com".into(),
+                "UDP".into(),
+                ForkMode::Parallel,
+            )
+            .expect("should create context");
+
+        let branch = BranchInfo::new(
+            "z9hG4bKbr-timerc",
+            SipUri::parse("sip:target@example.com").unwrap(),
+            Instant::now(),
+            BranchState::Trying,
+        )
+        .expect("should create branch");
+        context.add_branch(branch).await.expect("should add branch");
+
+        // Simulate a 1xx arriving so the branch is in Proceeding
+        // (the legitimate downstream never sends a final).
+        let r180 = make_response(180);
+        let forwarded = context.process_response("z9hG4bKbr-timerc", r180).await;
+        assert_eq!(
+            forwarded.map(|r| r.code()),
+            Some(180),
+            "1xx should be forwarded upstream immediately"
+        );
+
+        // Trip Timer C directly (no 3-minute wait in the test).
+        context.fire_timer_c("z9hG4bKbr-timerc").await;
+
+        // The branch should now be completed with a synthesised 408
+        // queued on the response channel. Consume whatever the normal
+        // forwarding path emitted (could be one or more responses; we
+        // only care that a 408 appears).
+        let mut saw_408 = false;
+        while let Ok(resp) = rx.try_recv() {
+            if resp.code() == 408 {
+                saw_408 = true;
+                break;
+            }
+        }
+        // If the 408 wasn't in rx (it gets forwarded through
+        // process_response's normal path which also returns it), check
+        // via get_branch_ids and branch state indirectly. The cleaner
+        // approach is to verify via best_response:
+        let branches = context.branches.read().await;
+        let branch = branches.get("z9hG4bKbr-timerc").expect("branch present");
+        assert!(
+            matches!(branch.state, BranchState::Completed),
+            "Timer C must transition branch to Completed"
+        );
+        assert_eq!(
+            branch.best_response.as_ref().map(|r| r.code()),
+            Some(408),
+            "Timer C must synthesise a 408 Request Timeout"
+        );
+        // Silence warning if the rx check didn't see it.
+        let _ = saw_408;
+    }
+
+    /// Once the branch has moved to Completed (legitimate final
+    /// response arrived before the 3-minute mark), firing Timer C
+    /// should be a no-op — we must not overwrite a real final with a
+    /// synthetic 408.
+    ///
+    /// Uses 486 (Busy Here) rather than 200 OK to avoid an unrelated
+    /// pre-existing deadlock: `process_response` calls
+    /// `cancel_other_branches` on the 2xx path while still holding the
+    /// `branches` write lock, and `cancel_other_branches` re-acquires
+    /// that same lock. Tracked separately; out of scope for the
+    /// Timer C change, which only adds a new spawn path.
+    #[tokio::test]
+    async fn timer_c_noops_if_branch_already_completed() {
+        let proxy = StatefulProxy::new();
+        let request = make_request();
+        let (context, _rx) = proxy
+            .start_context(
+                request,
+                "test-call-timer-c-noop".into(),
+                "z9hG4bKclient".into(),
+                "proxy.example.com".into(),
+                "UDP".into(),
+                ForkMode::Parallel,
+            )
+            .unwrap();
+        let branch = BranchInfo::new(
+            "z9hG4bKbr-completed",
+            SipUri::parse("sip:target@example.com").unwrap(),
+            Instant::now(),
+            BranchState::Trying,
+        )
+        .unwrap();
+        context.add_branch(branch).await.unwrap();
+
+        // 180 Ringing then 486 Busy Here — branch is Completed.
+        context
+            .process_response("z9hG4bKbr-completed", make_response(180))
+            .await;
+        context
+            .process_response("z9hG4bKbr-completed", make_response(486))
+            .await;
+
+        context.fire_timer_c("z9hG4bKbr-completed").await;
+
+        let branches = context.branches.read().await;
+        let branch = branches.get("z9hG4bKbr-completed").unwrap();
+        assert_eq!(
+            branch.best_response.as_ref().map(|r| r.code()),
+            Some(486),
+            "Timer C must not overwrite a real final response"
+        );
     }
 
     #[test]

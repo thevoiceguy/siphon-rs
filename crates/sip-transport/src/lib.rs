@@ -994,6 +994,12 @@ pub fn load_rustls_server_config(
         return Err(anyhow!("no certificates found in {}", cert_path));
     }
 
+    // Before touching the private key, refuse to load it if the file is
+    // readable by anyone other than the owner. A world- or group-readable
+    // key is an immediate disclosure to every local user — the same
+    // guard we apply to --auth-users.
+    enforce_secure_key_perms(key_path)?;
+
     let key = PrivateKeyDer::from_pem_file(key_path)
         .map_err(|e| anyhow!("no private keys found in {}: {e}", key_path))?;
 
@@ -1015,6 +1021,42 @@ pub fn load_rustls_server_config(
         .map_err(|e| anyhow!("failed to create TLS config: {e}"))?;
 
     Ok(std::sync::Arc::new(config))
+}
+
+/// On Unix, refuse to load a TLS private key whose permissions are more
+/// permissive than owner-only. A world- or group-readable key is an
+/// immediate disclosure to every local account — this check mirrors
+/// siphond's `--auth-users` 0600 guard.
+///
+/// On non-Unix platforms, log a warning since portable permission
+/// semantics aren't easily expressible; the caller is responsible for
+/// enforcing filesystem ACLs.
+#[cfg(unix)]
+fn enforce_secure_key_perms(path: &str) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(path)
+        .map_err(|e| anyhow!("failed to stat TLS key {}: {}", path, e))?;
+    let mode = meta.mode() & 0o777;
+    if mode & 0o077 != 0 {
+        return Err(anyhow!(
+            "TLS key {} has insecure permissions {:o}; \
+             run `chmod 0600 {}` (key must be owner-only readable)",
+            path,
+            mode,
+            path,
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn enforce_secure_key_perms(path: &str) -> Result<()> {
+    tracing::warn!(
+        %path,
+        "cannot enforce TLS key permissions on this platform; \
+         ensure the key is readable only by the daemon's user"
+    );
+    Ok(())
 }
 
 /// Decides which transport to use for an outbound message.
@@ -1801,5 +1843,54 @@ mod tests {
         // Wait past the 1-second window and try again.
         std::thread::sleep(std::time::Duration::from_millis(1100));
         assert!(check_stream_rate(peer), "window should have reset");
+    }
+
+    #[cfg(all(unix, feature = "tls"))]
+    mod key_perms {
+        use super::super::enforce_secure_key_perms;
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+
+        fn write_key(mode: u32) -> tempfile::NamedTempFile {
+            let mut f = tempfile::NamedTempFile::new().expect("tempfile");
+            writeln!(f, "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----")
+                .expect("write");
+            let mut perms = f.as_file().metadata().unwrap().permissions();
+            perms.set_mode(mode);
+            f.as_file().set_permissions(perms).unwrap();
+            f
+        }
+
+        #[test]
+        fn rejects_world_readable_tls_key() {
+            let f = write_key(0o644);
+            let err = enforce_secure_key_perms(f.path().to_str().unwrap())
+                .expect_err("must refuse world-readable TLS key");
+            let msg = format!("{err}");
+            assert!(
+                msg.contains("insecure permissions"),
+                "unexpected error message: {msg}"
+            );
+        }
+
+        #[test]
+        fn rejects_group_readable_tls_key() {
+            let f = write_key(0o640);
+            assert!(enforce_secure_key_perms(f.path().to_str().unwrap()).is_err());
+        }
+
+        #[test]
+        fn accepts_owner_only_tls_key() {
+            let f = write_key(0o600);
+            enforce_secure_key_perms(f.path().to_str().unwrap())
+                .expect("0600 should be accepted");
+        }
+
+        #[test]
+        fn accepts_owner_readonly_tls_key() {
+            let f = write_key(0o400);
+            enforce_secure_key_perms(f.path().to_str().unwrap())
+                .expect("0400 should be accepted");
+        }
     }
 }
