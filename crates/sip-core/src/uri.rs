@@ -121,6 +121,14 @@ fn validate_host(host: &str) -> Result<(), UriError> {
 }
 
 /// Validates a user part.
+///
+/// The input here is the *percent-decoded* user. RFC 3261 §19.1.1
+/// permits the raw user on the wire to contain percent-encoded versions
+/// of reserved characters (e.g. `%40` for `@`), but the decoded form
+/// must not include any of the URI delimiters that would re-parse as
+/// something else — otherwise `parse(serialize(x)) != x` and, worse, an
+/// attacker can smuggle `@`/`;`/`?` past downstream code that sees only
+/// the decoded string.
 fn validate_user(user: &str) -> Result<(), UriError> {
     if user.is_empty() {
         return Err(UriError::InvalidUser("user cannot be empty".to_string()));
@@ -138,6 +146,21 @@ fn validate_user(user: &str) -> Result<(), UriError> {
         return Err(UriError::InvalidUser(
             "contains control characters".to_string(),
         ));
+    }
+
+    // Reject URI delimiters in the decoded user. These characters
+    // partition a URI into its structural components (userinfo,
+    // host, params, headers, fragment); a decoded user that contains
+    // any of them would ambiguously re-parse. The raw percent-encoded
+    // form is still accepted by the caller — this check only fires
+    // after decoding.
+    if let Some(bad) = user
+        .chars()
+        .find(|c| matches!(c, '@' | ';' | '?' | '/' | '#' | '[' | ']'))
+    {
+        return Err(UriError::InvalidUser(format!(
+            "decoded user contains reserved URI delimiter {bad:?}"
+        )));
     }
 
     Ok(())
@@ -851,6 +874,44 @@ mod tests {
     fn rejects_unbracketed_ipv6_host() {
         let uri = SipUri::parse("sip:2001:db8::1");
         assert!(uri.is_err());
+    }
+
+    /// Decoded userinfo must not carry URI delimiters. Without this
+    /// check, `sip:alice%40evil.com@example.com` would parse to a user
+    /// of `alice@evil.com` and re-serialise as
+    /// `sip:alice@evil.com@example.com` — malformed and ambiguous.
+    /// Round-trip stability + smuggling defense.
+    #[test]
+    fn rejects_decoded_user_with_reserved_delimiter() {
+        for bad in [
+            "sip:alice%40evil.com@example.com", // @
+            "sip:alice%3Btransport=tcp@example.com", // ;
+            "sip:alice%3Fheader=val@example.com", // ?
+            "sip:alice%2Fpath@example.com",     // /
+            "sip:alice%23frag@example.com",     // #
+            "sip:alice%5Bx%5D@example.com",     // [ ]
+        ] {
+            let r = SipUri::parse(bad);
+            assert!(
+                r.is_err(),
+                "expected {bad} to be rejected after decoding, got {:?}",
+                r.map(|u| u.user().map(str::to_string))
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_decoded_user_with_safe_specials() {
+        // Visual / token characters that are NOT URI delimiters must
+        // still pass after decoding.
+        for ok in [
+            "sip:alice@example.com",
+            "sip:alice.bob@example.com",
+            "sip:%2Balice@example.com", // +alice (decoded "+" is a token char)
+            "sip:user_name@example.com",
+        ] {
+            SipUri::parse(ok).unwrap_or_else(|e| panic!("expected {ok} to parse, got {e:?}"));
+        }
     }
 
     #[test]
