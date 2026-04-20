@@ -64,6 +64,9 @@ pub fn parse_request_with_limit(datagram: &Bytes, max_size: usize) -> Option<Req
 
     let (method, uri) = parse_request_line(first)?;
     let headers = parse_headers(lines)?;
+    if !singleton_headers_unique(&headers) {
+        return None;
+    }
     if let Some(via) = headers.get("Via") {
         if let Some(branch) = via
             .split(';')
@@ -96,6 +99,9 @@ pub fn parse_request_with_limit_strict(datagram: &Bytes, max_size: usize) -> Opt
 
     let (method, uri) = parse_request_line(first)?;
     let headers = parse_headers(lines)?;
+    if !singleton_headers_unique(&headers) {
+        return None;
+    }
     if let Some(via) = headers.get("Via") {
         if let Some(branch) = via
             .split(';')
@@ -140,6 +146,9 @@ pub fn parse_response(datagram: &Bytes) -> Option<Response> {
 
     let status = parse_status_line(first)?;
     let headers = parse_headers(lines)?;
+    if !singleton_headers_unique(&headers) {
+        return None;
+    }
     if !validate_response_cseq(&headers) {
         return None;
     }
@@ -162,6 +171,9 @@ pub fn parse_response_strict(datagram: &Bytes) -> Option<Response> {
 
     let status = parse_status_line(first)?;
     let headers = parse_headers(lines)?;
+    if !singleton_headers_unique(&headers) {
+        return None;
+    }
     if !validate_response_cseq(&headers) {
         return None;
     }
@@ -584,6 +596,30 @@ fn validate_response_cseq(headers: &Headers) -> bool {
     }
 }
 
+/// Header names that RFC 3261 §7.3 requires to appear at most once per
+/// message. `Headers::get` only returns the first match, so a smuggled
+/// duplicate is silently ignored downstream — a known forgery primitive.
+/// Parsers reject any message carrying more than one of these.
+///
+/// Note: Contact is singleton only in specific messages (e.g. an INVITE
+/// Contact establishes dialog; REGISTER Contact is legitimately multi-
+/// valued). We keep Contact out of this blanket check and let call-site
+/// handlers enforce context-specific rules.
+const SINGLETON_HEADERS: &[&str] = &[
+    "Call-ID",
+    "CSeq",
+    "From",
+    "To",
+    "Max-Forwards",
+];
+
+/// Returns `true` if no singleton header appears more than once.
+fn singleton_headers_unique(headers: &Headers) -> bool {
+    SINGLETON_HEADERS
+        .iter()
+        .all(|name| headers.count(name) <= 1)
+}
+
 fn canonical_name(name: &SmolStr) -> SmolStr {
     if name.eq_ignore_ascii_case("Via") {
         SmolStr::new("Via")
@@ -944,6 +980,89 @@ CSeq: 4294967296 INVITE\r\n\
 Content-Length: 0\r\n\r\n",
         );
         assert!(parse_response(&raw).is_none());
+    }
+
+    /// RFC 3261 §7.3: Call-ID / CSeq / From / To / Max-Forwards must appear
+    /// at most once. A second copy previously slipped through because
+    /// `Headers::get` returns only the first match — downstream code would
+    /// then silently ignore the smuggled value.
+    #[test]
+    fn parse_request_rejects_duplicate_call_id() {
+        let raw = Bytes::from_static(
+            b"OPTIONS sip:example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP host;branch=z9hG4bKx\r\n\
+Call-ID: first@host\r\n\
+Call-ID: second@host\r\n\
+CSeq: 1 OPTIONS\r\n\
+Content-Length: 0\r\n\r\n",
+        );
+        assert!(parse_request(&raw).is_none());
+    }
+
+    #[test]
+    fn parse_request_rejects_duplicate_from() {
+        let raw = Bytes::from_static(
+            b"OPTIONS sip:example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP host;branch=z9hG4bKx\r\n\
+From: <sip:a@b>;tag=1\r\n\
+From: <sip:c@d>;tag=2\r\n\
+CSeq: 1 OPTIONS\r\n\
+Content-Length: 0\r\n\r\n",
+        );
+        assert!(parse_request(&raw).is_none());
+    }
+
+    #[test]
+    fn parse_request_rejects_duplicate_cseq() {
+        let raw = Bytes::from_static(
+            b"OPTIONS sip:example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP host;branch=z9hG4bKx\r\n\
+CSeq: 1 OPTIONS\r\n\
+CSeq: 2 OPTIONS\r\n\
+Content-Length: 0\r\n\r\n",
+        );
+        assert!(parse_request(&raw).is_none());
+    }
+
+    #[test]
+    fn parse_request_rejects_duplicate_max_forwards() {
+        let raw = Bytes::from_static(
+            b"OPTIONS sip:example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP host;branch=z9hG4bKx\r\n\
+Max-Forwards: 70\r\n\
+Max-Forwards: 1\r\n\
+CSeq: 1 OPTIONS\r\n\
+Content-Length: 0\r\n\r\n",
+        );
+        assert!(parse_request(&raw).is_none());
+    }
+
+    #[test]
+    fn parse_response_rejects_duplicate_singletons() {
+        let raw = Bytes::from_static(
+            b"SIP/2.0 200 OK\r\n\
+To: <sip:a@b>\r\n\
+To: <sip:c@d>\r\n\
+CSeq: 1 OPTIONS\r\n\
+Content-Length: 0\r\n\r\n",
+        );
+        assert!(parse_response(&raw).is_none());
+    }
+
+    #[test]
+    fn parse_request_permits_duplicate_via_and_route() {
+        // Via is intentionally multi-valued (each hop adds one). The
+        // singleton check must not reject a legitimately-multi-Via message.
+        let raw = Bytes::from_static(
+            b"OPTIONS sip:example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP hop1;branch=z9hG4bKa\r\n\
+Via: SIP/2.0/UDP hop2;branch=z9hG4bKb\r\n\
+Route: <sip:proxy1.example.com;lr>\r\n\
+Route: <sip:proxy2.example.com;lr>\r\n\
+CSeq: 1 OPTIONS\r\n\
+Content-Length: 0\r\n\r\n",
+        );
+        assert!(parse_request(&raw).is_some());
     }
 
     #[test]

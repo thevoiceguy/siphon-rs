@@ -1,6 +1,6 @@
 [package]
 name = "sip-dns"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 license.workspace = true
 description = "RFC 3263 DNS resolution for SIP."

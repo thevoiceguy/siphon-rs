@@ -77,12 +77,70 @@ impl PoolEntry {
     }
 }
 
+/// Watches a writer task's `JoinHandle` and removes the corresponding
+/// pool entry when the writer exits — for any reason: graceful close
+/// (channel drained), peer-closed write, or a panic inside the writer.
+///
+/// Previously the writer was spawned with a bare `tokio::spawn` and its
+/// `JoinHandle` discarded, so:
+///   * a panic was silently swallowed by the runtime;
+///   * the `PoolEntry` lingered in the map with a dead writer, and the
+///     next `send_*` for that key would fail at the `sender.send()` call
+///     before the entry was finally cleaned up.
+///
+/// The supervisor removes the entry proactively and emits a `warn!` on
+/// panic so operators see the failure.
+fn spawn_writer_supervisor<K, F>(
+    writer: tokio::task::JoinHandle<()>,
+    map: Arc<DashMap<K, PoolEntry>>,
+    key: K,
+    transport: &'static str,
+    format_key: F,
+) where
+    K: std::hash::Hash + Eq + Clone + Send + Sync + 'static,
+    F: FnOnce(&K) -> String + Send + 'static,
+{
+    tokio::spawn(async move {
+        let outcome = writer.await;
+        let key_label = format_key(&key);
+        match outcome {
+            Ok(()) => {
+                debug!(
+                    transport,
+                    peer = %key_label,
+                    "pool writer task exited, removing entry"
+                );
+            }
+            Err(e) if e.is_panic() => {
+                warn!(
+                    transport,
+                    peer = %key_label,
+                    "pool writer task panicked, removing entry"
+                );
+            }
+            Err(e) => {
+                debug!(
+                    transport,
+                    peer = %key_label,
+                    error = %e,
+                    "pool writer task cancelled, removing entry"
+                );
+            }
+        }
+        map.remove(&key);
+    });
+}
+
 /// Connection pool with idle timeout and size limits for TCP and WebSocket.
 #[derive(Debug)]
 pub struct ConnectionPool {
-    tcp: DashMap<SocketAddr, PoolEntry>,
+    // DashMap is wrapped in Arc so a per-connection supervisor task can
+    // hold a reference and remove the dead entry when the writer task
+    // exits (graceful, peer-closed, or panicked). Without this a dead
+    // writer's PoolEntry lingered until the next send_tcp failure.
+    tcp: Arc<DashMap<SocketAddr, PoolEntry>>,
     #[cfg(feature = "ws")]
-    ws: DashMap<String, PoolEntry>,
+    ws: Arc<DashMap<String, PoolEntry>>,
     max_size: usize,
     idle_timeout: Duration,
     inbound_tx: Arc<Mutex<Option<Sender<InboundPacket>>>>,
@@ -97,9 +155,9 @@ pub struct ConnectionPool {
 impl ConnectionPool {
     pub fn new() -> Self {
         Self {
-            tcp: DashMap::new(),
+            tcp: Arc::new(DashMap::new()),
             #[cfg(feature = "ws")]
-            ws: DashMap::new(),
+            ws: Arc::new(DashMap::new()),
             max_size: MAX_POOL_SIZE,
             idle_timeout: IDLE_TIMEOUT,
             inbound_tx: Arc::new(Mutex::new(None)),
@@ -110,9 +168,9 @@ impl ConnectionPool {
     /// Creates a new pool with custom limits.
     pub fn with_limits(max_size: usize, idle_timeout: Duration) -> Self {
         Self {
-            tcp: DashMap::new(),
+            tcp: Arc::new(DashMap::new()),
             #[cfg(feature = "ws")]
-            ws: DashMap::new(),
+            ws: Arc::new(DashMap::new()),
             max_size,
             idle_timeout,
             inbound_tx: Arc::new(Mutex::new(None)),
@@ -264,6 +322,19 @@ impl ConnectionPool {
             }
         });
         entry.task_handles.push(writer_handle.abort_handle());
+        // Supervise the writer: whenever it exits (graceful close,
+        // peer-closed write, or panic) remove the entry from the pool
+        // so the next send for this addr opens a fresh connection
+        // instead of sending into a dead channel. Panics are surfaced
+        // as a warning; previously they were silently dropped by
+        // `tokio::spawn`.
+        spawn_writer_supervisor(
+            writer_handle,
+            Arc::clone(&self.tcp),
+            addr,
+            "tcp",
+            move |peer| format!("{peer}"),
+        );
 
         // Optional reader task to deliver responses back to the inbound pipeline
         let inbound_tx_guard = self.inbound_tx.lock().await;
@@ -432,6 +503,13 @@ impl ConnectionPool {
             }
         });
         entry.task_handles.push(writer_handle.abort_handle());
+        spawn_writer_supervisor(
+            writer_handle,
+            Arc::clone(&self.ws),
+            key.clone(),
+            "ws",
+            |url| url.clone(),
+        );
 
         // Optional reader task — feeds received frames back to inbound handler
         let inbound_tx_guard = self.inbound_tx.lock().await;
@@ -550,7 +628,9 @@ fn parse_ws_peer_addr(url: &str) -> Option<SocketAddr> {
 /// TLS connection pool with idle timeout and size limits.
 #[derive(Debug)]
 pub struct TlsPool {
-    inner: DashMap<(SocketAddr, String), PoolEntry>,
+    // Arc-wrapped so the per-connection writer supervisor can remove
+    // the entry when the writer exits; see ConnectionPool.
+    inner: Arc<DashMap<(SocketAddr, String), PoolEntry>>,
     max_size: usize,
     idle_timeout: Duration,
     /// Permits enforcing the pool cap atomically; see ConnectionPool.
@@ -570,7 +650,7 @@ pub type TlsClientConfig = ClientConfig;
 impl TlsPool {
     pub fn new() -> Self {
         Self {
-            inner: DashMap::new(),
+            inner: Arc::new(DashMap::new()),
             max_size: MAX_POOL_SIZE,
             idle_timeout: IDLE_TIMEOUT,
             permits: Arc::new(Semaphore::new(MAX_POOL_SIZE)),
@@ -581,7 +661,7 @@ impl TlsPool {
     /// Creates a new pool with custom limits.
     pub fn with_limits(max_size: usize, idle_timeout: Duration) -> Self {
         Self {
-            inner: DashMap::new(),
+            inner: Arc::new(DashMap::new()),
             max_size,
             idle_timeout,
             permits: Arc::new(Semaphore::new(max_size)),
@@ -716,6 +796,13 @@ impl TlsPool {
             let _ = writer.shutdown().await;
         });
         entry.task_handles.push(writer_handle.abort_handle());
+        spawn_writer_supervisor(
+            writer_handle,
+            Arc::clone(&self.inner),
+            key.clone(),
+            "tls",
+            |(peer, server_name)| format!("{peer} ({server_name})"),
+        );
 
         // Optional reader task to deliver responses back to the inbound
         // pipeline. Mirrors ConnectionPool::send_tcp's reader-task pattern;
@@ -823,6 +910,65 @@ mod tests {
         old_entry.last_used = Instant::now() - Duration::from_secs(10);
 
         assert!(old_entry.is_idle(Duration::from_secs(5)));
+    }
+
+    /// Regression test: when the writer task returns (or panics), the
+    /// supervisor must remove the corresponding pool entry. Previously
+    /// the entry lingered until a subsequent `send_tcp` attempt failed.
+    #[tokio::test]
+    async fn supervisor_removes_entry_when_writer_exits() {
+        let pool = Arc::new(ConnectionPool::with_limits(4, Duration::from_secs(60)));
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 5060);
+        let (tx, _rx) = mpsc::channel::<Bytes>(1);
+        pool.tcp.insert(addr, PoolEntry::for_tests(tx));
+        assert_eq!(pool.len(), 1);
+
+        // Spawn a writer that exits immediately. The supervisor should
+        // then reach in and remove the (addr, entry).
+        let writer = tokio::spawn(async {});
+        spawn_writer_supervisor(
+            writer,
+            Arc::clone(&pool.tcp),
+            addr,
+            "tcp",
+            move |peer| format!("{peer}"),
+        );
+
+        // Give the supervisor a moment to run.
+        for _ in 0..20 {
+            if pool.len() == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(pool.len(), 0, "supervisor must remove entry after writer exit");
+    }
+
+    #[tokio::test]
+    async fn supervisor_removes_entry_when_writer_panics() {
+        let pool = Arc::new(ConnectionPool::with_limits(4, Duration::from_secs(60)));
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 5061);
+        let (tx, _rx) = mpsc::channel::<Bytes>(1);
+        pool.tcp.insert(addr, PoolEntry::for_tests(tx));
+
+        let writer = tokio::spawn(async {
+            panic!("simulated writer crash");
+        });
+        spawn_writer_supervisor(
+            writer,
+            Arc::clone(&pool.tcp),
+            addr,
+            "tcp",
+            move |peer| format!("{peer}"),
+        );
+
+        for _ in 0..20 {
+            if pool.len() == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(pool.len(), 0, "supervisor must remove entry even on panic");
     }
 
     #[test]
