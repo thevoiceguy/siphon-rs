@@ -334,42 +334,59 @@ impl ProxyContext {
 
     /// Process a response received on a branch
     ///
-    /// Returns the response that should be forwarded upstream (if any)
+    /// Returns the response that should be forwarded upstream (if any).
+    ///
+    /// # Locking
+    ///
+    /// Releases `branches` before any further `await` on a method that
+    /// itself acquires `branches` (currently `cancel_other_branches`).
+    /// `tokio::sync::RwLock` is not reentrant — holding the write
+    /// guard across such a call deadlocks. Earlier revisions of this
+    /// function held `branches.write()` for the whole body and called
+    /// `cancel_other_branches` from inside that scope, which would
+    /// hang on the 2xx fork-cancel path with no diagnostic.
     pub async fn process_response(
         self: &Arc<Self>,
         branch_id: &str,
         response: Response,
     ) -> Option<Response> {
-        let mut branches = self.branches.write().await;
-        let branch = branches.get_mut(branch_id)?;
-
         let is_final = response.code() >= 200;
-        let was_trying = matches!(branch.state, BranchState::Trying);
+        let is_two_xx = (200..300).contains(&response.code());
 
-        // Update branch state
-        if response.code() >= 100 && response.code() < 200 {
-            branch.state = BranchState::Proceeding;
-            // RFC 3261 §16.7 step 2: arm Timer C on the first
-            // transition into Proceeding (i.e. the first 1xx). If no
-            // final response arrives within TIMER_C_DURATION, the
-            // timer task synthesises a 408 so this branch — and
-            // therefore the upstream transaction — doesn't hang
-            // indefinitely on a silent downstream.
-            if was_trying {
-                arm_timer_c(Arc::downgrade(self), branch_id.to_string());
+        // Mutate the branch in its own scope so the write guard
+        // releases before we call cancel_other_branches below.
+        {
+            let mut branches = self.branches.write().await;
+            let branch = branches.get_mut(branch_id)?;
+
+            let was_trying = matches!(branch.state, BranchState::Trying);
+
+            if response.code() >= 100 && response.code() < 200 {
+                branch.state = BranchState::Proceeding;
+                // RFC 3261 §16.7 step 2: arm Timer C on the first
+                // transition into Proceeding so a silent downstream
+                // doesn't hang the upstream forever.
+                if was_trying {
+                    arm_timer_c(Arc::downgrade(self), branch_id.to_string());
+                }
+            } else if is_final {
+                branch.state = BranchState::Completed;
             }
-        } else if is_final {
-            branch.state = BranchState::Completed;
 
-            // Decrement outstanding count
+            // Store best response for this branch.
+            branch.best_response = Some(response.clone());
+        }
+
+        // Decrement the outstanding counter once the branches lock is
+        // released. Holding two write locks is fine in principle but
+        // keeping them strictly serialised keeps the lock graph
+        // trivial.
+        if is_final {
             let mut count = self.outstanding_count.write().await;
             if *count > 0 {
                 *count -= 1;
             }
         }
-
-        // Store best response for this branch
-        branch.best_response = Some(response.clone());
 
         // Handle provisional responses (always forward first 1xx per RFC 3261)
         if !is_final {
@@ -381,9 +398,17 @@ impl ProxyContext {
             return Some(response);
         }
 
-        // Handle final responses with response selection
-        let mut best_final = self.best_final.write().await;
-        let should_forward = select_best_response(best_final.as_ref(), &response);
+        // Handle final responses with response selection. The result
+        // is computed inside a small scope so the best_final write
+        // guard isn't held across `cancel_other_branches`.
+        let should_forward = {
+            let mut best_final = self.best_final.write().await;
+            let should = select_best_response(best_final.as_ref(), &response);
+            if should {
+                *best_final = Some(response.clone());
+            }
+            should
+        };
 
         if should_forward {
             info!(
@@ -391,10 +416,11 @@ impl ProxyContext {
                 response.code(),
                 branch_id
             );
-            *best_final = Some(response.clone());
 
-            // If we got a 2xx and have other branches, send CANCEL to them
-            if response.code() >= 200 && response.code() < 300 {
+            // If we got a 2xx and have other branches, send CANCEL to
+            // them. This re-enters `branches.write()`, which is why
+            // the write guard above had to drop first.
+            if is_two_xx {
                 self.cancel_other_branches(branch_id).await;
             }
 
@@ -404,8 +430,11 @@ impl ProxyContext {
         // Check if all branches have completed
         let outstanding = *self.outstanding_count.read().await;
         if outstanding == 0 {
-            // All branches done - return the best we have
-            if let Some(best) = best_final.clone() {
+            // All branches done - return the best we have. Take a
+            // fresh read of best_final since the earlier write guard
+            // has been released.
+            let best = self.best_final.read().await.clone();
+            if let Some(best) = best {
                 info!(
                     "All branches complete - forwarding best response {}",
                     best.code()
@@ -1007,6 +1036,85 @@ mod tests {
             Some(486),
             "Timer C must not overwrite a real final response"
         );
+    }
+
+    /// Regression test: receiving a 2xx on one branch in a fork must
+    /// trigger CANCEL of the other branches. Earlier revisions
+    /// deadlocked here because `process_response` held
+    /// `branches.write()` across the call to `cancel_other_branches`,
+    /// which itself acquires the same lock. The deadlock surfaced no
+    /// diagnostic — the test just hung. We protect with a timeout so
+    /// any future regression fails loudly instead of timing out the
+    /// CI job.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn process_response_cancels_other_branches_on_2xx_without_deadlock() {
+        use std::time::Duration;
+
+        let proxy = StatefulProxy::new();
+        let request = make_request();
+        let (context, _rx) = proxy
+            .start_context(
+                request,
+                "test-call-fork-cancel".into(),
+                "z9hG4bKclient".into(),
+                "proxy.example.com".into(),
+                "UDP".into(),
+                ForkMode::Parallel,
+            )
+            .unwrap();
+
+        // Two branches, both Trying.
+        for (id, target) in [
+            ("z9hG4bKbr-winner", "sip:winner@example.com"),
+            ("z9hG4bKbr-loser1", "sip:loser1@example.com"),
+            ("z9hG4bKbr-loser2", "sip:loser2@example.com"),
+        ] {
+            let branch = BranchInfo::new(
+                id,
+                SipUri::parse(target).unwrap(),
+                Instant::now(),
+                BranchState::Trying,
+            )
+            .unwrap();
+            context.add_branch(branch).await.unwrap();
+        }
+
+        // Drive the loser branches into Proceeding so the cancel path
+        // has live branches to act on.
+        context
+            .process_response("z9hG4bKbr-loser1", make_response(180))
+            .await;
+        context
+            .process_response("z9hG4bKbr-loser2", make_response(180))
+            .await;
+
+        // Send 200 OK on the winner. Wrap in a timeout: if the lock
+        // graph regresses, this hangs forever and the timeout fires
+        // with a clear assertion message.
+        let forwarded = tokio::time::timeout(
+            Duration::from_secs(5),
+            context.process_response("z9hG4bKbr-winner", make_response(200)),
+        )
+        .await
+        .expect("process_response must not deadlock on 2xx fork-cancel");
+
+        assert_eq!(
+            forwarded.map(|r| r.code()),
+            Some(200),
+            "winning 2xx must be forwarded upstream"
+        );
+
+        // Both losers should have been marked Cancelled by the
+        // sibling-cancel path.
+        let branches = context.branches.read().await;
+        for loser in ["z9hG4bKbr-loser1", "z9hG4bKbr-loser2"] {
+            let b = branches.get(loser).expect("loser branch present");
+            assert!(
+                matches!(b.state, BranchState::Cancelled),
+                "{loser} should be Cancelled after winner's 2xx, was {:?}",
+                b.state,
+            );
+        }
     }
 
     #[test]
