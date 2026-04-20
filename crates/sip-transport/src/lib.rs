@@ -295,6 +295,15 @@ impl InboundPacket {
 /// Maximum UDP packets per source IP per second before rate limiting kicks in.
 const UDP_RATE_LIMIT_PPS: u64 = 200;
 
+/// Opportunistically prune the per-source UDP rate map every N packets.
+/// Matches the cadence used by the stream rate limiter so the behaviour
+/// is predictable across transports.
+const UDP_RATE_CLEANUP_EVERY: u64 = 1024;
+
+/// Drop UDP rate-map entries whose 1-second window started longer ago
+/// than this. 60s mirrors the stream rate map TTL.
+const UDP_RATE_IDLE_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Maximum SIP frames per source IP per second across TCP/TLS/WS streams.
 ///
 /// UDP is already rate-limited at the datagram level; without an equivalent
@@ -368,9 +377,13 @@ pub async fn run_udp(socket: Arc<UdpSocket>, tx: mpsc::Sender<InboundPacket>) ->
     info!(%bind, "listening (udp)");
     transport_metrics().on_accept(TransportLabel::Udp);
     let mut buf = vec![0u8; 65_535];
-    // Per-source rate limiting: (packet_count, window_start)
+    // Per-source rate limiting: (packet_count, window_start).
+    // Opportunistically cleaned up (see UDP_RATE_CLEANUP_EVERY / TTL below)
+    // so source-IP churn — trivial to generate on UDP where the source is
+    // spoofable — can't grow the map indefinitely.
     let rate_map: dashmap::DashMap<std::net::IpAddr, (u64, std::time::Instant)> =
         dashmap::DashMap::new();
+    let mut packets_since_cleanup: u64 = 0;
     loop {
         match socket.recv_from(&mut buf).await {
             Ok((n, peer)) => {
@@ -391,6 +404,16 @@ pub async fn run_udp(socket: Arc<UdpSocket>, tx: mpsc::Sender<InboundPacket>) ->
                         }
                         continue;
                     }
+                }
+                // Opportunistic cleanup: every N packets, drop entries
+                // whose window is well past. Bounds memory under churn
+                // from spoofed source addresses.
+                packets_since_cleanup += 1;
+                if packets_since_cleanup >= UDP_RATE_CLEANUP_EVERY {
+                    packets_since_cleanup = 0;
+                    rate_map.retain(|_, (_, window_start)| {
+                        now.duration_since(*window_start) < UDP_RATE_IDLE_TTL
+                    });
                 }
 
                 transport_metrics().on_latency(TransportLabel::Udp, OpLabel::Recv, 0);

@@ -125,6 +125,15 @@ impl RequestHandler for OptionsHandler {
             "Accept",
             SmolStr::new("application/sdp, application/sdp-answer"),
         );
+        // RFC 3261 §11.2: the OPTIONS response SHOULD carry the same
+        // headers that a 200 to an INVITE would, in particular Contact,
+        // so the querying peer knows where to reach us. We were omitting
+        // it, which broke capability-negotiation flows that follow up
+        // with a direct INVITE.
+        let _ = headers.push(
+            "Contact",
+            SmolStr::new(format!("<{}>", services.config.local_uri)),
+        );
         let _ = headers.push(
             "User-Agent",
             SmolStr::new(services.config.user_agent.clone()),

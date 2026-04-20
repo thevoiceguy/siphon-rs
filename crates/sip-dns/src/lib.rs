@@ -300,10 +300,18 @@ pub trait Resolver: Send + Sync {
 /// 3. NAPTR lookup for transport discovery
 /// 4. SRV lookup with priority/weight handling
 /// 5. Fallback to A/AAAA with default port
+/// Default per-query DNS timeout. Without this a hung or slow nameserver
+/// stalls every caller that hits the resolver until their own (usually
+/// much coarser) transaction timeout fires. 3 seconds matches typical
+/// SIP resolution budgets and sits below the 5s TCP/TLS pool connect
+/// timeout used by the transport layer.
+const DEFAULT_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
 #[derive(Clone)]
 pub struct SipResolver {
     resolver: TokioResolver,
     enable_naptr: bool,
+    query_timeout: std::time::Duration,
 }
 
 impl SipResolver {
@@ -313,6 +321,7 @@ impl SipResolver {
         Ok(Self {
             resolver,
             enable_naptr: true,
+            query_timeout: DEFAULT_QUERY_TIMEOUT,
         })
     }
 
@@ -325,12 +334,20 @@ impl SipResolver {
         Ok(Self {
             resolver,
             enable_naptr: true,
+            query_timeout: DEFAULT_QUERY_TIMEOUT,
         })
     }
 
     /// Disables NAPTR lookups (useful for testing or non-compliant networks).
     pub fn disable_naptr(mut self) -> Self {
         self.enable_naptr = false;
+        self
+    }
+
+    /// Overrides the per-query timeout. A slow or unresponsive nameserver
+    /// will otherwise stall callers indefinitely.
+    pub fn with_query_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.query_timeout = timeout;
         self
     }
 
@@ -494,10 +511,12 @@ impl SipResolver {
         allowed_transport: Option<Transport>,
     ) -> Result<Vec<NaptrRecord>> {
         let host = uri.host();
-        let lookup = self
-            .resolver
-            .lookup(format!("{}.", host), RecordType::NAPTR)
-            .await?;
+        let lookup = tokio::time::timeout(
+            self.query_timeout,
+            self.resolver.lookup(format!("{}.", host), RecordType::NAPTR),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("NAPTR lookup for {host} timed out after {:?}", self.query_timeout))??;
 
         let mut records = Vec::new();
         for rec in lookup.iter() {
@@ -573,7 +592,12 @@ impl SipResolver {
         let proto = transport.as_proto_str();
         let srv_name = format!("{}._{}.{}", service, proto, host);
 
-        let lookup = self.resolver.srv_lookup(srv_name).await?;
+        let lookup = tokio::time::timeout(
+            self.query_timeout,
+            self.resolver.srv_lookup(srv_name.clone()),
+        )
+        .await
+        .map_err(|_| anyhow!("SRV lookup for {srv_name} timed out after {:?}", self.query_timeout))??;
 
         // Group by priority (RFC 2782 §3)
         let mut priority_groups: BTreeMap<u16, Vec<(u16, SmolStr, u16)>> = BTreeMap::new();
@@ -612,7 +636,12 @@ impl SipResolver {
 
     /// Performs A and AAAA lookup with Happy Eyeballs preference.
     async fn lookup_a_aaaa(&self, host: &str) -> Result<Vec<IpAddr>> {
-        let lookup = self.resolver.lookup_ip(host).await?;
+        let lookup = tokio::time::timeout(
+            self.query_timeout,
+            self.resolver.lookup_ip(host),
+        )
+        .await
+        .map_err(|_| anyhow!("A/AAAA lookup for {host} timed out after {:?}", self.query_timeout))??;
 
         let mut ipv6_addrs = Vec::new();
         let mut ipv4_addrs = Vec::new();
@@ -1260,6 +1289,26 @@ mod tests {
     fn numeric_ip_returns_directly() {
         assert!(SipResolver::is_numeric_ip("192.168.1.1"));
         assert!(!SipResolver::is_numeric_ip("example.com"));
+    }
+
+    #[test]
+    fn query_timeout_defaults_to_3s() {
+        // Safety check: the default matches the documented 3s SIP budget
+        // (under the 5s TCP/TLS connect timeout in sip-transport).
+        let resolver = SipResolver::from_system().expect("system resolver");
+        assert_eq!(resolver.query_timeout, DEFAULT_QUERY_TIMEOUT);
+        assert_eq!(resolver.query_timeout, std::time::Duration::from_secs(3));
+    }
+
+    #[test]
+    fn query_timeout_builder_overrides_default() {
+        let resolver = SipResolver::from_system()
+            .expect("system resolver")
+            .with_query_timeout(std::time::Duration::from_millis(250));
+        assert_eq!(
+            resolver.query_timeout,
+            std::time::Duration::from_millis(250)
+        );
     }
 
     #[test]
