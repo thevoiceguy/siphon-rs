@@ -62,6 +62,13 @@ pub struct ParseLimits {
     pub max_bytes: usize,
     pub max_lines: usize,
     pub max_line_length: usize,
+    /// Per-section cap on `a=...` attribute lines (session-level and
+    /// each media block are counted independently). Without this a
+    /// single section containing thousands of short attributes can
+    /// still fit under `max_bytes` / `max_lines` and drive a large
+    /// `Vec<Attribute>` allocation. 500 comfortably accommodates
+    /// ICE candidate lists + rtpmap/fmtp for realistic codecs.
+    pub max_attributes_per_section: usize,
 }
 
 impl Default for ParseLimits {
@@ -70,6 +77,7 @@ impl Default for ParseLimits {
             max_bytes: 128 * 1024,
             max_lines: 2048,
             max_line_length: 4096,
+            max_attributes_per_section: 500,
         }
     }
 }
@@ -113,7 +121,7 @@ pub fn parse_sdp_with_limits(
     }
 
     // Build SessionDescription from parsed lines
-    build_session_description(lines)
+    build_session_description(lines, &limits)
 }
 
 /// Represents a parsed SDP line
@@ -501,7 +509,10 @@ fn parse_addrtype(input: &str) -> IResult<&str, AddrType> {
 }
 
 /// Build SessionDescription from parsed lines
-fn build_session_description(lines: Vec<SdpLine>) -> Result<SessionDescription, ParseError> {
+fn build_session_description(
+    lines: Vec<SdpLine>,
+    limits: &ParseLimits,
+) -> Result<SessionDescription, ParseError> {
     let mut version = None;
     let mut origin = None;
     let mut session_name = None;
@@ -578,8 +589,20 @@ fn build_session_description(lines: Vec<SdpLine>) -> Result<SessionDescription, 
             }
             SdpLine::Attribute(a) => {
                 if let Some(ref mut m) = current_media {
+                    if m.attributes.len() >= limits.max_attributes_per_section {
+                        return Err(ParseError::LimitExceeded(
+                            "media attributes",
+                            limits.max_attributes_per_section,
+                        ));
+                    }
                     m.attributes.push(a);
                 } else {
+                    if attributes.len() >= limits.max_attributes_per_section {
+                        return Err(ParseError::LimitExceeded(
+                            "session attributes",
+                            limits.max_attributes_per_section,
+                        ));
+                    }
                     attributes.push(a);
                 }
             }
@@ -951,5 +974,76 @@ mod tests {
         assert_eq!(result.media.len(), 1);
         assert_eq!(result.media[0].title.as_deref(), Some("Audio Stream"));
         assert_eq!(result.media[0].encryption_key.as_deref(), Some("prompt"));
+    }
+
+    /// Per-section attribute cap: a single media block crammed with
+    /// hundreds of `a=` lines is rejected instead of allocating an
+    /// unbounded Vec<Attribute>. Overall byte/line limits are
+    /// respected here — the point is the per-section bound fires
+    /// before they would.
+    #[test]
+    fn per_section_attribute_cap_rejects_excessive_media_attributes() {
+        let limits = ParseLimits {
+            max_attributes_per_section: 3,
+            ..Default::default()
+        };
+        let input = "v=0\r\n\
+o=- 0 0 IN IP4 127.0.0.1\r\n\
+s=t\r\n\
+c=IN IP4 127.0.0.1\r\n\
+t=0 0\r\n\
+m=audio 49170 RTP/AVP 0\r\n\
+a=rtpmap:0 PCMU/8000\r\n\
+a=ptime:20\r\n\
+a=maxptime:40\r\n\
+a=sendrecv\r\n";
+        let result = parse_sdp_with_limits(input, limits);
+        match result {
+            Err(ParseError::LimitExceeded(field, 3)) => {
+                assert_eq!(field, "media attributes");
+            }
+            other => panic!("expected LimitExceeded(media attributes, 3), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn per_section_attribute_cap_rejects_excessive_session_attributes() {
+        let limits = ParseLimits {
+            max_attributes_per_section: 2,
+            ..Default::default()
+        };
+        let input = "v=0\r\n\
+o=- 0 0 IN IP4 127.0.0.1\r\n\
+s=t\r\n\
+c=IN IP4 127.0.0.1\r\n\
+t=0 0\r\n\
+a=group:BUNDLE 0\r\n\
+a=msid-semantic: WMS\r\n\
+a=extra:third\r\n";
+        let result = parse_sdp_with_limits(input, limits);
+        match result {
+            Err(ParseError::LimitExceeded(field, 2)) => {
+                assert_eq!(field, "session attributes");
+            }
+            other => panic!("expected LimitExceeded(session attributes, 2), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn per_section_attribute_cap_default_is_generous_enough_for_realistic_sdp() {
+        // Realistic WebRTC-ish SDP sits well under the 500 default.
+        let mut input = String::from(
+            "v=0\r\n\
+o=- 0 0 IN IP4 127.0.0.1\r\n\
+s=t\r\n\
+c=IN IP4 127.0.0.1\r\n\
+t=0 0\r\n\
+m=audio 49170 RTP/AVP 0\r\n",
+        );
+        for i in 0..50 {
+            input.push_str(&format!("a=candidate:foo {i} udp 1 192.0.2.1 5000 typ host\r\n"));
+        }
+        let result = parse_sdp_with_limits(&input, ParseLimits::default());
+        assert!(result.is_ok(), "50 candidates must fit under default cap: {result:?}");
     }
 }

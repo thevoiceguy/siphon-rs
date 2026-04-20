@@ -136,7 +136,15 @@ fn validate_telephone_number(number: &str) -> Result<(), TelUriError> {
     Ok(())
 }
 
-/// Validates a phone-context value.
+/// Validates a phone-context value per RFC 3966 §5.1.5.
+///
+/// `phone-context = descriptor` where descriptor is either a
+/// `domainname` (DNS-style label sequence) or `global-number-digits`
+/// (`+` followed by 1*DIGIT, with optional visual separators).
+/// Anything else — `;` parameter separator, `@` userinfo marker,
+/// embedded path/query characters — is structurally invalid and would
+/// allow an attacker-supplied tel URI to smuggle URI delimiters past
+/// downstream comparison or routing code.
 fn validate_phone_context(context: &str) -> Result<(), TelUriError> {
     if context.is_empty() {
         return Err(TelUriError::InvalidPhoneContext(
@@ -158,12 +166,63 @@ fn validate_phone_context(context: &str) -> Result<(), TelUriError> {
         ));
     }
 
-    // RFC 3966: phone-context can be a domain name or global number
-    // Basic validation: no semicolons (parameter separator)
-    if context.contains(';') {
+    if context.starts_with('+') {
+        // Global number form. The rest must be 1*phonedigit and must
+        // contain at least one digit. Visual separators are allowed
+        // (`-`, `.`, `(`, `)`); DTMF digits A–D and `*`/`#` are
+        // permitted by RFC 3966 §5.1.1 but rare for phone-context.
+        let rest = &context[1..];
+        let mut has_digit = false;
+        for c in rest.chars() {
+            if c.is_ascii_digit() {
+                has_digit = true;
+            } else if matches!(c, '-' | '.' | '(' | ')')
+                || matches!(c, 'A' | 'B' | 'C' | 'D')
+                || matches!(c, '*' | '#')
+            {
+                // visual separator or DTMF
+            } else {
+                return Err(TelUriError::InvalidPhoneContext(format!(
+                    "global phone-context contains invalid character {c:?}"
+                )));
+            }
+        }
+        if !has_digit {
+            return Err(TelUriError::InvalidPhoneContext(
+                "global phone-context must contain at least one digit".to_string(),
+            ));
+        }
+        return Ok(());
+    }
+
+    // Domain name form per RFC 1035 §2.3.1: dot-separated labels of
+    // letters / digits / hyphens, each label 1..=63 bytes, total
+    // already capped above.
+    let lower = context.to_ascii_lowercase();
+    if lower.starts_with('.') || lower.ends_with('.') || lower.contains("..") {
         return Err(TelUriError::InvalidPhoneContext(
-            "contains semicolon".to_string(),
+            "malformed domain phone-context (empty label)".to_string(),
         ));
+    }
+    for label in lower.split('.') {
+        if label.is_empty() || label.len() > 63 {
+            return Err(TelUriError::InvalidPhoneContext(format!(
+                "label length {} out of range 1..=63",
+                label.len()
+            )));
+        }
+        if label.starts_with('-') || label.ends_with('-') {
+            return Err(TelUriError::InvalidPhoneContext(
+                "domain label may not start or end with '-'".to_string(),
+            ));
+        }
+        for c in label.chars() {
+            if !(c.is_ascii_alphanumeric() || c == '-') {
+                return Err(TelUriError::InvalidPhoneContext(format!(
+                    "domain phone-context contains invalid character {c:?}"
+                )));
+            }
+        }
     }
 
     Ok(())
@@ -654,6 +713,48 @@ mod tests {
         // Global number cannot have phone-context
         let global = TelUri::new("+15551234", true).unwrap();
         assert!(global.with_phone_context("example.com").is_err());
+    }
+
+    /// RFC 3966 §5.1.5: phone-context is `domainname` or
+    /// `global-number-digits`. Anything else (URI delimiters, empty
+    /// labels, label-edge hyphens, …) is structurally invalid.
+    #[test]
+    fn phone_context_rejects_garbage_descriptors() {
+        let uri = TelUri::new("5551234", false).unwrap();
+        for bad in [
+            "@evil",          // userinfo marker, not a domain
+            "/path",          // URI path
+            "?q=v",           // query
+            "host:5060",      // colon (not a domain char)
+            ".leading.dot",   // empty label
+            "trailing.dot.",  // empty label
+            "double..dot",    // empty label
+            "-leading.label", // label can't start with hyphen
+            "label-.suffix",  // label can't end with hyphen
+            "+",              // global form needs a digit
+            "+abc",           // global form needs digits, not letters
+            "+42 ext.5",      // space is not allowed in either form
+        ] {
+            let r = uri.clone().with_phone_context(bad);
+            assert!(r.is_err(), "expected {bad:?} to be rejected");
+        }
+    }
+
+    #[test]
+    fn phone_context_accepts_domain_and_global_forms() {
+        let uri = TelUri::new("5551234", false).unwrap();
+        for ok in [
+            "example.com",
+            "sub.example.com",
+            "single",
+            "host-with-hyphen.example.com",
+            "+15551234567",
+            "+1-555-123-4567", // visual separators in global form
+        ] {
+            uri.clone()
+                .with_phone_context(ok)
+                .unwrap_or_else(|e| panic!("expected {ok:?} to parse, got {e:?}"));
+        }
     }
 
     #[test]
