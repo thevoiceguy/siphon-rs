@@ -92,11 +92,24 @@ fn validate_host(host: &str) -> Result<(), UriError> {
         ));
     }
 
-    // Basic hostname validation (simplified - could be more strict)
-    // Allow alphanumeric, dots, dashes, brackets for IPv6
+    // If the host has been stripped of brackets by split_host_port, a
+    // literal colon means it must be an IPv6 address. Parse it
+    // strictly — the old char-set check accepted nonsense like
+    // `[gggg::]` or `[:::::]`.
+    if host.contains(':') {
+        host.parse::<std::net::Ipv6Addr>().map_err(|e| {
+            UriError::InvalidHost(format!("invalid IPv6 literal: {e}"))
+        })?;
+        return Ok(());
+    }
+
+    // Basic hostname / IPv4 validation. Allow alphanumeric, dots,
+    // dashes, underscores. The reserved `[`/`]`/`:` from earlier here
+    // only existed because IPv6 slipped through without strict
+    // validation; bracket-stripping is handled in split_host_port.
     let valid = host
         .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '[' | ']' | ':'));
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'));
 
     if !valid {
         return Err(UriError::InvalidHost(
@@ -844,6 +857,40 @@ mod tests {
     fn accepts_bracketed_ipv6() {
         let uri = SipUri::parse("sip:alice@[2001:db8::1]").unwrap();
         assert_eq!(uri.host(), "2001:db8::1");
+    }
+
+    /// Before PR E the IPv6 check was character-class only ("hex +
+    /// `:` + `.`"), so malformed addresses slipped through. Validate
+    /// against `std::net::Ipv6Addr::from_str` instead.
+    #[test]
+    fn rejects_malformed_ipv6_hosts() {
+        // Non-hex groups
+        assert!(SipUri::parse("sip:alice@[gggg::1]").is_err());
+        // Too many groups
+        assert!(SipUri::parse("sip:alice@[1:2:3:4:5:6:7:8:9]").is_err());
+        // Multiple ::
+        assert!(SipUri::parse("sip:alice@[1::2::3]").is_err());
+        // Nothing but colons
+        assert!(SipUri::parse("sip:alice@[::::]").is_err());
+        // Empty brackets
+        assert!(SipUri::parse("sip:alice@[]").is_err());
+    }
+
+    #[test]
+    fn accepts_well_formed_ipv6_variants() {
+        for host in [
+            "[::1]",
+            "[::]",
+            "[2001:db8::1]",
+            "[2001:db8:0:0:0:0:0:1]",
+            "[fe80::1]",
+            "[::ffff:192.0.2.1]", // v4-mapped
+        ] {
+            let uri_str = format!("sip:u@{host}");
+            SipUri::parse(&uri_str).unwrap_or_else(|e| {
+                panic!("expected {host} to parse, got {e:?}");
+            });
+        }
     }
 
     #[test]

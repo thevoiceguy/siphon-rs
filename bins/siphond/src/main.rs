@@ -61,6 +61,15 @@ struct Args {
     #[arg(long)]
     tls_key: Option<String>,
 
+    /// Refuse to start if TLS loading fails.
+    ///
+    /// By default siphond warns and falls back to cleartext when
+    /// `--tls-cert` / `--tls-key` fail to load (bad file, mismatched
+    /// key, insecure permissions). For production deployments where
+    /// SIPS is mandatory, set this flag to fail-closed instead.
+    #[arg(long, default_value = "false", value_parser = clap::value_parser!(bool))]
+    require_tls: bool,
+
     /// WebSocket bind address (RFC 7118)
     #[cfg(feature = "ws")]
     #[arg(long)]
@@ -283,6 +292,7 @@ async fn main() -> Result<()> {
         &args.sips_bind,
         args.tls_cert.as_deref(),
         args.tls_key.as_deref(),
+        args.require_tls,
         #[cfg(feature = "ws")]
         args.ws_bind.as_deref(),
         #[cfg(feature = "ws")]

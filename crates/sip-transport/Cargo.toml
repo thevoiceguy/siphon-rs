@@ -1,6 +1,6 @@
 [package]
 name = "sip-transport"
-version = "0.2.9"
+version = "0.2.10"
 edition = "2021"
 license.workspace = true
 description = "SIP transport layer for UDP, TCP, and TLS."
@@ -29,6 +29,7 @@ socket2 = "0.5"
 tokio = { workspace = true }
 bytes = { workspace = true }
 tokio-tungstenite = { version = "0.21" }
+tempfile = "3"
 
 [features]
 default = []

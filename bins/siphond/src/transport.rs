@@ -22,6 +22,12 @@ use tokio_rustls::rustls;
 use tracing::{info, warn};
 
 /// Start all transport layers and return the transport dispatcher and UDP socket.
+///
+/// `require_tls`: when `true`, siphond refuses to start if a TLS cert /
+/// key pair was supplied but fails to load (bad file, mismatched key,
+/// insecure permissions). Without this flag the daemon would silently
+/// fall back to cleartext, which is a footgun for operators who meant
+/// to enforce SIPS.
 #[allow(clippy::too_many_arguments)]
 pub async fn start_transports(
     udp_bind: &str,
@@ -29,6 +35,7 @@ pub async fn start_transports(
     tls_bind: &str,
     tls_cert: Option<&str>,
     tls_key: Option<&str>,
+    require_tls: bool,
     #[cfg(feature = "ws")] ws_bind: Option<&str>,
     #[cfg(feature = "ws")] wss_bind: Option<&str>,
     tx: mpsc::Sender<InboundPacket>,
@@ -79,22 +86,47 @@ pub async fn start_transports(
         }
     });
 
-    // Load TLS config once for TLS/WSS
+    // Load TLS config once for TLS/WSS. When the operator supplied both
+    // --tls-cert and --tls-key, a load failure is a configuration error:
+    // with --require-tls we refuse to start rather than silently
+    // downgrade to cleartext. Without --require-tls the legacy
+    // warn-and-continue behaviour is preserved for backwards compat.
     #[cfg(feature = "tls")]
     let tls_server_config = if let (Some(cert), Some(key)) = (tls_cert, tls_key) {
         match load_rustls_server_config(cert, key) {
             Ok(config) => Some(config),
             Err(e) => {
-                warn!(%e, "Failed to load TLS config; TLS disabled");
+                if require_tls {
+                    return Err(anyhow!(
+                        "TLS is required (--require-tls) but loading cert/key failed: {e}"
+                    ));
+                }
+                warn!(%e, "Failed to load TLS config; TLS disabled (pass --require-tls to fail-closed)");
                 None
             }
         }
     } else {
         if tls_cert.is_some() || tls_key.is_some() {
-            warn!("Both --tls-cert and --tls-key must be provided to enable TLS");
+            // Partial TLS args is always a misconfig — fail-closed even
+            // without --require-tls since continuing silently would be
+            // surprising.
+            return Err(anyhow!(
+                "Both --tls-cert and --tls-key must be provided to enable TLS"
+            ));
+        }
+        if require_tls {
+            return Err(anyhow!(
+                "--require-tls set but neither --tls-cert nor --tls-key provided"
+            ));
         }
         None
     };
+    #[cfg(not(feature = "tls"))]
+    if require_tls {
+        return Err(anyhow!(
+            "--require-tls set but siphond was built without the `tls` feature"
+        ));
+    }
 
     // Spawn TLS listener if certificate and key are provided
     #[cfg(feature = "tls")]
