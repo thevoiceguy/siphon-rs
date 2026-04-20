@@ -1159,10 +1159,10 @@ impl RequestHandler for InviteHandler {
         }
 
         // RFC 3891 §3 / §5: an INVITE with a Replaces header must reference
-        // an existing dialog known to this UA. Without this check, anyone who
-        // can guess (Call-ID, to-tag, from-tag) could hijack a call by
-        // sending an unsolicited INVITE-with-Replaces. Reject with 481 so we
-        // also leak as little as possible about which calls exist.
+        // an existing dialog known to this UA, AND the initiator must be
+        // authorized to replace it. Without both checks, anyone who can
+        // guess (Call-ID, to-tag, from-tag) could hijack a call by sending
+        // an unsolicited INVITE-with-Replaces.
         if let Some(replaces) = header(request.headers(), "Replaces") {
             match parse_replaces_dialog_id(replaces.as_str()) {
                 None => {
@@ -1172,12 +1172,39 @@ impl RequestHandler for InviteHandler {
                     return Ok(());
                 }
                 Some(target_id) => {
-                    if services.dialog_mgr.get(&target_id).is_none() {
+                    let Some(target_dialog) = services.dialog_mgr.get(&target_id) else {
                         warn!(
                             call_id,
                             replaces_call_id = %target_id.call_id(),
                             "Replaces target dialog not found, rejecting 481 (RFC 3891 §5)"
                         );
+                        let response = UserAgentServer::create_response(
+                            request,
+                            481,
+                            "Call/Transaction Does Not Exist",
+                        );
+                        handle.send_final(response).await;
+                        return Ok(());
+                    };
+
+                    // Authorization: RFC 3891 §5 MUSTs that the new INVITE's
+                    // initiator is authorized to replace the matched dialog.
+                    // We approximate with two tiers:
+                    //   1. If auth is on, the dispatcher has already verified
+                    //      the Authorization header; require the authenticated
+                    //      username to match one of the dialog participants.
+                    //   2. If auth is off, require the new INVITE's From user
+                    //      part to match a participant — weaker, but raises
+                    //      the bar from "know the dialog ID triple" to
+                    //      "also impersonate a participant's URI".
+                    if !replaces_initiator_authorized(request, &target_dialog, services) {
+                        warn!(
+                            call_id,
+                            replaces_call_id = %target_id.call_id(),
+                            "Replaces initiator not authorized for matched dialog (RFC 3891 §5), rejecting 481"
+                        );
+                        // Use 481 rather than 403 so we don't reveal that the
+                        // dialog exists — RFC 3891 §5 calls out leak avoidance.
                         let response = UserAgentServer::create_response(
                             request,
                             481,
@@ -1460,6 +1487,71 @@ impl RequestHandler for InviteHandler {
     }
 }
 
+/// Decides whether a new INVITE-with-Replaces is permitted to replace the
+/// matched dialog. Implements RFC 3891 §5 "MUST verify that the initiator
+/// of the new INVITE is authorized to replace the matched dialog."
+///
+/// Strategy:
+/// 1. If Digest authentication is enabled, the dispatcher has already
+///    verified the Authorization header before this handler runs. We
+///    require the authenticated username to match one of the matched
+///    dialog's participants (local or remote URI user-part, NFC-normalised).
+/// 2. If authentication is disabled, fall back to comparing the new INVITE's
+///    From URI user-part against the matched dialog's participants. This is
+///    weaker — anyone who can forge the From can still claim identity — but
+///    it raises the bar from "know (call-id, to-tag, from-tag)" to "also
+///    impersonate a participant's SIP URI".
+fn replaces_initiator_authorized(
+    request: &sip_core::Request,
+    target_dialog: &sip_dialog::Dialog,
+    services: &ServiceRegistry,
+) -> bool {
+    let dialog_users: [Option<&str>; 2] = [
+        target_dialog.local_uri().user(),
+        target_dialog.remote_uri().user(),
+    ];
+
+    if services.config.features.authentication {
+        // Pull the authenticated identity out of the request. Fall back to
+        // the From user if the Authorization header isn't parseable — the
+        // dispatcher already accepted it so the header must have verified,
+        // but we double-check the username match here.
+        let auth_user = sip_auth::extract_auth_username(request.headers());
+        if let Some(user) = auth_user {
+            return dialog_users.iter().flatten().any(|du| users_equivalent(du, user.as_str()));
+        }
+        // No Authorization header at all — dispatcher would have challenged
+        // already, so this path means auth is on but the incoming INVITE is
+        // unauthenticated. Deny.
+        return false;
+    }
+
+    // Auth disabled: use the new INVITE's From URI user-part as a weak
+    // identity proxy. Parse the From header and extract the SIP URI user.
+    let Some(from_raw) = sip_parse::header(request.headers(), "From") else {
+        return false;
+    };
+    let Some(from_uri) = crate::sdp_utils::parse_name_addr_uri(from_raw.as_str()) else {
+        return false;
+    };
+    let Some(from_user) = from_uri.user() else {
+        return false;
+    };
+    dialog_users
+        .iter()
+        .flatten()
+        .any(|du| users_equivalent(du, from_user))
+}
+
+/// Compare two SIP URI user-parts for identity equality. NFC-normalised
+/// and ASCII case-folded, mirroring the registrar's AOR comparison.
+fn users_equivalent(a: &str, b: &str) -> bool {
+    use unicode_normalization::UnicodeNormalization;
+    let a_nfc: String = a.nfc().collect();
+    let b_nfc: String = b.nfc().collect();
+    a_nfc.eq_ignore_ascii_case(&b_nfc)
+}
+
 /// Parses an RFC 3891 Replaces header value into a `DialogId`.
 ///
 /// Header form (after URL-decoding by the parser): `call-id;to-tag=...;from-tag=...[;early-only]`.
@@ -1553,5 +1645,18 @@ mod tests {
         assert_eq!(id.call_id(), "abc");
         assert_eq!(id.local_tag(), "local");
         assert_eq!(id.remote_tag(), "remote");
+    }
+
+    #[test]
+    fn users_equivalent_matches_case_and_nfc() {
+        assert!(users_equivalent("alice", "ALICE"));
+        assert!(users_equivalent("alice", "alice"));
+        // NFC-composed vs NFD-decomposed "café"
+        assert!(users_equivalent("caf\u{00E9}", "cafe\u{0301}"));
+        // Different strings must not match.
+        assert!(!users_equivalent("alice", "bob"));
+        // Cyrillic homoglyph: NFC alone does not collapse, so the attacker
+        // cannot pretend to be `alice` via `аlice`.
+        assert!(!users_equivalent("alice", "\u{0430}lice"));
     }
 }

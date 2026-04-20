@@ -555,6 +555,12 @@ pub struct TlsPool {
     idle_timeout: Duration,
     /// Permits enforcing the pool cap atomically; see ConnectionPool.
     permits: Arc<Semaphore>,
+    /// Inbound packet sink. When set, each `send_tls`-opened connection
+    /// spawns a reader task that drains SIP frames and forwards them here.
+    /// Without this, responses to outbound TLS requests (e.g. 200 OK to
+    /// REGISTER, 1xx/2xx to INVITE) are silently dropped because the
+    /// receiving end of the TLS socket is never read.
+    inbound_tx: Arc<Mutex<Option<Sender<InboundPacket>>>>,
 }
 
 #[cfg(feature = "tls")]
@@ -568,6 +574,7 @@ impl TlsPool {
             max_size: MAX_POOL_SIZE,
             idle_timeout: IDLE_TIMEOUT,
             permits: Arc::new(Semaphore::new(MAX_POOL_SIZE)),
+            inbound_tx: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -578,7 +585,16 @@ impl TlsPool {
             max_size,
             idle_timeout,
             permits: Arc::new(Semaphore::new(max_size)),
+            inbound_tx: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Registers an inbound packet sink so responses on outbound TLS
+    /// connections get routed back into the SIP handler/transaction layer.
+    /// Symmetric with `ConnectionPool::set_inbound_tx`.
+    pub async fn set_inbound_tx(&self, tx: Sender<InboundPacket>) {
+        let mut guard = self.inbound_tx.lock().await;
+        *guard = Some(tx);
     }
 
     /// Atomic permit reservation; see `ConnectionPool::reserve_slot`.
@@ -676,25 +692,91 @@ impl TlsPool {
         .await
         .map_err(|_| anyhow!("TLS pool connect timeout after 5s to {}", addr))?
         ?;
-        let mut tls_stream = connector.connect(server_name, stream).await?;
+        let tls_stream = connector.connect(server_name, stream).await?;
+        // Split so the reader and writer tasks own separate halves; without
+        // this the writer task holds the only handle to the TLS stream and
+        // we never read responses (the original send_tls bug).
+        let (mut reader, mut writer) = tokio::io::split(tls_stream);
 
         let (tx, mut rx) = mpsc::channel::<Bytes>(64);
+        let writer_tx = tx.clone();
         let mut entry = PoolEntry::new(tx.clone(), permit);
 
         let writer_handle = tokio::spawn(async move {
             while let Some(buf) = rx.recv().await {
-                if tls_stream.write_all(&buf).await.is_err() {
+                if writer.write_all(&buf).await.is_err() {
                     break;
                 }
                 // Flush the stream to ensure data is sent on the wire
-                if tls_stream.flush().await.is_err() {
+                if writer.flush().await.is_err() {
                     break;
                 }
             }
-            // Perform proper TLS shutdown when connection closes
-            let _ = tls_stream.shutdown().await;
+            // Perform proper TLS shutdown when connection closes.
+            let _ = writer.shutdown().await;
         });
         entry.task_handles.push(writer_handle.abort_handle());
+
+        // Optional reader task to deliver responses back to the inbound
+        // pipeline. Mirrors ConnectionPool::send_tcp's reader-task pattern;
+        // previously absent, which silently swallowed responses to all
+        // outbound TLS requests.
+        let inbound_tx_guard = self.inbound_tx.lock().await;
+        if let Some(inbound_tx) = inbound_tx_guard.clone() {
+            drop(inbound_tx_guard);
+            let peer = addr;
+            let reader_handle = tokio::spawn(async move {
+                let mut buf = BytesMut::with_capacity(4096);
+                loop {
+                    if buf.len() >= MAX_BUFFER_SIZE {
+                        warn!(
+                            peer = %peer,
+                            buffer_size = buf.len(),
+                            "tls client buffer exceeded MAX_BUFFER_SIZE, closing connection"
+                        );
+                        break;
+                    }
+                    match reader.read_buf(&mut buf).await {
+                        Ok(0) => break,
+                        Ok(_) => match drain_sip_frames(&mut buf) {
+                            Ok(frames) => {
+                                for payload in frames {
+                                    let packet = InboundPacket {
+                                        transport: TransportKind::Tls,
+                                        peer,
+                                        payload,
+                                        stream: Some(writer_tx.clone()),
+                                    };
+                                    if inbound_tx.send(packet).await.is_err() {
+                                        warn!(peer = %peer, "tls client inbound_tx channel closed");
+                                        return;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                warn!(
+                                    peer = %peer,
+                                    error = %e,
+                                    "tls client framing error, closing connection"
+                                );
+                                break;
+                            }
+                        },
+                        Err(e) => {
+                            warn!(
+                                peer = %peer,
+                                error = %e,
+                                "tls client read error, closing connection"
+                            );
+                            break;
+                        }
+                    }
+                }
+            });
+            entry.task_handles.push(reader_handle.abort_handle());
+        } else {
+            drop(inbound_tx_guard);
+        }
 
         self.inner.insert(key.clone(), entry);
 

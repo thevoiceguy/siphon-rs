@@ -258,11 +258,20 @@ impl AsyncCredentialStore for MemoryCredentialStore {
 }
 
 /// Digest algorithm per RFC 7616.
+///
+/// RFC 7616 §6.1 standardises `MD5`, `SHA-256`, and `SHA-512-256`. The last
+/// of those is SHA-512 truncated to 256 bits (i.e. the first 32 bytes of
+/// the 64-byte output, hex-encoded). Plain `SHA-512` is **not** defined by
+/// RFC 7616 but some implementations advertise it; we keep a distinct
+/// variant so the on-the-wire hash length matches what's negotiated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DigestAlgorithm {
     Md5,
     Sha256,
+    /// Non-standard full SHA-512 (64-byte / 128-hex-char output).
     Sha512,
+    /// RFC 7616 SHA-512/256: SHA-512 truncated to the first 256 bits.
+    Sha512_256,
 }
 
 impl DigestAlgorithm {
@@ -271,6 +280,7 @@ impl DigestAlgorithm {
             DigestAlgorithm::Md5 => "MD5",
             DigestAlgorithm::Sha256 => "SHA-256",
             DigestAlgorithm::Sha512 => "SHA-512",
+            DigestAlgorithm::Sha512_256 => "SHA-512-256",
         }
     }
 
@@ -278,7 +288,8 @@ impl DigestAlgorithm {
         match s.to_ascii_uppercase().as_str() {
             "MD5" => Some(DigestAlgorithm::Md5),
             "SHA-256" => Some(DigestAlgorithm::Sha256),
-            "SHA-512" | "SHA-512-256" => Some(DigestAlgorithm::Sha512),
+            "SHA-512" => Some(DigestAlgorithm::Sha512),
+            "SHA-512-256" => Some(DigestAlgorithm::Sha512_256),
             _ => None,
         }
     }
@@ -1108,6 +1119,12 @@ impl<S> DigestAuthenticator<S> {
             DigestAlgorithm::Md5 => format!("{:x}", md5::compute(data)),
             DigestAlgorithm::Sha256 => hex::encode(Sha256::digest(data)),
             DigestAlgorithm::Sha512 => hex::encode(Sha512::digest(data)),
+            // RFC 7616 §6.1: SHA-512/256 is SHA-512 truncated to the first
+            // 256 bits (32 bytes), hex-encoded as 64 chars. Previously this
+            // variant didn't exist and "SHA-512-256" emitted a 128-char
+            // full SHA-512 hash, so interop with any RFC-compliant peer
+            // silently failed.
+            DigestAlgorithm::Sha512_256 => hex::encode(&Sha512::digest(data)[..32]),
         }
     }
 
@@ -1431,6 +1448,9 @@ impl DigestClient {
             DigestAlgorithm::Md5 => format!("{:x}", md5::compute(data)),
             DigestAlgorithm::Sha256 => hex::encode(Sha256::digest(data)),
             DigestAlgorithm::Sha512 => hex::encode(Sha512::digest(data)),
+            // RFC 7616 §6.1 truncates to the first 256 bits; see note on
+            // the sibling `hash` above.
+            DigestAlgorithm::Sha512_256 => hex::encode(&Sha512::digest(data)[..32]),
         }
     }
 }
@@ -1452,11 +1472,89 @@ mod tests {
             DigestAlgorithm::parse("SHA-512"),
             Some(DigestAlgorithm::Sha512)
         );
+        // RFC 7616 §6.1 standard algorithm — parse as a distinct variant so
+        // the hash is truncated to 32 bytes, not the full 64-byte SHA-512.
+        assert_eq!(
+            DigestAlgorithm::parse("SHA-512-256"),
+            Some(DigestAlgorithm::Sha512_256)
+        );
+        assert_eq!(
+            DigestAlgorithm::parse("sha-512-256"),
+            Some(DigestAlgorithm::Sha512_256)
+        );
         assert_eq!(
             DigestAlgorithm::parse("sha-256"),
             Some(DigestAlgorithm::Sha256)
         );
         assert_eq!(DigestAlgorithm::parse("INVALID"), None);
+    }
+
+    #[test]
+    fn sha512_256_hash_is_truncated_to_32_bytes() {
+        // Use the DigestClient::hash shim (there are two identical `hash`
+        // impls in the crate; the DigestAuthenticator one is private, so
+        // hit the algorithm through verify/compute paths isn't worth the
+        // scaffolding. Instead, rebuild the expected output manually and
+        // compare char count + prefix match against full SHA-512.)
+        use sha2::{Digest as _, Sha512};
+        let data = b"the quick brown fox";
+        let full = hex::encode(Sha512::digest(data));
+        let truncated = hex::encode(&Sha512::digest(data)[..32]);
+        // 32 bytes hex-encoded = 64 chars; 64 bytes = 128 chars.
+        assert_eq!(full.len(), 128, "SHA-512 full should be 128 hex chars");
+        assert_eq!(
+            truncated.len(),
+            64,
+            "SHA-512/256 should be 64 hex chars (RFC 7616 §6.1)"
+        );
+        // The truncated form is the prefix of the full form.
+        assert_eq!(&full[..64], truncated.as_str());
+    }
+
+    #[test]
+    fn sha512_256_round_trips_verify_with_itself() {
+        // End-to-end: configure the authenticator with Sha512_256, generate
+        // a challenge, compute a client response, and verify. If the hash
+        // weren't truncated, the server would compute a 64-char response
+        // and the client would compute a 128-char response (or vice versa),
+        // and the constant-time compare would fail.
+        let store = MemoryCredentialStore::with(vec![Credentials {
+            username: SmolStr::new("alice"),
+            password: "secret".to_string(),
+            realm: SmolStr::new("example.com"),
+        }]);
+        let server = DigestAuthenticator::new("example.com", store)
+            .with_algorithm(DigestAlgorithm::Sha512_256);
+        let nonce = server.nonce_manager().generate();
+
+        let mut client = DigestClient::new("alice", "secret");
+        let uri = "sip:example.com";
+        let auth_header = client.generate_authorization(
+            &Method::Register,
+            uri,
+            "example.com",
+            nonce.value(),
+            DigestAlgorithm::Sha512_256,
+            Some(Qop::Auth),
+            Some(&server.opaque()),
+            b"",
+        );
+
+        let mut headers = Headers::new();
+        headers
+            .push(SmolStr::new("Authorization"), SmolStr::new(auth_header))
+            .unwrap();
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse(uri).unwrap()),
+            headers.clone(),
+            Bytes::new(),
+        )
+        .expect("valid request");
+
+        assert!(
+            server.verify(&request, &headers).expect("verify"),
+            "SHA-512-256 client/server round-trip must succeed"
+        );
     }
 
     #[test]

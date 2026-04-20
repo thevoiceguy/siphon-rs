@@ -40,6 +40,11 @@ pub async fn start_transports(
     // Create connection pools
     let tcp_pool = Arc::new(ConnectionPool::new());
     let tls_pool = Arc::new(TlsPool::new());
+    // Route responses on outbound TLS connections back into the inbound
+    // pipeline. Without this the TLS pool opens a connection, sends the
+    // request, and never reads the response (the reader task was
+    // previously absent, silently dropping all 1xx/2xx on outbound TLS).
+    tls_pool.set_inbound_tx(tx.clone()).await;
 
     // Prepare optional TLS client config (system roots, default crypto)
     let tls_client_config = build_tls_client_config();
