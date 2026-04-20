@@ -1,6 +1,6 @@
 [package]
 name = "sip-registrar"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 license.workspace = true
 description = "REGISTER handling and location service for SIP."
@@ -24,6 +24,7 @@ tracing = { workspace = true }
 rand = { workspace = true }
 async-trait = "0.1"
 tokio = { workspace = true }
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 bytes = { workspace = true }

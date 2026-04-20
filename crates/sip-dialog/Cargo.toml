@@ -1,6 +1,6 @@
 [package]
 name = "sip-dialog"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2021"
 license.workspace = true
 description = "SIP dialog and subscription management."
@@ -21,3 +21,4 @@ tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 async-trait = "0.1"
+rand = { workspace = true }

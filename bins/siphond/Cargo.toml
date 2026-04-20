@@ -1,6 +1,6 @@
 [package]
 name = "siphond"
-version = "0.4.5"
+version = "0.4.6"
 edition = "2021"
 license.workspace = true
 description = "Multi-mode SIP testing daemon."
@@ -44,3 +44,6 @@ default = ["tls"]
 tls = ["tokio-rustls", "webpki-roots"]
 ws = ["sip-transport/ws"]
 webrtc = ["ws"]
+
+[dev-dependencies]
+tempfile = "3"
