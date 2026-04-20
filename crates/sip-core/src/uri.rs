@@ -596,6 +596,18 @@ impl Uri {
         }
     }
 
+    /// Strips embedded URI headers (`?k=v&…`) from a SIP/SIPS URI. Non-SIP
+    /// URIs pass through unchanged. See `SipUri::without_uri_headers`;
+    /// this enum-level wrapper lets name-addr parsing sanitise the URI
+    /// before handing it to consumers without the caller caring which
+    /// inner variant is held.
+    pub fn without_uri_headers(self) -> Self {
+        match self {
+            Uri::Sip(uri) => Uri::Sip(uri.without_uri_headers()),
+            other => other,
+        }
+    }
+
     /// Returns the inner TelUri if this is a tel URI, None otherwise.
     pub fn as_tel(&self) -> Option<&TelUri> {
         match self {

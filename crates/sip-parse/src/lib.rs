@@ -1049,6 +1049,42 @@ Content-Length: 0\r\n\r\n",
         assert!(parse_response(&raw).is_none());
     }
 
+    /// name-addr URIs (Contact / From / To / Route / P-*) must not carry
+    /// embedded URI headers through into parsed form, or a Refer-To-style
+    /// smuggling vector opens on every caller that re-serialises those
+    /// URIs into outgoing requests. parse_name_addr strips at parse time.
+    #[test]
+    fn parse_from_strips_embedded_uri_headers() {
+        let raw = SmolStr::new("<sip:victim@example.com?Route=%3Csip:attacker.com%3E>;tag=t1");
+        let parsed = parse_from_header(&raw).expect("well-formed From");
+        let s = parsed.inner().uri().as_str();
+        assert!(
+            !s.contains('?') && !s.contains("Route"),
+            "URI headers must be stripped from parsed From: {s}"
+        );
+    }
+
+    #[test]
+    fn parse_contact_strips_embedded_uri_headers() {
+        let raw = SmolStr::new(
+            "<sip:alice@example.com:5060?From=%3Csip:impersonator@evil%3E>",
+        );
+        let parsed = parse_contact_header(&raw).expect("well-formed Contact");
+        let s = parsed.inner().uri().as_str();
+        assert!(!s.contains('?'), "URI headers must be stripped: {s}");
+        assert!(!s.contains("From="), "smuggled header must be stripped: {s}");
+    }
+
+    #[test]
+    fn parse_route_strips_embedded_uri_headers() {
+        let raw = SmolStr::new("<sip:proxy.example.com;lr?Path=%3Csip:x%3E>");
+        let parsed = parse_route_header(&raw).expect("well-formed Route");
+        let s = parsed.inner().uri().as_str();
+        assert!(!s.contains('?'));
+        // `;lr` (a URI parameter, not a URI header) must survive.
+        assert!(s.contains(";lr"), "URI parameters must be preserved: {s}");
+    }
+
     #[test]
     fn parse_request_permits_duplicate_via_and_route() {
         // Via is intentionally multi-valued (each hop adds one). The

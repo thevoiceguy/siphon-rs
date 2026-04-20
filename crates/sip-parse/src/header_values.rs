@@ -410,12 +410,17 @@ fn parse_name_addr(value: &SmolStr) -> Option<NameAddr> {
     if input.is_empty() {
         return None;
     }
+    // RFC 3261 §19.1.5: URI headers (the `?k=v&…` tail) MUST NOT flow
+    // into request fields constructed from the URI. Parse normally then
+    // strip so every consumer of Contact / From / To / Route / P-*
+    // name-addr values gets a sanitised URI without having to remember
+    // `.without_uri_headers()` at each call site.
     match find_unquoted_angle_brackets(input) {
         Ok(Some((start, end))) => {
             let display = input[..start].trim();
             let uri = input[start + 1..end].trim();
             let params = parse_params(input[end + 1..].trim())?;
-            let uri = Uri::parse(uri).ok()?;
+            let uri = Uri::parse(uri).ok()?.without_uri_headers();
             NameAddr::new(
                 if display.is_empty() {
                     None
@@ -429,7 +434,7 @@ fn parse_name_addr(value: &SmolStr) -> Option<NameAddr> {
         }
         Ok(None) => {
             let (uri_part, param_part) = input.split_once(';').unwrap_or((input, ""));
-            let uri = Uri::parse(uri_part.trim()).ok()?;
+            let uri = Uri::parse(uri_part.trim()).ok()?.without_uri_headers();
             let params = parse_params(param_part)?;
             NameAddr::new(None, uri, params).ok()
         }
