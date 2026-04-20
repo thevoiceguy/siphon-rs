@@ -137,6 +137,25 @@ pub trait Authenticator: Send + Sync {
     fn challenge(&self, request: &Request) -> Result<Response>;
     fn verify(&self, request: &Request, headers: &Headers) -> Result<bool>;
     fn credentials_for(&self, method: &Method, uri: &str) -> Option<Credentials>;
+
+    /// Returns `true` if the request's Authorization header references a
+    /// nonce that this authenticator issued and has since expired.
+    ///
+    /// Callers use this signal to decide between [`Self::challenge`] (a
+    /// fresh nonce) and [`Self::challenge_stale`] (a fresh nonce with
+    /// `stale=true` so the client may retry without re-prompting the user
+    /// — RFC 7616 §3.5). Default returns `false`; implementations that
+    /// track nonces should override.
+    fn nonce_is_stale(&self, _request: &Request) -> bool {
+        false
+    }
+
+    /// Issues a `stale=true` challenge for an expired-nonce failure.
+    /// Default delegates to [`Self::challenge`]; override to emit the
+    /// `stale` parameter so the client can re-authenticate silently.
+    fn challenge_stale(&self, request: &Request) -> Result<Response> {
+        self.challenge(request)
+    }
 }
 
 /// Credential store abstraction for server-side verification.
@@ -1195,6 +1214,37 @@ impl<S: CredentialStore> Authenticator for DigestAuthenticator<S> {
     fn credentials_for(&self, _method: &Method, _uri: &str) -> Option<Credentials> {
         None
     }
+
+    fn nonce_is_stale(&self, request: &Request) -> bool {
+        // Look for our header (Authorization for 401, Proxy-Authorization
+        // for 407) and check whether its nonce is one we issued but has
+        // since expired. This is the signal that the next response should
+        // be `401 + stale=true` instead of a fresh challenge.
+        let header_name = if self.proxy_auth {
+            "Proxy-Authorization"
+        } else {
+            "Authorization"
+        };
+        let raw = match request.headers().get_smol(header_name) {
+            Some(v) => v,
+            None => return false,
+        };
+        let parsed = match parse_authorization_header(raw) {
+            Some(p) => p,
+            None => return false,
+        };
+        if !parsed.scheme().eq_ignore_ascii_case("Digest") {
+            return false;
+        }
+        match parsed.param("nonce") {
+            Some(nonce) => self.is_nonce_stale(nonce.as_str()),
+            None => false,
+        }
+    }
+
+    fn challenge_stale(&self, request: &Request) -> Result<Response> {
+        DigestAuthenticator::challenge_stale(self, request)
+    }
 }
 
 impl<S: AsyncCredentialStore> DigestAuthenticator<S> {
@@ -1477,6 +1527,81 @@ mod tests {
         let response = auth.challenge(&request).expect("challenge");
         assert_eq!(response.code(), 401);
         assert!(response.headers().get("WWW-Authenticate").is_some());
+    }
+
+    #[test]
+    fn nonce_is_stale_detects_expired_nonce_in_authorization() {
+        // Authenticator with a 10ms nonce TTL so we can age it deterministically.
+        let store = MemoryCredentialStore::new();
+        let auth =
+            DigestAuthenticator::new("example.com", store).with_nonce_ttl(Duration::from_millis(10));
+
+        // Get a nonce, expire it, then send an Authorization that references it.
+        let nonce = auth.nonce_manager().generate();
+        std::thread::sleep(Duration::from_millis(20));
+
+        let mut headers = Headers::new();
+        headers
+            .push(
+                "Authorization",
+                format!(
+                    "Digest username=\"alice\", realm=\"example.com\", nonce=\"{}\", uri=\"sip:example.com\", response=\"deadbeef\"",
+                    nonce.value()
+                ),
+            )
+            .unwrap();
+        let request = Request::new(
+            RequestLine::new(
+                Method::Register,
+                SipUri::parse("sip:example.com").unwrap(),
+            ),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid request");
+
+        // Trait-method dispatch (DigestAuthenticator's override) — RFC 7616 §3.5.
+        let auth_dyn: &dyn Authenticator = &auth;
+        assert!(
+            auth_dyn.nonce_is_stale(&request),
+            "expired-but-known nonce should be reported as stale"
+        );
+        let resp = auth_dyn.challenge_stale(&request).expect("challenge_stale");
+        assert_eq!(resp.code(), 401);
+        let www = resp
+            .headers()
+            .get("WWW-Authenticate")
+            .expect("WWW-Authenticate present");
+        assert!(www.contains("stale=true"), "expected stale=true in: {www}");
+    }
+
+    #[test]
+    fn nonce_is_stale_returns_false_for_unknown_nonce() {
+        let store = MemoryCredentialStore::new();
+        let auth = DigestAuthenticator::new("example.com", store);
+
+        let mut headers = Headers::new();
+        headers
+            .push(
+                "Authorization",
+                "Digest username=\"alice\", realm=\"example.com\", nonce=\"never-issued\", uri=\"sip:example.com\", response=\"deadbeef\"",
+            )
+            .unwrap();
+        let request = Request::new(
+            RequestLine::new(
+                Method::Register,
+                SipUri::parse("sip:example.com").unwrap(),
+            ),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid request");
+
+        let auth_dyn: &dyn Authenticator = &auth;
+        assert!(
+            !auth_dyn.nonce_is_stale(&request),
+            "nonces we never issued must not be reported as stale"
+        );
     }
 
     #[test]

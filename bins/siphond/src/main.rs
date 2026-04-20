@@ -11,7 +11,7 @@ use anyhow::Result;
 use clap::Parser;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{info, warn};
 
 mod b2bua_state;
 mod config;
@@ -245,6 +245,16 @@ async fn main() -> Result<()> {
     );
 
     print_mode_info(&config);
+    warn_if_open_relay(
+        &config,
+        &args.udp_bind,
+        &args.tcp_bind,
+        &args.sips_bind,
+        #[cfg(feature = "ws")]
+        args.ws_bind.as_deref(),
+        #[cfg(feature = "ws")]
+        args.wss_bind.as_deref(),
+    );
 
     // Create service registry
     let services = Arc::new(ServiceRegistry::new(config));
@@ -780,6 +790,111 @@ fn map_transport(kind: sip_transport::TransportKind) -> sip_transaction::Transpo
         sip_transport::TransportKind::TlsSctp => sip_transaction::TransportKind::TlsSctp,
         sip_transport::TransportKind::Ws => sip_transaction::TransportKind::Ws,
         sip_transport::TransportKind::Wss => sip_transaction::TransportKind::Wss,
+    }
+}
+
+/// Loudly warn the operator if the daemon will auto-accept calls,
+/// registrations, or subscriptions on a non-loopback bind address. The
+/// defaults are convenient for local testing but will turn siphond into an
+/// open answering machine / open registrar if rolled out as-is.
+fn warn_if_open_relay(
+    config: &DaemonConfig,
+    udp_bind: &str,
+    tcp_bind: &str,
+    sips_bind: &str,
+    #[cfg(feature = "ws")] ws_bind: Option<&str>,
+    #[cfg(feature = "ws")] wss_bind: Option<&str>,
+) {
+    let auto_accepts: &[(&str, bool)] = &[
+        ("--auto-accept-calls", config.features.auto_accept_calls),
+        (
+            "--auto-accept-registrations",
+            config.features.auto_accept_registrations,
+        ),
+        (
+            "--auto-accept-subscriptions",
+            config.features.auto_accept_subscriptions,
+        ),
+    ];
+    let any_auto = auto_accepts.iter().any(|&(_, on)| on);
+    if !any_auto {
+        return;
+    }
+
+    #[cfg_attr(not(feature = "ws"), allow(unused_mut))]
+    let mut binds: Vec<&str> = vec![udp_bind, tcp_bind, sips_bind];
+    #[cfg(feature = "ws")]
+    {
+        if let Some(b) = ws_bind {
+            binds.push(b);
+        }
+        if let Some(b) = wss_bind {
+            binds.push(b);
+        }
+    }
+
+    let exposed = binds.iter().any(|b| !is_loopback_bind(b));
+    if !exposed {
+        return;
+    }
+
+    warn!("================================================================");
+    warn!("WARNING: siphond is exposed on a non-loopback address with");
+    warn!("auto-accept enabled. This effectively makes the daemon an open");
+    warn!("relay / answering machine for any reachable peer.");
+    for &(flag, on) in auto_accepts {
+        if on {
+            warn!("  • {flag}=true");
+        }
+    }
+    if !config.features.authentication {
+        warn!("  • --auth is OFF — no Digest authentication required");
+    }
+    warn!("Run with --auto-accept-calls=false (etc.) and --auth=true for");
+    warn!("anything other than local testing.");
+    warn!("================================================================");
+}
+
+/// Treats `0.0.0.0`/`::`/`*` as exposed; `127.0.0.0/8` and `::1` as loopback.
+/// Anything we can't parse falls back to "exposed" so the warning is louder
+/// than necessary rather than missed.
+fn is_loopback_bind(bind: &str) -> bool {
+    let host = bind.rsplit_once(':').map(|(h, _)| h).unwrap_or(bind);
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    if host.is_empty() {
+        return false;
+    }
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return ip.is_loopback();
+    }
+    matches!(host, "localhost")
+}
+
+#[cfg(test)]
+mod open_relay_warning_tests {
+    use super::is_loopback_bind;
+
+    #[test]
+    fn loopback_addresses_are_loopback() {
+        assert!(is_loopback_bind("127.0.0.1:5060"));
+        assert!(is_loopback_bind("127.1.2.3:5060"));
+        assert!(is_loopback_bind("[::1]:5060"));
+        assert!(is_loopback_bind("localhost:5060"));
+    }
+
+    #[test]
+    fn wildcards_and_public_addresses_are_not_loopback() {
+        assert!(!is_loopback_bind("0.0.0.0:5060"));
+        assert!(!is_loopback_bind("[::]:5060"));
+        assert!(!is_loopback_bind("192.168.1.10:5060"));
+        assert!(!is_loopback_bind("203.0.113.5:5060"));
+    }
+
+    #[test]
+    fn malformed_bind_treated_as_exposed() {
+        // Better to over-warn than miss a misconfigured bind.
+        assert!(!is_loopback_bind(""));
+        assert!(!is_loopback_bind("not-a-host:5060"));
     }
 }
 

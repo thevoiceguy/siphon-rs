@@ -2154,9 +2154,14 @@ mod tests {
         assert_eq!(response.code(), 180);
         assert_eq!(response.reason(), "Ringing");
 
-        // Verify RSeq header (should be 1 for first reliable provisional)
-        assert!(response.headers().get("RSeq").is_some());
-        assert_eq!(response.headers().get("RSeq").unwrap(), "1");
+        // Verify RSeq header (RFC 3262 §3 says initial value is random in
+        // 1..=2^31-1; assert the range, not a specific value).
+        let rseq_str = response.headers().get("RSeq").expect("RSeq present");
+        let rseq: u32 = rseq_str.parse().expect("RSeq must be numeric");
+        assert!(
+            (1..=0x7FFF_FFFF).contains(&rseq),
+            "RSeq {rseq} out of RFC 3262 range"
+        );
 
         // Verify Require: 100rel
         assert_eq!(response.headers().get("Require").unwrap(), "100rel");
@@ -2238,9 +2243,16 @@ mod tests {
             false,                           // is_uac
         );
 
-        let _provisional = uas
+        let provisional = uas
             .create_reliable_provisional(&invite_request, &dialog, 180, "Ringing", None)
             .expect("valid reliable provisional");
+        // RFC 3262: PRACK's RAck must echo the RSeq from the matched reliable
+        // provisional. Since the initial RSeq is now random, read it back.
+        let rseq = provisional
+            .headers()
+            .get("RSeq")
+            .expect("RSeq present")
+            .to_string();
 
         // Create PRACK request
         let mut headers = Headers::new();
@@ -2269,7 +2281,7 @@ mod tests {
             .push(SmolStr::new("CSeq"), SmolStr::new("2 PRACK"))
             .unwrap();
         headers
-            .push(SmolStr::new("RAck"), SmolStr::new("1 1 INVITE"))
+            .push(SmolStr::new("RAck"), SmolStr::new(format!("{rseq} 1 INVITE")))
             .unwrap();
 
         let prack_request = Request::new(

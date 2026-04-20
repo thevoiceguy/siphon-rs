@@ -279,6 +279,25 @@ fn validate_expires(expires: Duration) -> Result<(), RegistrationError> {
 /// # Errors
 ///
 /// Returns `NormalizeError::UnsupportedScheme` for non-SIP/non-tel URIs (e.g., mailto:, http:).
+///
+/// Compares two SIP usernames for AOR-vs-Authorization equality.
+///
+/// SIP user-parts are technically case-sensitive (RFC 3261 §19.1.4) but in
+/// practice deployments universally treat them ASCII-case-insensitively, and
+/// raw byte equality lets a homoglyph like `аlice` (Cyrillic а) impersonate
+/// `alice`. We apply Unicode NFC normalization (so visually identical text
+/// in different forms compares equal) and ASCII case folding on top.
+///
+/// This is *not* full Unicode case folding — codepoints outside ASCII are
+/// compared by codepoint value. NFC alone closes the most common look-alike
+/// channel without implementing IDNA-style script confusables.
+pub(crate) fn usernames_equal(a: &str, b: &str) -> bool {
+    use unicode_normalization::UnicodeNormalization;
+    let a_nfc: String = a.nfc().collect();
+    let b_nfc: String = b.nfc().collect();
+    a_nfc.eq_ignore_ascii_case(&b_nfc)
+}
+
 pub fn normalize_aor(uri: &Uri) -> Result<String, NormalizeError> {
     match uri {
         Uri::Sip(sip_uri) => Ok(normalize_sip_aor(sip_uri)),
@@ -1301,6 +1320,13 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
             match auth.verify(request, request.headers()) {
                 Ok(true) => {}
                 Ok(false) => {
+                    // RFC 7616 §3.5: if the failure was specifically due to
+                    // a known-but-expired nonce, issue stale=true so the
+                    // client can retry without re-prompting the user.
+                    if auth.nonce_is_stale(request) {
+                        info!("REGISTER nonce stale, issuing stale=true challenge");
+                        return auth.challenge_stale(request);
+                    }
                     info!("REGISTER authentication failed, issuing challenge");
                     return auth.challenge(request);
                 }
@@ -1352,7 +1378,7 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
                     .map(|(user, _)| user);
 
                 if let Some(aor_user) = aor_user {
-                    if !aor_user.eq_ignore_ascii_case(auth_user.as_str()) {
+                    if !usernames_equal(aor_user, auth_user.as_str()) {
                         warn!(
                             auth_user = %auth_user,
                             aor_user = %aor_user,
@@ -1602,7 +1628,13 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
                     // Authentication succeeded, continue processing
                 }
                 Ok(false) => {
-                    // Authentication failed - issue challenge
+                    // RFC 7616 §3.5: if the failure was specifically due to
+                    // a known-but-expired nonce, issue stale=true so the
+                    // client can retry without re-prompting the user.
+                    if auth.nonce_is_stale(request) {
+                        info!("REGISTER nonce stale, issuing stale=true challenge");
+                        return auth.challenge_stale(request);
+                    }
                     info!("REGISTER authentication failed, issuing challenge");
                     return auth.challenge(request);
                 }
@@ -1657,7 +1689,7 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
                     .map(|(user, _)| user);
 
                 if let Some(aor_user) = aor_user {
-                    if !aor_user.eq_ignore_ascii_case(auth_user.as_str()) {
+                    if !usernames_equal(aor_user, auth_user.as_str()) {
                         warn!(
                             auth_user = %auth_user,
                             aor_user = %aor_user,
@@ -1986,6 +2018,40 @@ mod tests {
             .push("From", "<sip:alice@example.com>;tag=from123")
             .unwrap();
         headers
+    }
+
+    #[test]
+    fn usernames_equal_basic_ascii_case_fold() {
+        assert!(usernames_equal("alice", "ALICE"));
+        assert!(usernames_equal("alice", "alice"));
+        assert!(!usernames_equal("alice", "bob"));
+    }
+
+    #[test]
+    fn usernames_equal_normalizes_nfc() {
+        // Same character, different Unicode forms: NFC composed (\u00E9 = é)
+        // vs NFD decomposed (e + \u0301 combining acute).
+        let composed = "caf\u{00E9}";
+        let decomposed = "cafe\u{0301}";
+        assert_ne!(composed, decomposed, "test premise: bytes differ");
+        assert!(
+            usernames_equal(composed, decomposed),
+            "NFC normalization should make these compare equal"
+        );
+    }
+
+    #[test]
+    fn usernames_equal_does_not_collapse_different_scripts() {
+        // Latin "a" (U+0061) vs Cyrillic "а" (U+0430) are visually identical
+        // but distinct codepoints. NFC alone does NOT fold these together
+        // (they are not canonically equivalent), so the homoglyph is rejected.
+        let latin = "alice";
+        let cyrillic = "\u{0430}lice"; // first char is Cyrillic а
+        assert_ne!(latin, cyrillic);
+        assert!(
+            !usernames_equal(latin, cyrillic),
+            "different scripts must not be considered equal"
+        );
     }
 
     #[test]

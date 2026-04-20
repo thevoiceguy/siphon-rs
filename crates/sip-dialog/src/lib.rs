@@ -1698,10 +1698,21 @@ impl Default for SubscriptionManager {
     }
 }
 
+/// Returns a random initial RSeq value in the inclusive range `1..=2^31 - 1`,
+/// per RFC 3262 §3. Sourced from `OsRng` so the value is unpredictable to
+/// off-path attackers (a deterministic RNG would let them guess the first
+/// reliable-provisional sequence).
+fn random_initial_rseq() -> u32 {
+    use rand::{rngs::OsRng, RngCore};
+    // RngCore::next_u32 may return 0; clamp into 1..=(2^31 - 1).
+    (OsRng.next_u32() & 0x7FFF_FFFF).max(1)
+}
+
 /// RSeq (Reliable Sequence) manager for RFC 3262 PRACK support.
 ///
 /// Manages RSeq sequence numbers for reliable provisional responses.
-/// Each dialog has its own RSeq sequence space starting at 1.
+/// Each dialog gets a random initial RSeq in `1..=2^31 - 1`; subsequent
+/// values increment by 1.
 #[derive(Debug, Clone)]
 pub struct RSeqManager {
     /// Map of DialogId to next RSeq number
@@ -1716,13 +1727,22 @@ impl RSeqManager {
     }
 
     /// Gets the next RSeq for a dialog and increments the counter.
-    /// Returns 1 for the first call.
+    ///
+    /// On first use for a dialog, picks a random initial value in
+    /// `1..=2^31 - 1` per RFC 3262 §3 ("Initial value SHOULD be a random
+    /// number such that the entire 31-bit space is available"). Predictable
+    /// initial RSeq lets an off-path attacker forge PRACK by guessing the
+    /// next value before the legitimate UAC sees the reliable provisional.
+    ///
+    /// Subsequent calls increment by 1 monotonically. Saturating add is
+    /// used so a runaway dialog can't overflow into 0 (which would be an
+    /// invalid RSeq).
     pub fn next_rseq(&self, dialog_id: &DialogId) -> u32 {
         *self
             .sequences
             .entry(dialog_id.clone())
             .and_modify(|rseq| *rseq = rseq.saturating_add(1))
-            .or_insert(1)
+            .or_insert_with(random_initial_rseq)
     }
 
     /// Gets the current RSeq without incrementing.
@@ -2377,5 +2397,40 @@ mod tests {
         // We expect exactly threads*per_thread since IDs are distinct and
         // (threads*per_thread = 3200) < MAX_SUBSCRIPTIONS.
         assert_eq!(count, threads * per_thread);
+    }
+
+    #[test]
+    fn rseq_initial_value_is_random_and_in_range() {
+        // RFC 3262 §3: initial RSeq is in 1..=2^31-1.
+        let mgr = RSeqManager::new();
+
+        // Generate enough initial values to be statistically confident no
+        // two collide (birthday paradox: 64 draws from 2^31 has p≈1e-15
+        // collision; effectively impossible barring an RNG bug).
+        let mut seen = std::collections::HashSet::new();
+        for i in 0..64 {
+            let id = DialogId::unchecked_new(format!("call-{i}"), "from", "to");
+            let v = mgr.next_rseq(&id);
+            assert!(v >= 1, "RSeq must be >= 1, got {v}");
+            assert!(
+                v <= 0x7FFF_FFFF,
+                "RSeq must fit in 31 bits, got {v:#x}"
+            );
+            assert!(seen.insert(v), "duplicate initial RSeq across dialogs: {v}");
+        }
+        // The old impl returned 1 for every dialog; assert at least one was
+        // not 1 to catch any regression to deterministic init.
+        assert!(seen.iter().any(|&v| v != 1), "no random RSeq observed");
+    }
+
+    #[test]
+    fn rseq_increments_monotonically() {
+        let mgr = RSeqManager::new();
+        let id = DialogId::unchecked_new("call", "from", "to");
+        let first = mgr.next_rseq(&id);
+        for n in 1..10 {
+            let v = mgr.next_rseq(&id);
+            assert_eq!(v, first.saturating_add(n), "RSeq must increment by 1");
+        }
     }
 }

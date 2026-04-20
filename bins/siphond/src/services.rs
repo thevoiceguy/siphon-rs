@@ -235,14 +235,95 @@ impl ServiceRegistry {
     }
 }
 
-/// Load users from JSON file
+/// Load users from JSON file.
 ///
-/// Expected format: `{"username": "password", ...}`
+/// Expected format: `{"username": "password", ...}`. Passwords are stored in
+/// plaintext, so on Unix we refuse to load the file unless its mode is no
+/// more permissive than `0600` (owner read/write only). World- or
+/// group-readable credentials are an immediate disclosure to any local user.
 fn load_users_file(path: &std::path::Path) -> anyhow::Result<HashMap<String, String>> {
     use std::fs;
+
+    enforce_secure_users_file_perms(path)?;
 
     let contents = fs::read_to_string(path)?;
     let users: HashMap<String, String> = serde_json::from_str(&contents)?;
 
     Ok(users)
+}
+
+/// Reject a users-file path whose permissions allow access beyond the owner.
+///
+/// On Unix this checks the mode bits and refuses anything more permissive
+/// than `0600`. On other platforms this is a warning since portable
+/// permission semantics aren't easily expressible.
+#[cfg(unix)]
+fn enforce_secure_users_file_perms(path: &std::path::Path) -> anyhow::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    let meta = std::fs::metadata(path)?;
+    // Mask off file-type bits; we only care about the permission bits.
+    let mode = meta.mode() & 0o777;
+    // Any group/world bits set → reject.
+    if mode & 0o077 != 0 {
+        return Err(anyhow::anyhow!(
+            "auth users file {} has insecure permissions {:o}; \
+             plaintext credentials must be readable only by the owner \
+             (chmod 0600 {} to fix)",
+            path.display(),
+            mode,
+            path.display(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn enforce_secure_users_file_perms(path: &std::path::Path) -> anyhow::Result<()> {
+    tracing::warn!(
+        path = %path.display(),
+        "cannot enforce auth-users file permissions on this platform; \
+         ensure the file is readable only by the daemon's user"
+    );
+    Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod users_file_tests {
+    use super::*;
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn write_users_file(mode: u32) -> tempfile::NamedTempFile {
+        let mut f = tempfile::NamedTempFile::new().expect("tempfile");
+        writeln!(f, "{{\"alice\": \"secret\"}}").expect("write");
+        let mut perms = f.as_file().metadata().unwrap().permissions();
+        perms.set_mode(mode);
+        f.as_file().set_permissions(perms).unwrap();
+        f
+    }
+
+    #[test]
+    fn rejects_world_readable_users_file() {
+        let f = write_users_file(0o644);
+        let err = load_users_file(f.path()).expect_err("should refuse 0644");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("insecure permissions"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn rejects_group_readable_users_file() {
+        let f = write_users_file(0o640);
+        assert!(load_users_file(f.path()).is_err(), "should refuse 0640");
+    }
+
+    #[test]
+    fn accepts_owner_only_users_file() {
+        let f = write_users_file(0o600);
+        let users = load_users_file(f.path()).expect("0600 should be accepted");
+        assert_eq!(users.get("alice").map(String::as_str), Some("secret"));
+    }
 }
