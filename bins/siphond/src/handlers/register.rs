@@ -33,12 +33,26 @@ impl RequestHandler for RegisterHandler {
         &self,
         request: &Request,
         handle: ServerTransactionHandle,
-        _ctx: &TransportContext,
+        ctx: &TransportContext,
         services: &ServiceRegistry,
     ) -> Result<()> {
         let call_id = header(request.headers(), "Call-ID")
             .map(|s| s.as_str())
             .unwrap_or("unknown");
+
+        // Per-source-IP REGISTER throttle. Keeps a rogue client from
+        // hammering the binding store (and, under auth, the digest
+        // hasher) at wire-line rate. 503 with Retry-After lets a
+        // compliant client back off on its own.
+        let source_ip = ctx.peer().ip().to_string();
+        if !services
+            .register_rate_limiter
+            .check_rate_limit(&source_ip)
+        {
+            warn!(call_id, %source_ip, "REGISTER rate-limited");
+            send_rate_limited(request, handle).await;
+            return Ok(());
+        }
 
         // Check if registrar is enabled
         let registrar = match &services.registrar {
@@ -115,4 +129,23 @@ fn copy_headers(request: &Request, headers: &mut sip_core::Headers) {
     if let Some(cseq) = header(request.headers(), "CSeq") {
         let _ = headers.push("CSeq", cseq.clone());
     }
+}
+
+/// Sends a 503 Service Unavailable with Retry-After=30 to indicate the
+/// peer is being rate-limited. Shared shape with the dispatcher's
+/// rate-limit responder so clients see a consistent throttle response.
+async fn send_rate_limited(request: &Request, handle: ServerTransactionHandle) {
+    use bytes::Bytes;
+    use sip_core::{Response, StatusLine};
+
+    let mut headers = sip_core::Headers::new();
+    copy_headers(request, &mut headers);
+    let _ = headers.push("Retry-After", "30");
+    let response = Response::new(
+        StatusLine::new(503, "Service Unavailable").expect("valid status line"),
+        headers,
+        Bytes::new(),
+    )
+    .expect("valid response");
+    handle.send_final(response).await;
 }

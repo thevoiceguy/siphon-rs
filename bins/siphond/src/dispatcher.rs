@@ -89,6 +89,7 @@ impl RequestDispatcher {
         &self,
         request: &Request,
         handle: &ServerTransactionHandle,
+        ctx: &TransportContext,
     ) -> bool {
         let authenticator = match &self.services.authenticator {
             Some(auth) => auth,
@@ -102,6 +103,24 @@ impl RequestDispatcher {
             &Method::Ack | &Method::Cancel | &Method::Options | &Method::Register
         ) {
             return true;
+        }
+
+        // Throttle authentication attempts per source IP to cap Digest
+        // brute-force rate. The limiter is checked *before* the hash
+        // comparison so invalid nonces don't get a free hash computation
+        // at attacker-controlled rate. A blocked attempt gets 503 rather
+        // than the usual 401 — returning a 401 challenge would encourage
+        // the attacker to retry immediately and also lets them drain our
+        // nonce pool.
+        let source_ip = ctx.peer().ip().to_string();
+        if !self
+            .services
+            .auth_rate_limiter
+            .check_rate_limit(&source_ip)
+        {
+            warn!(%source_ip, method = ?method, "Auth attempt rate-limited");
+            self.send_rate_limited(request, handle.clone()).await;
+            return false;
         }
 
         // Try to verify the Authorization header
@@ -125,6 +144,32 @@ impl RequestDispatcher {
                 false
             }
         }
+    }
+
+    /// Sends 503 Service Unavailable when a rate limit is hit. We re-use
+    /// this for any hot-path throttle (auth / REGISTER / INVITE) so the
+    /// response shape is consistent.
+    async fn send_rate_limited(&self, request: &Request, handle: ServerTransactionHandle) {
+        use bytes::Bytes;
+        use sip_core::{Headers, Response, StatusLine};
+        use sip_parse::header;
+
+        let mut headers = Headers::new();
+        for name in ["Via", "From", "To", "Call-ID", "CSeq"] {
+            if let Some(value) = header(request.headers(), name) {
+                let _ = headers.push(name, value.clone());
+            }
+        }
+        // Retry-After gives the peer a cooldown hint. 30s matches the
+        // register_preset refill window scale.
+        let _ = headers.push("Retry-After", "30");
+        let response = Response::new(
+            StatusLine::new(503, "Service Unavailable").expect("valid status line"),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid response");
+        handle.send_final(response).await;
     }
 
     /// Dispatch an incoming request to the appropriate handler.
@@ -154,7 +199,7 @@ impl RequestDispatcher {
         }
 
         // Authenticate non-exempt methods when auth is enabled
-        if !self.check_auth(request, &handle).await {
+        if !self.check_auth(request, &handle, ctx).await {
             return;
         }
 

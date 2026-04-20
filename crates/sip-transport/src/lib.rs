@@ -39,7 +39,6 @@ use tracing::{error, info, warn};
 use {
     futures_util::{SinkExt, StreamExt},
     tokio_tungstenite::{
-        accept_hdr_async,
         tungstenite::{self, handshake::server::Request},
     },
 };
@@ -663,7 +662,17 @@ where
 {
     // RFC 7118 requires the "sip" subprotocol; reject peers that do not offer it.
     let mut selected_sip = false;
-    let ws_stream = accept_hdr_async(
+    // Cap per-frame and total-message size so a malicious peer cannot
+    // force us to buffer tungstenite's default 64 MB frame before our
+    // own MAX_BODY_SIZE check runs. 1 MB per frame covers typical SIP
+    // (~1–10 KB) with a comfortable margin; MAX_BODY_SIZE (10 MB)
+    // remains the upper bound on reassembled-message size.
+    let ws_config = tungstenite::protocol::WebSocketConfig {
+        max_frame_size: Some(1024 * 1024),
+        max_message_size: Some(MAX_BODY_SIZE),
+        ..Default::default()
+    };
+    let ws_stream = tokio_tungstenite::accept_hdr_async_with_config(
         stream,
         |req: &Request, mut resp: tungstenite::handshake::server::Response| {
             if let Some(value) = req.headers().get("Sec-WebSocket-Protocol") {
@@ -686,6 +695,7 @@ where
             }
             Ok(resp)
         },
+        Some(ws_config),
     )
     .await?;
 
