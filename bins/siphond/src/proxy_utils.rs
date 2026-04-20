@@ -9,6 +9,7 @@ use sip_parse::header;
 use sip_proxy::ProxyHelpers;
 use sip_transaction::TransportKind;
 use smol_str::SmolStr;
+use tracing::warn;
 
 use crate::services::ServiceRegistry;
 
@@ -154,14 +155,31 @@ pub async fn forward_request(
     // it must not propagate to the next proxy.
     strip_hop_by_hop_request_headers(proxied_req.headers_mut());
 
-    ProxyHelpers::check_max_forwards(&mut proxied_req)?;
-
     let proxy_host = services
         .config
         .local_uri
         .split('@')
         .nth(1)
         .unwrap_or("localhost");
+
+    // RFC 3261 §16.3 / §16.6 step 8: hashed-branch loop check. We must
+    // do this BEFORE inserting our own Via, otherwise the new Via we
+    // add would always be the most recent and we'd flag legitimate
+    // first-time requests as loops. The detector compares each
+    // existing Via's branch against the hash we *would* compute for
+    // this request as if traversing this proxy — so any Via that
+    // already carries that hash with our sent-by means the request
+    // already passed through us once.
+    if let Err(e) = ProxyHelpers::detect_loop_hashed(&proxied_req, proxy_host) {
+        warn!(call_id, error = %e, "Loop detected, rejecting with 482");
+        return Err(anyhow!(
+            "loop detected — respond 482 Loop Detected: {}",
+            e
+        ));
+    }
+
+    ProxyHelpers::check_max_forwards(&mut proxied_req)?;
+
     let transport_name = match ctx.transport() {
         TransportKind::Udp => "UDP",
         TransportKind::Tcp => "TCP",
@@ -172,7 +190,14 @@ pub async fn forward_request(
         TransportKind::TlsSctp => "TLS-SCTP",
     };
 
-    let branch = ProxyHelpers::add_via(&mut proxied_req, proxy_host, transport_name);
+    // Use the loop-detection variant so subsequent hops can recognise
+    // a return trip via this proxy. Branch = hash(To, From, Call-ID,
+    // CSeq-num, Request-URI, our sent-by).
+    let branch = ProxyHelpers::add_via_with_loop_detection(
+        &mut proxied_req,
+        proxy_host,
+        transport_name,
+    );
     services
         .proxy_state
         .store_transaction(crate::proxy_state::ProxyTransaction {

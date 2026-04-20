@@ -1071,6 +1071,19 @@ impl RequestHandler for InviteHandler {
             .map(|s| s.as_str())
             .unwrap_or("unknown");
 
+        // Per-source-IP INVITE throttle. Runs *before* dialog lookup and
+        // mode selection so an INVITE flood can't exhaust dialog-manager
+        // capacity, auth retries, or the B2BUA call-leg map before the
+        // rate limit takes effect. In-dialog re-INVITEs from the same
+        // IP count against this quota too (same preset: 30/min burst
+        // 10); a legitimate re-INVITE cadence stays well below.
+        let source_ip = ctx.peer().ip().to_string();
+        if !services.invite_rate_limiter.check_rate_limit(&source_ip) {
+            warn!(call_id, %source_ip, "INVITE rate-limited");
+            send_rate_limited(request, handle).await;
+            return Ok(());
+        }
+
         // B2BUA MODE: Bridge calls between two users
         if services.config.enable_b2bua() {
             return self
@@ -1629,6 +1642,26 @@ fn copy_dialog_headers(request: &Request, headers: &mut sip_core::Headers) {
     if let Some(cseq) = header(request.headers(), "CSeq") {
         let _ = headers.push("CSeq", cseq.clone());
     }
+}
+
+/// Sends 503 Service Unavailable + Retry-After to signal a rate-limit
+/// cool-down to the peer. Same shape the dispatcher uses for auth
+/// throttling; keeping the message uniform lets clients have one
+/// retry-after code path.
+async fn send_rate_limited(request: &Request, handle: ServerTransactionHandle) {
+    use bytes::Bytes;
+    use sip_core::{Response, StatusLine};
+
+    let mut headers = sip_core::Headers::new();
+    copy_dialog_headers(request, &mut headers);
+    let _ = headers.push("Retry-After", "30");
+    let response = Response::new(
+        StatusLine::new(503, "Service Unavailable").expect("valid status line"),
+        headers,
+        Bytes::new(),
+    )
+    .expect("valid response");
+    handle.send_final(response).await;
 }
 
 #[cfg(test)]

@@ -646,27 +646,37 @@ pub struct TlsPool {
 #[cfg(feature = "tls")]
 pub type TlsClientConfig = ClientConfig;
 
+/// Cadence of the background idle sweep for TlsPool. TLS connections
+/// are expensive to establish, so we don't poll too aggressively; 30s
+/// matches the WS ping cadence used elsewhere.
+#[cfg(feature = "tls")]
+const TLS_POOL_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
+
 #[cfg(feature = "tls")]
 impl TlsPool {
     pub fn new() -> Self {
-        Self {
+        let pool = Self {
             inner: Arc::new(DashMap::new()),
             max_size: MAX_POOL_SIZE,
             idle_timeout: IDLE_TIMEOUT,
             permits: Arc::new(Semaphore::new(MAX_POOL_SIZE)),
             inbound_tx: Arc::new(Mutex::new(None)),
-        }
+        };
+        pool.spawn_idle_sweeper();
+        pool
     }
 
     /// Creates a new pool with custom limits.
     pub fn with_limits(max_size: usize, idle_timeout: Duration) -> Self {
-        Self {
+        let pool = Self {
             inner: Arc::new(DashMap::new()),
             max_size,
             idle_timeout,
             permits: Arc::new(Semaphore::new(max_size)),
             inbound_tx: Arc::new(Mutex::new(None)),
-        }
+        };
+        pool.spawn_idle_sweeper();
+        pool
     }
 
     /// Registers an inbound packet sink so responses on outbound TLS
@@ -675,6 +685,50 @@ impl TlsPool {
     pub async fn set_inbound_tx(&self, tx: Sender<InboundPacket>) {
         let mut guard = self.inbound_tx.lock().await;
         *guard = Some(tx);
+    }
+
+    /// Spawn a background task that sweeps idle TLS connections.
+    ///
+    /// `cleanup_idle` only runs opportunistically inside `reserve_slot`,
+    /// i.e. when a new connection is being opened. If the workload goes
+    /// quiet, idle TLS connections accumulate until eviction or process
+    /// exit. This task wakes every `TLS_POOL_SWEEP_INTERVAL` and prunes
+    /// entries past the idle timeout, bounding steady-state memory.
+    ///
+    /// The task holds a `Weak` reference to the map so it exits cleanly
+    /// when the pool is dropped; no shutdown signal needed.
+    fn spawn_idle_sweeper(&self) {
+        // TlsPool can be constructed in synchronous contexts (tests, CLI
+        // init paths); only arm the background sweep when we're on a
+        // tokio runtime.
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let inner = Arc::downgrade(&self.inner);
+        let idle_timeout = self.idle_timeout;
+        handle.spawn(async move {
+            let mut interval = tokio::time::interval(TLS_POOL_SWEEP_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                interval.tick().await;
+                let Some(inner) = inner.upgrade() else {
+                    break;
+                };
+                let mut swept = 0usize;
+                inner.retain(|(addr, _), entry| {
+                    if entry.is_idle(idle_timeout) {
+                        debug!(peer = %addr, "tls pool sweeper: dropping idle connection");
+                        swept += 1;
+                        false
+                    } else {
+                        true
+                    }
+                });
+                if swept > 0 {
+                    debug!(swept, "tls pool idle sweep complete");
+                }
+            }
+        });
     }
 
     /// Atomic permit reservation; see `ConnectionPool::reserve_slot`.

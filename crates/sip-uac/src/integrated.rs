@@ -1048,7 +1048,7 @@ impl IntegratedUAC {
                     && self.config.auto_retry_auth
                 {
                     warn!("Received {} challenge, retrying with authentication", response.code());
-                    return self.retry_with_auth(request, response, dns_target).await;
+                    return self.retry_with_auth(request, response, dns_target, 1).await;
                 }
 
                 Ok(response)
@@ -1063,11 +1063,19 @@ impl IntegratedUAC {
     }
 
     /// Retries a request with authentication after receiving 401/407.
+    ///
+    /// `attempt` is 1-based: 1 is the first retry (second overall send).
+    /// If the retried request is itself challenged, we re-arm with the
+    /// new nonce and go again up to `config.max_auth_retries`, then
+    /// surface whichever challenge we received last. This honours the
+    /// documented `max_auth_retries` field, which previously had no
+    /// effect on the send path.
     async fn retry_with_auth(
         &self,
         original_request: Request,
         challenge: Response,
         dns_target: DnsTarget,
+        attempt: u32,
     ) -> Result<Response> {
         // Extract realm for provider
         let realm = extract_realm(&challenge);
@@ -1094,7 +1102,7 @@ impl IntegratedUAC {
         self.auto_fill_headers(&mut auth_request, Some(dns_target.transport()))
             .await;
 
-        // Send authenticated request (non-recursive - don't retry again)
+        // Send authenticated request.
         let ctx = self.create_transport_context(&dns_target).await?;
         let (final_tx, final_rx) = oneshot::channel();
         let (term_tx, term_rx) = oneshot::channel();
@@ -1110,16 +1118,52 @@ impl IntegratedUAC {
             .await?;
 
         info!(
-            "Started authenticated client transaction {} for {:?}",
+            "Started authenticated client transaction {} (attempt {}) for {:?}",
             key.branch(),
+            attempt,
             auth_request.method()
         );
 
-        tokio::select! {
-            Ok(response) = final_rx => Ok(response),
-            Ok(reason) = term_rx => Err(anyhow!("Authenticated transaction terminated: {}", reason)),
-            else => Err(anyhow!("Authenticated response channels closed")),
+        let response = tokio::select! {
+            Ok(response) = final_rx => response,
+            Ok(reason) = term_rx => return Err(anyhow!("Authenticated transaction terminated: {}", reason)),
+            else => return Err(anyhow!("Authenticated response channels closed")),
+        };
+
+        // If we're still being challenged, retry up to the configured
+        // cap. Bounded recursion: each level increments `attempt` and
+        // bails once `attempt >= max_auth_retries`. Returning the last
+        // challenge (rather than erroring) lets callers react to a
+        // persistent rejection the same way they would to any other
+        // final response.
+        if (response.code() == 401 || response.code() == 407)
+            && attempt < self.config.max_auth_retries
+        {
+            warn!(
+                code = response.code(),
+                attempt,
+                max = self.config.max_auth_retries,
+                "auth still rejected; retrying with refreshed credentials"
+            );
+            return Box::pin(self.retry_with_auth(
+                auth_request,
+                response,
+                dns_target,
+                attempt + 1,
+            ))
+            .await;
         }
+
+        if response.code() == 401 || response.code() == 407 {
+            warn!(
+                code = response.code(),
+                attempts = attempt,
+                max = self.config.max_auth_retries,
+                "auth retry limit reached; returning last challenge to caller"
+            );
+        }
+
+        Ok(response)
     }
 
     /// Creates a TransportContext from a DnsTarget.

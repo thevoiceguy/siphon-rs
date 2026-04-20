@@ -13,6 +13,7 @@ use sip_dialog::{
     prack_validator::PrackValidator, session_timer_manager::SessionTimerManager, DialogManager,
     RSeqManager, SubscriptionManager,
 };
+use sip_ratelimit::{RateLimitConfig, RateLimiter};
 use sip_registrar::{BasicRegistrar, MemoryLocationStore};
 use sip_transaction::{TransactionManager, TransportDispatcher};
 use sip_transport::pool::TlsClientConfig;
@@ -78,6 +79,17 @@ pub struct ServiceRegistry {
 
     /// Daemon configuration (immutable)
     pub config: Arc<DaemonConfig>,
+
+    /// Per-source-IP rate limiter for authentication attempts. Keyed by
+    /// peer IP. Used to throttle Digest brute-force across REGISTER and
+    /// other authenticated methods. Always present; may be `disabled()`.
+    pub auth_rate_limiter: Arc<RateLimiter>,
+
+    /// Per-source-IP rate limiter for REGISTER. Default: 60/h burst 10.
+    pub register_rate_limiter: Arc<RateLimiter>,
+
+    /// Per-source-IP rate limiter for INVITE. Default: 30/min burst 10.
+    pub invite_rate_limiter: Arc<RateLimiter>,
 }
 
 impl ServiceRegistry {
@@ -174,6 +186,17 @@ impl ServiceRegistry {
             None
         };
 
+        // Per-source rate limiters. We instantiate three pools so each
+        // method type has its own bucket — overrunning REGISTER doesn't
+        // starve INVITE, etc. Keyed by peer IP at the call site (handled
+        // in the dispatcher / handlers, since the rate-limiter API is
+        // string-keyed).
+        let auth_rate_limiter = Arc::new(RateLimiter::new(RateLimitConfig::auth_preset()));
+        let register_rate_limiter =
+            Arc::new(RateLimiter::new(RateLimitConfig::register_preset()));
+        let invite_rate_limiter =
+            Arc::new(RateLimiter::new(RateLimitConfig::invite_preset()));
+
         Self {
             dialog_mgr,
             subscription_mgr,
@@ -190,6 +213,9 @@ impl ServiceRegistry {
             udp_socket: OnceLock::new(),
             tls_client_config: OnceLock::new(),
             config,
+            auth_rate_limiter,
+            register_rate_limiter,
+            invite_rate_limiter,
         }
     }
 
