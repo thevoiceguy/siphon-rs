@@ -373,8 +373,10 @@ fn parse_k_line(input: &str) -> IResult<&str, SmolStr> {
 /// characters in addition to `:`. Without that, a property attribute that
 /// happens to be followed by a value attribute on the next line — e.g.
 ///
-///     a=sendonly\r\n
-///     a=rtpmap:9 G722/8000\r\n
+/// ```text
+/// a=sendonly\r\n
+/// a=rtpmap:9 G722/8000\r\n
+/// ```
 ///
 /// — would be greedy-parsed as a single Value attribute named
 /// `"sendonly\r\na=rtpmap"` with value `"9 G722/8000"`, because the
