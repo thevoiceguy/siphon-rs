@@ -368,13 +368,26 @@ fn parse_k_line(input: &str) -> IResult<&str, SmolStr> {
 }
 
 /// Parse attribute line: a=<attribute> or a=<attribute>:<value>
+///
+/// The Value-form arm constrains the name parser to stop at line-break
+/// characters in addition to `:`. Without that, a property attribute that
+/// happens to be followed by a value attribute on the next line — e.g.
+///
+///     a=sendonly\r\n
+///     a=rtpmap:9 G722/8000\r\n
+///
+/// — would be greedy-parsed as a single Value attribute named
+/// `"sendonly\r\na=rtpmap"` with value `"9 G722/8000"`, because the
+/// original `take_till(|c| c == ':')` happily consumed the newline. The
+/// Property-form arm in the `alt` would never get a chance because the
+/// Value arm always matched first.
 fn parse_a_line(input: &str) -> IResult<&str, Attribute> {
     preceded(
         tag("a="),
         alt((
             map(
                 tuple((
-                    take_till(|c| c == ':'),
+                    take_till(|c| c == ':' || c == '\r' || c == '\n'),
                     preceded(char(':'), take_till(|c| c == '\r' || c == '\n')),
                 )),
                 |(name, value): (&str, &str)| Attribute::Value {
@@ -841,6 +854,54 @@ mod tests {
         assert_eq!(result.bandwidth.len(), 1);
         assert_eq!(result.bandwidth[0].bw_type.as_str(), "AS");
         assert_eq!(result.bandwidth[0].bandwidth, 256);
+    }
+
+    /// Regression: a property attribute (`a=<name>` with no value)
+    /// followed on the next line by a value attribute (`a=<name>:<value>`)
+    /// must be parsed as two distinct `Attribute`s, not greedy-merged into
+    /// one because the value-form name parser failed to stop at the line
+    /// break. RFC 3264 hold/resume offers ride on this: the direction line
+    /// is property-form and is typically immediately followed by `a=rtpmap`.
+    #[test]
+    fn parses_property_attribute_followed_by_value_attribute() {
+        let sdp = "v=0\r\n\
+                   o=alice 123 0 IN IP4 127.0.0.1\r\n\
+                   s=anvil\r\n\
+                   c=IN IP4 127.0.0.1\r\n\
+                   t=0 0\r\n\
+                   m=audio 5000 RTP/AVP 9\r\n\
+                   a=sendonly\r\n\
+                   a=rtpmap:9 G722/8000\r\n";
+
+        let result = parse_sdp(sdp).expect("valid SDP");
+        let media = &result.media[0];
+
+        let mut got_property_sendonly = false;
+        let mut got_value_rtpmap = false;
+        for attr in &media.attributes {
+            match attr {
+                Attribute::Property(name) if name.as_str() == "sendonly" => {
+                    got_property_sendonly = true;
+                }
+                Attribute::Value { name, value }
+                    if name.as_str() == "rtpmap" && value.as_str() == "9 G722/8000" =>
+                {
+                    got_value_rtpmap = true;
+                }
+                _ => {}
+            }
+        }
+
+        assert!(
+            got_property_sendonly,
+            "missing Property(sendonly); attributes were {:?}",
+            media.attributes
+        );
+        assert!(
+            got_value_rtpmap,
+            "missing Value(rtpmap, 9 G722/8000); attributes were {:?}",
+            media.attributes
+        );
     }
 
     #[test]
