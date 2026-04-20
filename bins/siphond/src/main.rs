@@ -128,6 +128,16 @@ struct Args {
     #[arg(long, default_value = "false", value_parser = clap::value_parser!(bool))]
     enable_session_timers: bool,
 
+    /// Allow REFER to dial private / loopback / link-local targets.
+    ///
+    /// By default siphond refuses REFER requests whose Refer-To resolves to
+    /// non-globally-routable addresses, since the transferor picks the
+    /// target freely and could otherwise probe 127.0.0.1 or the internal
+    /// network. Enable only when the REFER source is trusted (e.g. a lab
+    /// harness bridging localhost endpoints).
+    #[arg(long, default_value = "false", value_parser = clap::value_parser!(bool))]
+    allow_private_refer_targets: bool,
+
     /// Scenario file (YAML or JSON) for scripted flows
     #[arg(long)]
     scenario: Option<std::path::PathBuf>,
@@ -204,6 +214,7 @@ async fn main() -> Result<()> {
             enable_prack: args.enable_prack,
             enable_refer: args.enable_refer,
             enable_session_timers: args.enable_session_timers,
+            allow_private_refer_targets: args.allow_private_refer_targets,
         },
         sdp_profile: args.sdp_profile,
         rtp_audio_port: args.rtp_audio_port,

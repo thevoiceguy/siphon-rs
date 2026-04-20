@@ -62,6 +62,16 @@ pub struct FeatureFlags {
 
     /// Send Session-Timers (RFC 4028)
     pub enable_session_timers: bool,
+
+    /// Allow REFER targets that resolve to private, loopback, link-local,
+    /// unspecified, multicast, or documentation IP ranges.
+    ///
+    /// Default `false`. The REFER transferor is an untrusted peer and can
+    /// name any host; without this gate the daemon will dial
+    /// `sip:victim@127.0.0.1` to probe loopback services or RFC 1918
+    /// addresses to scan the internal network. Set to `true` only when
+    /// the REFER source is fully trusted (e.g. an internal test rig).
+    pub allow_private_refer_targets: bool,
 }
 
 impl Default for FeatureFlags {
@@ -74,6 +84,7 @@ impl Default for FeatureFlags {
             enable_prack: true,
             enable_refer: true,
             enable_session_timers: false,
+            allow_private_refer_targets: false,
         }
     }
 }

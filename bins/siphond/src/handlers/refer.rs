@@ -564,6 +564,22 @@ impl RequestHandler for ReferHandler {
                     return Ok(());
                 };
 
+                // SSRF guard: the Refer-To target is attacker-controlled (the
+                // transferor dictates it via the REFER). Without a filter
+                // the daemon will dial whatever address they name — including
+                // 127.0.0.1 to probe loopback services, RFC 1918 ranges to
+                // scan the internal network, or 0.0.0.0 / multicast.
+                if !refer_target_allowed(&target_addr, &services.config) {
+                    warn!(
+                        call_id,
+                        target = %target_addr,
+                        "Refer-To target blocked by SSRF policy (non-routable address)"
+                    );
+                    Self::send_notify(&uas, &mut subscription, 403, "Forbidden", services, _ctx)
+                        .await;
+                    return Ok(());
+                }
+
                 let transport_param: Option<&SmolStr> = refer_uri
                     .params()
                     .get(&SmolStr::new("transport"))
@@ -729,6 +745,92 @@ fn percent_decode(input: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// Returns `true` if the daemon is allowed to initiate an outbound call to
+/// `target` on behalf of a REFER transferor, given the current feature flags.
+///
+/// REFER is in-dialog but the target URI is attacker-controlled — the
+/// transferor picks it freely. Without a filter the daemon becomes an SSRF
+/// / internal-scan primitive: the transferor could name `127.0.0.1`,
+/// RFC 1918 ranges, `0.0.0.0`, link-local, multicast, or documentation
+/// addresses. By default we refuse any non-global-unicast address; the
+/// operator can opt in with `allow_private_refer_targets`.
+fn refer_target_allowed(target: &std::net::SocketAddr, config: &crate::config::DaemonConfig) -> bool {
+    if config.features.allow_private_refer_targets {
+        return true;
+    }
+    is_global_unicast(&target.ip())
+}
+
+/// Approximates "globally-routable unicast address" without requiring
+/// the unstable `IpAddr::is_global`. Accepts addresses that are not
+/// loopback / private / link-local / unspecified / multicast /
+/// documentation / benchmarking / broadcast.
+fn is_global_unicast(ip: &std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(v4) => {
+            if v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_multicast()
+                || v4.is_broadcast()
+                || v4.is_documentation()
+            {
+                return false;
+            }
+            let [a, b, _, _] = v4.octets();
+            // Shared address space (RFC 6598, 100.64.0.0/10)
+            if a == 100 && (64..=127).contains(&b) {
+                return false;
+            }
+            // Benchmarking (RFC 2544, 198.18.0.0/15)
+            if a == 198 && (b == 18 || b == 19) {
+                return false;
+            }
+            // IETF protocol assignments (RFC 6890, 192.0.0.0/24)
+            if a == 192 && b == 0 && v4.octets()[2] == 0 {
+                return false;
+            }
+            true
+        }
+        IpAddr::V6(v6) => {
+            if v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+            {
+                return false;
+            }
+            let segs = v6.segments();
+            // Link-local fe80::/10
+            if segs[0] & 0xffc0 == 0xfe80 {
+                return false;
+            }
+            // Unique local fc00::/7
+            if segs[0] & 0xfe00 == 0xfc00 {
+                return false;
+            }
+            // Documentation 2001:db8::/32
+            if segs[0] == 0x2001 && segs[1] == 0xdb8 {
+                return false;
+            }
+            // IPv4-mapped ::ffff:0:0/96 — re-check the embedded v4.
+            if segs[0] == 0 && segs[1] == 0 && segs[2] == 0 && segs[3] == 0
+                && segs[4] == 0 && segs[5] == 0xffff
+            {
+                let mapped = std::net::Ipv4Addr::new(
+                    (segs[6] >> 8) as u8,
+                    (segs[6] & 0xff) as u8,
+                    (segs[7] >> 8) as u8,
+                    (segs[7] & 0xff) as u8,
+                );
+                return is_global_unicast(&IpAddr::V4(mapped));
+            }
+            true
+        }
+    }
+}
+
 /// Copy essential headers from request to response
 fn copy_headers(request: &Request, headers: &mut sip_core::Headers) {
     if let Some(via) = header(request.headers(), "Via") {
@@ -788,5 +890,66 @@ mod tests {
         assert_eq!(percent_decode("plain"), "plain");
         // Truncated escape is passed through literally rather than panicking.
         assert_eq!(percent_decode("ab%2"), "ab%2");
+    }
+
+    #[test]
+    fn ssrf_filter_rejects_non_global_ipv4() {
+        use std::net::{IpAddr, Ipv4Addr};
+        let cases: &[Ipv4Addr] = &[
+            Ipv4Addr::new(127, 0, 0, 1),       // loopback
+            Ipv4Addr::new(10, 0, 0, 1),        // private
+            Ipv4Addr::new(172, 16, 0, 1),      // private
+            Ipv4Addr::new(192, 168, 1, 1),     // private
+            Ipv4Addr::new(169, 254, 1, 1),     // link-local
+            Ipv4Addr::new(0, 0, 0, 0),         // unspecified
+            Ipv4Addr::new(224, 0, 0, 1),       // multicast
+            Ipv4Addr::new(255, 255, 255, 255), // broadcast
+            Ipv4Addr::new(192, 0, 2, 1),       // documentation (TEST-NET-1)
+            Ipv4Addr::new(100, 64, 0, 1),      // shared (RFC 6598)
+            Ipv4Addr::new(198, 18, 0, 1),      // benchmarking (RFC 2544)
+        ];
+        for ip in cases {
+            assert!(
+                !is_global_unicast(&IpAddr::V4(*ip)),
+                "{ip} should NOT be treated as globally routable"
+            );
+        }
+    }
+
+    #[test]
+    fn ssrf_filter_accepts_global_ipv4() {
+        use std::net::{IpAddr, Ipv4Addr};
+        for ip in [
+            Ipv4Addr::new(8, 8, 8, 8),
+            Ipv4Addr::new(203, 0, 113, 5), // documentation, but the user said yes
+        ] {
+            // 203.0.113.0/24 IS documentation — it should be rejected. Keep
+            // only the first case as the public-IP check.
+            if ip == Ipv4Addr::new(203, 0, 113, 5) {
+                assert!(!is_global_unicast(&IpAddr::V4(ip)));
+            } else {
+                assert!(is_global_unicast(&IpAddr::V4(ip)));
+            }
+        }
+    }
+
+    #[test]
+    fn ssrf_filter_rejects_non_global_ipv6() {
+        use std::net::{IpAddr, Ipv6Addr};
+        let cases: &[Ipv6Addr] = &[
+            "::1".parse().unwrap(),              // loopback
+            "::".parse().unwrap(),               // unspecified
+            "ff02::1".parse().unwrap(),          // multicast
+            "fe80::1".parse().unwrap(),          // link-local
+            "fc00::1".parse().unwrap(),          // unique local
+            "2001:db8::1".parse().unwrap(),      // documentation
+            "::ffff:127.0.0.1".parse().unwrap(), // v4-mapped loopback
+        ];
+        for ip in cases {
+            assert!(
+                !is_global_unicast(&IpAddr::V6(*ip)),
+                "{ip} should NOT be treated as globally routable"
+            );
+        }
     }
 }
