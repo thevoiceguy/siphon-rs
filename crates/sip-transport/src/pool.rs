@@ -27,6 +27,24 @@ const MAX_POOL_SIZE: usize = 1000;
 /// Idle timeout for pooled connections (close after 5 minutes of inactivity).
 const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Default outbound CRLF keepalive interval (RFC 6223 / RFC 5626 §3.5.1).
+///
+/// The peer-to-peer mapping for NAT and stateful firewalls typically
+/// expires after about two minutes of idle time. 95 seconds leaves
+/// ~25 seconds of slack before the most common 120s timeout — long
+/// enough to not spam the wire, short enough to refresh the binding
+/// reliably.
+///
+/// Apps can override via `ConnectionPool::with_keepalive_interval` /
+/// `TlsPool::with_keepalive_interval`, or disable entirely by
+/// passing `None`.
+pub const DEFAULT_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(95);
+
+/// The double-CRLF ping frame emitted on TCP / TLS keepalive ticks.
+/// Peers respond with a single CRLF pong that our inbound framer
+/// absorbs automatically — no handler intervention required.
+pub(crate) const CRLF_KEEPALIVE_PING: &[u8] = b"\r\n\r\n";
+
 /// Connection entry with activity tracking for eviction.
 #[derive(Debug)]
 struct PoolEntry {
@@ -74,6 +92,75 @@ impl PoolEntry {
 
     fn is_idle(&self, timeout: Duration) -> bool {
         self.last_used.elapsed() > timeout
+    }
+}
+
+/// Drives a writer half of a TCP / TLS stream, consuming send frames
+/// from the supplied channel and interleaving RFC 6223 CRLF keepalive
+/// pings on a configurable interval.
+///
+/// Exits when the channel is closed, when a write fails, or when a
+/// keepalive ping fails — each of those indicates the connection is
+/// no longer usable and the pool entry should be reaped. The
+/// keepalive timer resets after every real send so busy connections
+/// never emit spurious pings.
+///
+/// Passing `keepalive = None` disables the ping entirely — useful for
+/// tests and for transports where the keepalive is unwanted.
+async fn run_stream_writer_with_keepalive<W>(
+    writer: &mut W,
+    rx: &mut mpsc::Receiver<Bytes>,
+    keepalive: Option<Duration>,
+) where
+    W: AsyncWriteExt + Unpin,
+{
+    // `interval_at` starts the first tick after the duration, not
+    // immediately — exactly the "keep binding alive while idle"
+    // behaviour we want.
+    let mut keepalive_timer = keepalive.map(|d| {
+        let mut i = tokio::time::interval_at(tokio::time::Instant::now() + d, d);
+        i.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        i
+    });
+
+    loop {
+        tokio::select! {
+            // Biased: drain payloads first so a busy connection
+            // doesn't race the keepalive tick.
+            biased;
+
+            maybe_buf = rx.recv() => {
+                let Some(buf) = maybe_buf else {
+                    // Channel closed — pool entry was dropped.
+                    break;
+                };
+                if writer.write_all(&buf).await.is_err() {
+                    break;
+                }
+                if writer.flush().await.is_err() {
+                    break;
+                }
+                // Real traffic means the NAT binding is fresh; reset
+                // the keepalive countdown.
+                if let Some(t) = keepalive_timer.as_mut() {
+                    t.reset();
+                }
+            }
+
+            _ = async {
+                match keepalive_timer.as_mut() {
+                    Some(t) => { t.tick().await; }
+                    None => std::future::pending::<()>().await,
+                }
+            } => {
+                if writer.write_all(CRLF_KEEPALIVE_PING).await.is_err() {
+                    break;
+                }
+                if writer.flush().await.is_err() {
+                    break;
+                }
+            }
+        }
     }
 }
 
@@ -150,6 +237,10 @@ pub struct ConnectionPool {
     /// when the entry is dropped (eviction, send failure, idle cleanup).
     /// Shared across TCP and WS so the total connection count is the cap.
     permits: Arc<Semaphore>,
+    /// RFC 6223 outbound keepalive interval for TCP connections. `None`
+    /// disables the background CRLF ping. WebSocket connections don't
+    /// use this — tokio-tungstenite handles WS-native ping/pong.
+    keepalive_interval: Option<Duration>,
 }
 
 impl ConnectionPool {
@@ -162,6 +253,7 @@ impl ConnectionPool {
             idle_timeout: IDLE_TIMEOUT,
             inbound_tx: Arc::new(Mutex::new(None)),
             permits: Arc::new(Semaphore::new(MAX_POOL_SIZE)),
+            keepalive_interval: Some(DEFAULT_KEEPALIVE_INTERVAL),
         }
     }
 
@@ -175,7 +267,27 @@ impl ConnectionPool {
             idle_timeout,
             inbound_tx: Arc::new(Mutex::new(None)),
             permits: Arc::new(Semaphore::new(max_size)),
+            keepalive_interval: Some(DEFAULT_KEEPALIVE_INTERVAL),
         }
+    }
+
+    /// Configure the outbound RFC 6223 CRLF keepalive interval for
+    /// TCP connections.
+    ///
+    /// Passing `Some(d)` schedules a `\r\n\r\n` ping every `d` after
+    /// the last write on each pooled connection; peers MAY respond
+    /// with a single-CRLF pong, which the inbound framer absorbs
+    /// automatically. Passing `None` disables the background ping.
+    /// The timer resets after every real send, so busy connections
+    /// effectively never ping.
+    pub fn with_keepalive_interval(mut self, interval: Option<Duration>) -> Self {
+        self.keepalive_interval = interval;
+        self
+    }
+
+    /// Returns the current keepalive interval (`None` if disabled).
+    pub fn keepalive_interval(&self) -> Option<Duration> {
+        self.keepalive_interval
     }
 
     /// Reserves a slot in the pool, atomically. Tries to acquire a permit;
@@ -305,18 +417,14 @@ impl ConnectionPool {
         let mut entry = PoolEntry::new(tx.clone(), permit);
         debug!(peer = %addr, "creating new pool entry");
 
-        // Writer task
+        // Writer task. Drains the send channel and emits periodic
+        // RFC 6223 keepalive pings (`\r\n\r\n`) on idle — the channel
+        // branch resets the keepalive timer on every real send, so
+        // busy connections never ping spuriously.
         let writer_tx = tx.clone();
+        let keepalive = self.keepalive_interval;
         let writer_handle = tokio::spawn(async move {
-            while let Some(buf) = rx.recv().await {
-                if writer.write_all(&buf).await.is_err() {
-                    break;
-                }
-                // Flush the stream to ensure data is sent on the wire
-                if writer.flush().await.is_err() {
-                    break;
-                }
-            }
+            run_stream_writer_with_keepalive(&mut writer, &mut rx, keepalive).await;
         });
         entry.task_handles.push(writer_handle.abort_handle());
         // Supervise the writer: whenever it exits (graceful close,
@@ -637,6 +745,8 @@ pub struct TlsPool {
     /// REGISTER, 1xx/2xx to INVITE) are silently dropped because the
     /// receiving end of the TLS socket is never read.
     inbound_tx: Arc<Mutex<Option<Sender<InboundPacket>>>>,
+    /// RFC 6223 outbound keepalive interval. `None` disables.
+    keepalive_interval: Option<Duration>,
 }
 
 #[cfg(feature = "tls")]
@@ -657,6 +767,7 @@ impl TlsPool {
             idle_timeout: IDLE_TIMEOUT,
             permits: Arc::new(Semaphore::new(MAX_POOL_SIZE)),
             inbound_tx: Arc::new(Mutex::new(None)),
+            keepalive_interval: Some(DEFAULT_KEEPALIVE_INTERVAL),
         };
         pool.spawn_idle_sweeper();
         pool
@@ -670,9 +781,23 @@ impl TlsPool {
             idle_timeout,
             permits: Arc::new(Semaphore::new(max_size)),
             inbound_tx: Arc::new(Mutex::new(None)),
+            keepalive_interval: Some(DEFAULT_KEEPALIVE_INTERVAL),
         };
         pool.spawn_idle_sweeper();
         pool
+    }
+
+    /// Configure the RFC 6223 CRLF keepalive interval for TLS
+    /// connections. Same semantics as
+    /// [`ConnectionPool::with_keepalive_interval`].
+    pub fn with_keepalive_interval(mut self, interval: Option<Duration>) -> Self {
+        self.keepalive_interval = interval;
+        self
+    }
+
+    /// Returns the current TLS keepalive interval (`None` if disabled).
+    pub fn keepalive_interval(&self) -> Option<Duration> {
+        self.keepalive_interval
     }
 
     /// Registers an inbound packet sink so responses on outbound TLS
@@ -829,16 +954,12 @@ impl TlsPool {
         let writer_tx = tx.clone();
         let mut entry = PoolEntry::new(tx.clone(), permit);
 
+        // TLS writer task with keepalive (RFC 6223). Same idle-reset
+        // semantics as the TCP pool; we read `keepalive_interval`
+        // from the pool struct.
+        let keepalive = self.keepalive_interval;
         let writer_handle = tokio::spawn(async move {
-            while let Some(buf) = rx.recv().await {
-                if writer.write_all(&buf).await.is_err() {
-                    break;
-                }
-                // Flush the stream to ensure data is sent on the wire
-                if writer.flush().await.is_err() {
-                    break;
-                }
-            }
+            run_stream_writer_with_keepalive(&mut writer, &mut rx, keepalive).await;
             // Perform proper TLS shutdown when connection closes.
             let _ = writer.shutdown().await;
         });
@@ -1203,5 +1324,121 @@ mod tests {
         let removed = pool.cleanup_idle();
         assert_eq!(removed, 5);
         assert_eq!(pool.len(), 0);
+    }
+
+    // =====================================================================
+    // RFC 6223 / RFC 5626 §3.5 outbound CRLF keepalive
+    // =====================================================================
+
+    /// Spawns a loopback TCP listener that records every byte the
+    /// client sends into a shared `Vec<u8>`. Returns the listener's
+    /// addr and a handle to the captured bytes.
+    async fn spawn_capture_listener() -> (
+        SocketAddr,
+        Arc<tokio::sync::Mutex<Vec<u8>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use tokio::net::TcpListener;
+        let captured: Arc<tokio::sync::Mutex<Vec<u8>>> =
+            Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let cap = Arc::clone(&captured);
+        let handle = tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = [0u8; 4096];
+                loop {
+                    match stream.read(&mut buf).await {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            cap.lock().await.extend_from_slice(&buf[..n]);
+                        }
+                        Err(_) => break,
+                    }
+                }
+            }
+        });
+        (addr, captured, handle)
+    }
+
+    #[tokio::test]
+    async fn tcp_pool_emits_crlf_keepalive_when_idle() {
+        // Short keepalive interval so the test is fast. The first
+        // tick happens `interval` after channel open; wait longer
+        // than that and assert bytes showed up on the wire.
+        let (addr, captured, _) = spawn_capture_listener().await;
+        let pool = ConnectionPool::new().with_keepalive_interval(Some(Duration::from_millis(80)));
+
+        // Send one real frame so the pool opens a connection.
+        pool.send_tcp(
+            addr,
+            Bytes::from_static(b"OPTIONS sip:a SIP/2.0\r\nContent-Length: 0\r\n\r\n"),
+        )
+        .await
+        .unwrap();
+
+        // Wait through at least two keepalive ticks. The initial
+        // send resets the timer, so ~160ms of idle yields ~1-2 pings.
+        tokio::time::sleep(Duration::from_millis(240)).await;
+
+        let bytes = captured.lock().await;
+        let content = &*bytes;
+        assert!(
+            content.windows(4).filter(|w| *w == b"\r\n\r\n").count() >= 2,
+            "expected at least one keepalive CRLFCRLF after OPTIONS; got {} bytes total",
+            content.len(),
+        );
+    }
+
+    #[tokio::test]
+    async fn tcp_pool_keepalive_disabled_emits_no_pings() {
+        let (addr, captured, _) = spawn_capture_listener().await;
+        let pool = ConnectionPool::new().with_keepalive_interval(None);
+
+        // Open the connection with one small frame.
+        let frame = b"OPTIONS sip:a SIP/2.0\r\nContent-Length: 0\r\n\r\n";
+        pool.send_tcp(addr, Bytes::from_static(frame))
+            .await
+            .unwrap();
+
+        // Wait long enough for a keepalive to fire IF it were armed.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let bytes = captured.lock().await;
+        // Expect exactly the OPTIONS bytes — no extra CRLFs injected.
+        assert_eq!(
+            bytes.as_slice(),
+            frame,
+            "keepalive=None MUST NOT emit CRLF pings",
+        );
+    }
+
+    #[tokio::test]
+    async fn tcp_pool_keepalive_timer_resets_on_real_send() {
+        // A busy connection should never emit a keepalive. We send
+        // every 40ms and keepalive is configured at 100ms — each
+        // real send resets the timer so the tick never arrives.
+        let (addr, captured, _) = spawn_capture_listener().await;
+        let pool = ConnectionPool::new().with_keepalive_interval(Some(Duration::from_millis(100)));
+
+        let frame: &[u8] = b"OPTIONS sip:a SIP/2.0\r\nContent-Length: 0\r\n\r\n";
+        for _ in 0..6 {
+            pool.send_tcp(addr, Bytes::from_static(frame))
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(40)).await;
+        }
+
+        let bytes = captured.lock().await;
+        let content = &*bytes;
+        // Bytes on the wire are exactly the 6 OPTIONS frames
+        // concatenated. Each frame ends in CRLFCRLF, so the
+        // count-of-CRLFCRLF should equal the number of frames (6),
+        // not more.
+        let crlf_pairs = content.windows(4).filter(|w| *w == b"\r\n\r\n").count();
+        assert_eq!(
+            crlf_pairs, 6,
+            "expected exactly one CRLFCRLF per OPTIONS (no extra keepalives); got {crlf_pairs}",
+        );
     }
 }
