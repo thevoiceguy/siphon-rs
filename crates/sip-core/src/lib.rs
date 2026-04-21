@@ -139,7 +139,7 @@ pub use token_list::{
 };
 pub use uri::{SipUri, Uri};
 pub use version::SipVersion;
-pub use via::ViaHeader;
+pub use via::{apply_rfc3581_rport, ViaHeader};
 pub use watcher_info::{
     parse_watcherinfo, Watcher, WatcherEvent, WatcherList, WatcherStatus, WatcherinfoDocument,
 };

@@ -499,7 +499,15 @@ async fn handle_packet(
     use sip_transaction::{branch_from_via, request_branch_id, TransactionKey, TransportContext};
 
     // Try parsing as a request
-    if let Some(req) = parse_request(&packet.payload()) {
+    if let Some(mut req) = parse_request(&packet.payload()) {
+        // RFC 3581 §4: stamp the top Via with `received` / `rport`
+        // from the actual source address. Every peer behind NAT
+        // relies on this to route responses back to the public IP
+        // rather than the RFC 1918 address the UA advertised in its
+        // sent-by. Idempotent; a no-op if the UA didn't request
+        // rport and isn't behind NAT.
+        sip_proxy::ProxyHelpers::apply_rport_received(&mut req, packet.peer());
+
         let ws_override = if matches!(
             packet.transport(),
             sip_transport::TransportKind::Ws | sip_transport::TransportKind::Wss

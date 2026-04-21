@@ -545,6 +545,127 @@ impl ViaHeader {
         self.params.insert(name, value);
         Ok(())
     }
+
+    /// Inserts or overwrites a parameter (mutation).
+    ///
+    /// Unlike [`Self::add_param`], this does not error if the
+    /// parameter already exists — it replaces the prior value. Useful
+    /// for RFC 3581 `received` / `rport` population where the server
+    /// needs to overwrite whatever value (or no value) the client
+    /// originally wrote.
+    pub fn set_param(
+        &mut self,
+        name: impl Into<SmolStr>,
+        value: Option<impl Into<SmolStr>>,
+    ) -> Result<(), ViaError> {
+        let name = name.into();
+        validate_param_name(&name)?;
+        let name = SmolStr::new(name.to_ascii_lowercase());
+
+        let value = match value {
+            Some(v) => {
+                let v = v.into();
+                validate_param_value(&v)?;
+                Some(v)
+            }
+            None => None,
+        };
+
+        // Replace-or-insert. Check the length only when we're growing.
+        if !self.params.contains_key(&name) && self.params.len() >= MAX_PARAMS {
+            return Err(ViaError::TooManyParameters { max: MAX_PARAMS });
+        }
+        self.params.insert(name, value);
+        Ok(())
+    }
+}
+
+/// RFC 3581 §4 response-routing enrichment of a Via header.
+///
+/// When a UAS (or proxy) receives a request, it MUST populate the
+/// top Via with response-routing information:
+///
+///   * `received=<source-ip>` — added when the source IP differs
+///     from the Via's `sent-by` host. This lets the UAC (and any
+///     intermediaries) route responses back to the actual sender
+///     rather than whatever address the UAC *thought* it had — the
+///     difference matters behind NAT where the UAC advertises its
+///     RFC 1918 address but responses must reach the public IP.
+///   * `rport=<source-port>` — added only when the client asked for
+///     it by sending `;rport` with no value (RFC 3581 §4: "A client,
+///     adding an rport parameter to the topmost Via header field of
+///     a request, MUST use a value of 'rport' with no value"). The
+///     server then sets it to the source port. If the UAC did NOT
+///     ask for rport, this function leaves the parameter alone.
+///
+/// Returns `true` if any mutation was made. The caller is responsible
+/// for writing the mutated Via back onto the request — typically via
+/// replacing the top Via header value in the request's header set.
+///
+/// This function is idempotent: if the top Via already has a
+/// `received` / `rport` that matches the source, no change is made.
+pub fn apply_rfc3581_rport(via: &mut ViaHeader, source: std::net::SocketAddr) -> bool {
+    let mut mutated = false;
+    let sent_by_host = via
+        .sent_by()
+        .rsplit_once(':')
+        .map(|(h, _)| h)
+        .unwrap_or(via.sent_by())
+        .trim_start_matches('[')
+        .trim_end_matches(']');
+
+    let source_ip = source.ip();
+    let source_ip_str = format_ip_for_via(source_ip);
+    // Add `received` when the source IP disagrees with the Via's
+    // sent-by host. We compare as-strings — a UAC behind NAT will
+    // advertise an RFC 1918 host here that can never match a public
+    // source IP, which is exactly the case this was designed for.
+    if !sent_by_host.eq_ignore_ascii_case(&source_ip_str) {
+        let current = via
+            .param("received")
+            .and_then(|v| v.as_ref())
+            .map(|s| s.as_str());
+        if current != Some(&source_ip_str) {
+            if via
+                .set_param("received", Some(source_ip_str.as_str()))
+                .is_ok()
+            {
+                mutated = true;
+            }
+        }
+    }
+
+    // `rport` is only added when the UAC explicitly asked for it by
+    // including `;rport` with no value. If the param isn't present,
+    // we don't inject one — that would change the semantics the UAC
+    // negotiated.
+    if let Some(existing) = via.param("rport") {
+        let port_str = source.port().to_string();
+        match existing {
+            None => {
+                if via.set_param("rport", Some(port_str.as_str())).is_ok() {
+                    mutated = true;
+                }
+            }
+            Some(current) if current.as_str() != port_str => {
+                if via.set_param("rport", Some(port_str.as_str())).is_ok() {
+                    mutated = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    mutated
+}
+
+/// Format an IP address as it would appear in a Via `received`
+/// parameter. IPv6 addresses are NOT bracketed in `received` (the
+/// brackets are a sent-by artifact, not part of the address).
+fn format_ip_for_via(ip: std::net::IpAddr) -> String {
+    match ip {
+        std::net::IpAddr::V4(v4) => v4.to_string(),
+        std::net::IpAddr::V6(v6) => v6.to_string(),
+    }
 }
 
 impl fmt::Display for ViaHeader {
@@ -788,5 +909,145 @@ mod tests {
         assert!(ViaHeader::new("UDP", "[2001:db8::1").is_err());
         assert!(ViaHeader::new("UDP", "2001:db8::1]").is_err());
         assert!(ViaHeader::new("UDP", "2001:db8::1").is_err());
+    }
+
+    // =====================================================================
+    // RFC 3581 rport / received
+    // =====================================================================
+
+    use std::net::SocketAddr;
+
+    #[test]
+    fn set_param_overwrites_existing_value() {
+        let mut via = ViaHeader::parse("SIP/2.0/UDP host:5060;rport").unwrap();
+        // rport present with no value initially.
+        assert!(via.param("rport").unwrap().is_none());
+        via.set_param("rport", Some("6789")).unwrap();
+        assert_eq!(
+            via.param("rport")
+                .and_then(|v| v.as_ref())
+                .map(|s| s.as_str()),
+            Some("6789"),
+        );
+    }
+
+    #[test]
+    fn apply_rport_adds_received_when_source_differs_from_sent_by() {
+        // UA behind NAT: advertises 192.168.1.50 but source is 203.0.113.77.
+        let mut via =
+            ViaHeader::parse("SIP/2.0/UDP 192.168.1.50:5060;branch=z9hG4bK1;rport").unwrap();
+        let source: SocketAddr = "203.0.113.77:54321".parse().unwrap();
+        assert!(apply_rfc3581_rport(&mut via, source));
+
+        assert_eq!(
+            via.param("received")
+                .and_then(|v| v.as_ref())
+                .map(|s| s.as_str()),
+            Some("203.0.113.77"),
+        );
+        // rport was requested (empty value) — server populates with source port.
+        assert_eq!(
+            via.param("rport")
+                .and_then(|v| v.as_ref())
+                .map(|s| s.as_str()),
+            Some("54321"),
+        );
+    }
+
+    #[test]
+    fn apply_rport_skips_received_when_source_matches_sent_by() {
+        // UA with direct addressing (no NAT): sent-by host IS the source IP.
+        let mut via =
+            ViaHeader::parse("SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bK1;rport").unwrap();
+        let source: SocketAddr = "192.0.2.10:5060".parse().unwrap();
+        assert!(apply_rfc3581_rport(&mut via, source));
+
+        // No received added because sent-by matches.
+        assert!(via.param("received").is_none());
+        // rport still populated because UA asked for it.
+        assert_eq!(
+            via.param("rport")
+                .and_then(|v| v.as_ref())
+                .map(|s| s.as_str()),
+            Some("5060"),
+        );
+    }
+
+    #[test]
+    fn apply_rport_does_not_inject_rport_when_client_did_not_ask() {
+        // The UA didn't include `;rport`, so the server MUST NOT add
+        // one — doing so would change the negotiated semantics.
+        let mut via = ViaHeader::parse("SIP/2.0/UDP 192.168.1.50:5060;branch=z9hG4bK1").unwrap();
+        let source: SocketAddr = "203.0.113.77:54321".parse().unwrap();
+        apply_rfc3581_rport(&mut via, source);
+        assert!(via.param("rport").is_none(), "must not inject rport");
+        // received is still populated because the source differs from sent-by.
+        assert_eq!(
+            via.param("received")
+                .and_then(|v| v.as_ref())
+                .map(|s| s.as_str()),
+            Some("203.0.113.77"),
+        );
+    }
+
+    #[test]
+    fn apply_rport_is_idempotent_when_already_correct() {
+        // Calling twice with the same source produces no further
+        // mutation the second time.
+        let mut via = ViaHeader::parse(
+            "SIP/2.0/UDP 192.168.1.50:5060;branch=z9hG4bK1;rport;received=203.0.113.77",
+        )
+        .unwrap();
+        let source: SocketAddr = "203.0.113.77:54321".parse().unwrap();
+        let first = apply_rfc3581_rport(&mut via, source);
+        let second = apply_rfc3581_rport(&mut via, source);
+        assert!(first, "first call sets rport value");
+        assert!(!second, "second call must be no-op");
+    }
+
+    #[test]
+    fn apply_rport_handles_ipv6_source_correctly() {
+        // Source is an IPv6 literal. `received` MUST NOT include
+        // brackets (brackets are a sent-by artifact per RFC 3261 §25).
+        let mut via = ViaHeader::parse("SIP/2.0/UDP [fe80::1]:5060;branch=z9hG4bK1;rport").unwrap();
+        let source: SocketAddr = "[2001:db8::abcd]:9999".parse().unwrap();
+        apply_rfc3581_rport(&mut via, source);
+        assert_eq!(
+            via.param("received")
+                .and_then(|v| v.as_ref())
+                .map(|s| s.as_str()),
+            Some("2001:db8::abcd"),
+            "received value is unbracketed IPv6",
+        );
+        assert_eq!(
+            via.param("rport")
+                .and_then(|v| v.as_ref())
+                .map(|s| s.as_str()),
+            Some("9999"),
+        );
+    }
+
+    #[test]
+    fn apply_rport_overwrites_stale_received_and_rport() {
+        // An intermediate proxy / replay attack could plant wrong
+        // `received` / `rport` values. The server MUST overwrite.
+        let mut via = ViaHeader::parse(
+            "SIP/2.0/UDP 192.168.1.50:5060;branch=z9hG4bK1;rport=1111;received=192.0.2.99",
+        )
+        .unwrap();
+        let source: SocketAddr = "203.0.113.77:54321".parse().unwrap();
+        assert!(apply_rfc3581_rport(&mut via, source));
+        assert_eq!(
+            via.param("received")
+                .and_then(|v| v.as_ref())
+                .map(|s| s.as_str()),
+            Some("203.0.113.77"),
+        );
+        assert_eq!(
+            via.param("rport")
+                .and_then(|v| v.as_ref())
+                .map(|s| s.as_str()),
+            Some("54321"),
+        );
     }
 }

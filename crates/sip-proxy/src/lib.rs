@@ -210,6 +210,37 @@ impl ProxyHelpers {
         }
     }
 
+    /// Applies RFC 3581 §4 `received` / `rport` handling to the top
+    /// Via of an incoming request, using the source address from the
+    /// transport layer.
+    ///
+    /// Every UAS / proxy SHOULD call this on every received request
+    /// before further processing. Without it, responses routed to
+    /// clients behind NAT end up at the private IP advertised in the
+    /// Via's sent-by — which never resolves on the public internet.
+    ///
+    /// Returns `true` when the top Via was mutated. The header value
+    /// is rewritten in place via [`Headers::replace_first`].
+    ///
+    /// Malformed top Via values are left untouched (not re-serialized
+    /// as a best-effort — if we can't parse, we can't safely modify).
+    pub fn apply_rport_received(request: &mut Request, source: std::net::SocketAddr) -> bool {
+        let top_via = match request.headers().get("Via") {
+            Some(v) => v.to_string(),
+            None => return false,
+        };
+        let mut via = match sip_core::ViaHeader::parse(&top_via) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        if !sip_core::apply_rfc3581_rport(&mut via, source) {
+            return false;
+        }
+        let new_value = via.to_string();
+        let _ = request.headers_mut().replace_first("Via", new_value);
+        true
+    }
+
     /// Prepends a Via header whose branch embeds a hash of request
     /// identity (RFC 3261 §16.6 step 8). When the same logical request
     /// re-arrives at this proxy (because some downstream forwarded it
@@ -933,5 +964,74 @@ mod tests {
         // Route set is now empty: the strict-routing detour fully
         // unwound.
         assert_eq!(req.headers().get_all("Route").count(), 0);
+    }
+
+    // =====================================================================
+    // RFC 3581 rport / received on request-level API
+    // =====================================================================
+
+    fn make_request_with_via(via: &str) -> Request {
+        let mut headers = Headers::new();
+        headers.push("Via", via).unwrap();
+        headers.push("Max-Forwards", "70").unwrap();
+        Request::new(
+            RequestLine::new(
+                Method::Invite,
+                SipUri::parse("sip:bob@example.com").unwrap(),
+            ),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid request")
+    }
+
+    #[test]
+    fn apply_rport_received_rewrites_top_via() {
+        // UA behind NAT: sent-by is RFC 1918, source is a public IP.
+        let mut req =
+            make_request_with_via("SIP/2.0/UDP 192.168.1.50:5060;branch=z9hG4bKabc;rport");
+        let source: std::net::SocketAddr = "203.0.113.77:54321".parse().unwrap();
+        let mutated = ProxyHelpers::apply_rport_received(&mut req, source);
+        assert!(mutated);
+
+        let top_via = req.headers().get("Via").unwrap();
+        assert!(
+            top_via.contains("received=203.0.113.77"),
+            "received must be on top Via: {top_via}",
+        );
+        assert!(
+            top_via.contains("rport=54321"),
+            "rport must carry source port: {top_via}",
+        );
+        // Branch preserved.
+        assert!(top_via.contains("branch=z9hG4bKabc"));
+    }
+
+    #[test]
+    fn apply_rport_received_noop_for_malformed_via() {
+        // If Via doesn't parse, the helper leaves the message alone
+        // rather than synthesising a rewrite that may drop data.
+        let mut req = make_request_with_via("garbage-not-a-via");
+        let source: std::net::SocketAddr = "203.0.113.77:54321".parse().unwrap();
+        let mutated = ProxyHelpers::apply_rport_received(&mut req, source);
+        assert!(!mutated);
+        assert_eq!(req.headers().get("Via").unwrap(), "garbage-not-a-via");
+    }
+
+    #[test]
+    fn apply_rport_received_noop_when_no_via() {
+        let mut headers = Headers::new();
+        headers.push("Max-Forwards", "70").unwrap();
+        let mut req = Request::new(
+            RequestLine::new(
+                Method::Invite,
+                SipUri::parse("sip:bob@example.com").unwrap(),
+            ),
+            headers,
+            Bytes::new(),
+        )
+        .unwrap();
+        let source: std::net::SocketAddr = "203.0.113.77:54321".parse().unwrap();
+        assert!(!ProxyHelpers::apply_rport_received(&mut req, source));
     }
 }
