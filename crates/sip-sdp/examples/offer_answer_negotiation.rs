@@ -16,7 +16,7 @@
 //! cargo run --example offer_answer_negotiation
 //! ```
 
-use sip_sdp::{negotiate, profiles, SessionDescription};
+use sip_sdp::{negotiate, negotiate::DirectionNegotiate, profiles, SessionDescription};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== SDP Offer/Answer Negotiation Example ===\n");

@@ -68,6 +68,14 @@ fn direction_from_attrs(attrs: &[Attribute]) -> Option<Direction> {
     })
 }
 
+/// True for the IPv4/IPv6 unspecified address (`0.0.0.0` and `::`).
+/// Per RFC 3264 §5.1 the legacy hold convention re-uses this value
+/// in the `c=` line to mean the stream is on hold.
+fn is_unspecified_address(addr: &str) -> bool {
+    let host = addr.split('/').next().unwrap_or(addr).trim();
+    host == "0.0.0.0" || host == "::"
+}
+
 fn set_direction(attrs: &mut Vec<Attribute>, direction: Direction) {
     attrs.retain(|a| !matches!(a, Attribute::Property(n) if Direction::from_token(n).is_some()));
     attrs.push(Attribute::Property(SmolStr::new(direction.as_token())));
@@ -362,6 +370,25 @@ impl Setup {
             _ => None,
         }
     }
+
+    /// Compute the answerer's `setup` value given the offerer's
+    /// (RFC 5763 §5).
+    ///
+    /// Rules:
+    ///   * `active` → answer `passive` (only one side initiates DTLS)
+    ///   * `passive` → answer `active`
+    ///   * `actpass` → answer picks; `active` is the convention so
+    ///     the answerer initiates the handshake (faster setup, fewer
+    ///     NAT round trips).
+    ///   * `holdconn` → echo `holdconn` (connection on hold).
+    pub fn answer_for(offer: Setup) -> Setup {
+        match offer {
+            Setup::Active => Setup::Passive,
+            Setup::Passive => Setup::Active,
+            Setup::ActPass => Setup::Active,
+            Setup::HoldConn => Setup::HoldConn,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -416,6 +443,45 @@ impl MediaDescription {
     /// `sendrecv` default).
     pub fn clear_direction(&mut self) {
         clear_direction(&mut self.attributes);
+    }
+
+    /// Returns the *effective* direction taking RFC 3264 §5.1 hold
+    /// conventions into account.
+    ///
+    /// Resolution order:
+    ///   1. If the media-level `c=` line carries `0.0.0.0` (or the
+    ///      IPv6 unspecified address `::`), the stream is on hold per
+    ///      legacy RFC 2543 — surface it as [`Direction::Inactive`].
+    ///   2. Otherwise, return any explicit direction attribute.
+    ///   3. Otherwise, fall back to RFC 4566's `SendRecv` default.
+    ///
+    /// Session-level `c=` lines are intentionally NOT consulted here
+    /// — that's a [`SessionDescription`] concern. Callers that need
+    /// the absolute effective direction should consult
+    /// [`SessionDescription::media_effective_direction`].
+    pub fn effective_direction(&self) -> Direction {
+        if let Some(conn) = &self.connection {
+            if is_unspecified_address(conn.connection_address.as_str()) {
+                return Direction::Inactive;
+            }
+        }
+        self.direction().unwrap_or(Direction::SendRecv)
+    }
+
+    /// Convenience: true when the remote has placed this stream on
+    /// hold from the answerer's perspective. A hold is signalled by
+    /// the offerer with `a=sendonly`, `a=inactive`, or the legacy
+    /// 0.0.0.0 connection address.
+    ///
+    /// Note: `recvonly` from the offerer is NOT a hold — it means
+    /// the offerer wants to receive media but won't send any (think
+    /// listen-only conferencing). The answerer would respond with
+    /// `sendonly` and continue sending.
+    pub fn is_held_by_remote(&self) -> bool {
+        matches!(
+            self.effective_direction(),
+            Direction::SendOnly | Direction::Inactive
+        )
     }
 
     /// Iterate every parsed `a=rtpmap:` line on this media section.

@@ -503,6 +503,32 @@ impl SessionDescription {
             .filter(|m| m.media_type == media_type)
             .collect()
     }
+
+    /// Increments the `o=` line's session-version by one.
+    ///
+    /// Per RFC 4566 §5.2 the session-version MUST change whenever the
+    /// session description is modified. SIP re-INVITE flows (hold,
+    /// resume, codec change, adding video) are the canonical trigger:
+    /// the offerer sends a new SDP with the same session-id and a
+    /// monotonically-increasing session-version so the answerer can
+    /// detect that this is an update rather than a new session.
+    ///
+    /// If the existing session-version is not a valid u64 (some peers
+    /// pad with non-numeric characters), it's treated as zero and the
+    /// new value is set to `1`. This keeps the field strictly numeric
+    /// going forward — recommended by RFC 4566 even though the
+    /// grammar formally permits any token.
+    pub fn bump_session_version(&mut self) {
+        let current: u64 = self.origin.session_version.parse().unwrap_or(0);
+        let next = current.saturating_add(1);
+        self.origin.session_version = SmolStr::new(next.to_string());
+    }
+
+    /// Returns the parsed session-version, or `None` if it isn't a
+    /// valid u64.
+    pub fn session_version_as_u64(&self) -> Option<u64> {
+        self.origin.session_version.parse().ok()
+    }
 }
 
 impl std::fmt::Display for SessionDescription {
@@ -1229,5 +1255,56 @@ mod tests {
     fn accepts_max_valid_payload_type() {
         let result = MediaDescription::audio(8000).add_format(127);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn bump_session_version_increments_monotonically() {
+        let mut sdp = SessionDescription::builder()
+            .origin("alice", "0", "192.0.2.1")
+            .unwrap()
+            .session_name("Test")
+            .unwrap()
+            .build();
+        assert_eq!(sdp.origin.session_version.as_str(), "0");
+        sdp.bump_session_version();
+        assert_eq!(sdp.origin.session_version.as_str(), "1");
+        sdp.bump_session_version();
+        assert_eq!(sdp.origin.session_version.as_str(), "2");
+        assert_eq!(sdp.session_version_as_u64(), Some(2));
+    }
+
+    #[test]
+    fn bump_session_version_treats_non_numeric_as_zero() {
+        let mut sdp = SessionDescription::builder()
+            .origin("alice", "0", "192.0.2.1")
+            .unwrap()
+            .session_name("Test")
+            .unwrap()
+            .build();
+        // Some peers pad with whitespace or use non-numeric tokens.
+        sdp.origin.session_version = SmolStr::new("garbage");
+        assert_eq!(sdp.session_version_as_u64(), None);
+        sdp.bump_session_version();
+        assert_eq!(sdp.origin.session_version.as_str(), "1");
+    }
+
+    #[test]
+    fn bump_session_version_round_trips_via_serialize() {
+        // After bumping, the new value must survive parse → serialize.
+        let mut sdp = SessionDescription::builder()
+            .origin("alice", "100", "192.0.2.1")
+            .unwrap()
+            .session_name("Test")
+            .unwrap()
+            .build();
+        sdp.bump_session_version();
+        sdp.bump_session_version();
+        let serialized = sdp.serialize();
+        assert!(
+            serialized.contains("o=alice 100 2 IN IP4 192.0.2.1\r\n"),
+            "session-version not in serialized output: {serialized}",
+        );
+        let reparsed = SessionDescription::parse(&serialized).unwrap();
+        assert_eq!(reparsed.origin.session_version.as_str(), "2");
     }
 }
