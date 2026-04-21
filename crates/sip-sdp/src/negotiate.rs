@@ -261,7 +261,7 @@ fn negotiate_media(
 
     // Set negotiated direction
     answer_media = answer_media
-        .direction(match answer_dir {
+        .with_direction(match answer_dir {
             Direction::SendRecv => "sendrecv",
             Direction::SendOnly => "sendonly",
             Direction::RecvOnly => "recvonly",
@@ -483,7 +483,7 @@ mod tests {
                     .unwrap()
                     .add_rtpmap(8, "PCMA", 8000, None)
                     .unwrap()
-                    .direction("sendrecv")
+                    .with_direction("sendrecv")
                     .unwrap(),
             )
             .unwrap()
@@ -503,7 +503,7 @@ mod tests {
                     .unwrap()
                     .add_rtpmap(0, "PCMU", 8000, None)
                     .unwrap()
-                    .direction("sendrecv")
+                    .with_direction("sendrecv")
                     .unwrap(),
             )
             .unwrap()
@@ -593,7 +593,7 @@ mod tests {
                     .unwrap()
                     .add_rtpmap(96, "opus", 48000, Some("2"))
                     .unwrap()
-                    .direction("sendrecv")
+                    .with_direction("sendrecv")
                     .unwrap(),
             )
             .unwrap()
@@ -612,7 +612,7 @@ mod tests {
                     .unwrap()
                     .add_rtpmap(111, "opus", 48000, Some("2"))
                     .unwrap()
-                    .direction("sendrecv")
+                    .with_direction("sendrecv")
                     .unwrap(),
             )
             .unwrap()

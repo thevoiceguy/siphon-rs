@@ -28,11 +28,17 @@
 //!     .build();
 //! ```
 
+pub mod attrs;
 pub mod builder;
 pub mod negotiate;
 pub mod parse;
 pub mod profiles;
 pub mod serialize;
+
+pub use attrs::{
+    Candidate, CandidateTransport, CandidateType, Direction, Fingerprint, Fmtp, ParsedRtpMap,
+    Setup, Ssrc,
+};
 
 use smol_str::SmolStr;
 use std::collections::HashMap;
@@ -572,7 +578,13 @@ impl MediaDescription {
         Ok(self)
     }
 
-    /// Adds an RTP map with validation
+    /// Adds an RTP map with validation.
+    ///
+    /// If a prior rtpmap exists for the same payload type, both the
+    /// cached entry AND any matching `a=rtpmap:<pt> ...` attribute
+    /// lines are replaced. Without this dedup, repeated calls with the
+    /// same PT would leave the HashMap correct but accumulate stale
+    /// attribute lines that survive into the serialized output.
     pub fn add_rtpmap(
         mut self,
         payload_type: u8,
@@ -583,6 +595,15 @@ impl MediaDescription {
         validate_payload_type(payload_type)?;
         validate_field(encoding_name, "encoding_name", MAX_ENCODING_NAME_LENGTH)?;
         validate_clock_rate(clock_rate)?;
+
+        // Replace-semantics: drop any previous rtpmap for this PT
+        // before counting against the limits. This way we don't reject
+        // a legitimate update at the boundary.
+        let was_present = self.rtpmaps.contains_key(&payload_type);
+        if was_present {
+            remove_rtpmap_attr(&mut self.attributes, payload_type);
+            self.rtpmaps.remove(&payload_type);
+        }
 
         if self.rtpmaps.len() >= MAX_RTPMAPS {
             return Err(SdpError::TooManyItems {
@@ -669,10 +690,130 @@ impl MediaDescription {
         Ok(self)
     }
 
-    /// Sets the media direction (sendrecv, sendonly, recvonly, inactive)
-    pub fn direction(self, dir: &str) -> Result<Self, SdpError> {
+    /// Sets the media direction property (sendrecv, sendonly, recvonly,
+    /// inactive). Builder-pattern variant — for parsed/typed access on an
+    /// existing `MediaDescription`, see [`MediaDescription::direction`]
+    /// and [`MediaDescription::set_direction`] in the `attrs` module.
+    pub fn with_direction(self, dir: &str) -> Result<Self, SdpError> {
         self.add_property(dir)
     }
+
+    /// Re-derives the [`Self::rtpmaps`] cache from the raw attribute
+    /// vector. Use this after mutating `attributes` directly so
+    /// downstream code that consults the cache (e.g. negotiation
+    /// helpers) sees a consistent view.
+    ///
+    /// The builder-style helpers ([`Self::add_rtpmap`]) and the
+    /// dedicated mutators ([`Self::set_rtpmap`], [`Self::remove_rtpmap`])
+    /// keep the cache in sync automatically — call this only when
+    /// you've reached for `attributes` yourself.
+    pub fn rebuild_rtpmaps(&mut self) {
+        self.rtpmaps.clear();
+        for attr in &self.attributes {
+            if let Attribute::Value { name, value } = attr {
+                if name.as_str() != "rtpmap" {
+                    continue;
+                }
+                if let Some(parsed) = crate::attrs::parse_rtpmap_value_pub(value.as_str()) {
+                    self.rtpmaps.insert(
+                        parsed.payload_type,
+                        RtpMap {
+                            payload_type: parsed.payload_type,
+                            encoding_name: parsed.encoding_name,
+                            clock_rate: parsed.clock_rate,
+                            encoding_params: parsed.encoding_params,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    /// Sets (or replaces) the rtpmap entry for a given payload type.
+    ///
+    /// Updates both the attribute vector and the [`Self::rtpmaps`] cache
+    /// so they stay in lock-step. Returns an error only if the new
+    /// values fail validation (clock rate, encoding-name length, etc.).
+    pub fn set_rtpmap(
+        &mut self,
+        payload_type: u8,
+        encoding_name: &str,
+        clock_rate: u32,
+        encoding_params: Option<&str>,
+    ) -> Result<(), SdpError> {
+        validate_payload_type(payload_type)?;
+        validate_field(encoding_name, "encoding_name", MAX_ENCODING_NAME_LENGTH)?;
+        validate_clock_rate(clock_rate)?;
+
+        // Drop any prior entries first so duplicate-pt mutations are
+        // idempotent and don't trip the per-section attribute cap.
+        remove_rtpmap_attr(&mut self.attributes, payload_type);
+        self.rtpmaps.remove(&payload_type);
+
+        if self.attributes.len() >= MAX_ATTRIBUTES_PER_DESCRIPTION {
+            return Err(SdpError::TooManyItems {
+                collection: "attributes",
+                max: MAX_ATTRIBUTES_PER_DESCRIPTION,
+                actual: self.attributes.len() + 1,
+            });
+        }
+        if self.rtpmaps.len() >= MAX_RTPMAPS {
+            return Err(SdpError::TooManyItems {
+                collection: "rtpmaps",
+                max: MAX_RTPMAPS,
+                actual: self.rtpmaps.len() + 1,
+            });
+        }
+
+        let value = match encoding_params {
+            Some(params) => format!(
+                "{} {}/{}/{}",
+                payload_type, encoding_name, clock_rate, params
+            ),
+            None => format!("{} {}/{}", payload_type, encoding_name, clock_rate),
+        };
+        self.attributes.push(Attribute::Value {
+            name: SmolStr::new("rtpmap"),
+            value: SmolStr::new(&value),
+        });
+        self.rtpmaps.insert(
+            payload_type,
+            RtpMap {
+                payload_type,
+                encoding_name: SmolStr::new(encoding_name),
+                clock_rate,
+                encoding_params: encoding_params.map(SmolStr::new),
+            },
+        );
+        Ok(())
+    }
+
+    /// Removes the rtpmap entry for a given payload type, including
+    /// every matching `a=rtpmap:<pt> ...` attribute line. Returns
+    /// `true` if anything was removed.
+    pub fn remove_rtpmap(&mut self, payload_type: u8) -> bool {
+        let attr_removed = remove_rtpmap_attr(&mut self.attributes, payload_type) > 0;
+        let cache_removed = self.rtpmaps.remove(&payload_type).is_some();
+        attr_removed || cache_removed
+    }
+}
+
+/// Removes every `a=rtpmap:<payload_type> ...` attribute from `attrs`.
+/// Returns the count removed so callers can tell if anything was there.
+fn remove_rtpmap_attr(attrs: &mut Vec<Attribute>, payload_type: u8) -> usize {
+    let before = attrs.len();
+    attrs.retain(|a| match a {
+        Attribute::Value { name, value } if name.as_str() == "rtpmap" => {
+            value
+                .as_str()
+                .split_whitespace()
+                .next()
+                .and_then(|t| t.parse::<u8>().ok())
+                != Some(payload_type)
+        }
+        _ => true,
+    });
+    before - attrs.len()
 }
 
 impl Origin {

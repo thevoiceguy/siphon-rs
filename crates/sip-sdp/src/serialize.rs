@@ -228,7 +228,7 @@ mod tests {
                     .unwrap()
                     .add_rtpmap(0, "PCMU", 8000, None)
                     .unwrap()
-                    .direction("sendrecv")
+                    .with_direction("sendrecv")
                     .unwrap(),
             )
             .unwrap()
@@ -238,7 +238,7 @@ mod tests {
                     .unwrap()
                     .add_rtpmap(96, "H264", 90000, None)
                     .unwrap()
-                    .direction("sendrecv")
+                    .with_direction("sendrecv")
                     .unwrap(),
             )
             .unwrap()
@@ -295,6 +295,189 @@ mod tests {
         let reparsed = crate::parse::parse_sdp(&serialized).unwrap();
 
         // Should be identical
+        assert_eq!(parsed, reparsed);
+    }
+
+    // ---------------------------------------------------------------
+    // Round-trip preservation guarantee
+    //
+    // Real-world SDP carries a long tail of attributes the parser does
+    // not understand (vendor extensions, ICE/DTLS, BUNDLE, RTCP-FB).
+    // These tests assert two properties on representative samples
+    // gathered from common interop targets:
+    //
+    //   1. parse → serialize → parse round-trips to an equal value.
+    //   2. Every `a=...` line in the original input survives byte-for-byte
+    //      in the serialized output.
+    //
+    // The second property guards against any future parser refactor
+    // that silently drops unknown attributes — a regression that would
+    // be invisible to (1) because both sides would lose the same data.
+    // ---------------------------------------------------------------
+
+    /// Walks every `a=` line in `original` and asserts the serialized
+    /// form contains the same `name[:value]` token. Skips empty lines.
+    fn assert_attributes_preserved(original: &str, serialized: &str) {
+        for line in original.lines() {
+            let trimmed = line.trim_end_matches('\r');
+            if !trimmed.starts_with("a=") {
+                continue;
+            }
+            assert!(
+                serialized.contains(trimmed),
+                "attribute dropped by round-trip:\n  original line: {trimmed}\n  serialized:\n{serialized}",
+            );
+        }
+    }
+
+    fn assert_round_trip_preserves(sample: &str) {
+        let parsed = crate::parse::parse_sdp(sample).expect("sample must parse");
+        let serialized = serialize_sdp(&parsed);
+        assert_attributes_preserved(sample, &serialized);
+        let reparsed = crate::parse::parse_sdp(&serialized).expect("reparse");
+        assert_eq!(parsed, reparsed, "semantic equality across round-trip");
+    }
+
+    #[test]
+    fn preserves_asterisk_style_offer() {
+        let sample = "v=0\r\n\
+                      o=- 1234567890 1 IN IP4 192.0.2.10\r\n\
+                      s=Asterisk\r\n\
+                      c=IN IP4 192.0.2.10\r\n\
+                      t=0 0\r\n\
+                      m=audio 5004 RTP/AVP 0 8 9 96 97\r\n\
+                      a=sendrecv\r\n\
+                      a=rtpmap:0 PCMU/8000\r\n\
+                      a=rtpmap:8 PCMA/8000\r\n\
+                      a=rtpmap:9 G722/8000\r\n\
+                      a=rtpmap:96 iLBC/8000\r\n\
+                      a=fmtp:96 mode=20\r\n\
+                      a=rtpmap:97 telephone-event/8000\r\n\
+                      a=fmtp:97 0-16\r\n\
+                      a=ptime:20\r\n\
+                      a=maxptime:140\r\n";
+        assert_round_trip_preserves(sample);
+    }
+
+    #[test]
+    fn preserves_freeswitch_style_offer_with_unknown_attrs() {
+        let sample = "v=0\r\n\
+                      o=FreeSWITCH 1729188372 1729188373 IN IP4 198.51.100.5\r\n\
+                      s=FreeSWITCH\r\n\
+                      c=IN IP4 198.51.100.5\r\n\
+                      t=0 0\r\n\
+                      m=audio 16384 RTP/AVP 0 101\r\n\
+                      a=rtpmap:0 PCMU/8000\r\n\
+                      a=rtpmap:101 telephone-event/8000\r\n\
+                      a=fmtp:101 0-16\r\n\
+                      a=rtcp:16385 IN IP4 198.51.100.5\r\n\
+                      a=ptime:20\r\n\
+                      a=sendrecv\r\n\
+                      a=X-vendor-info:fs-engine=core1;build=1.10.10\r\n";
+        assert_round_trip_preserves(sample);
+    }
+
+    #[test]
+    fn preserves_webrtc_style_offer_with_dtls_ice_bundle() {
+        let sample = "v=0\r\n\
+                      o=- 4611728142112323737 2 IN IP4 127.0.0.1\r\n\
+                      s=-\r\n\
+                      t=0 0\r\n\
+                      a=group:BUNDLE 0\r\n\
+                      a=msid-semantic: WMS stream0\r\n\
+                      m=audio 9 UDP/TLS/RTP/SAVPF 111 103 9 0 8 13 110\r\n\
+                      c=IN IP4 0.0.0.0\r\n\
+                      a=rtcp:9 IN IP4 0.0.0.0\r\n\
+                      a=ice-ufrag:abcd\r\n\
+                      a=ice-pwd:efghijklmnopqrstuvwxyz0123\r\n\
+                      a=ice-options:trickle\r\n\
+                      a=fingerprint:sha-256 12:34:56:78:9A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0\r\n\
+                      a=setup:actpass\r\n\
+                      a=mid:0\r\n\
+                      a=sendrecv\r\n\
+                      a=rtpmap:111 opus/48000/2\r\n\
+                      a=fmtp:111 minptime=10;useinbandfec=1\r\n\
+                      a=rtpmap:103 ISAC/16000\r\n\
+                      a=rtpmap:9 G722/8000\r\n\
+                      a=rtpmap:0 PCMU/8000\r\n\
+                      a=rtpmap:8 PCMA/8000\r\n\
+                      a=rtpmap:13 CN/8000\r\n\
+                      a=rtpmap:110 telephone-event/48000\r\n\
+                      a=ssrc:3735928559 cname:user@example.com\r\n\
+                      a=ssrc:3735928559 msid:stream0 track0\r\n\
+                      a=candidate:1 1 UDP 2130706431 192.168.1.5 52000 typ host generation 0\r\n\
+                      a=candidate:2 1 UDP 1694498815 198.51.100.10 52001 typ srflx raddr 192.168.1.5 rport 52000 generation 0\r\n";
+        assert_round_trip_preserves(sample);
+    }
+
+    #[test]
+    fn preserves_audio_video_offer_with_per_media_attrs() {
+        let sample = "v=0\r\n\
+                      o=alice 1 1 IN IP4 203.0.113.4\r\n\
+                      s=A/V Conf\r\n\
+                      c=IN IP4 203.0.113.4\r\n\
+                      t=0 0\r\n\
+                      a=tool:siphon-rs\r\n\
+                      m=audio 49170 RTP/AVP 96\r\n\
+                      a=rtpmap:96 opus/48000/2\r\n\
+                      a=fmtp:96 maxaveragebitrate=64000\r\n\
+                      a=sendrecv\r\n\
+                      a=ptime:20\r\n\
+                      m=video 49180 RTP/AVP 100\r\n\
+                      a=rtpmap:100 H264/90000\r\n\
+                      a=fmtp:100 profile-level-id=42e01f;packetization-mode=1\r\n\
+                      a=sendonly\r\n\
+                      a=mid:video0\r\n";
+        assert_round_trip_preserves(sample);
+    }
+
+    #[test]
+    fn preserves_typed_accessor_modifications_across_round_trip() {
+        // End-to-end app workflow: parse, mutate via typed accessors,
+        // serialize, re-parse. Assert mutations land AND no other
+        // attribute is lost (especially the `x-keep-me` extension).
+        use crate::attrs::{Direction, Setup};
+
+        let sample = "v=0\r\n\
+                      o=- 0 0 IN IP4 198.51.100.1\r\n\
+                      s=-\r\n\
+                      c=IN IP4 198.51.100.1\r\n\
+                      t=0 0\r\n\
+                      m=audio 9000 UDP/TLS/RTP/SAVPF 111\r\n\
+                      a=sendrecv\r\n\
+                      a=rtpmap:111 opus/48000/2\r\n\
+                      a=fmtp:111 minptime=10\r\n\
+                      a=ptime:20\r\n\
+                      a=setup:actpass\r\n\
+                      a=fingerprint:sha-256 12:34\r\n\
+                      a=mid:audio0\r\n\
+                      a=x-keep-me:custom-flag\r\n";
+
+        let mut parsed = crate::parse::parse_sdp(sample).unwrap();
+        parsed.media[0].set_direction(Direction::SendOnly);
+        parsed.media[0].set_ptime(40);
+        parsed.media[0].set_fmtp(111, "minptime=20;useinbandfec=1");
+        parsed.media[0].set_setup(Setup::Active);
+
+        let serialized = serialize_sdp(&parsed);
+
+        assert!(serialized.contains("a=sendonly"));
+        assert!(serialized.contains("a=ptime:40"));
+        assert!(serialized.contains("a=fmtp:111 minptime=20;useinbandfec=1"));
+        assert!(serialized.contains("a=setup:active"));
+        assert!(!serialized.contains("a=sendrecv"));
+        assert!(!serialized.contains("a=ptime:20"));
+        assert!(!serialized.contains("a=fmtp:111 minptime=10"));
+        assert!(!serialized.contains("a=setup:actpass"));
+        assert!(serialized.contains("a=fingerprint:sha-256 12:34"));
+        assert!(serialized.contains("a=mid:audio0"));
+        assert!(
+            serialized.contains("a=x-keep-me:custom-flag"),
+            "unknown attribute lost across modify/serialize: {serialized}",
+        );
+        assert!(serialized.contains("a=rtpmap:111 opus/48000/2"));
+
+        let reparsed = crate::parse::parse_sdp(&serialized).unwrap();
         assert_eq!(parsed, reparsed);
     }
 }

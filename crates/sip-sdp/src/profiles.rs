@@ -105,7 +105,7 @@ impl MediaProfileBuilder {
             .time(0, 0);
 
         let mut audio = MediaDescription::audio(audio_port)
-            .direction(self.direction)
+            .with_direction(self.direction)
             .expect("valid direction");
         for (pt, name, rate) in &self.audio_codecs {
             audio = audio
@@ -131,7 +131,7 @@ impl MediaProfileBuilder {
         if self.enable_video {
             let vport = video_port.unwrap_or(audio_port + 2);
             let mut video = MediaDescription::video(vport)
-                .direction(self.direction)
+                .with_direction(self.direction)
                 .expect("valid direction");
             for (pt, name, rate) in &self.video_codecs {
                 video = video
@@ -230,7 +230,7 @@ fn create_audio_only(username: &str, addr: &str, port: u16) -> SessionDescriptio
                 .expect("valid rtpmap")
                 .add_attribute("fmtp", "101 0-16")
                 .expect("valid attribute")
-                .direction("sendrecv")
+                .with_direction("sendrecv")
                 .expect("valid direction"),
         )
         .expect("valid media")
@@ -270,7 +270,7 @@ fn create_audio_video(
                 .expect("valid rtpmap")
                 .add_attribute("fmtp", "101 0-16")
                 .expect("valid attribute")
-                .direction("sendrecv")
+                .with_direction("sendrecv")
                 .expect("valid direction"),
         )
         .expect("valid media")
@@ -292,7 +292,7 @@ fn create_audio_video(
                 .expect("valid attribute")
                 .add_attribute("rtcp-fb", "97 nack pli")
                 .expect("valid attribute")
-                .direction("sendrecv")
+                .with_direction("sendrecv")
                 .expect("valid direction"),
         )
         .expect("valid media")

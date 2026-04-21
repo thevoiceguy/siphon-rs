@@ -402,7 +402,13 @@ fn parse_a_line(input: &str) -> IResult<&str, Attribute> {
                 )),
                 |(name, value): (&str, &str)| Attribute::Value {
                     name: SmolStr::new(name),
-                    value: SmolStr::new(value.trim()),
+                    // Strip only trailing whitespace. Some peers (notably
+                    // Chrome WebRTC) carry a meaningful leading space in
+                    // attribute values such as `a=msid-semantic: WMS stream0`;
+                    // collapsing it loses byte-identical round-trip and breaks
+                    // interop with parsers that use the raw value for
+                    // exact-match comparison.
+                    value: SmolStr::new(value.trim_end()),
                 },
             ),
             map(take_till(|c| c == '\r' || c == '\n'), |name: &str| {
