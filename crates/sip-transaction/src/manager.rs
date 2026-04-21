@@ -323,6 +323,11 @@ struct ClientEntry {
     timers: HashMap<TransactionTimer, oneshot::Sender<()>>,
     start_time: Instant,
     method: Method,
+    /// RFC 3263 §4.3 alternate targets queued for failover. When the
+    /// current `ctx` fails to dispatch, the next entry here becomes
+    /// the new `ctx` and the send is retried before the FSM sees a
+    /// transport error. Empty for single-target transactions.
+    remaining_targets: Vec<TransportContext>,
 }
 
 enum ClientKind {
@@ -411,6 +416,69 @@ fn transport_kind_to_transport(kind: TransportKind) -> Transport {
 }
 
 impl TransactionManager {
+    /// Dispatch a client transmit with RFC 3263 §4.3 failover.
+    ///
+    /// Tries the current entry's `ctx`. On transport failure, pops
+    /// the next entry from `remaining_targets`, updates `ctx` on the
+    /// live transaction entry, and retries — until a target
+    /// succeeds or the list is exhausted. Only when every target
+    /// fails does the manager queue a `ClientTransportError`
+    /// command, which is what ultimately drives the FSM into
+    /// TransportError and fires `on_transport_error` on the TU.
+    ///
+    /// For single-target transactions (the common case), this
+    /// behaves identically to `dispatch_with_pool` on the first
+    /// attempt and raises the transport error on first failure.
+    async fn dispatch_with_failover(&self, key: &TransactionKey, bytes: Bytes) {
+        loop {
+            // Take a snapshot of ctx each iteration — the previous
+            // iteration may have advanced to the next target.
+            let ctx = match self.inner.client.get(key) {
+                Some(entry) => entry.ctx.clone(),
+                None => return, // transaction vanished mid-dispatch
+            };
+
+            match self.dispatch_with_pool(&ctx, bytes.clone()).await {
+                Ok(()) => return,
+                Err(e) => {
+                    error!(%e, key = ?key, peer = %ctx.peer, "client transport dispatch failed");
+                    // Try to swap in the next target. If there is
+                    // one, update the live entry and loop. If not,
+                    // escalate to the FSM.
+                    let advanced = {
+                        if let Some(mut entry) = self.inner.client.get_mut(key) {
+                            if let Some(next) = (!entry.remaining_targets.is_empty())
+                                .then(|| entry.remaining_targets.remove(0))
+                            {
+                                debug!(
+                                    key = ?key,
+                                    next_peer = %next.peer,
+                                    remaining = entry.remaining_targets.len(),
+                                    "advancing to next RFC 3263 target after transport error"
+                                );
+                                entry.ctx = next;
+                                true
+                            } else {
+                                false
+                            }
+                        } else {
+                            return;
+                        }
+                    };
+
+                    if !advanced {
+                        let _ = self
+                            .cmd_tx
+                            .send(ManagerCommand::ClientTransportError { key: key.clone() })
+                            .await;
+                        return;
+                    }
+                    // Loop and retry with the new ctx.
+                }
+            }
+        }
+    }
+
     async fn dispatch_with_pool(&self, ctx: &TransportContext, bytes: Bytes) -> Result<()> {
         // Extract first line for logging
         let first_line = bytes
@@ -782,6 +850,44 @@ impl TransactionManager {
         ctx: TransportContext,
         tu: Arc<dyn ClientTransactionUser>,
     ) -> Result<TransactionKey> {
+        self.start_client_transaction_with_targets(request, vec![ctx], tu)
+            .await
+    }
+
+    /// Starts a client transaction with RFC 3263 §4.3 target
+    /// failover. `targets` is the ordered list of candidates the
+    /// resolver produced (SRV / A / AAAA records, already sorted by
+    /// priority and weight). The manager uses `targets[0]` for the
+    /// initial transmit; if dispatch fails it advances to the next
+    /// target and retries before declaring the transaction a
+    /// transport failure. Only when every target has been tried
+    /// does the TU's `on_transport_error` fire.
+    ///
+    /// Returns an error if `targets` is empty.
+    pub async fn start_client_transaction_with_targets(
+        &self,
+        request: Request,
+        mut targets: Vec<TransportContext>,
+        tu: Arc<dyn ClientTransactionUser>,
+    ) -> Result<TransactionKey> {
+        if targets.is_empty() {
+            return Err(anyhow!(
+                "start_client_transaction_with_targets: empty target list"
+            ));
+        }
+        let ctx = targets.remove(0);
+        let remaining_targets = targets;
+        self.start_client_inner(request, ctx, remaining_targets, tu)
+            .await
+    }
+
+    async fn start_client_inner(
+        &self,
+        request: Request,
+        ctx: TransportContext,
+        remaining_targets: Vec<TransportContext>,
+        tu: Arc<dyn ClientTransactionUser>,
+    ) -> Result<TransactionKey> {
         let branch = request_branch_id(&request)
             .ok_or_else(|| anyhow!("missing Via branch for client transaction"))?;
         let method = request.method().clone();
@@ -830,6 +936,7 @@ impl TransactionManager {
             timers: HashMap::new(),
             start_time: Instant::now(),
             method: key.method.clone(),
+            remaining_targets,
         };
 
         self.inner.client.insert(key.clone(), entry);
@@ -1137,17 +1244,7 @@ impl TransactionManager {
                             TransportType::from(transport_kind_to_transport(entry.ctx.transport));
                         self.inner.metrics.record_retransmission(transport_type);
                     }
-                    if let Some(entry) = self.inner.client.get(key) {
-                        let ctx = entry.ctx.clone();
-                        drop(entry);
-                        if let Err(e) = self.dispatch_with_pool(&ctx, bytes).await {
-                            error!(%e, key = ?key, "client transport dispatch failed");
-                            let _ = self
-                                .cmd_tx
-                                .send(ManagerCommand::ClientTransportError { key: key.clone() })
-                                .await;
-                        }
-                    }
+                    self.dispatch_with_failover(key, bytes).await;
                 }
                 ClientInviteAction::Deliver(response) => {
                     if let Some(entry) = self.inner.client.get(key) {
@@ -1210,17 +1307,7 @@ impl TransactionManager {
                             TransportType::from(transport_kind_to_transport(entry.ctx.transport));
                         self.inner.metrics.record_retransmission(transport_type);
                     }
-                    if let Some(entry) = self.inner.client.get(key) {
-                        let ctx = entry.ctx.clone();
-                        drop(entry);
-                        if let Err(e) = self.dispatch_with_pool(&ctx, bytes).await {
-                            error!(%e, key = ?key, "client transport dispatch failed");
-                            let _ = self
-                                .cmd_tx
-                                .send(ManagerCommand::ClientTransportError { key: key.clone() })
-                                .await;
-                        }
-                    }
+                    self.dispatch_with_failover(key, bytes).await;
                 }
                 ClientAction::Deliver(response) => {
                     if let Some(entry) = self.inner.client.get(key) {
@@ -1530,6 +1617,28 @@ mod tests {
         }
     }
 
+    /// Dispatcher that fails dispatches targeting peers in its
+    /// `fail_peers` set; succeeds otherwise. Used to verify RFC 3263
+    /// §4.3 failover: when the first N targets fail and the next
+    /// one succeeds, the transaction survives.
+    #[derive(Debug, Default)]
+    struct SelectiveFailingDispatcher {
+        attempts: Mutex<Vec<SocketAddr>>,
+        fail_peers: Mutex<std::collections::HashSet<SocketAddr>>,
+    }
+
+    #[async_trait]
+    impl TransportDispatcher for SelectiveFailingDispatcher {
+        async fn dispatch(&self, ctx: &TransportContext, _payload: Bytes) -> Result<()> {
+            self.attempts.lock().await.push(ctx.peer);
+            if self.fail_peers.lock().await.contains(&ctx.peer) {
+                Err(anyhow::anyhow!("selective fail: {}", ctx.peer))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
     #[async_trait]
     impl ClientTransactionUser for TestClientTu {
         async fn on_provisional(&self, _key: &TransactionKey, response: &Response) {
@@ -1702,12 +1811,14 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // RFC 3261 §18.4 transport-error plumbing
+    // RFC 3261 §18.4 + RFC 3263 §4.3: transport-error + DNS failover
     //
     // When the transport layer rejects a send, the manager must
     // surface the failure to the TU via on_transport_error() and
     // drive the FSM to terminal state — NOT silently stall waiting
-    // on retransmit timers.
+    // on retransmit timers. When multiple resolved targets are
+    // available, the manager tries them in order before declaring
+    // the transaction dead.
     // ---------------------------------------------------------------
 
     /// Polls `condition` every `step` up to `max` duration. Returns
@@ -1811,6 +1922,124 @@ mod tests {
 
         assert!(saw_err, "INVITE TU MUST see on_transport_error()");
         assert_eq!(*tu.transport_errors.lock().await, 1);
+    }
+
+    #[tokio::test]
+    async fn client_transaction_fails_over_to_next_target() {
+        // Two targets. The first fails; the second succeeds. TU
+        // sees NO transport error — failover transparently rescued
+        // the transaction. Dispatcher records both attempts.
+        let addr1: SocketAddr = "127.0.0.1:5191".parse().unwrap();
+        let addr2: SocketAddr = "127.0.0.1:5192".parse().unwrap();
+
+        let dispatcher = Arc::new(SelectiveFailingDispatcher::default());
+        dispatcher.fail_peers.lock().await.insert(addr1);
+
+        let manager = TransactionManager::new(dispatcher.clone());
+        let tu = Arc::new(TestClientTu::default());
+        let targets = vec![
+            TransportContext::new(TransportKind::Udp, addr1, None),
+            TransportContext::new(TransportKind::Udp, addr2, None),
+        ];
+
+        manager
+            .start_client_transaction_with_targets(
+                build_client_request(Method::Options, "z9hG4bKfailover-one"),
+                targets,
+                tu.clone(),
+            )
+            .await
+            .unwrap();
+
+        // Give the manager time to try both targets.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let attempts = dispatcher.attempts.lock().await.clone();
+        assert_eq!(
+            attempts,
+            vec![addr1, addr2],
+            "manager must try addr1 first, then fail over to addr2",
+        );
+        assert_eq!(
+            *tu.transport_errors.lock().await,
+            0,
+            "TU MUST NOT see transport error when failover succeeds",
+        );
+    }
+
+    #[tokio::test]
+    async fn client_transaction_exhausts_all_targets_before_failing() {
+        // Three targets, all fail. TU sees transport error only
+        // after all three attempts are exhausted.
+        let addr1: SocketAddr = "127.0.0.1:5291".parse().unwrap();
+        let addr2: SocketAddr = "127.0.0.1:5292".parse().unwrap();
+        let addr3: SocketAddr = "127.0.0.1:5293".parse().unwrap();
+
+        let dispatcher = Arc::new(SelectiveFailingDispatcher::default());
+        {
+            let mut fails = dispatcher.fail_peers.lock().await;
+            fails.insert(addr1);
+            fails.insert(addr2);
+            fails.insert(addr3);
+        }
+
+        let manager = TransactionManager::new(dispatcher.clone());
+        let tu = Arc::new(TestClientTu::default());
+        let targets = vec![
+            TransportContext::new(TransportKind::Udp, addr1, None),
+            TransportContext::new(TransportKind::Udp, addr2, None),
+            TransportContext::new(TransportKind::Udp, addr3, None),
+        ];
+
+        manager
+            .start_client_transaction_with_targets(
+                build_client_request(Method::Options, "z9hG4bKall-fail"),
+                targets,
+                tu.clone(),
+            )
+            .await
+            .unwrap();
+
+        let tu_err = tu.clone();
+        let saw_err = wait_until(
+            || {
+                let tu = tu_err.clone();
+                async move { *tu.transport_errors.lock().await > 0 }
+            },
+            std::time::Duration::from_millis(10),
+            std::time::Duration::from_secs(2),
+        )
+        .await;
+
+        let attempts = dispatcher.attempts.lock().await.clone();
+        assert_eq!(
+            attempts,
+            vec![addr1, addr2, addr3],
+            "manager must try every target in order",
+        );
+        assert!(
+            saw_err,
+            "TU must see transport error after all targets fail"
+        );
+        assert_eq!(*tu.transport_errors.lock().await, 1);
+    }
+
+    #[tokio::test]
+    async fn empty_targets_rejected() {
+        // Starting with no targets is a programming error; surface
+        // it immediately instead of silently accepting an untransmittable
+        // transaction.
+        let dispatcher = Arc::new(TestDispatcher::default());
+        let manager = TransactionManager::new(dispatcher);
+        let tu = Arc::new(TestClientTu::default());
+        let result = manager
+            .start_client_transaction_with_targets(
+                build_client_request(Method::Options, "z9hG4bKno-targets"),
+                vec![],
+                tu,
+            )
+            .await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]
