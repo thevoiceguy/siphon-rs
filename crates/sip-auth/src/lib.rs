@@ -264,33 +264,88 @@ impl AsyncCredentialStore for MemoryCredentialStore {
 /// the 64-byte output, hex-encoded). Plain `SHA-512` is **not** defined by
 /// RFC 7616 but some implementations advertise it; we keep a distinct
 /// variant so the on-the-wire hash length matches what's negotiated.
+///
+/// Every hash algorithm has a `-sess` counterpart per RFC 7616 §3.4.2.
+/// The `-sess` form rebinds HA1 to the specific challenge: instead of
+/// `H(user:realm:pass)` it uses `H(H(user:realm:pass):nonce:cnonce)`.
+/// Session-keying makes HA1 unique per authentication handshake, which
+/// matters for long-lived registrations where the same password-derived
+/// hash would otherwise be reused across many requests. Authenticator and
+/// client MUST agree on the `-sess` vs non-sess flavour — the on-wire
+/// algorithm token is negotiated via the challenge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DigestAlgorithm {
     Md5,
+    Md5Sess,
     Sha256,
+    Sha256Sess,
     /// Non-standard full SHA-512 (64-byte / 128-hex-char output).
     Sha512,
+    /// Non-standard full SHA-512 with session-key form.
+    Sha512Sess,
     /// RFC 7616 SHA-512/256: SHA-512 truncated to the first 256 bits.
     Sha512_256,
+    /// RFC 7616 SHA-512/256 with session-key form.
+    Sha512_256Sess,
 }
 
 impl DigestAlgorithm {
     pub fn as_str(&self) -> &'static str {
         match self {
             DigestAlgorithm::Md5 => "MD5",
+            DigestAlgorithm::Md5Sess => "MD5-sess",
             DigestAlgorithm::Sha256 => "SHA-256",
+            DigestAlgorithm::Sha256Sess => "SHA-256-sess",
             DigestAlgorithm::Sha512 => "SHA-512",
+            DigestAlgorithm::Sha512Sess => "SHA-512-sess",
             DigestAlgorithm::Sha512_256 => "SHA-512-256",
+            DigestAlgorithm::Sha512_256Sess => "SHA-512-256-sess",
         }
     }
 
     pub fn parse(s: &str) -> Option<Self> {
+        // RFC 7616 §3.4.2: the "-sess" suffix is lowercase. Real peers
+        // vary their case on the base token ("MD5" vs "md5"), so we
+        // upper-case the full string and match — the `-SESS` outcome
+        // still round-trips through our canonical `as_str()` form.
         match s.to_ascii_uppercase().as_str() {
             "MD5" => Some(DigestAlgorithm::Md5),
+            "MD5-SESS" => Some(DigestAlgorithm::Md5Sess),
             "SHA-256" => Some(DigestAlgorithm::Sha256),
+            "SHA-256-SESS" => Some(DigestAlgorithm::Sha256Sess),
             "SHA-512" => Some(DigestAlgorithm::Sha512),
+            "SHA-512-SESS" => Some(DigestAlgorithm::Sha512Sess),
             "SHA-512-256" => Some(DigestAlgorithm::Sha512_256),
+            "SHA-512-256-SESS" => Some(DigestAlgorithm::Sha512_256Sess),
             _ => None,
+        }
+    }
+
+    /// True if this is a session-keyed (`-sess`) variant. Session
+    /// variants compute HA1 as `H(H(user:realm:pass):nonce:cnonce)`
+    /// instead of the base `H(user:realm:pass)`.
+    pub fn is_sess(&self) -> bool {
+        matches!(
+            self,
+            DigestAlgorithm::Md5Sess
+                | DigestAlgorithm::Sha256Sess
+                | DigestAlgorithm::Sha512Sess
+                | DigestAlgorithm::Sha512_256Sess
+        )
+    }
+
+    /// Returns the base (non-sess) algorithm, which is the hash
+    /// function used for every primitive in the digest calculation.
+    /// The session flavour only changes HA1's composition, not the
+    /// hash function itself.
+    pub fn base(&self) -> DigestAlgorithm {
+        match self {
+            DigestAlgorithm::Md5 | DigestAlgorithm::Md5Sess => DigestAlgorithm::Md5,
+            DigestAlgorithm::Sha256 | DigestAlgorithm::Sha256Sess => DigestAlgorithm::Sha256,
+            DigestAlgorithm::Sha512 | DigestAlgorithm::Sha512Sess => DigestAlgorithm::Sha512,
+            DigestAlgorithm::Sha512_256 | DigestAlgorithm::Sha512_256Sess => {
+                DigestAlgorithm::Sha512_256
+            }
         }
     }
 }
@@ -1103,6 +1158,22 @@ impl<S> DigestAuthenticator<S> {
         result
     }
 
+    /// RFC 7616 §3.4.2 session-key transformation of HA1.
+    ///
+    /// For `-sess` algorithms, HA1 = H(H(user:realm:pass):nonce:cnonce).
+    /// For non-sess algorithms the base HA1 is returned unchanged.
+    /// Callers must hold the nonce and cnonce that were (or will be)
+    /// used in the Authorization header — mismatches produce a
+    /// silently-wrong response that fails verification.
+    fn apply_sess(&self, base_ha1: &str, nonce: &str, cnonce: Option<&str>) -> String {
+        if !self.algorithm.is_sess() {
+            return base_ha1.to_string();
+        }
+        let cnonce = cnonce.unwrap_or("");
+        let sess_input = format!("{}:{}:{}", base_ha1, nonce, cnonce);
+        Self::hash(&self.algorithm, sess_input.as_bytes())
+    }
+
     fn compute_ha2(&self, method: &Method, uri: &str, body: &[u8]) -> String {
         let ha2_input = match self.qop {
             Qop::Auth => format!("{}:{}", method.as_str(), uri),
@@ -1115,7 +1186,11 @@ impl<S> DigestAuthenticator<S> {
     }
 
     fn hash(algorithm: &DigestAlgorithm, data: &[u8]) -> String {
-        match algorithm {
+        // RFC 7616 §3.4.2: the `-sess` flavour changes HA1's composition
+        // but uses the same underlying hash function for every digest
+        // primitive. Collapse to the base algorithm here so callers
+        // can pass the algorithm verbatim without reasoning about sess.
+        match algorithm.base() {
             DigestAlgorithm::Md5 => format!("{:x}", md5::compute(data)),
             DigestAlgorithm::Sha256 => hex::encode(Sha256::digest(data)),
             DigestAlgorithm::Sha512 => hex::encode(Sha512::digest(data)),
@@ -1125,6 +1200,9 @@ impl<S> DigestAuthenticator<S> {
             // full SHA-512 hash, so interop with any RFC-compliant peer
             // silently failed.
             DigestAlgorithm::Sha512_256 => hex::encode(&Sha512::digest(data)[..32]),
+            // Base() never returns a `-sess` variant; all four base
+            // cases above cover the arms.
+            _ => unreachable!("base() returned a sess variant"),
         }
     }
 
@@ -1141,7 +1219,8 @@ impl<S> DigestAuthenticator<S> {
         qop: Option<Qop>,
         body: &[u8],
     ) -> String {
-        let ha1 = self.compute_ha1(username, password);
+        let base_ha1 = self.compute_ha1(username, password);
+        let ha1 = self.apply_sess(&base_ha1, nonce, cnonce);
         let ha2 = self.compute_ha2(method, uri, body);
 
         let final_input = if let (Some(qop), Some(nc), Some(cnonce)) = (qop, nc, cnonce) {
@@ -1301,6 +1380,267 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.ct_eq(b).into()
 }
 
+// ============================================================================
+// RFC 7616 §3.5 — Authentication-Info
+// ============================================================================
+
+/// Parsed / buildable Authentication-Info header value.
+///
+/// Emitted by the server on a 2xx response to an authenticated
+/// request so the client can verify the peer identity (mutual
+/// authentication) and, optionally, pick up a new one-time nonce
+/// for the next request without waiting for another challenge.
+///
+/// Field origin (per RFC 7616 §3.5):
+///   * `qop`, `cnonce`, `nc` — echoed from the client's Authorization.
+///   * `rspauth` — H(HA1:nonce:nc:cnonce:qop:HA2') where
+///     HA2' = H(":" + digest-uri) for qop=auth, and
+///     HA2' = H(":" + digest-uri + ":" + H(response-body)) for
+///     qop=auth-int. The response-body hash uses the hash function
+///     implied by the algorithm (not the request body hash).
+///   * `nextnonce` — server-selected fresh nonce the client SHOULD
+///     use on the next request. Enables one-time-nonce policies
+///     without the cost of a new 401 round trip.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthInfo {
+    pub qop: Option<Qop>,
+    pub rspauth: SmolStr,
+    pub cnonce: Option<SmolStr>,
+    pub nc: Option<SmolStr>,
+    pub nextnonce: Option<SmolStr>,
+}
+
+impl AuthInfo {
+    /// Render as the raw header value (what goes after
+    /// `Authentication-Info:`).
+    ///
+    /// Fields are emitted in the order RFC 7616 §3.5 documents
+    /// (qop, rspauth, cnonce, nc, nextnonce); absent optional
+    /// fields are skipped so the line stays canonical. `rspauth` is
+    /// always present — the whole point of the header is mutual
+    /// auth.
+    pub fn to_header_value(&self) -> String {
+        let mut out = String::new();
+        if let Some(qop) = self.qop {
+            out.push_str(&format!("qop={}, ", qop.as_str()));
+        }
+        out.push_str(&format!("rspauth=\"{}\"", self.rspauth));
+        if let Some(cnonce) = &self.cnonce {
+            out.push_str(&format!(", cnonce=\"{}\"", cnonce));
+        }
+        if let Some(nc) = &self.nc {
+            out.push_str(&format!(", nc={}", nc));
+        }
+        if let Some(nextnonce) = &self.nextnonce {
+            out.push_str(&format!(", nextnonce=\"{}\"", nextnonce));
+        }
+        out
+    }
+
+    /// Parses an Authentication-Info header value.
+    ///
+    /// Tolerant to parameter order and whitespace; strict about
+    /// quoted / unquoted syntax per RFC 7616. Returns `None` when
+    /// `rspauth` is missing — without it the header carries no
+    /// mutual-authentication value and callers should ignore it.
+    pub fn parse(value: &str) -> Option<Self> {
+        let mut qop = None;
+        let mut rspauth: Option<SmolStr> = None;
+        let mut cnonce = None;
+        let mut nc = None;
+        let mut nextnonce = None;
+
+        for raw in split_auth_info_params(value) {
+            let (key, val) = match raw.split_once('=') {
+                Some((k, v)) => (k.trim(), v.trim()),
+                None => continue,
+            };
+            let val = strip_quotes(val);
+            match key.to_ascii_lowercase().as_str() {
+                "qop" => {
+                    qop = Qop::parse(val);
+                }
+                "rspauth" => rspauth = Some(SmolStr::new(val)),
+                "cnonce" => cnonce = Some(SmolStr::new(val)),
+                "nc" => nc = Some(SmolStr::new(val)),
+                "nextnonce" => nextnonce = Some(SmolStr::new(val)),
+                _ => {}
+            }
+        }
+
+        Some(AuthInfo {
+            qop,
+            rspauth: rspauth?,
+            cnonce,
+            nc,
+            nextnonce,
+        })
+    }
+}
+
+/// Strips surrounding double quotes from a raw parameter value if
+/// present. Leaves unquoted values alone.
+fn strip_quotes(s: &str) -> &str {
+    let s = s.trim();
+    if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
+        &s[1..s.len() - 1]
+    } else {
+        s
+    }
+}
+
+/// Splits an Authentication-Info value on unquoted commas. Quoted
+/// strings (possibly containing commas) are kept intact.
+fn split_auth_info_params(input: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut escape = false;
+    for ch in input.chars() {
+        if escape {
+            current.push(ch);
+            escape = false;
+            continue;
+        }
+        match ch {
+            '\\' if in_quotes => {
+                current.push(ch);
+                escape = true;
+            }
+            '"' => {
+                in_quotes = !in_quotes;
+                current.push(ch);
+            }
+            ',' if !in_quotes => {
+                let trimmed = current.trim();
+                if !trimmed.is_empty() {
+                    out.push(trimmed.to_string());
+                }
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        out.push(trimmed.to_string());
+    }
+    out
+}
+
+impl<S: CredentialStore> DigestAuthenticator<S> {
+    /// Builds the Authentication-Info header for a 2xx response to a
+    /// previously-verified request.
+    ///
+    /// Callers pair this with a successful `verify()` or
+    /// `verify_with_nonce_tracking()`. The function re-parses the
+    /// request's Authorization header (cheap; same parse path as
+    /// verify) and computes rspauth from the same credentials,
+    /// nonce, nc, cnonce, and qop that the client proved knowledge
+    /// of. If any required field is missing (unauthenticated request
+    /// or `qop` absent from the request) the function returns
+    /// `Ok(None)` — Authentication-Info is only defined for
+    /// qop-protected handshakes.
+    ///
+    /// `response_body` is the body of the OUTGOING 2xx response,
+    /// used for `qop=auth-int`'s HA2' computation. Pass `&[]` for
+    /// empty bodies or when using `qop=auth`.
+    ///
+    /// When `nextnonce` is provided it's added to the header so the
+    /// client can use it directly on the next request (one-time
+    /// nonce policy). The caller is responsible for having
+    /// registered the nonce in the NonceManager.
+    pub fn build_auth_info(
+        &self,
+        request: &Request,
+        response_body: &[u8],
+        nextnonce: Option<&str>,
+    ) -> Result<Option<AuthInfo>> {
+        let params = match self.prepare_digest(request, request.headers())? {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+        // Authentication-Info rspauth requires qop — without it the
+        // header's format is undefined in RFC 7616.
+        let Some(qop) = params.qop else {
+            return Ok(None);
+        };
+        let Some(cnonce) = params.cnonce.clone() else {
+            return Ok(None);
+        };
+        let Some(nc_raw) = params.nc_raw.clone() else {
+            return Ok(None);
+        };
+
+        let creds = self
+            .store
+            .fetch(params.username.as_str(), params.realm.as_str())
+            .ok_or_else(|| anyhow!("unknown user for Authentication-Info"))?;
+
+        let rspauth = self.compute_rspauth(
+            params.username.as_str(),
+            creds.password(),
+            params.uri.as_str(),
+            params.nonce.as_str(),
+            &nc_raw,
+            &cnonce,
+            qop,
+            response_body,
+        );
+
+        Ok(Some(AuthInfo {
+            qop: Some(qop),
+            rspauth: SmolStr::new(rspauth),
+            cnonce: Some(cnonce),
+            nc: Some(nc_raw),
+            nextnonce: nextnonce.map(SmolStr::new),
+        }))
+    }
+
+    /// Computes the `rspauth` value per RFC 7616 §3.5.1.
+    ///
+    /// The only differences from `compute_response`:
+    ///   * HA2' omits the method — it's `H(":" + uri)` for auth,
+    ///     `H(":" + uri + ":" + H(body))` for auth-int.
+    ///   * For auth-int, the body hashed is the RESPONSE body (not
+    ///     the request's).
+    #[allow(clippy::too_many_arguments)]
+    fn compute_rspauth(
+        &self,
+        username: &str,
+        password: &str,
+        uri: &str,
+        nonce: &str,
+        nc: &str,
+        cnonce: &str,
+        qop: Qop,
+        response_body: &[u8],
+    ) -> String {
+        let base_ha1 = self.compute_ha1(username, password);
+        let ha1 = self.apply_sess(&base_ha1, nonce, Some(cnonce));
+
+        let ha2_input = match qop {
+            Qop::Auth => format!(":{}", uri),
+            Qop::AuthInt => {
+                let body_hash = Self::hash(&self.algorithm, response_body);
+                format!(":{}:{}", uri, body_hash)
+            }
+        };
+        let ha2 = Self::hash(&self.algorithm, ha2_input.as_bytes());
+
+        let final_input = format!(
+            "{}:{}:{}:{}:{}:{}",
+            ha1,
+            nonce,
+            nc,
+            cnonce,
+            qop.as_str(),
+            ha2
+        );
+        Self::hash(&self.algorithm, final_input.as_bytes())
+    }
+}
+
 /// Client-side authentication helper for generating Authorization headers.
 /// All fields are private to protect sensitive credential data.
 ///
@@ -1395,7 +1735,16 @@ impl DigestClient {
             .collect();
 
         let ha1_input = format!("{}:{}:{}", self.username, realm, self.password);
-        let ha1 = Self::hash(&algorithm, ha1_input.as_bytes());
+        let base_ha1 = Self::hash(&algorithm, ha1_input.as_bytes());
+        // RFC 7616 §3.4.2: for `-sess` algorithms, rebind HA1 to this
+        // handshake by hashing it together with the nonce and cnonce.
+        // For non-sess variants base_ha1 is used verbatim.
+        let ha1 = if algorithm.is_sess() {
+            let sess_input = format!("{}:{}:{}", base_ha1, nonce, cnonce);
+            Self::hash(&algorithm, sess_input.as_bytes())
+        } else {
+            base_ha1
+        };
 
         let ha2_input = match qop {
             Some(Qop::AuthInt) => {
@@ -1444,14 +1793,91 @@ impl DigestClient {
     }
 
     fn hash(algorithm: &DigestAlgorithm, data: &[u8]) -> String {
-        match algorithm {
+        match algorithm.base() {
             DigestAlgorithm::Md5 => format!("{:x}", md5::compute(data)),
             DigestAlgorithm::Sha256 => hex::encode(Sha256::digest(data)),
             DigestAlgorithm::Sha512 => hex::encode(Sha512::digest(data)),
             // RFC 7616 §6.1 truncates to the first 256 bits; see note on
             // the sibling `hash` above.
             DigestAlgorithm::Sha512_256 => hex::encode(&Sha512::digest(data)[..32]),
+            _ => unreachable!("base() returned a sess variant"),
         }
+    }
+
+    /// Verifies the server's Authentication-Info `rspauth` against
+    /// the request this client just sent.
+    ///
+    /// Pass the `AuthInfo` parsed from the 200 OK's
+    /// Authentication-Info header plus the `realm` used on the
+    /// original Authorization, the `digest-uri` the client sent
+    /// (usually the Request-URI), the `response_body` of the 2xx
+    /// response (for `qop=auth-int`), and the `algorithm` + `nonce`
+    /// the server challenged with.
+    ///
+    /// Returns `Ok(nextnonce_if_any)` when the server's rspauth
+    /// matches (mutual auth succeeded) — the caller SHOULD use the
+    /// returned `nextnonce` on subsequent requests when present.
+    /// Returns `Err` when rspauth doesn't match, meaning the 2xx
+    /// came from a peer that doesn't know the password; apps that
+    /// care about mutual authentication should refuse to trust the
+    /// response.
+    #[allow(clippy::too_many_arguments)]
+    pub fn verify_auth_info(
+        &self,
+        info: &AuthInfo,
+        realm: &str,
+        digest_uri: &str,
+        nonce: &str,
+        algorithm: DigestAlgorithm,
+        response_body: &[u8],
+    ) -> Result<Option<SmolStr>> {
+        let qop = info.qop.ok_or_else(|| {
+            anyhow!("Authentication-Info without qop — mutual auth not negotiated")
+        })?;
+        let cnonce = info
+            .cnonce
+            .as_ref()
+            .ok_or_else(|| anyhow!("Authentication-Info missing cnonce"))?;
+        let nc = info
+            .nc
+            .as_ref()
+            .ok_or_else(|| anyhow!("Authentication-Info missing nc"))?;
+
+        let ha1_input = format!("{}:{}:{}", self.username, realm, self.password);
+        let base_ha1 = Self::hash(&algorithm, ha1_input.as_bytes());
+        let ha1 = if algorithm.is_sess() {
+            let sess_input = format!("{}:{}:{}", base_ha1, nonce, cnonce);
+            Self::hash(&algorithm, sess_input.as_bytes())
+        } else {
+            base_ha1
+        };
+
+        let ha2_input = match qop {
+            Qop::Auth => format!(":{}", digest_uri),
+            Qop::AuthInt => {
+                let body_hash = Self::hash(&algorithm, response_body);
+                format!(":{}:{}", digest_uri, body_hash)
+            }
+        };
+        let ha2 = Self::hash(&algorithm, ha2_input.as_bytes());
+
+        let final_input = format!(
+            "{}:{}:{}:{}:{}:{}",
+            ha1,
+            nonce,
+            nc,
+            cnonce,
+            qop.as_str(),
+            ha2
+        );
+        let expected = Self::hash(&algorithm, final_input.as_bytes());
+
+        if !constant_time_eq(expected.as_bytes(), info.rspauth.as_bytes()) {
+            return Err(anyhow!(
+                "Authentication-Info rspauth mismatch — mutual auth failed"
+            ));
+        }
+        Ok(info.nextnonce.clone())
     }
 }
 
@@ -1554,6 +1980,364 @@ mod tests {
         assert!(
             server.verify(&request, &headers).expect("verify"),
             "SHA-512-256 client/server round-trip must succeed"
+        );
+    }
+
+    // --------------------------------------------------------------
+    // RFC 7616 §3.4.2 session-key (-sess) algorithms
+    // --------------------------------------------------------------
+
+    #[test]
+    fn sess_algorithm_tokens_round_trip() {
+        for (canonical, variant) in [
+            ("MD5-sess", DigestAlgorithm::Md5Sess),
+            ("SHA-256-sess", DigestAlgorithm::Sha256Sess),
+            ("SHA-512-256-sess", DigestAlgorithm::Sha512_256Sess),
+        ] {
+            assert_eq!(DigestAlgorithm::parse(canonical), Some(variant));
+            // Upper-casing input still parses to the same variant.
+            assert_eq!(
+                DigestAlgorithm::parse(&canonical.to_ascii_uppercase()),
+                Some(variant),
+            );
+            assert_eq!(variant.as_str(), canonical);
+            assert!(variant.is_sess());
+            assert!(!variant.base().is_sess());
+        }
+    }
+
+    #[test]
+    fn sess_base_maps_to_underlying_hash() {
+        assert_eq!(DigestAlgorithm::Md5Sess.base(), DigestAlgorithm::Md5);
+        assert_eq!(DigestAlgorithm::Sha256Sess.base(), DigestAlgorithm::Sha256);
+        assert_eq!(
+            DigestAlgorithm::Sha512_256Sess.base(),
+            DigestAlgorithm::Sha512_256
+        );
+        // Non-sess variants are their own base.
+        assert_eq!(DigestAlgorithm::Md5.base(), DigestAlgorithm::Md5);
+    }
+
+    /// Verify a sess variant round-trips: server challenges with
+    /// MD5-sess, client computes the Authorization using the same
+    /// algorithm, server verifies. This proves both sides agree on
+    /// the session-key HA1 composition.
+    fn sess_round_trip_inner(algorithm: DigestAlgorithm) {
+        let store = MemoryCredentialStore::with(vec![Credentials {
+            username: SmolStr::new("alice"),
+            password: "secret".to_string(),
+            realm: SmolStr::new("example.com"),
+        }]);
+        let server = DigestAuthenticator::new("example.com", store).with_algorithm(algorithm);
+        let nonce = server.nonce_manager().generate();
+
+        let mut client = DigestClient::new("alice", "secret");
+        let uri = "sip:example.com";
+        let auth_header = client.generate_authorization(
+            &Method::Register,
+            uri,
+            "example.com",
+            nonce.value(),
+            algorithm,
+            Some(Qop::Auth),
+            Some(server.opaque()),
+            b"",
+        );
+        assert!(
+            auth_header.contains(algorithm.as_str()),
+            "auth header MUST advertise the -sess token: {auth_header}",
+        );
+
+        let mut headers = Headers::new();
+        headers
+            .push(SmolStr::new("Authorization"), SmolStr::new(auth_header))
+            .unwrap();
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse(uri).unwrap()),
+            headers.clone(),
+            Bytes::new(),
+        )
+        .expect("valid request");
+
+        assert!(
+            server.verify(&request, &headers).expect("verify"),
+            "{}: sess client/server round-trip must succeed",
+            algorithm.as_str(),
+        );
+    }
+
+    // --------------------------------------------------------------
+    // RFC 7616 §3.5 Authentication-Info
+    // --------------------------------------------------------------
+
+    #[test]
+    fn auth_info_parse_rejects_missing_rspauth() {
+        assert!(AuthInfo::parse("qop=auth, nc=00000001").is_none());
+    }
+
+    #[test]
+    fn auth_info_parse_extracts_all_fields() {
+        let raw = "qop=auth, rspauth=\"abcdef\", cnonce=\"c-1\", nc=00000001, nextnonce=\"nn-2\"";
+        let info = AuthInfo::parse(raw).expect("valid");
+        assert_eq!(info.qop, Some(Qop::Auth));
+        assert_eq!(info.rspauth.as_str(), "abcdef");
+        assert_eq!(info.cnonce.as_deref(), Some("c-1"));
+        assert_eq!(info.nc.as_deref(), Some("00000001"));
+        assert_eq!(info.nextnonce.as_deref(), Some("nn-2"));
+    }
+
+    #[test]
+    fn auth_info_to_header_value_round_trips() {
+        let info = AuthInfo {
+            qop: Some(Qop::AuthInt),
+            rspauth: SmolStr::new("deadbeef"),
+            cnonce: Some(SmolStr::new("clientnonce")),
+            nc: Some(SmolStr::new("00000002")),
+            nextnonce: Some(SmolStr::new("next-one")),
+        };
+        let value = info.to_header_value();
+        let round = AuthInfo::parse(&value).expect("round-trip");
+        assert_eq!(round, info);
+    }
+
+    /// End-to-end: server authenticates a request, builds
+    /// Authentication-Info, client parses it and verifies rspauth.
+    /// The outer path mirrors a successful REGISTER → 200 OK flow.
+    fn auth_info_round_trip_inner(algorithm: DigestAlgorithm, qop: Qop, response_body: &[u8]) {
+        let store = MemoryCredentialStore::with(vec![Credentials {
+            username: SmolStr::new("alice"),
+            password: "secret".to_string(),
+            realm: SmolStr::new("example.com"),
+        }]);
+        let server = DigestAuthenticator::new("example.com", store)
+            .with_algorithm(algorithm)
+            .with_qop(qop);
+        let nonce = server.nonce_manager().generate();
+
+        let mut client = DigestClient::new("alice", "secret");
+        let uri = "sip:example.com";
+        let auth_header = client.generate_authorization(
+            &Method::Register,
+            uri,
+            "example.com",
+            nonce.value(),
+            algorithm,
+            Some(qop),
+            Some(server.opaque()),
+            b"",
+        );
+
+        let mut req_headers = Headers::new();
+        req_headers
+            .push(
+                SmolStr::new("Authorization"),
+                SmolStr::new(auth_header.clone()),
+            )
+            .unwrap();
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse(uri).unwrap()),
+            req_headers.clone(),
+            Bytes::new(),
+        )
+        .expect("valid request");
+
+        // Server: verify the request first (standard path), then
+        // build the Authentication-Info for the outgoing 2xx.
+        assert!(server.verify(&request, &req_headers).expect("verify"));
+
+        let nextnonce = "fresh-nonce-for-next-request";
+        let info = server
+            .build_auth_info(&request, response_body, Some(nextnonce))
+            .expect("build_auth_info")
+            .expect("qop-protected request yields AuthInfo");
+        assert_eq!(info.qop, Some(qop));
+        assert_eq!(info.nextnonce.as_deref(), Some(nextnonce));
+        assert!(!info.rspauth.is_empty());
+
+        // Simulate transmission over the wire: serialize + reparse.
+        let header_value = info.to_header_value();
+        let parsed = AuthInfo::parse(&header_value).expect("reparse");
+        assert_eq!(parsed, info);
+
+        // Client: verify mutual auth. Returns the nextnonce.
+        let returned_nextnonce = client
+            .verify_auth_info(
+                &parsed,
+                "example.com",
+                uri,
+                nonce.value(),
+                algorithm,
+                response_body,
+            )
+            .expect("rspauth must match — client/server share the password");
+        assert_eq!(returned_nextnonce.as_deref(), Some(nextnonce));
+    }
+
+    #[test]
+    fn auth_info_round_trip_md5_auth() {
+        auth_info_round_trip_inner(DigestAlgorithm::Md5, Qop::Auth, b"");
+    }
+
+    #[test]
+    fn auth_info_round_trip_sha256_auth() {
+        auth_info_round_trip_inner(DigestAlgorithm::Sha256, Qop::Auth, b"");
+    }
+
+    #[test]
+    fn auth_info_round_trip_sess_variant() {
+        // -sess variants hash HA1 with nonce+cnonce; the
+        // Authentication-Info path must apply the same
+        // transformation or rspauth will mismatch.
+        auth_info_round_trip_inner(DigestAlgorithm::Sha256Sess, Qop::Auth, b"");
+    }
+
+    #[test]
+    fn auth_info_round_trip_auth_int_includes_response_body() {
+        // Body should factor into rspauth when qop=auth-int. A
+        // non-empty body ensures the HA2' path differs from qop=auth.
+        auth_info_round_trip_inner(
+            DigestAlgorithm::Sha256,
+            Qop::AuthInt,
+            b"200 OK response body",
+        );
+    }
+
+    #[test]
+    fn auth_info_fails_when_wrong_password() {
+        // A client that doesn't know the password MUST NOT be able
+        // to verify rspauth — mutual auth catches a forged 200 OK.
+        let algorithm = DigestAlgorithm::Sha256;
+        let qop = Qop::Auth;
+        let store = MemoryCredentialStore::with(vec![Credentials {
+            username: SmolStr::new("alice"),
+            password: "correct-secret".to_string(),
+            realm: SmolStr::new("example.com"),
+        }]);
+        let server = DigestAuthenticator::new("example.com", store)
+            .with_algorithm(algorithm)
+            .with_qop(qop);
+        let nonce = server.nonce_manager().generate();
+
+        let mut auth_client = DigestClient::new("alice", "correct-secret");
+        let uri = "sip:example.com";
+        let auth_header = auth_client.generate_authorization(
+            &Method::Register,
+            uri,
+            "example.com",
+            nonce.value(),
+            algorithm,
+            Some(qop),
+            Some(server.opaque()),
+            b"",
+        );
+        let mut req_headers = Headers::new();
+        req_headers
+            .push(SmolStr::new("Authorization"), SmolStr::new(auth_header))
+            .unwrap();
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse(uri).unwrap()),
+            req_headers.clone(),
+            Bytes::new(),
+        )
+        .expect("valid request");
+        assert!(server.verify(&request, &req_headers).expect("verify"));
+
+        let info = server
+            .build_auth_info(&request, b"", None)
+            .expect("build")
+            .expect("info");
+
+        // A different client (wrong password) tries to verify.
+        let wrong = DigestClient::new("alice", "wrong-password");
+        let result =
+            wrong.verify_auth_info(&info, "example.com", uri, nonce.value(), algorithm, b"");
+        assert!(
+            result.is_err(),
+            "rspauth MUST NOT verify under a wrong password",
+        );
+    }
+
+    #[test]
+    fn build_auth_info_returns_none_without_qop() {
+        // An unauthenticated request (no Authorization header) must
+        // produce no Authentication-Info — the function is a no-op
+        // when qop wasn't negotiated.
+        let store = MemoryCredentialStore::with(vec![Credentials {
+            username: SmolStr::new("alice"),
+            password: "secret".to_string(),
+            realm: SmolStr::new("example.com"),
+        }]);
+        let server = DigestAuthenticator::new("example.com", store);
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            Headers::new(),
+            Bytes::new(),
+        )
+        .expect("valid request");
+        let result = server
+            .build_auth_info(&request, b"", None)
+            .expect("no error");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn md5_sess_round_trip() {
+        sess_round_trip_inner(DigestAlgorithm::Md5Sess);
+    }
+
+    #[test]
+    fn sha256_sess_round_trip() {
+        sess_round_trip_inner(DigestAlgorithm::Sha256Sess);
+    }
+
+    #[test]
+    fn sha512_256_sess_round_trip() {
+        sess_round_trip_inner(DigestAlgorithm::Sha512_256Sess);
+    }
+
+    /// Negative: a -sess server MUST NOT accept a client that
+    /// computes HA1 without the session-key transformation (i.e.
+    /// used the non-sess algorithm by mistake). Verifies that
+    /// session-keying is actually protecting the digest, not just a
+    /// cosmetic token.
+    #[test]
+    fn sess_server_rejects_non_sess_client_response() {
+        let store = MemoryCredentialStore::with(vec![Credentials {
+            username: SmolStr::new("alice"),
+            password: "secret".to_string(),
+            realm: SmolStr::new("example.com"),
+        }]);
+        let server =
+            DigestAuthenticator::new("example.com", store).with_algorithm(DigestAlgorithm::Md5Sess);
+        let nonce = server.nonce_manager().generate();
+
+        // Client uses the non-sess form by mistake.
+        let mut client = DigestClient::new("alice", "secret");
+        let uri = "sip:example.com";
+        let auth_header = client.generate_authorization(
+            &Method::Register,
+            uri,
+            "example.com",
+            nonce.value(),
+            DigestAlgorithm::Md5,
+            Some(Qop::Auth),
+            Some(server.opaque()),
+            b"",
+        );
+        let mut headers = Headers::new();
+        headers
+            .push(SmolStr::new("Authorization"), SmolStr::new(auth_header))
+            .unwrap();
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse(uri).unwrap()),
+            headers.clone(),
+            Bytes::new(),
+        )
+        .expect("valid request");
+        let verified = server.verify(&request, &headers).unwrap_or(false);
+        assert!(
+            !verified,
+            "MD5-sess server MUST reject an MD5 (non-sess) response — session-keying isn't just cosmetic",
         );
     }
 
