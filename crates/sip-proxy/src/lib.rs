@@ -19,11 +19,14 @@
 //! ```
 
 pub mod cancel_ack;
+pub mod location;
 pub mod service;
 pub mod stateful;
 
 use anyhow::{anyhow, Result};
-use sip_core::{decrement_max_forwards, Header, Headers, Request, RequestLine, SipUri};
+use sip_core::{
+    decrement_max_forwards, Header, Headers, Request, RequestLine, RouteHeader, SipUri, Uri,
+};
 use sip_transaction::generate_branch_id;
 
 /// Stateless proxy helpers for RFC 3261 proxy operations.
@@ -331,6 +334,114 @@ impl ProxyHelpers {
         *request = Request::new(RequestLine::new(method, target_uri), headers, body)
             .expect("valid request");
     }
+
+    /// RFC 3261 §16.4 strict-routing recovery.
+    ///
+    /// When the previous hop is a strict-router (a peer that does not
+    /// understand `;lr`), it forwards requests by overwriting the
+    /// Request-URI with the next Route entry and pushing the original
+    /// target URI to the END of the Route header field. The target
+    /// proxy must reverse that operation on receive: if the
+    /// Request-URI corresponds to *us* (i.e., we previously placed it
+    /// in a Record-Route), restore the original Request-URI from the
+    /// LAST Route entry and remove that entry.
+    ///
+    /// `is_self` is invoked on the parsed Request-URI; return `true`
+    /// if the URI represents this proxy. Typical implementations
+    /// compare host+port (and optionally params) against the proxy's
+    /// configured Record-Route URI.
+    ///
+    /// Returns `true` if the Request-URI was restored from the Route
+    /// header set; `false` if no rewrite was needed.
+    ///
+    /// Limitation: only single-value Route headers (one URI per
+    /// header line) are recognised. Comma-separated multi-value Route
+    /// headers should be normalised by the caller before invocation.
+    pub fn recover_strict_routed_request_uri<F>(request: &mut Request, is_self: F) -> bool
+    where
+        F: FnOnce(&Uri) -> bool,
+    {
+        if !is_self(request.uri()) {
+            return false;
+        }
+
+        // Find the LAST Route header in document order.
+        let last_idx = request
+            .headers()
+            .iter()
+            .enumerate()
+            .rfind(|(_, h)| h.name().eq_ignore_ascii_case("Route"))
+            .map(|(i, _)| i);
+
+        let Some(idx) = last_idx else {
+            // Strict routing requires a Route to recover from. If
+            // there's none, the Request-URI is genuinely ours and the
+            // request is malformed — leave it alone for the caller to
+            // notice.
+            return false;
+        };
+
+        let raw = request.headers().as_slice()[idx].value().to_string();
+        let Ok(route) = RouteHeader::parse(raw.trim()) else {
+            return false;
+        };
+        let restored = route.uri().clone();
+
+        request.headers_mut().remove_at(idx);
+        request.set_uri(restored);
+        true
+    }
+
+    /// RFC 3261 §16.4 strict-routing forward step.
+    ///
+    /// If the request carries one or more Route headers and the FIRST
+    /// Route URI lacks the `;lr` parameter, the next hop is a
+    /// strict-router. The proxy MUST:
+    ///   1. Save the current Request-URI.
+    ///   2. Place the first Route URI into the Request-URI.
+    ///   3. Remove the first Route header.
+    ///   4. Append the saved Request-URI as the LAST Route entry.
+    ///
+    /// This preserves the original target so the strict-router can
+    /// continue forwarding the request, eventually reaching a hop
+    /// that places the saved URI back into the Request-URI on
+    /// receive (see [`recover_strict_routed_request_uri`]).
+    ///
+    /// Returns `true` if the request was rewritten for a strict
+    /// router; `false` if the next hop loose-routes (or there are no
+    /// Route headers).
+    ///
+    /// Limitation: only single-value Route headers (one URI per
+    /// header line) are recognised.
+    pub fn apply_strict_routing_swap(request: &mut Request) -> bool {
+        let first_idx = request
+            .headers()
+            .iter()
+            .position(|h| h.name().eq_ignore_ascii_case("Route"));
+
+        let Some(idx) = first_idx else { return false };
+
+        let raw = request.headers().as_slice()[idx].value().to_string();
+        let Ok(route) = RouteHeader::parse(raw.trim()) else {
+            return false;
+        };
+        if route.has_lr() {
+            // Loose-routed next hop — no swap required.
+            return false;
+        }
+
+        let original_request_uri = request.uri().clone();
+        let next_hop_uri = route.uri().clone();
+
+        // Step 3: drop the first Route entry.
+        request.headers_mut().remove_at(idx);
+        // Step 2: install the first Route URI as the new Request-URI.
+        request.set_uri(next_hop_uri);
+        // Step 4: append the original Request-URI as the last Route.
+        let appended = format!("<{}>", original_request_uri.as_str());
+        let _ = request.headers_mut().push("Route", appended);
+        true
+    }
 }
 
 #[cfg(test)]
@@ -439,7 +550,10 @@ mod tests {
         let b1 = compute_loop_branch(&r1, "proxy.example.com");
         let b2 = compute_loop_branch(&r2, "proxy.example.com");
         assert_eq!(b1, b2, "same identity → same branch");
-        assert!(b1.starts_with("z9hG4bK"), "branch must carry magic cookie: {b1}");
+        assert!(
+            b1.starts_with("z9hG4bK"),
+            "branch must carry magic cookie: {b1}"
+        );
     }
 
     #[test]
@@ -484,10 +598,7 @@ mod tests {
     fn hashed_branch_changes_when_request_uri_changes() {
         let r1 = make_request_with_identity();
         let mut r2 = make_request_with_identity();
-        ProxyHelpers::set_request_uri(
-            &mut r2,
-            SipUri::parse("sip:carol@example.net").unwrap(),
-        );
+        ProxyHelpers::set_request_uri(&mut r2, SipUri::parse("sip:carol@example.net").unwrap());
         let b1 = compute_loop_branch(&r1, "proxy.example.com");
         let b2 = compute_loop_branch(&r2, "proxy.example.com");
         assert_ne!(b1, b2);
@@ -593,5 +704,234 @@ mod tests {
         ProxyHelpers::set_request_uri(&mut req, target.clone());
 
         assert_eq!(req.uri().as_sip().unwrap().as_str(), target.as_str());
+    }
+
+    // ===========================================
+    // RFC 3261 §16.4 strict-routing helpers
+    // ===========================================
+
+    /// Helper: build an INVITE with the given Request-URI and an
+    /// ordered list of Route header values (one entry per header).
+    fn make_request_with_routes(req_uri: &str, routes: &[&str]) -> Request {
+        let mut headers = Headers::new();
+        headers.push("Call-ID", "test-call-1").unwrap();
+        headers.push("Max-Forwards", "70").unwrap();
+        for route in routes {
+            headers.push("Route", *route).unwrap();
+        }
+        Request::new(
+            RequestLine::new(Method::Invite, SipUri::parse(req_uri).unwrap()),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid request")
+    }
+
+    #[test]
+    fn recover_strict_routed_request_uri_restores_from_last_route() {
+        // Simulate a strict router upstream: it placed our Record-Route
+        // URI into the Request-URI and pushed the original target to
+        // the END of the Route set. We must reverse that.
+        let mut req = make_request_with_routes(
+            "sip:proxy.example.com",
+            &[
+                "<sip:upstream.example.net;lr>",
+                "<sip:bob@final-target.example.com>",
+            ],
+        );
+
+        let rewritten = ProxyHelpers::recover_strict_routed_request_uri(&mut req, |uri| {
+            uri.as_sip()
+                .map(|s| s.host() == "proxy.example.com")
+                .unwrap_or(false)
+        });
+        assert!(rewritten, "Request-URI is ours; recovery should fire");
+
+        // Request-URI now carries the original target.
+        assert_eq!(
+            req.uri().as_sip().unwrap().as_str(),
+            "sip:bob@final-target.example.com"
+        );
+
+        // The last Route entry was consumed; only the loose-routed
+        // upstream remains.
+        let routes: Vec<_> = req.headers().get_all("Route").collect();
+        assert_eq!(routes.len(), 1);
+        assert!(routes[0].contains("upstream.example.net"));
+    }
+
+    #[test]
+    fn recover_strict_routed_request_uri_noop_when_uri_is_not_self() {
+        // The Request-URI is NOT one we placed in Record-Route, so we
+        // must not touch the Route set.
+        let mut req = make_request_with_routes(
+            "sip:bob@somewhere.example.com",
+            &["<sip:proxy.example.com;lr>"],
+        );
+
+        let rewritten = ProxyHelpers::recover_strict_routed_request_uri(&mut req, |_| false);
+        assert!(!rewritten);
+        assert_eq!(
+            req.uri().as_sip().unwrap().as_str(),
+            "sip:bob@somewhere.example.com"
+        );
+        assert_eq!(req.headers().get_all("Route").count(), 1);
+    }
+
+    #[test]
+    fn recover_strict_routed_request_uri_noop_when_no_route_header() {
+        // Request-URI is "self" but there's no Route to recover from
+        // — the request is malformed; we leave it for the caller.
+        let mut req = make_request_with_routes("sip:proxy.example.com", &[]);
+        let rewritten = ProxyHelpers::recover_strict_routed_request_uri(&mut req, |_| true);
+        assert!(!rewritten);
+        assert_eq!(
+            req.uri().as_sip().unwrap().as_str(),
+            "sip:proxy.example.com"
+        );
+    }
+
+    #[test]
+    fn apply_strict_routing_swap_rewrites_when_first_route_lacks_lr() {
+        // Next hop is a strict router (no ;lr). We must put its URI
+        // into the Request-URI and push the original target to the
+        // end of the Route set.
+        let mut req = make_request_with_routes(
+            "sip:bob@final-target.example.com",
+            &[
+                "<sip:strict-hop.example.net>",
+                "<sip:loose-hop.example.org;lr>",
+            ],
+        );
+
+        let rewritten = ProxyHelpers::apply_strict_routing_swap(&mut req);
+        assert!(rewritten, "first Route lacks ;lr — swap MUST fire");
+
+        // Step 2: the strict-router URI is now the Request-URI.
+        assert_eq!(
+            req.uri().as_sip().unwrap().as_str(),
+            "sip:strict-hop.example.net"
+        );
+
+        // Step 3 + 4: the strict-hop Route entry is gone, and the
+        // original target sits at the END of the Route set.
+        let routes: Vec<_> = req.headers().get_all("Route").collect();
+        assert_eq!(routes.len(), 2);
+        assert!(routes[0].contains("loose-hop.example.org"));
+        assert!(routes[1].contains("final-target.example.com"));
+    }
+
+    #[test]
+    fn apply_strict_routing_swap_noop_when_first_route_has_lr() {
+        // Loose-routed next hop: no rewrite, Route set unchanged.
+        let mut req = make_request_with_routes(
+            "sip:bob@final-target.example.com",
+            &[
+                "<sip:loose-hop.example.org;lr>",
+                "<sip:another.example.net;lr>",
+            ],
+        );
+        let original_routes: Vec<String> = req
+            .headers()
+            .get_all("Route")
+            .map(|s| s.to_owned())
+            .collect();
+
+        let rewritten = ProxyHelpers::apply_strict_routing_swap(&mut req);
+        assert!(!rewritten);
+        assert_eq!(
+            req.uri().as_sip().unwrap().as_str(),
+            "sip:bob@final-target.example.com"
+        );
+        let after: Vec<String> = req
+            .headers()
+            .get_all("Route")
+            .map(|s| s.to_owned())
+            .collect();
+        assert_eq!(after, original_routes);
+    }
+
+    #[test]
+    fn apply_strict_routing_swap_noop_when_no_route_header() {
+        // No Route header — nothing to do, regardless of where the
+        // Request-URI is going.
+        let mut req = make_request_with_routes("sip:bob@final-target.example.com", &[]);
+        let rewritten = ProxyHelpers::apply_strict_routing_swap(&mut req);
+        assert!(!rewritten);
+    }
+
+    #[test]
+    fn strict_routing_round_trip_through_two_hops() {
+        // Full §16.4 round-trip:
+        //   1. UAC has Route set [strictA, looseB] (strictA lacks ;lr).
+        //   2. Caller-side proxy (us) calls apply_strict_routing_swap
+        //      → Request-URI = strictA, Route set = [looseB, original].
+        //   3. The strict router strictA forwards by pulling the next
+        //      Route into the Request-URI and pushing strictA's
+        //      Record-Route URI as the new Request-URI's predecessor.
+        //      We simulate that by setting Request-URI to looseB and
+        //      shifting the Route set.
+        //   4. The proxy at looseB sees the Request-URI is itself
+        //      (recovery case) and calls
+        //      recover_strict_routed_request_uri to restore the
+        //      original target.
+        let original_target = "sip:bob@final-target.example.com";
+        let mut req = make_request_with_routes(
+            original_target,
+            &["<sip:strictA.example.net>", "<sip:looseB.example.org;lr>"],
+        );
+
+        // Caller-side proxy: strict-routing pre-forward swap.
+        assert!(ProxyHelpers::apply_strict_routing_swap(&mut req));
+        assert_eq!(
+            req.uri().as_sip().unwrap().as_str(),
+            "sip:strictA.example.net"
+        );
+
+        // Simulate strictA's hop: it does not understand ;lr, so it
+        // overwrites Request-URI with the next Route entry and shifts
+        // the original Request-URI we appended into position. After
+        // its forward, the Request-URI points to looseB and the
+        // original target sits at the end of the Route set unchanged.
+        let routes: Vec<String> = req
+            .headers()
+            .get_all("Route")
+            .map(|s| s.to_owned())
+            .collect();
+        assert_eq!(routes.len(), 2);
+        // Drop the first Route (looseB) and put it in Request-URI.
+        let new_uri = SipUri::parse("sip:looseB.example.org;lr").unwrap();
+        ProxyHelpers::set_request_uri(&mut req, new_uri);
+        // Strip the consumed first Route entry.
+        let kept: Vec<String> = req
+            .headers()
+            .get_all("Route")
+            .skip(1)
+            .map(|s| s.to_owned())
+            .collect();
+        req.headers_mut().remove("Route");
+        for route in kept {
+            req.headers_mut().push("Route", route).unwrap();
+        }
+
+        // Proxy at looseB: Request-URI is "self", run recovery.
+        let req_uri_str = req.uri().as_str().to_string();
+        let recovered = ProxyHelpers::recover_strict_routed_request_uri(&mut req, |uri| {
+            uri.as_sip()
+                .map(|s| s.host().eq_ignore_ascii_case("looseB.example.org"))
+                .unwrap_or(false)
+        });
+        assert!(
+            recovered,
+            "predicate failed for Request-URI = {req_uri_str}"
+        );
+        assert_eq!(
+            req.uri().as_sip().unwrap().as_str(),
+            original_target,
+            "round-trip MUST restore the original target",
+        );
+        // Route set is now empty: the strict-routing detour fully
+        // unwound.
+        assert_eq!(req.headers().get_all("Route").count(), 0);
     }
 }

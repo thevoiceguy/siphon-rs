@@ -1631,8 +1631,8 @@ mod tests {
     fn nonce_is_stale_detects_expired_nonce_in_authorization() {
         // Authenticator with a 10ms nonce TTL so we can age it deterministically.
         let store = MemoryCredentialStore::new();
-        let auth =
-            DigestAuthenticator::new("example.com", store).with_nonce_ttl(Duration::from_millis(10));
+        let auth = DigestAuthenticator::new("example.com", store)
+            .with_nonce_ttl(Duration::from_millis(10));
 
         // Get a nonce, expire it, then send an Authorization that references it.
         let nonce = auth.nonce_manager().generate();
@@ -1649,10 +1649,7 @@ mod tests {
             )
             .unwrap();
         let request = Request::new(
-            RequestLine::new(
-                Method::Register,
-                SipUri::parse("sip:example.com").unwrap(),
-            ),
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
         )
@@ -1686,10 +1683,7 @@ mod tests {
             )
             .unwrap();
         let request = Request::new(
-            RequestLine::new(
-                Method::Register,
-                SipUri::parse("sip:example.com").unwrap(),
-            ),
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
             headers,
             Bytes::new(),
         )

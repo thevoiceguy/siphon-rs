@@ -339,10 +339,7 @@ impl UserAgentClient {
 
         // Subscription-State: active (unsolicited)
         headers
-            .push(
-                SmolStr::new("Subscription-State"),
-                SmolStr::new("active"),
-            )
+            .push(SmolStr::new("Subscription-State"), SmolStr::new("active"))
             .unwrap();
 
         // User-Agent
@@ -3110,11 +3107,7 @@ impl UserAgentClient {
 /// don't hard-error because that would break existing non-conforming
 /// callers. A `tracing::warn!` surfaces the misconfiguration at
 /// runtime without forcing an API break.
-fn warn_if_sips_contact_downgrade(
-    request_uri: &SipUri,
-    contact_uri: &SipUri,
-    method: &str,
-) {
+fn warn_if_sips_contact_downgrade(request_uri: &SipUri, contact_uri: &SipUri, method: &str) {
     if request_uri.is_sips() && !contact_uri.is_sips() {
         tracing::warn!(
             request_uri = %request_uri.as_str(),

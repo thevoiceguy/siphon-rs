@@ -787,8 +787,8 @@ impl InviteHandler {
             )
         };
 
-        let transformed = sip_core::Response::new(start_line, new_headers, body)
-            .expect("valid response");
+        let transformed =
+            sip_core::Response::new(start_line, new_headers, body).expect("valid response");
 
         tracing::debug!(
             outgoing_call_id,
@@ -1560,7 +1560,10 @@ fn replaces_initiator_authorized(
         // but we double-check the username match here.
         let auth_user = sip_auth::extract_auth_username(request.headers());
         if let Some(user) = auth_user {
-            return dialog_users.iter().flatten().any(|du| users_equivalent(du, user.as_str()));
+            return dialog_users
+                .iter()
+                .flatten()
+                .any(|du| users_equivalent(du, user.as_str()));
         }
         // No Authorization header at all — dispatcher would have challenged
         // already, so this path means auth is on but the incoming INVITE is
@@ -1670,8 +1673,8 @@ mod tests {
 
     #[test]
     fn parse_replaces_extracts_call_id_and_tags() {
-        let id = parse_replaces_dialog_id("abc123;to-tag=local;from-tag=remote")
-            .expect("well-formed");
+        let id =
+            parse_replaces_dialog_id("abc123;to-tag=local;from-tag=remote").expect("well-formed");
         assert_eq!(id.call_id(), "abc123");
         assert_eq!(id.local_tag(), "local");
         assert_eq!(id.remote_tag(), "remote");
@@ -1679,10 +1682,8 @@ mod tests {
 
     #[test]
     fn parse_replaces_accepts_early_only_param() {
-        let id = parse_replaces_dialog_id(
-            "abc123;to-tag=local;from-tag=remote;early-only",
-        )
-        .expect("well-formed");
+        let id = parse_replaces_dialog_id("abc123;to-tag=local;from-tag=remote;early-only")
+            .expect("well-formed");
         assert_eq!(id.local_tag(), "local");
     }
 
@@ -1702,8 +1703,8 @@ mod tests {
 
     #[test]
     fn parse_replaces_tolerates_whitespace() {
-        let id = parse_replaces_dialog_id("abc ; to-tag=local ; from-tag=remote")
-            .expect("well-formed");
+        let id =
+            parse_replaces_dialog_id("abc ; to-tag=local ; from-tag=remote").expect("well-formed");
         assert_eq!(id.call_id(), "abc");
         assert_eq!(id.local_tag(), "local");
         assert_eq!(id.remote_tag(), "remote");

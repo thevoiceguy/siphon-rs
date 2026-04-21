@@ -113,11 +113,7 @@ impl RequestDispatcher {
         // the attacker to retry immediately and also lets them drain our
         // nonce pool.
         let source_ip = ctx.peer().ip().to_string();
-        if !self
-            .services
-            .auth_rate_limiter
-            .check_rate_limit(&source_ip)
-        {
+        if !self.services.auth_rate_limiter.check_rate_limit(&source_ip) {
             warn!(%source_ip, method = ?method, "Auth attempt rate-limited");
             self.send_rate_limited(request, handle.clone()).await;
             return false;

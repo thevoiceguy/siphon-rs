@@ -89,6 +89,67 @@ impl CancelForwarder {
         Ok(cancel)
     }
 
+    /// Validates that a CANCEL request matches a previously-forwarded
+    /// INVITE per RFC 3261 §9.2:
+    ///
+    /// > The matching is performed comparing the request URI, the From
+    /// > tag, the Call-ID, and the CSeq number (only the number, not
+    /// > the method) of the incoming request to the URI of the
+    /// > original request, the From tag, Call-ID, and CSeq number of
+    /// > the request being cancelled.
+    ///
+    /// Returns `true` only when every field above matches. The To-tag
+    /// is intentionally ignored: a CANCEL may arrive before any
+    /// response has established a To-tag on the dialog.
+    ///
+    /// A non-matching CANCEL must be rejected with 481 (per §9.2 the
+    /// proxy "MUST" only act on a matching CANCEL).
+    pub fn matches_invite(cancel: &Request, invite: &Request) -> bool {
+        // CSeq number (not method) must match.
+        let cancel_seq = match Self::extract_invite_cseq(cancel) {
+            Ok(n) => n,
+            Err(_) => return false,
+        };
+        let invite_seq = match Self::extract_invite_cseq(invite) {
+            Ok(n) => n,
+            Err(_) => return false,
+        };
+        if cancel_seq != invite_seq {
+            return false;
+        }
+
+        // Call-ID must match exactly.
+        let (Some(cancel_cid), Some(invite_cid)) = (
+            cancel.headers().get("Call-ID"),
+            invite.headers().get("Call-ID"),
+        ) else {
+            return false;
+        };
+        if cancel_cid != invite_cid {
+            return false;
+        }
+
+        // From tag must match. We compare the tag parameter only —
+        // display names and the URI are equivalent across the two
+        // messages but parsing is brittle, so isolate the tag.
+        let (Some(cancel_from), Some(invite_from)) =
+            (cancel.headers().get("From"), invite.headers().get("From"))
+        else {
+            return false;
+        };
+        if extract_tag(cancel_from) != extract_tag(invite_from) {
+            return false;
+        }
+
+        // Request-URI must match. Compare the canonical string form;
+        // SipUri stores it normalised, so this is well-defined.
+        if cancel.uri().as_str() != invite.uri().as_str() {
+            return false;
+        }
+
+        true
+    }
+
     /// Determine if CANCEL should be forwarded to a branch
     ///
     /// Per RFC 3261 §16.10, a stateful proxy should forward CANCEL to
@@ -111,6 +172,16 @@ impl CancelForwarder {
             }
         }
     }
+}
+
+/// Extracts the `tag` parameter from a From / To header value.
+/// Returns the tag verbatim (no quoting/escaping rules apply, per
+/// RFC 3261 §19.3) or `None` if absent.
+fn extract_tag(header_value: &str) -> Option<&str> {
+    header_value
+        .split(';')
+        .map(str::trim)
+        .find_map(|p| p.strip_prefix("tag="))
 }
 
 /// ACK forwarding per RFC 3261 §16.11
@@ -358,6 +429,97 @@ mod tests {
         let ack = make_ack();
         assert_eq!(AckForwarder::ack_type(&ack, Some(true)), AckType::For2xx);
         assert_eq!(AckForwarder::ack_type(&ack, Some(false)), AckType::Non2xx);
+    }
+
+    fn make_invite() -> Request {
+        let mut headers = Headers::new();
+        headers.push("Call-ID", "test-123").unwrap();
+        headers.push("CSeq", "1 INVITE").unwrap();
+        headers
+            .push("From", "<sip:alice@example.com>;tag=abc")
+            .unwrap();
+        headers.push("To", "<sip:bob@example.com>").unwrap();
+        headers
+            .push("Via", "SIP/2.0/UDP proxy;branch=z9hG4bKtemplate")
+            .unwrap();
+
+        Request::new(
+            RequestLine::new(
+                Method::Invite,
+                SipUri::parse("sip:bob@example.com").unwrap(),
+            ),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid request")
+    }
+
+    #[test]
+    fn cancel_matches_invite_when_call_id_from_tag_cseq_request_uri_align() {
+        let invite = make_invite();
+        let cancel = make_cancel();
+        assert!(CancelForwarder::matches_invite(&cancel, &invite));
+    }
+
+    #[test]
+    fn cancel_rejects_invite_with_different_call_id() {
+        let invite = make_invite();
+        let mut cancel = make_cancel();
+        cancel
+            .headers_mut()
+            .set_or_push("Call-ID", "other-call")
+            .unwrap();
+        assert!(!CancelForwarder::matches_invite(&cancel, &invite));
+    }
+
+    #[test]
+    fn cancel_rejects_invite_with_different_from_tag() {
+        let invite = make_invite();
+        let mut cancel = make_cancel();
+        cancel
+            .headers_mut()
+            .set_or_push("From", "<sip:alice@example.com>;tag=DIFFERENT")
+            .unwrap();
+        assert!(!CancelForwarder::matches_invite(&cancel, &invite));
+    }
+
+    #[test]
+    fn cancel_rejects_invite_with_different_cseq_number() {
+        let invite = make_invite();
+        let mut cancel = make_cancel();
+        cancel
+            .headers_mut()
+            .set_or_push("CSeq", "42 CANCEL")
+            .unwrap();
+        assert!(!CancelForwarder::matches_invite(&cancel, &invite));
+    }
+
+    #[test]
+    fn cancel_rejects_invite_with_different_request_uri() {
+        let invite = make_invite();
+        let cancel = Request::new(
+            RequestLine::new(
+                Method::Cancel,
+                SipUri::parse("sip:carol@example.net").unwrap(),
+            ),
+            make_cancel().headers().clone(),
+            Bytes::new(),
+        )
+        .unwrap();
+        assert!(!CancelForwarder::matches_invite(&cancel, &invite));
+    }
+
+    /// RFC 3261 §9.2: To-tag is intentionally NOT part of the match.
+    /// A CANCEL may arrive before any response has set a To-tag.
+    #[test]
+    fn cancel_match_ignores_to_tag() {
+        let invite = make_invite();
+        let mut cancel = make_cancel();
+        cancel
+            .headers_mut()
+            .set_or_push("To", "<sip:bob@example.com>;tag=server-side")
+            .unwrap();
+        assert!(CancelForwarder::matches_invite(&cancel, &invite));
     }
 
     #[test]

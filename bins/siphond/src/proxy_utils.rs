@@ -172,10 +172,7 @@ pub async fn forward_request(
     // already passed through us once.
     if let Err(e) = ProxyHelpers::detect_loop_hashed(&proxied_req, proxy_host) {
         warn!(call_id, error = %e, "Loop detected, rejecting with 482");
-        return Err(anyhow!(
-            "loop detected — respond 482 Loop Detected: {}",
-            e
-        ));
+        return Err(anyhow!("loop detected — respond 482 Loop Detected: {}", e));
     }
 
     ProxyHelpers::check_max_forwards(&mut proxied_req)?;
@@ -193,11 +190,8 @@ pub async fn forward_request(
     // Use the loop-detection variant so subsequent hops can recognise
     // a return trip via this proxy. Branch = hash(To, From, Call-ID,
     // CSeq-num, Request-URI, our sent-by).
-    let branch = ProxyHelpers::add_via_with_loop_detection(
-        &mut proxied_req,
-        proxy_host,
-        transport_name,
-    );
+    let branch =
+        ProxyHelpers::add_via_with_loop_detection(&mut proxied_req, proxy_host, transport_name);
     services
         .proxy_state
         .store_transaction(crate::proxy_state::ProxyTransaction {

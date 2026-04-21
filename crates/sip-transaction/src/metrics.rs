@@ -300,7 +300,10 @@ impl TransactionMetrics {
         transport_durations.push(duration);
 
         // Record by method (cap to prevent unbounded growth)
-        let method_durations = data.durations_by_method.entry(method.to_string()).or_default();
+        let method_durations = data
+            .durations_by_method
+            .entry(method.to_string())
+            .or_default();
         if method_durations.len() >= MAX_DURATION_SAMPLES {
             method_durations.remove(0);
         }

@@ -2281,7 +2281,10 @@ mod tests {
             .push(SmolStr::new("CSeq"), SmolStr::new("2 PRACK"))
             .unwrap();
         headers
-            .push(SmolStr::new("RAck"), SmolStr::new(format!("{rseq} 1 INVITE")))
+            .push(
+                SmolStr::new("RAck"),
+                SmolStr::new(format!("{rseq} 1 INVITE")),
+            )
             .unwrap();
 
         let prack_request = Request::new(

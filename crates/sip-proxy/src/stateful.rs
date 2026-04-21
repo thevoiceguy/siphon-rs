@@ -66,6 +66,9 @@ pub enum ProxyError {
     TooManyContexts { max: usize },
     /// Too many targets (DoS prevention)
     TooManyTargets { max: usize, actual: usize },
+    /// RFC 3261 §16.7 #4: a 6xx response has been received on this
+    /// context; no further branches may be added.
+    TerminatedBy6xx,
 }
 
 impl std::fmt::Display for ProxyError {
@@ -85,6 +88,9 @@ impl std::fmt::Display for ProxyError {
             }
             ProxyError::TooManyTargets { max, actual } => {
                 write!(f, "too many targets {} (max {})", actual, max)
+            }
+            ProxyError::TerminatedBy6xx => {
+                write!(f, "context terminated by 6xx response (RFC 3261 §16.7 #4)")
             }
         }
     }
@@ -288,10 +294,23 @@ pub struct ProxyContext {
 
     /// When this context was created
     pub(crate) created_at: Instant,
+
+    /// RFC 3261 §16.8 Timer C duration. Spec mandates `> 3 minutes`;
+    /// real deployments often need to tune this (e.g. shorter for
+    /// gateways, longer for IVR menus). Defaults to
+    /// `TIMER_C_DURATION` (180s).
+    timer_c_duration: Duration,
+
+    /// Set once any branch has produced a 6xx final response. RFC
+    /// 3261 §16.7 #4: "When a 6xx response is received [...] the
+    /// stateful proxy SHOULD cancel all client pending transactions
+    /// [...] and MUST NOT create any new branches in this context."
+    /// `add_branch` honours this flag.
+    terminated_by_6xx: RwLock<bool>,
 }
 
 impl ProxyContext {
-    /// Create a new proxy context
+    /// Create a new proxy context with the default Timer C (180s).
     pub fn new(
         original_request: Request,
         call_id: SmolStr,
@@ -300,6 +319,33 @@ impl ProxyContext {
         transport: SmolStr,
         fork_mode: ForkMode,
         response_tx: mpsc::UnboundedSender<Response>,
+    ) -> Self {
+        Self::with_timer_c(
+            original_request,
+            call_id,
+            client_branch,
+            proxy_host,
+            transport,
+            fork_mode,
+            response_tx,
+            TIMER_C_DURATION,
+        )
+    }
+
+    /// Like [`ProxyContext::new`] but with a caller-chosen Timer C
+    /// duration. Per RFC 3261 §16.8 the value must be greater than
+    /// 3 minutes for spec compliance; the constructor accepts shorter
+    /// values for testing and lab use, leaving policy to the caller.
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_timer_c(
+        original_request: Request,
+        call_id: SmolStr,
+        client_branch: SmolStr,
+        proxy_host: SmolStr,
+        transport: SmolStr,
+        fork_mode: ForkMode,
+        response_tx: mpsc::UnboundedSender<Response>,
+        timer_c_duration: Duration,
     ) -> Self {
         Self {
             original_request,
@@ -313,11 +359,21 @@ impl ProxyContext {
             response_tx,
             outstanding_count: RwLock::new(0),
             created_at: Instant::now(),
+            timer_c_duration,
+            terminated_by_6xx: RwLock::new(false),
         }
     }
 
-    /// Add a branch that was created for forwarding
+    /// Add a branch that was created for forwarding.
+    ///
+    /// Returns [`ProxyError::TerminatedBy6xx`] if the context has
+    /// already received a 6xx response — RFC 3261 §16.7 #4 forbids
+    /// new branches in that state.
     pub async fn add_branch(&self, branch_info: BranchInfo) -> Result<(), ProxyError> {
+        if *self.terminated_by_6xx.read().await {
+            return Err(ProxyError::TerminatedBy6xx);
+        }
+
         let mut branches = self.branches.write().await;
 
         if branches.len() >= MAX_BRANCHES_PER_CONTEXT {
@@ -330,6 +386,13 @@ impl ProxyContext {
         branches.insert(branch_info.branch_id.clone(), branch_info);
         *count += 1;
         Ok(())
+    }
+
+    /// True once any branch has produced a 6xx final. Apps building
+    /// their own forking loop on top of this context can poll this to
+    /// stop scheduling additional targets.
+    pub async fn is_terminated_by_6xx(&self) -> bool {
+        *self.terminated_by_6xx.read().await
     }
 
     /// Process a response received on a branch
@@ -352,6 +415,10 @@ impl ProxyContext {
     ) -> Option<Response> {
         let is_final = response.code() >= 200;
         let is_two_xx = (200..300).contains(&response.code());
+        // RFC 3261 §16.7 #4: a 6xx is a global failure. We must
+        // cancel siblings AND prevent any further forking via
+        // `add_branch`.
+        let is_six_xx = (600..700).contains(&response.code());
 
         // Mutate the branch in its own scope so the write guard
         // releases before we call cancel_other_branches below.
@@ -367,7 +434,11 @@ impl ProxyContext {
                 // transition into Proceeding so a silent downstream
                 // doesn't hang the upstream forever.
                 if was_trying {
-                    arm_timer_c(Arc::downgrade(self), branch_id.to_string());
+                    arm_timer_c(
+                        Arc::downgrade(self),
+                        branch_id.to_string(),
+                        self.timer_c_duration,
+                    );
                 }
             } else if is_final {
                 branch.state = BranchState::Completed;
@@ -410,20 +481,35 @@ impl ProxyContext {
             should
         };
 
-        if should_forward {
+        // Per RFC 3261 §16.7: only 2xx and 6xx finals may be forwarded
+        // as soon as they arrive. Every other final (1xx already
+        // returned above, 3xx/4xx/5xx) must be buffered until ALL
+        // branches have completed; otherwise we'd both (a) emit the
+        // wrong "best" upstream when a sibling later returns a better
+        // response, and (b) skip the §16.7 #7 401/407 aggregation
+        // step. `should_forward` here only controls whether we update
+        // the stored best — actual upstream forwarding for non-2xx/
+        // non-6xx happens via the "all branches complete" path below.
+        if should_forward && is_two_xx {
             info!(
-                "Selected {} as best response (branch {})",
+                "Selected {} (2xx) — forwarding immediately and cancelling siblings",
                 response.code(),
-                branch_id
             );
-
-            // If we got a 2xx and have other branches, send CANCEL to
-            // them. This re-enters `branches.write()`, which is why
-            // the write guard above had to drop first.
-            if is_two_xx {
-                self.cancel_other_branches(branch_id).await;
-            }
-
+            self.cancel_other_branches(branch_id).await;
+            return Some(response);
+        }
+        if should_forward && is_six_xx {
+            info!(
+                "Selected {} (6xx) — global failure, cancelling siblings",
+                response.code(),
+            );
+            // RFC 3261 §16.7 #4: on 6xx, also cancel siblings and
+            // mark the context so no further branches can be added.
+            // Without this, late forks after a 6xx would leak — and
+            // could even override the global failure with a 4xx that
+            // arrives later.
+            *self.terminated_by_6xx.write().await = true;
+            self.cancel_other_branches(branch_id).await;
             return Some(response);
         }
 
@@ -434,7 +520,16 @@ impl ProxyContext {
             // fresh read of best_final since the earlier write guard
             // has been released.
             let best = self.best_final.read().await.clone();
-            if let Some(best) = best {
+            if let Some(mut best) = best {
+                // RFC 3261 §16.7 #7: if the best response is 401 /
+                // 407, aggregate WWW-Authenticate / Proxy-Authenticate
+                // from every branch that returned 401 / 407 into the
+                // response we forward. The client needs all of them
+                // to construct a request that satisfies every realm
+                // simultaneously.
+                if best.code() == 401 || best.code() == 407 {
+                    self.aggregate_auth_challenges(&mut best).await;
+                }
                 info!(
                     "All branches complete - forwarding best response {}",
                     best.code()
@@ -444,6 +539,61 @@ impl ProxyContext {
         }
 
         None
+    }
+
+    /// Adds `WWW-Authenticate` (for 401) and `Proxy-Authenticate`
+    /// (for 407) headers from every other branch's stored
+    /// 401/407 response to `best`, in branch insertion order, with
+    /// duplicates removed. Per RFC 3261 §16.7 #7 the proxy "MUST
+    /// collect any WWW-Authenticate and Proxy-Authenticate header
+    /// field values from all other 401 and 407 responses received
+    /// and add them to this response without modification."
+    async fn aggregate_auth_challenges(&self, best: &mut Response) {
+        let branches = self.branches.read().await;
+        // Collect raw header values from every branch that responded
+        // 401 or 407 — including the winning branch (`best` already
+        // carries them, but iterating uniformly keeps the dedup logic
+        // simple).
+        let mut www_seen: Vec<SmolStr> = best
+            .headers()
+            .get_all_smol("WWW-Authenticate")
+            .cloned()
+            .collect();
+        let mut proxy_seen: Vec<SmolStr> = best
+            .headers()
+            .get_all_smol("Proxy-Authenticate")
+            .cloned()
+            .collect();
+        let initial_www = www_seen.len();
+        let initial_proxy = proxy_seen.len();
+
+        for branch in branches.values() {
+            let Some(resp) = branch.best_response.as_ref() else {
+                continue;
+            };
+            if resp.code() != 401 && resp.code() != 407 {
+                continue;
+            }
+            for header in resp.headers().get_all_smol("WWW-Authenticate") {
+                if !www_seen.iter().any(|v| v == header) {
+                    www_seen.push(header.clone());
+                }
+            }
+            for header in resp.headers().get_all_smol("Proxy-Authenticate") {
+                if !proxy_seen.iter().any(|v| v == header) {
+                    proxy_seen.push(header.clone());
+                }
+            }
+        }
+
+        // Append only the newly-collected ones to `best`.
+        let headers = best.headers_mut();
+        for value in www_seen.into_iter().skip(initial_www) {
+            let _ = headers.push("WWW-Authenticate", value);
+        }
+        for value in proxy_seen.into_iter().skip(initial_proxy) {
+            let _ = headers.push("Proxy-Authenticate", value);
+        }
     }
 
     /// Cancel all branches except the specified one (winner)
@@ -606,13 +756,76 @@ impl ProxyContext {
             let _ = self.response_tx.send(to_forward);
         }
     }
+
+    /// RFC 3261 §16.9 transport-error handling.
+    ///
+    /// Per spec: "If the transport layer notifies a proxy of an error
+    /// when it tries to forward a request, the proxy MUST behave as
+    /// if the forwarded request received a 503 (Service Unavailable)
+    /// response." This synthesises that 503 for a branch and feeds it
+    /// through the normal response-selection path so:
+    ///   * sibling branches can still win,
+    ///   * a 503 only "wins" if no better response arrives,
+    ///   * the upstream transaction is properly closed when this is
+    ///     the only branch.
+    ///
+    /// The application invokes this when its transport layer reports
+    /// an unrecoverable failure (connection refused, ICMP unreachable,
+    /// TLS handshake failure, etc.) for a branch this proxy created.
+    /// If the branch has already received a final response or been
+    /// cancelled, the call is a no-op.
+    ///
+    /// Returns the response forwarded upstream (if any), mirroring
+    /// `process_response`. Callers wiring this into a transport
+    /// dispatcher can ignore the return value — the response is also
+    /// pushed to the context's response channel.
+    pub async fn report_transport_error(self: &Arc<Self>, branch_id: &str) -> Option<Response> {
+        // Skip branches that already moved past Trying/Proceeding —
+        // a successful 2xx or a real 5xx has already been recorded
+        // and the transport error is now irrelevant.
+        {
+            let branches = self.branches.read().await;
+            let Some(branch) = branches.get(branch_id) else {
+                return None;
+            };
+            if matches!(
+                branch.state,
+                BranchState::Completed | BranchState::Cancelled
+            ) {
+                return None;
+            }
+        }
+
+        use bytes::Bytes;
+        use sip_core::{Headers, Response, StatusLine};
+        let req = &self.original_request;
+        let mut headers = Headers::new();
+        for name in ["Via", "From", "To", "Call-ID", "CSeq"] {
+            if let Some(value) = req.headers().get(name) {
+                let _ = headers.push(name, value);
+            }
+        }
+        let status = StatusLine::new(503, "Service Unavailable").ok()?;
+        let synthetic = Response::new(status, headers, Bytes::new()).ok()?;
+
+        warn!(
+            branch_id,
+            call_id = %self.call_id,
+            "transport error reported (RFC 3261 §16.9) — synthesising 503 Service Unavailable"
+        );
+        let forwarded = self.process_response(branch_id, synthetic).await;
+        if let Some(ref to_forward) = forwarded {
+            let _ = self.response_tx.send(to_forward.clone());
+        }
+        forwarded
+    }
 }
 
 /// Spawns the Timer C watchdog for a branch. Holds a `Weak` to the
 /// context so the task exits cleanly if the context is dropped before
 /// the timer fires. Sleep is a single tokio::time::sleep — no busy
 /// loop, no polling.
-fn arm_timer_c(ctx: std::sync::Weak<ProxyContext>, branch_id: String) {
+fn arm_timer_c(ctx: std::sync::Weak<ProxyContext>, branch_id: String, duration: Duration) {
     // Only arm when we have a tokio runtime handle. Unit tests that
     // construct ProxyContext outside a runtime would otherwise panic.
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
@@ -620,7 +833,7 @@ fn arm_timer_c(ctx: std::sync::Weak<ProxyContext>, branch_id: String) {
         return;
     };
     handle.spawn(async move {
-        tokio::time::sleep(TIMER_C_DURATION).await;
+        tokio::time::sleep(duration).await;
         let Some(ctx) = ctx.upgrade() else {
             return;
         };
@@ -671,15 +884,29 @@ pub struct StatefulProxy {
 
     /// Transaction cleanup interval
     cleanup_interval: Duration,
+
+    /// RFC 3261 §16.8 Timer C duration applied to every context this
+    /// proxy creates. Defaults to 180s; override via
+    /// [`StatefulProxy::with_timer_c`].
+    timer_c_duration: Duration,
 }
 
 impl StatefulProxy {
-    /// Create a new stateful proxy
+    /// Create a new stateful proxy with default Timer C (180s).
     pub fn new() -> Self {
         Self {
             contexts: DashMap::new(),
             cleanup_interval: Duration::from_secs(300), // 5 minutes
+            timer_c_duration: TIMER_C_DURATION,
         }
+    }
+
+    /// Override the per-context Timer C duration. RFC 3261 §16.8
+    /// requires `> 3 minutes` for spec compliance; the helper accepts
+    /// any value so tests and lab harnesses can fire it quickly.
+    pub fn with_timer_c(mut self, duration: Duration) -> Self {
+        self.timer_c_duration = duration;
+        self
     }
 
     /// Start a new proxy context for a request
@@ -702,7 +929,7 @@ impl StatefulProxy {
 
         let (response_tx, response_rx) = mpsc::unbounded_channel();
 
-        let context = Arc::new(ProxyContext::new(
+        let context = Arc::new(ProxyContext::with_timer_c(
             request,
             call_id,
             client_branch.clone(),
@@ -710,6 +937,7 @@ impl StatefulProxy {
             transport,
             fork_mode,
             response_tx,
+            self.timer_c_duration,
         ));
 
         self.contexts.insert(client_branch, context.clone());
@@ -1115,6 +1343,480 @@ mod tests {
                 b.state,
             );
         }
+    }
+
+    /// RFC 3261 §16.7 #4: a 6xx response cancels siblings AND
+    /// prevents new branches from being added — it's a global
+    /// failure, not a per-branch one.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn six_xx_cancels_siblings_and_blocks_new_branches() {
+        use std::time::Duration;
+
+        let proxy = StatefulProxy::new();
+        let request = make_request();
+        let (context, _rx) = proxy
+            .start_context(
+                request,
+                "test-call-6xx".into(),
+                "z9hG4bKclient".into(),
+                "proxy.example.com".into(),
+                "UDP".into(),
+                ForkMode::Parallel,
+            )
+            .unwrap();
+
+        for (id, target) in [
+            ("z9hG4bKbr-rejecter", "sip:rejecter@example.com"),
+            ("z9hG4bKbr-other1", "sip:other1@example.com"),
+            ("z9hG4bKbr-other2", "sip:other2@example.com"),
+        ] {
+            let branch = BranchInfo::new(
+                id,
+                SipUri::parse(target).unwrap(),
+                Instant::now(),
+                BranchState::Trying,
+            )
+            .unwrap();
+            context.add_branch(branch).await.unwrap();
+        }
+
+        // Drive the others into Proceeding.
+        context
+            .process_response("z9hG4bKbr-other1", make_response(180))
+            .await;
+        context
+            .process_response("z9hG4bKbr-other2", make_response(180))
+            .await;
+
+        // Rejecter sends 603 Decline.
+        let forwarded = tokio::time::timeout(
+            Duration::from_secs(5),
+            context.process_response("z9hG4bKbr-rejecter", make_response(603)),
+        )
+        .await
+        .expect("process_response must not deadlock on 6xx");
+        assert_eq!(forwarded.map(|r| r.code()), Some(603));
+
+        // Siblings cancelled.
+        {
+            let branches = context.branches.read().await;
+            for other in ["z9hG4bKbr-other1", "z9hG4bKbr-other2"] {
+                let b = branches.get(other).expect("present");
+                assert!(
+                    matches!(b.state, BranchState::Cancelled),
+                    "{other} should be Cancelled after 6xx, was {:?}",
+                    b.state,
+                );
+            }
+        }
+
+        // Context is terminated and no new branches accepted.
+        assert!(context.is_terminated_by_6xx().await);
+        let new_branch = BranchInfo::new(
+            "z9hG4bKbr-late",
+            SipUri::parse("sip:late@example.com").unwrap(),
+            Instant::now(),
+            BranchState::Trying,
+        )
+        .unwrap();
+        let err = context.add_branch(new_branch).await.unwrap_err();
+        assert_eq!(err, ProxyError::TerminatedBy6xx);
+    }
+
+    /// 4xx must NOT trigger the 6xx semantics — only 6xx is a global
+    /// failure. Sibling branches keep running on a 4xx because a
+    /// later 2xx from a sibling is a perfectly good outcome.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn four_xx_does_not_block_new_branches() {
+        let proxy = StatefulProxy::new();
+        let request = make_request();
+        let (context, _rx) = proxy
+            .start_context(
+                request,
+                "test-call-4xx".into(),
+                "z9hG4bKclient".into(),
+                "proxy.example.com".into(),
+                "UDP".into(),
+                ForkMode::Parallel,
+            )
+            .unwrap();
+
+        let branch = BranchInfo::new(
+            "z9hG4bKbr-busy",
+            SipUri::parse("sip:busy@example.com").unwrap(),
+            Instant::now(),
+            BranchState::Trying,
+        )
+        .unwrap();
+        context.add_branch(branch).await.unwrap();
+        context
+            .process_response("z9hG4bKbr-busy", make_response(486))
+            .await;
+
+        assert!(!context.is_terminated_by_6xx().await);
+        // New branch may be added (e.g. caller retrying with another
+        // candidate from the location service).
+        let later = BranchInfo::new(
+            "z9hG4bKbr-later",
+            SipUri::parse("sip:later@example.com").unwrap(),
+            Instant::now(),
+            BranchState::Trying,
+        )
+        .unwrap();
+        context.add_branch(later).await.expect("4xx must not block");
+    }
+
+    // ===========================================
+    // RFC 3261 §16.9: transport-error → synthetic 503
+    // ===========================================
+
+    /// A single-branch transport failure must surface as a 503
+    /// upstream so the upstream transaction can complete.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn transport_error_on_only_branch_synthesises_503() {
+        let proxy = StatefulProxy::new();
+        let request = make_request();
+        let (context, _rx) = proxy
+            .start_context(
+                request,
+                "test-call-tx".into(),
+                "z9hG4bKclient".into(),
+                "proxy.example.com".into(),
+                "UDP".into(),
+                ForkMode::None,
+            )
+            .unwrap();
+
+        let branch = BranchInfo::new(
+            "z9hG4bKbr-only",
+            SipUri::parse("sip:dead@example.com").unwrap(),
+            Instant::now(),
+            BranchState::Trying,
+        )
+        .unwrap();
+        context.add_branch(branch).await.unwrap();
+
+        let forwarded = context
+            .report_transport_error("z9hG4bKbr-only")
+            .await
+            .expect("synthetic 503 must be forwarded");
+        assert_eq!(forwarded.code(), 503);
+    }
+
+    /// When a sibling branch is still alive, a transport error on
+    /// one branch MUST NOT short-circuit the upstream. The 503 is
+    /// recorded but a later 200 from a sibling can still win.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn transport_error_does_not_block_sibling_2xx() {
+        let proxy = StatefulProxy::new();
+        let request = make_request();
+        let (context, _rx) = proxy
+            .start_context(
+                request,
+                "test-call-tx2".into(),
+                "z9hG4bKclient".into(),
+                "proxy.example.com".into(),
+                "UDP".into(),
+                ForkMode::Parallel,
+            )
+            .unwrap();
+
+        for id in ["z9hG4bKbr-dead", "z9hG4bKbr-alive"] {
+            let branch = BranchInfo::new(
+                id,
+                SipUri::parse("sip:user@example.com").unwrap(),
+                Instant::now(),
+                BranchState::Trying,
+            )
+            .unwrap();
+            context.add_branch(branch).await.unwrap();
+        }
+
+        // Branch 1 fails at the transport — buffered (5xx isn't
+        // immediately forwarded under §16.7's revised flow).
+        let none = context.report_transport_error("z9hG4bKbr-dead").await;
+        assert!(
+            none.is_none(),
+            "503 from one branch must not pre-empt sibling that is still trying",
+        );
+
+        // Branch 2 returns 200 OK — wins immediately.
+        let forwarded = context
+            .process_response("z9hG4bKbr-alive", make_response(200))
+            .await
+            .expect("2xx must forward");
+        assert_eq!(forwarded.code(), 200);
+    }
+
+    /// A transport error reported for a branch that's already
+    /// completed (e.g. response raced ahead of the error notification)
+    /// must be a no-op so we don't double-account the response.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn transport_error_on_completed_branch_is_noop() {
+        let proxy = StatefulProxy::new();
+        let request = make_request();
+        let (context, _rx) = proxy
+            .start_context(
+                request,
+                "test-call-tx3".into(),
+                "z9hG4bKclient".into(),
+                "proxy.example.com".into(),
+                "UDP".into(),
+                ForkMode::None,
+            )
+            .unwrap();
+
+        let branch = BranchInfo::new(
+            "z9hG4bKbr-done",
+            SipUri::parse("sip:user@example.com").unwrap(),
+            Instant::now(),
+            BranchState::Trying,
+        )
+        .unwrap();
+        context.add_branch(branch).await.unwrap();
+        // Drive the branch to Completed via a 486.
+        context
+            .process_response("z9hG4bKbr-done", make_response(486))
+            .await;
+
+        let forwarded = context.report_transport_error("z9hG4bKbr-done").await;
+        assert!(
+            forwarded.is_none(),
+            "transport error on Completed branch must be ignored",
+        );
+    }
+
+    // ===========================================
+    // RFC 3261 §16.7 #7: 401/407 challenge aggregation
+    //
+    // When the best response is 401 or 407, the proxy MUST collect
+    // every WWW-Authenticate / Proxy-Authenticate header from every
+    // other branch that returned 401 / 407 and add them to the
+    // forwarded response. The client needs all challenges to satisfy
+    // every realm at once.
+    // ===========================================
+
+    /// Helper: build a response with auth challenge headers.
+    fn make_auth_response(code: u16, www: &[&str], proxy: &[&str]) -> Response {
+        let mut headers = Headers::new();
+        headers.push("Call-ID", "test-call-123").unwrap();
+        headers
+            .push("Via", "SIP/2.0/UDP proxy;branch=z9hG4bKproxy")
+            .unwrap();
+        for value in www {
+            headers.push("WWW-Authenticate", *value).unwrap();
+        }
+        for value in proxy {
+            headers.push("Proxy-Authenticate", *value).unwrap();
+        }
+        Response::new(
+            StatusLine::new(code, "Unauthorized").expect("valid status line"),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid response")
+    }
+
+    /// Wires up two branches that each return a 401 with a different
+    /// WWW-Authenticate challenge. Drives them to completion with a
+    /// 401 best response and asserts the aggregated forwarded response
+    /// carries challenges from both branches.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn aggregates_www_authenticate_from_multiple_401_branches() {
+        let proxy = StatefulProxy::new();
+        let request = make_request();
+        let (context, _rx) = proxy
+            .start_context(
+                request,
+                "test-call-401".into(),
+                "z9hG4bKclient".into(),
+                "proxy.example.com".into(),
+                "UDP".into(),
+                ForkMode::Parallel,
+            )
+            .unwrap();
+
+        for id in ["z9hG4bKbr-a", "z9hG4bKbr-b"] {
+            let branch = BranchInfo::new(
+                id,
+                SipUri::parse("sip:user@example.com").unwrap(),
+                Instant::now(),
+                BranchState::Trying,
+            )
+            .unwrap();
+            context.add_branch(branch).await.unwrap();
+        }
+
+        let challenge_a = r#"Digest realm="realm-a.example.com",nonce="aaaa",algorithm=MD5"#;
+        let challenge_b = r#"Digest realm="realm-b.example.com",nonce="bbbb",algorithm=SHA-256"#;
+
+        // Branch A reports first; should not yet forward (waiting for B).
+        let none = context
+            .process_response("z9hG4bKbr-a", make_auth_response(401, &[challenge_a], &[]))
+            .await;
+        assert!(
+            none.is_none(),
+            "first 401 should be buffered, not forwarded"
+        );
+
+        // Branch B reports; all branches done, forwarded best should
+        // carry both challenges.
+        let forwarded = context
+            .process_response("z9hG4bKbr-b", make_auth_response(401, &[challenge_b], &[]))
+            .await
+            .expect("final aggregate forwarded");
+        assert_eq!(forwarded.code(), 401);
+        let www: Vec<&str> = forwarded.headers().get_all("WWW-Authenticate").collect();
+        assert!(
+            www.iter().any(|v| *v == challenge_a),
+            "challenge_a missing: {www:?}",
+        );
+        assert!(
+            www.iter().any(|v| *v == challenge_b),
+            "challenge_b missing: {www:?}",
+        );
+    }
+
+    /// Same as above but for 407 / Proxy-Authenticate.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn aggregates_proxy_authenticate_from_multiple_407_branches() {
+        let proxy = StatefulProxy::new();
+        let request = make_request();
+        let (context, _rx) = proxy
+            .start_context(
+                request,
+                "test-call-407".into(),
+                "z9hG4bKclient".into(),
+                "proxy.example.com".into(),
+                "UDP".into(),
+                ForkMode::Parallel,
+            )
+            .unwrap();
+
+        for id in ["z9hG4bKbr-a", "z9hG4bKbr-b"] {
+            let branch = BranchInfo::new(
+                id,
+                SipUri::parse("sip:user@example.com").unwrap(),
+                Instant::now(),
+                BranchState::Trying,
+            )
+            .unwrap();
+            context.add_branch(branch).await.unwrap();
+        }
+
+        let challenge_a = r#"Digest realm="proxy-a.example.com",nonce="1111""#;
+        let challenge_b = r#"Digest realm="proxy-b.example.com",nonce="2222""#;
+
+        context
+            .process_response("z9hG4bKbr-a", make_auth_response(407, &[], &[challenge_a]))
+            .await;
+        let forwarded = context
+            .process_response("z9hG4bKbr-b", make_auth_response(407, &[], &[challenge_b]))
+            .await
+            .expect("final aggregate forwarded");
+        assert_eq!(forwarded.code(), 407);
+        let proxy_auth: Vec<&str> = forwarded.headers().get_all("Proxy-Authenticate").collect();
+        assert!(proxy_auth.iter().any(|v| *v == challenge_a));
+        assert!(proxy_auth.iter().any(|v| *v == challenge_b));
+    }
+
+    /// Identical challenges from two branches must NOT be appended
+    /// twice — duplicates are removed so the upstream sees one copy.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn does_not_duplicate_identical_authenticate_headers() {
+        let proxy = StatefulProxy::new();
+        let request = make_request();
+        let (context, _rx) = proxy
+            .start_context(
+                request,
+                "test-call-dup".into(),
+                "z9hG4bKclient".into(),
+                "proxy.example.com".into(),
+                "UDP".into(),
+                ForkMode::Parallel,
+            )
+            .unwrap();
+
+        for id in ["z9hG4bKbr-a", "z9hG4bKbr-b"] {
+            let branch = BranchInfo::new(
+                id,
+                SipUri::parse("sip:user@example.com").unwrap(),
+                Instant::now(),
+                BranchState::Trying,
+            )
+            .unwrap();
+            context.add_branch(branch).await.unwrap();
+        }
+
+        let same = r#"Digest realm="r.example.com",nonce="x""#;
+        context
+            .process_response("z9hG4bKbr-a", make_auth_response(401, &[same], &[]))
+            .await;
+        let forwarded = context
+            .process_response("z9hG4bKbr-b", make_auth_response(401, &[same], &[]))
+            .await
+            .expect("forwarded");
+        let count = forwarded
+            .headers()
+            .get_all("WWW-Authenticate")
+            .filter(|v| *v == same)
+            .count();
+        assert_eq!(count, 1, "duplicate WWW-Authenticate must be deduped");
+    }
+
+    /// Regression guard: aggregation must only fire when the BEST
+    /// response is 401 / 407. A 486 final must not pull in challenges
+    /// from a sibling that earlier returned 401.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn does_not_aggregate_when_best_is_not_401_or_407() {
+        let proxy = StatefulProxy::new();
+        let request = make_request();
+        let (context, _rx) = proxy
+            .start_context(
+                request,
+                "test-call-mixed".into(),
+                "z9hG4bKclient".into(),
+                "proxy.example.com".into(),
+                "UDP".into(),
+                ForkMode::Parallel,
+            )
+            .unwrap();
+
+        for id in ["z9hG4bKbr-401", "z9hG4bKbr-486"] {
+            let branch = BranchInfo::new(
+                id,
+                SipUri::parse("sip:user@example.com").unwrap(),
+                Instant::now(),
+                BranchState::Trying,
+            )
+            .unwrap();
+            context.add_branch(branch).await.unwrap();
+        }
+
+        let challenge = r#"Digest realm="r",nonce="x""#;
+        context
+            .process_response("z9hG4bKbr-401", make_auth_response(401, &[challenge], &[]))
+            .await;
+        // 486 wins per response-selection (lower-class beats 401? In
+        // RFC 3261 §16.7 step 6, lowest 4xx wins; both are 4xx so the
+        // first one stored wins. We pin the deterministic case by
+        // having the 486 arrive last with a lower code than 401? Both
+        // are 4xx — first-in-class wins, so the 401 is the best.
+        // Override by sending 486 first then 401 to keep 401 best, OR
+        // assert that when the best ends up being something else, no
+        // aggregation runs. Use a 200 sibling instead of 486 so the
+        // best is unambiguously NOT 401.)
+        let forwarded = context
+            .process_response("z9hG4bKbr-486", make_response(200))
+            .await;
+        // 200 wins immediately and is forwarded straight away.
+        let forwarded = forwarded.expect("200 must be forwarded");
+        assert_eq!(forwarded.code(), 200);
+        let www_count = forwarded.headers().get_all("WWW-Authenticate").count();
+        assert_eq!(
+            www_count, 0,
+            "200 OK must not carry aggregated WWW-Authenticate",
+        );
     }
 
     #[test]

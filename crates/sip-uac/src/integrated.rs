@@ -1145,13 +1145,8 @@ impl IntegratedUAC {
                 max = self.config.max_auth_retries,
                 "auth still rejected; retrying with refreshed credentials"
             );
-            return Box::pin(self.retry_with_auth(
-                auth_request,
-                response,
-                dns_target,
-                attempt + 1,
-            ))
-            .await;
+            return Box::pin(self.retry_with_auth(auth_request, response, dns_target, attempt + 1))
+                .await;
         }
 
         if response.code() == 401 || response.code() == 407 {
@@ -1986,8 +1981,13 @@ impl IntegratedUAC {
         let dns_target = self.resolve_target(&request_target).await?;
 
         let helper = self.helper.lock().await;
-        let mut request =
-            helper.create_unsolicited_notify_with_state(target, event, content_type, body, subscription_state);
+        let mut request = helper.create_unsolicited_notify_with_state(
+            target,
+            event,
+            content_type,
+            body,
+            subscription_state,
+        );
         drop(helper);
 
         self.auto_fill_headers(&mut request, Some(dns_target.transport()))
@@ -2724,7 +2724,8 @@ impl ClientTransactionUser for InviteTransactionUser {
         // Create or confirm dialog from 2xx and update CallHandle's dialog
         if response.code() >= 200 && response.code() < 300 {
             let helper = self.helper.lock().await;
-            if let Some(confirmed_dialog) = helper.process_invite_response(&self.request, response) {
+            if let Some(confirmed_dialog) = helper.process_invite_response(&self.request, response)
+            {
                 info!(
                     "Confirmed dialog from {}: {} (to-tag={})",
                     response.code(),
