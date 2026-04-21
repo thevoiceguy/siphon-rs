@@ -97,9 +97,8 @@ fn validate_host(host: &str) -> Result<(), UriError> {
     // strictly — the old char-set check accepted nonsense like
     // `[gggg::]` or `[:::::]`.
     if host.contains(':') {
-        host.parse::<std::net::Ipv6Addr>().map_err(|e| {
-            UriError::InvalidHost(format!("invalid IPv6 literal: {e}"))
-        })?;
+        host.parse::<std::net::Ipv6Addr>()
+            .map_err(|e| UriError::InvalidHost(format!("invalid IPv6 literal: {e}")))?;
         return Ok(());
     }
 
@@ -884,12 +883,12 @@ mod tests {
     #[test]
     fn rejects_decoded_user_with_reserved_delimiter() {
         for bad in [
-            "sip:alice%40evil.com@example.com", // @
+            "sip:alice%40evil.com@example.com",      // @
             "sip:alice%3Btransport=tcp@example.com", // ;
-            "sip:alice%3Fheader=val@example.com", // ?
-            "sip:alice%2Fpath@example.com",     // /
-            "sip:alice%23frag@example.com",     // #
-            "sip:alice%5Bx%5D@example.com",     // [ ]
+            "sip:alice%3Fheader=val@example.com",    // ?
+            "sip:alice%2Fpath@example.com",          // /
+            "sip:alice%23frag@example.com",          // #
+            "sip:alice%5Bx%5D@example.com",          // [ ]
         ] {
             let r = SipUri::parse(bad);
             assert!(

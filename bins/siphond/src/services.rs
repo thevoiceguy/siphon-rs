@@ -192,10 +192,8 @@ impl ServiceRegistry {
         // in the dispatcher / handlers, since the rate-limiter API is
         // string-keyed).
         let auth_rate_limiter = Arc::new(RateLimiter::new(RateLimitConfig::auth_preset()));
-        let register_rate_limiter =
-            Arc::new(RateLimiter::new(RateLimitConfig::register_preset()));
-        let invite_rate_limiter =
-            Arc::new(RateLimiter::new(RateLimitConfig::invite_preset()));
+        let register_rate_limiter = Arc::new(RateLimiter::new(RateLimitConfig::register_preset()));
+        let invite_rate_limiter = Arc::new(RateLimiter::new(RateLimitConfig::invite_preset()));
 
         Self {
             dialog_mgr,

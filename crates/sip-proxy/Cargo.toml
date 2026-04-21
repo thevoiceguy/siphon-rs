@@ -1,6 +1,6 @@
 [package]
 name = "sip-proxy"
-version = "0.2.5"
+version = "0.3.0"
 edition = "2021"
 license.workspace = true
 description = "SIP proxy primitives and routing helpers."
@@ -19,5 +19,6 @@ tokio = { workspace = true, features = ["sync"] }
 dashmap = { workspace = true }
 smol_str = { workspace = true }
 tracing = { workspace = true }
+async-trait = { workspace = true }
 sha2 = "0.10"
 hex = "0.4"

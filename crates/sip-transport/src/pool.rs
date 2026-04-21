@@ -295,13 +295,10 @@ impl ConnectionPool {
 
         // Create new connection with timeout
         debug!(peer = %addr, "connecting to TCP peer");
-        let stream = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            TcpStream::connect(addr),
-        )
-        .await
-        .map_err(|_| anyhow!("TCP pool connect timeout after 5s to {}", addr))?
-        ?;
+        let stream =
+            tokio::time::timeout(std::time::Duration::from_secs(5), TcpStream::connect(addr))
+                .await
+                .map_err(|_| anyhow!("TCP pool connect timeout after 5s to {}", addr))??;
         debug!(peer = %addr, "TCP connection established");
         let (mut reader, mut writer) = stream.into_split();
         let (tx, mut rx) = mpsc::channel::<Bytes>(64);
@@ -481,8 +478,7 @@ impl ConnectionPool {
             tokio_tungstenite::connect_async(request),
         )
         .await
-        .map_err(|_| anyhow!("WS connect timeout after 5s to {}", key))?
-        ?;
+        .map_err(|_| anyhow!("WS connect timeout after 5s to {}", key))??;
 
         crate::transport_metrics().on_connect(crate::TransportLabel::Ws);
         debug!(url = %key, "WS connection established");
@@ -819,13 +815,10 @@ impl TlsPool {
         let connector = TlsConnector::from(config.clone());
         let server_name =
             ServerName::try_from(server_name).map_err(|_| anyhow!("invalid TLS server name"))?;
-        let stream = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            TcpStream::connect(addr),
-        )
-        .await
-        .map_err(|_| anyhow!("TLS pool connect timeout after 5s to {}", addr))?
-        ?;
+        let stream =
+            tokio::time::timeout(std::time::Duration::from_secs(5), TcpStream::connect(addr))
+                .await
+                .map_err(|_| anyhow!("TLS pool connect timeout after 5s to {}", addr))??;
         let tls_stream = connector.connect(server_name, stream).await?;
         // Split so the reader and writer tasks own separate halves; without
         // this the writer task holds the only handle to the TLS stream and
@@ -980,13 +973,9 @@ mod tests {
         // Spawn a writer that exits immediately. The supervisor should
         // then reach in and remove the (addr, entry).
         let writer = tokio::spawn(async {});
-        spawn_writer_supervisor(
-            writer,
-            Arc::clone(&pool.tcp),
-            addr,
-            "tcp",
-            move |peer| format!("{peer}"),
-        );
+        spawn_writer_supervisor(writer, Arc::clone(&pool.tcp), addr, "tcp", move |peer| {
+            format!("{peer}")
+        });
 
         // Give the supervisor a moment to run.
         for _ in 0..20 {
@@ -995,7 +984,11 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        assert_eq!(pool.len(), 0, "supervisor must remove entry after writer exit");
+        assert_eq!(
+            pool.len(),
+            0,
+            "supervisor must remove entry after writer exit"
+        );
     }
 
     #[tokio::test]
@@ -1008,13 +1001,9 @@ mod tests {
         let writer = tokio::spawn(async {
             panic!("simulated writer crash");
         });
-        spawn_writer_supervisor(
-            writer,
-            Arc::clone(&pool.tcp),
-            addr,
-            "tcp",
-            move |peer| format!("{peer}"),
-        );
+        spawn_writer_supervisor(writer, Arc::clone(&pool.tcp), addr, "tcp", move |peer| {
+            format!("{peer}")
+        });
 
         for _ in 0..20 {
             if pool.len() == 0 {

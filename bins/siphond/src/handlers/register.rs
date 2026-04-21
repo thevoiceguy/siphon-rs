@@ -45,10 +45,7 @@ impl RequestHandler for RegisterHandler {
         // hasher) at wire-line rate. 503 with Retry-After lets a
         // compliant client back off on its own.
         let source_ip = ctx.peer().ip().to_string();
-        if !services
-            .register_rate_limiter
-            .check_rate_limit(&source_ip)
-        {
+        if !services.register_rate_limiter.check_rate_limit(&source_ip) {
             warn!(call_id, %source_ip, "REGISTER rate-limited");
             send_rate_limited(request, handle).await;
             return Ok(());

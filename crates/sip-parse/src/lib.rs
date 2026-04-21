@@ -605,13 +605,7 @@ fn validate_response_cseq(headers: &Headers) -> bool {
 /// Contact establishes dialog; REGISTER Contact is legitimately multi-
 /// valued). We keep Contact out of this blanket check and let call-site
 /// handlers enforce context-specific rules.
-const SINGLETON_HEADERS: &[&str] = &[
-    "Call-ID",
-    "CSeq",
-    "From",
-    "To",
-    "Max-Forwards",
-];
+const SINGLETON_HEADERS: &[&str] = &["Call-ID", "CSeq", "From", "To", "Max-Forwards"];
 
 /// Returns `true` if no singleton header appears more than once.
 fn singleton_headers_unique(headers: &Headers) -> bool {
@@ -1066,13 +1060,14 @@ Content-Length: 0\r\n\r\n",
 
     #[test]
     fn parse_contact_strips_embedded_uri_headers() {
-        let raw = SmolStr::new(
-            "<sip:alice@example.com:5060?From=%3Csip:impersonator@evil%3E>",
-        );
+        let raw = SmolStr::new("<sip:alice@example.com:5060?From=%3Csip:impersonator@evil%3E>");
         let parsed = parse_contact_header(&raw).expect("well-formed Contact");
         let s = parsed.inner().uri().as_str();
         assert!(!s.contains('?'), "URI headers must be stripped: {s}");
-        assert!(!s.contains("From="), "smuggled header must be stripped: {s}");
+        assert!(
+            !s.contains("From="),
+            "smuggled header must be stripped: {s}"
+        );
     }
 
     #[test]

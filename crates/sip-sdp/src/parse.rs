@@ -1041,9 +1041,14 @@ t=0 0\r\n\
 m=audio 49170 RTP/AVP 0\r\n",
         );
         for i in 0..50 {
-            input.push_str(&format!("a=candidate:foo {i} udp 1 192.0.2.1 5000 typ host\r\n"));
+            input.push_str(&format!(
+                "a=candidate:foo {i} udp 1 192.0.2.1 5000 typ host\r\n"
+            ));
         }
         let result = parse_sdp_with_limits(&input, ParseLimits::default());
-        assert!(result.is_ok(), "50 candidates must fit under default cap: {result:?}");
+        assert!(
+            result.is_ok(),
+            "50 candidates must fit under default cap: {result:?}"
+        );
     }
 }

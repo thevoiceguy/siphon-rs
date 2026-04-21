@@ -27,17 +27,17 @@ pub use enum_lookup::{
 };
 
 use anyhow::{anyhow, Result};
+use hickory_resolver::{
+    config::{ResolverConfig, ResolverOpts},
+    proto::rr::RecordType,
+    TokioResolver,
+};
 use rand::Rng;
 use sip_core::SipUri;
 use smol_str::SmolStr;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::net::IpAddr;
-use hickory_resolver::{
-    config::{ResolverConfig, ResolverOpts},
-    proto::rr::RecordType,
-    TokioResolver,
-};
 
 // Security constants for DNS resolution
 const MAX_HOSTNAME_LENGTH: usize = 253; // RFC 1035 §2.3.4
@@ -328,9 +328,10 @@ impl SipResolver {
     /// Creates a resolver with custom configuration.
     pub fn with_config(config: ResolverConfig, opts: ResolverOpts) -> Result<Self> {
         use hickory_resolver::name_server::TokioConnectionProvider;
-        let resolver = TokioResolver::builder_with_config(config, TokioConnectionProvider::default())
-            .with_options(opts)
-            .build();
+        let resolver =
+            TokioResolver::builder_with_config(config, TokioConnectionProvider::default())
+                .with_options(opts)
+                .build();
         Ok(Self {
             resolver,
             enable_naptr: true,
@@ -513,10 +514,16 @@ impl SipResolver {
         let host = uri.host();
         let lookup = tokio::time::timeout(
             self.query_timeout,
-            self.resolver.lookup(format!("{}.", host), RecordType::NAPTR),
+            self.resolver
+                .lookup(format!("{}.", host), RecordType::NAPTR),
         )
         .await
-        .map_err(|_| anyhow::anyhow!("NAPTR lookup for {host} timed out after {:?}", self.query_timeout))??;
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "NAPTR lookup for {host} timed out after {:?}",
+                self.query_timeout
+            )
+        })??;
 
         let mut records = Vec::new();
         for rec in lookup.iter() {
@@ -597,7 +604,12 @@ impl SipResolver {
             self.resolver.srv_lookup(srv_name.clone()),
         )
         .await
-        .map_err(|_| anyhow!("SRV lookup for {srv_name} timed out after {:?}", self.query_timeout))??;
+        .map_err(|_| {
+            anyhow!(
+                "SRV lookup for {srv_name} timed out after {:?}",
+                self.query_timeout
+            )
+        })??;
 
         // Group by priority (RFC 2782 §3)
         let mut priority_groups: BTreeMap<u16, Vec<(u16, SmolStr, u16)>> = BTreeMap::new();
@@ -636,12 +648,14 @@ impl SipResolver {
 
     /// Performs A and AAAA lookup with Happy Eyeballs preference.
     async fn lookup_a_aaaa(&self, host: &str) -> Result<Vec<IpAddr>> {
-        let lookup = tokio::time::timeout(
-            self.query_timeout,
-            self.resolver.lookup_ip(host),
-        )
-        .await
-        .map_err(|_| anyhow!("A/AAAA lookup for {host} timed out after {:?}", self.query_timeout))??;
+        let lookup = tokio::time::timeout(self.query_timeout, self.resolver.lookup_ip(host))
+            .await
+            .map_err(|_| {
+                anyhow!(
+                    "A/AAAA lookup for {host} timed out after {:?}",
+                    self.query_timeout
+                )
+            })??;
 
         let mut ipv6_addrs = Vec::new();
         let mut ipv4_addrs = Vec::new();

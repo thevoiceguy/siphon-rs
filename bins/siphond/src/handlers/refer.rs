@@ -754,7 +754,10 @@ fn percent_decode(input: &str) -> String {
 /// RFC 1918 ranges, `0.0.0.0`, link-local, multicast, or documentation
 /// addresses. By default we refuse any non-global-unicast address; the
 /// operator can opt in with `allow_private_refer_targets`.
-fn refer_target_allowed(target: &std::net::SocketAddr, config: &crate::config::DaemonConfig) -> bool {
+fn refer_target_allowed(
+    target: &std::net::SocketAddr,
+    config: &crate::config::DaemonConfig,
+) -> bool {
     if config.features.allow_private_refer_targets {
         return true;
     }
@@ -795,10 +798,7 @@ fn is_global_unicast(ip: &std::net::IpAddr) -> bool {
             true
         }
         IpAddr::V6(v6) => {
-            if v6.is_loopback()
-                || v6.is_unspecified()
-                || v6.is_multicast()
-            {
+            if v6.is_loopback() || v6.is_unspecified() || v6.is_multicast() {
                 return false;
             }
             let segs = v6.segments();
@@ -815,8 +815,12 @@ fn is_global_unicast(ip: &std::net::IpAddr) -> bool {
                 return false;
             }
             // IPv4-mapped ::ffff:0:0/96 — re-check the embedded v4.
-            if segs[0] == 0 && segs[1] == 0 && segs[2] == 0 && segs[3] == 0
-                && segs[4] == 0 && segs[5] == 0xffff
+            if segs[0] == 0
+                && segs[1] == 0
+                && segs[2] == 0
+                && segs[3] == 0
+                && segs[4] == 0
+                && segs[5] == 0xffff
             {
                 let mapped = std::net::Ipv4Addr::new(
                     (segs[6] >> 8) as u8,
@@ -857,8 +861,7 @@ mod tests {
     #[test]
     fn extract_replaces_decodes_semicolons() {
         // RFC 3891 form, percent-encoded as it would appear in a Refer-To URI.
-        let refer_to =
-            "<sip:t@example.com?Replaces=callid42%3Bto-tag%3Daaa%3Bfrom-tag%3Dbbb>";
+        let refer_to = "<sip:t@example.com?Replaces=callid42%3Bto-tag%3Daaa%3Bfrom-tag%3Dbbb>";
         let got = ReferHandler::extract_replaces(refer_to).expect("decoded");
         assert_eq!(got, "callid42;to-tag=aaa;from-tag=bbb");
     }

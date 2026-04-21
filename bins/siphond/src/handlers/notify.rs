@@ -60,8 +60,12 @@ impl NotifyHandler {
 
         // Subscriber's view: we sent SUBSCRIBE, so our local-tag is the
         // SUBSCRIBE's From-tag. NOTIFY arrives with that tag in To.
-        let id_subscriber =
-            SubscriptionId::unchecked_new(call_id.clone(), to_tag.clone(), from_tag.clone(), &event);
+        let id_subscriber = SubscriptionId::unchecked_new(
+            call_id.clone(),
+            to_tag.clone(),
+            from_tag.clone(),
+            &event,
+        );
         if let Some(sub) = services.subscription_mgr.get(&id_subscriber) {
             return Some(sub);
         }
@@ -69,8 +73,7 @@ impl NotifyHandler {
         // Notifier's view (e.g. REFER implicit subscription): the SUBSCRIBE's
         // From-tag becomes the NOTIFY's To-tag, but the subscription was
         // stored with the SUBSCRIBE-side tags.
-        let id_notifier =
-            SubscriptionId::unchecked_new(call_id, from_tag, to_tag, &event);
+        let id_notifier = SubscriptionId::unchecked_new(call_id, from_tag, to_tag, &event);
         services.subscription_mgr.get(&id_notifier)
     }
 }
@@ -110,12 +113,7 @@ impl RequestHandler for NotifyHandler {
     }
 }
 
-async fn send_status(
-    request: &Request,
-    handle: ServerTransactionHandle,
-    code: u16,
-    reason: &str,
-) {
+async fn send_status(request: &Request, handle: ServerTransactionHandle, code: u16, reason: &str) {
     let mut headers = Headers::new();
     for name in ["Via", "From", "To", "Call-ID", "CSeq"] {
         if let Some(value) = header(request.headers(), name) {
