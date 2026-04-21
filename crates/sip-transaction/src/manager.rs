@@ -623,6 +623,26 @@ impl TransactionManager {
         &self.inner.metrics
     }
 
+    /// Number of client transactions currently in-flight (non-terminal).
+    ///
+    /// Useful for graceful shutdown: a daemon that's been asked to
+    /// drain can poll this alongside [`Self::active_server_count`]
+    /// to decide when every request has settled and exit.
+    pub fn active_client_count(&self) -> usize {
+        self.inner.client.len()
+    }
+
+    /// Number of server transactions currently in-flight (non-terminal).
+    pub fn active_server_count(&self) -> usize {
+        self.inner.server.len()
+    }
+
+    /// Total number of active transactions (client + server). Zero
+    /// once every transaction has transitioned to terminal state.
+    pub fn active_transaction_count(&self) -> usize {
+        self.active_client_count() + self.active_server_count()
+    }
+
     /// Register an inbound packet sink for client-initiated TCP/TLS connections.
     ///
     /// This allows responses on outbound TCP connections to be routed back into the
@@ -2040,6 +2060,64 @@ mod tests {
             )
             .await;
         assert!(result.is_err());
+    }
+
+    // ---------------------------------------------------------------
+    // Active-transaction accessors for graceful shutdown
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn active_transaction_count_reflects_lifecycle() {
+        // Use TCP so Timer K = 0 (transport-aware). On UDP the
+        // non-INVITE Completed state lingers for T4 (~5s) waiting
+        // for retransmits, which would make the test either flaky
+        // or slow.
+        let dispatcher = Arc::new(TestDispatcher::default());
+        let manager = TransactionManager::new(dispatcher);
+
+        // No activity yet.
+        assert_eq!(manager.active_transaction_count(), 0);
+        assert_eq!(manager.active_client_count(), 0);
+        assert_eq!(manager.active_server_count(), 0);
+
+        // Start one client transaction; should bump client count.
+        let ctx =
+            TransportContext::new(TransportKind::Tcp, "127.0.0.1:5390".parse().unwrap(), None);
+        let tu = Arc::new(TestClientTu::default());
+        manager
+            .start_client_transaction(
+                build_client_request(Method::Options, "z9hG4bKactive-1"),
+                ctx.clone(),
+                tu.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(manager.active_client_count(), 1);
+        assert_eq!(manager.active_server_count(), 0);
+        assert_eq!(manager.active_transaction_count(), 1);
+
+        // Feed a final response — Timer K is zero on TCP, so the
+        // transaction terminates immediately.
+        manager
+            .receive_response(build_response_with_branch(
+                200,
+                "z9hG4bKactive-1",
+                Method::Options,
+            ))
+            .await;
+
+        // Drain path is async; wait briefly.
+        for _ in 0..40 {
+            if manager.active_transaction_count() == 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            manager.active_transaction_count(),
+            0,
+            "terminated TCP transaction must be removed from the manager"
+        );
     }
 
     #[tokio::test]

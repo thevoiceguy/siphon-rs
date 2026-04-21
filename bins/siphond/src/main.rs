@@ -171,6 +171,15 @@ struct Args {
     /// NetworkPolicy but otherwise keep it loopback-only.
     #[arg(long)]
     metrics_bind: Option<String>,
+
+    /// Grace period (seconds) to drain in-flight transactions after
+    /// a shutdown signal (SIGTERM / Ctrl-C) before exiting. Set to 0
+    /// to exit immediately without draining (legacy behaviour). k8s
+    /// sets `terminationGracePeriodSeconds` on the pod; this value
+    /// must be strictly less than that — otherwise the pod is
+    /// SIGKILLed before draining completes.
+    #[arg(long, default_value = "30")]
+    drain_timeout: u64,
 }
 
 fn parse_mode(s: &str) -> Result<DaemonMode, String> {
@@ -413,19 +422,62 @@ async fn main() -> Result<()> {
         .expect("Failed to register SIGTERM handler");
 
     // Main event loop with graceful shutdown
+    let shutdown_reason: &'static str;
     loop {
         tokio::select! {
             Some(packet) = rx.recv() => {
                 handle_packet(&transaction_mgr, &dispatcher, &services, packet).await;
             }
             _ = tokio::signal::ctrl_c() => {
-                info!("Received SIGINT (Ctrl+C), initiating graceful shutdown...");
+                shutdown_reason = "SIGINT (Ctrl+C)";
+                info!(reason = shutdown_reason, "shutdown signal received");
                 break;
             }
             _ = sigterm.recv() => {
-                info!("Received SIGTERM, initiating graceful shutdown...");
+                shutdown_reason = "SIGTERM";
+                info!(reason = shutdown_reason, "shutdown signal received");
                 break;
             }
+        }
+    }
+
+    // --- Phase 1: take the instance out of load-balancer rotation.
+    //
+    // Flipping readiness to `false` makes `/ready` return 503 so
+    // k8s (or any other LB that uses readiness probes) stops
+    // routing new requests here. Existing calls keep flowing while
+    // their transactions drain in phase 2.
+    readiness.store(false, std::sync::atomic::Ordering::Release);
+    info!("/ready flipped to 503 — waiting for load balancer to drain");
+
+    // --- Phase 2: drain in-flight transactions.
+    //
+    // Poll the manager's active-transaction count every 100ms until
+    // it hits zero OR we exhaust the configured drain timeout. The
+    // initial 250ms delay gives the LB a chance to observe the /ready
+    // flip and stop sending new traffic before we start counting.
+    //
+    // Timeout-of-zero disables drain entirely (legacy behaviour for
+    // environments that can't tolerate the delay).
+    let drain_timeout = std::time::Duration::from_secs(args.drain_timeout);
+    if !drain_timeout.is_zero() {
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        let start = std::time::Instant::now();
+        loop {
+            let active = transaction_mgr.active_transaction_count();
+            if active == 0 {
+                info!("all transactions drained");
+                break;
+            }
+            if start.elapsed() >= drain_timeout {
+                warn!(
+                    active,
+                    timeout_secs = drain_timeout.as_secs(),
+                    "drain timeout reached; abandoning in-flight transactions"
+                );
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
     }
 
