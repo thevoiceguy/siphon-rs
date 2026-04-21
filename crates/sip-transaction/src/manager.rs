@@ -1512,6 +1512,24 @@ mod tests {
         }
     }
 
+    /// Dispatcher that fails every send — models a transport layer
+    /// that can't reach the peer (connection refused, TLS handshake
+    /// failure, DNS resolution failure, broken pipe). Used to
+    /// exercise the §18.4 transport-error path end to end.
+    #[derive(Debug, Default)]
+    struct FailingDispatcher {
+        attempts: Mutex<u32>,
+    }
+
+    #[async_trait]
+    impl TransportDispatcher for FailingDispatcher {
+        async fn dispatch(&self, _ctx: &TransportContext, _payload: Bytes) -> Result<()> {
+            let mut guard = self.attempts.lock().await;
+            *guard += 1;
+            Err(anyhow::anyhow!("simulated transport failure"))
+        }
+    }
+
     #[async_trait]
     impl ClientTransactionUser for TestClientTu {
         async fn on_provisional(&self, _key: &TransactionKey, response: &Response) {
@@ -1681,6 +1699,118 @@ mod tests {
 
         let finals = tu.finals.lock().await;
         assert_eq!(finals.as_slice(), &[200]);
+    }
+
+    // ---------------------------------------------------------------
+    // RFC 3261 §18.4 transport-error plumbing
+    //
+    // When the transport layer rejects a send, the manager must
+    // surface the failure to the TU via on_transport_error() and
+    // drive the FSM to terminal state — NOT silently stall waiting
+    // on retransmit timers.
+    // ---------------------------------------------------------------
+
+    /// Polls `condition` every `step` up to `max` duration. Returns
+    /// true once the predicate is satisfied, false on timeout.
+    /// Used to wait for async manager state to settle without
+    /// oversleeping on fast test runs.
+    async fn wait_until<F, Fut>(
+        mut condition: F,
+        step: std::time::Duration,
+        max: std::time::Duration,
+    ) -> bool
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = bool>,
+    {
+        let start = std::time::Instant::now();
+        while start.elapsed() < max {
+            if condition().await {
+                return true;
+            }
+            tokio::time::sleep(step).await;
+        }
+        condition().await
+    }
+
+    #[tokio::test]
+    async fn client_non_invite_transport_error_notifies_tu() {
+        // Uses UDP so dispatch_with_pool routes directly to
+        // `dispatcher.dispatch()` (our FailingDispatcher); TCP
+        // without a stream bypasses the dispatcher and goes via the
+        // pool's connect path, which would test a different code path.
+        let dispatcher = Arc::new(FailingDispatcher::default());
+        let manager = TransactionManager::new(dispatcher.clone());
+        let ctx =
+            TransportContext::new(TransportKind::Udp, "127.0.0.1:5090".parse().unwrap(), None);
+        let tu = Arc::new(TestClientTu::default());
+        let branch = "z9hG4bKtransport-err-non-invite";
+
+        manager
+            .start_client_transaction(
+                build_client_request(Method::Options, branch),
+                ctx,
+                tu.clone(),
+            )
+            .await
+            .unwrap();
+
+        let tu_err = tu.clone();
+        let saw_err = wait_until(
+            || {
+                let tu = tu_err.clone();
+                async move { *tu.transport_errors.lock().await > 0 }
+            },
+            std::time::Duration::from_millis(10),
+            std::time::Duration::from_secs(2),
+        )
+        .await;
+
+        assert!(
+            *dispatcher.attempts.lock().await >= 1,
+            "dispatcher must be invoked for the initial send (attempts={})",
+            *dispatcher.attempts.lock().await,
+        );
+        assert!(
+            saw_err,
+            "TU MUST see on_transport_error() when dispatch fails",
+        );
+        assert_eq!(*tu.transport_errors.lock().await, 1);
+    }
+
+    #[tokio::test]
+    async fn client_invite_transport_error_notifies_tu() {
+        // See note on sibling test above — use UDP so the failing
+        // dispatcher is actually invoked for the Transmit action.
+        let dispatcher = Arc::new(FailingDispatcher::default());
+        let manager = TransactionManager::new(dispatcher.clone());
+        let ctx =
+            TransportContext::new(TransportKind::Udp, "127.0.0.1:5091".parse().unwrap(), None);
+        let tu = Arc::new(TestClientTu::default());
+        let branch = "z9hG4bKtransport-err-invite";
+
+        manager
+            .start_client_transaction(
+                build_client_request(Method::Invite, branch),
+                ctx,
+                tu.clone(),
+            )
+            .await
+            .unwrap();
+
+        let tu_err = tu.clone();
+        let saw_err = wait_until(
+            || {
+                let tu = tu_err.clone();
+                async move { *tu.transport_errors.lock().await > 0 }
+            },
+            std::time::Duration::from_millis(10),
+            std::time::Duration::from_secs(2),
+        )
+        .await;
+
+        assert!(saw_err, "INVITE TU MUST see on_transport_error()");
+        assert_eq!(*tu.transport_errors.lock().await, 1);
     }
 
     #[tokio::test]
