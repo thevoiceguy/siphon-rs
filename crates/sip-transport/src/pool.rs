@@ -13,11 +13,48 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
     sync::{
+        broadcast,
         mpsc::{self, Sender},
         Mutex, OwnedSemaphorePermit, Semaphore,
     },
 };
 use tracing::{debug, warn};
+
+/// Events surfaced from the pool as connections die or encounter
+/// errors. Observers subscribe via
+/// [`ConnectionPool::subscribe_events`] /
+/// [`TlsPool::subscribe_events`] and use the stream for logging,
+/// metrics, or a per-application reconnect policy.
+///
+/// RFC 3261 §18.4 requires transport errors to surface to the
+/// transaction layer. The existing `dispatch_with_pool` path does
+/// that reactively — on the next send the transaction notices the
+/// failure and fires `TransportError` on its FSM. This event stream
+/// is complementary: it gives proactive visibility so operators can
+/// see the failure at the moment it happens, even for idle
+/// connections that aren't currently driving a transaction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnectionEvent {
+    /// A connection was closed cleanly (peer FIN, graceful shutdown,
+    /// idle sweeper). The pool entry has been removed.
+    Closed {
+        transport: TransportKind,
+        peer: SocketAddr,
+    },
+    /// A connection failed (write / read / flush error, connect
+    /// timeout, TLS handshake failure). The pool entry has been
+    /// removed; the next send to this peer will open a fresh one.
+    Failed {
+        transport: TransportKind,
+        peer: SocketAddr,
+        reason: String,
+    },
+}
+
+/// Default capacity of the pool event broadcast channel. Slow
+/// subscribers see Lagged if they fall behind by more than this;
+/// events are still delivered to subscribers that keep up.
+const CONNECTION_EVENT_CHANNEL_CAPACITY: usize = 256;
 
 use crate::{drain_sip_frames, InboundPacket, TransportKind, MAX_BUFFER_SIZE};
 
@@ -183,6 +220,7 @@ fn spawn_writer_supervisor<K, F>(
     key: K,
     transport: &'static str,
     format_key: F,
+    event_emitter: Option<WriterEventEmitter>,
 ) where
     K: std::hash::Hash + Eq + Clone + Send + Sync + 'static,
     F: FnOnce(&K) -> String + Send + 'static,
@@ -190,6 +228,7 @@ fn spawn_writer_supervisor<K, F>(
     tokio::spawn(async move {
         let outcome = writer.await;
         let key_label = format_key(&key);
+        let mut event_reason: Option<String> = None;
         match outcome {
             Ok(()) => {
                 debug!(
@@ -204,6 +243,7 @@ fn spawn_writer_supervisor<K, F>(
                     peer = %key_label,
                     "pool writer task panicked, removing entry"
                 );
+                event_reason = Some("writer panicked".to_string());
             }
             Err(e) => {
                 debug!(
@@ -212,10 +252,41 @@ fn spawn_writer_supervisor<K, F>(
                     error = %e,
                     "pool writer task cancelled, removing entry"
                 );
+                event_reason = Some(format!("writer cancelled: {e}"));
             }
         }
         map.remove(&key);
+
+        // Emit a ConnectionEvent so observers (metrics, reconnect
+        // policies) see the death without waiting for the next send
+        // attempt. The emitter knows the peer SocketAddr; WS
+        // supervisors don't provide one (URL-keyed).
+        if let Some(emitter) = event_emitter {
+            let event = match event_reason {
+                Some(reason) => ConnectionEvent::Failed {
+                    transport: emitter.transport,
+                    peer: emitter.peer,
+                    reason,
+                },
+                None => ConnectionEvent::Closed {
+                    transport: emitter.transport,
+                    peer: emitter.peer,
+                },
+            };
+            // Ignore send failure — it just means no subscribers
+            // are currently listening, which is fine.
+            let _ = emitter.tx.send(event);
+        }
     });
+}
+
+/// Bundle of data needed for the supervisor to synthesise a
+/// [`ConnectionEvent`] on writer-task exit. TCP and TLS pools pass
+/// this through; WS passes `None` (no SocketAddr available).
+struct WriterEventEmitter {
+    transport: TransportKind,
+    peer: SocketAddr,
+    tx: broadcast::Sender<ConnectionEvent>,
 }
 
 /// Connection pool with idle timeout and size limits for TCP and WebSocket.
@@ -241,10 +312,16 @@ pub struct ConnectionPool {
     /// disables the background CRLF ping. WebSocket connections don't
     /// use this — tokio-tungstenite handles WS-native ping/pong.
     keepalive_interval: Option<Duration>,
+    /// Broadcast channel for [`ConnectionEvent`]s. Kept as a single
+    /// sender per pool; subscribers call [`Self::subscribe_events`]
+    /// to obtain a receiver. No subscribers == events are discarded
+    /// (broadcast semantics).
+    events_tx: broadcast::Sender<ConnectionEvent>,
 }
 
 impl ConnectionPool {
     pub fn new() -> Self {
+        let (events_tx, _) = broadcast::channel(CONNECTION_EVENT_CHANNEL_CAPACITY);
         Self {
             tcp: Arc::new(DashMap::new()),
             #[cfg(feature = "ws")]
@@ -254,11 +331,13 @@ impl ConnectionPool {
             inbound_tx: Arc::new(Mutex::new(None)),
             permits: Arc::new(Semaphore::new(MAX_POOL_SIZE)),
             keepalive_interval: Some(DEFAULT_KEEPALIVE_INTERVAL),
+            events_tx,
         }
     }
 
     /// Creates a new pool with custom limits.
     pub fn with_limits(max_size: usize, idle_timeout: Duration) -> Self {
+        let (events_tx, _) = broadcast::channel(CONNECTION_EVENT_CHANNEL_CAPACITY);
         Self {
             tcp: Arc::new(DashMap::new()),
             #[cfg(feature = "ws")]
@@ -268,7 +347,22 @@ impl ConnectionPool {
             inbound_tx: Arc::new(Mutex::new(None)),
             permits: Arc::new(Semaphore::new(max_size)),
             keepalive_interval: Some(DEFAULT_KEEPALIVE_INTERVAL),
+            events_tx,
         }
+    }
+
+    /// Subscribe to [`ConnectionEvent`]s emitted by this pool.
+    ///
+    /// Each subscriber receives every event from the moment of
+    /// subscription forward — there's no replay of past events. If
+    /// a subscriber falls more than
+    /// `CONNECTION_EVENT_CHANNEL_CAPACITY` events behind, it sees
+    /// `RecvError::Lagged` from the stream; events after the lag
+    /// are still delivered. Typical subscribers: a tracing sink
+    /// that logs connection deaths, a Prometheus counter for
+    /// transport failures, or an app-level reconnect policy.
+    pub fn subscribe_events(&self) -> broadcast::Receiver<ConnectionEvent> {
+        self.events_tx.subscribe()
     }
 
     /// Configure the outbound RFC 6223 CRLF keepalive interval for
@@ -439,6 +533,11 @@ impl ConnectionPool {
             addr,
             "tcp",
             move |peer| format!("{peer}"),
+            Some(WriterEventEmitter {
+                transport: TransportKind::Tcp,
+                peer: addr,
+                tx: self.events_tx.clone(),
+            }),
         );
 
         // Optional reader task to deliver responses back to the inbound pipeline
@@ -613,6 +712,10 @@ impl ConnectionPool {
             key.clone(),
             "ws",
             |url| url.clone(),
+            // WS connections are URL-keyed — no SocketAddr available
+            // for ConnectionEvent. Observers that want WS events can
+            // rely on tokio-tungstenite's native ping/pong telemetry.
+            None,
         );
 
         // Optional reader task — feeds received frames back to inbound handler
@@ -747,6 +850,9 @@ pub struct TlsPool {
     inbound_tx: Arc<Mutex<Option<Sender<InboundPacket>>>>,
     /// RFC 6223 outbound keepalive interval. `None` disables.
     keepalive_interval: Option<Duration>,
+    /// Broadcast channel for [`ConnectionEvent`]s; symmetric with
+    /// [`ConnectionPool::events_tx`].
+    events_tx: broadcast::Sender<ConnectionEvent>,
 }
 
 #[cfg(feature = "tls")]
@@ -761,6 +867,7 @@ const TLS_POOL_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
 #[cfg(feature = "tls")]
 impl TlsPool {
     pub fn new() -> Self {
+        let (events_tx, _) = broadcast::channel(CONNECTION_EVENT_CHANNEL_CAPACITY);
         let pool = Self {
             inner: Arc::new(DashMap::new()),
             max_size: MAX_POOL_SIZE,
@@ -768,6 +875,7 @@ impl TlsPool {
             permits: Arc::new(Semaphore::new(MAX_POOL_SIZE)),
             inbound_tx: Arc::new(Mutex::new(None)),
             keepalive_interval: Some(DEFAULT_KEEPALIVE_INTERVAL),
+            events_tx,
         };
         pool.spawn_idle_sweeper();
         pool
@@ -775,6 +883,7 @@ impl TlsPool {
 
     /// Creates a new pool with custom limits.
     pub fn with_limits(max_size: usize, idle_timeout: Duration) -> Self {
+        let (events_tx, _) = broadcast::channel(CONNECTION_EVENT_CHANNEL_CAPACITY);
         let pool = Self {
             inner: Arc::new(DashMap::new()),
             max_size,
@@ -782,9 +891,16 @@ impl TlsPool {
             permits: Arc::new(Semaphore::new(max_size)),
             inbound_tx: Arc::new(Mutex::new(None)),
             keepalive_interval: Some(DEFAULT_KEEPALIVE_INTERVAL),
+            events_tx,
         };
         pool.spawn_idle_sweeper();
         pool
+    }
+
+    /// Subscribe to [`ConnectionEvent`]s emitted by this TLS pool.
+    /// See [`ConnectionPool::subscribe_events`] for semantics.
+    pub fn subscribe_events(&self) -> broadcast::Receiver<ConnectionEvent> {
+        self.events_tx.subscribe()
     }
 
     /// Configure the RFC 6223 CRLF keepalive interval for TLS
@@ -970,6 +1086,11 @@ impl TlsPool {
             key.clone(),
             "tls",
             |(peer, server_name)| format!("{peer} ({server_name})"),
+            Some(WriterEventEmitter {
+                transport: TransportKind::Tls,
+                peer: key.0,
+                tx: self.events_tx.clone(),
+            }),
         );
 
         // Optional reader task to deliver responses back to the inbound
@@ -1094,9 +1215,14 @@ mod tests {
         // Spawn a writer that exits immediately. The supervisor should
         // then reach in and remove the (addr, entry).
         let writer = tokio::spawn(async {});
-        spawn_writer_supervisor(writer, Arc::clone(&pool.tcp), addr, "tcp", move |peer| {
-            format!("{peer}")
-        });
+        spawn_writer_supervisor(
+            writer,
+            Arc::clone(&pool.tcp),
+            addr,
+            "tcp",
+            move |peer| format!("{peer}"),
+            None,
+        );
 
         // Give the supervisor a moment to run.
         for _ in 0..20 {
@@ -1122,9 +1248,14 @@ mod tests {
         let writer = tokio::spawn(async {
             panic!("simulated writer crash");
         });
-        spawn_writer_supervisor(writer, Arc::clone(&pool.tcp), addr, "tcp", move |peer| {
-            format!("{peer}")
-        });
+        spawn_writer_supervisor(
+            writer,
+            Arc::clone(&pool.tcp),
+            addr,
+            "tcp",
+            move |peer| format!("{peer}"),
+            None,
+        );
 
         for _ in 0..20 {
             if pool.len() == 0 {
@@ -1411,6 +1542,98 @@ mod tests {
             frame,
             "keepalive=None MUST NOT emit CRLF pings",
         );
+    }
+
+    // =====================================================================
+    // RFC 3261 §18.4: transport-error observability
+    // =====================================================================
+
+    #[tokio::test]
+    async fn connection_event_emitted_when_peer_closes_tcp() {
+        use tokio::net::TcpListener;
+
+        // Spawn a listener that accepts one connection and immediately
+        // drops it, simulating a peer-side close (or middlebox RST).
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                drop(stream);
+            }
+        });
+
+        // Short keepalive so the writer notices the dead peer quickly
+        // — without it the writer sits idle on rx.recv() and the
+        // supervisor only reaps the entry when someone tries to send
+        // again. The keepalive ping IS such a send attempt.
+        let pool = ConnectionPool::new().with_keepalive_interval(Some(Duration::from_millis(80)));
+        let mut events = pool.subscribe_events();
+
+        // Open a connection with one send.
+        let frame = b"OPTIONS sip:a SIP/2.0\r\nContent-Length: 0\r\n\r\n";
+        let _ = pool.send_tcp(addr, Bytes::from_static(frame)).await;
+
+        // Wait for the supervisor to observe the writer task exiting.
+        let event = tokio::time::timeout(Duration::from_secs(2), events.recv()).await;
+        let event = event
+            .expect("supervisor must emit a ConnectionEvent within 2s")
+            .expect("broadcast channel should deliver");
+
+        match event {
+            ConnectionEvent::Closed { transport, peer }
+            | ConnectionEvent::Failed {
+                transport, peer, ..
+            } => {
+                assert_eq!(transport, TransportKind::Tcp);
+                assert_eq!(peer, addr);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn connection_event_subscribers_see_multiple_deaths() {
+        // Two separate connections die; a single subscriber receives
+        // both events in order.
+        use tokio::net::TcpListener;
+
+        async fn one_shot_close(addr: SocketAddr) {
+            let listener = TcpListener::bind(addr).await.unwrap();
+            tokio::spawn(async move {
+                if let Ok((stream, _)) = listener.accept().await {
+                    drop(stream);
+                }
+            });
+        }
+
+        let l1 = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr1 = l1.local_addr().unwrap();
+        let l2 = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr2 = l2.local_addr().unwrap();
+        drop(l1);
+        drop(l2);
+        one_shot_close(addr1).await;
+        one_shot_close(addr2).await;
+
+        let pool = ConnectionPool::new().with_keepalive_interval(Some(Duration::from_millis(80)));
+        let mut events = pool.subscribe_events();
+
+        let frame = b"OPTIONS sip:a SIP/2.0\r\nContent-Length: 0\r\n\r\n";
+        let _ = pool.send_tcp(addr1, Bytes::from_static(frame)).await;
+        let _ = pool.send_tcp(addr2, Bytes::from_static(frame)).await;
+
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..2 {
+            let ev = tokio::time::timeout(Duration::from_secs(2), events.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            let peer = match ev {
+                ConnectionEvent::Closed { peer, .. } | ConnectionEvent::Failed { peer, .. } => peer,
+            };
+            seen.insert(peer);
+        }
+        assert!(seen.contains(&addr1), "event for addr1 missing");
+        assert!(seen.contains(&addr2), "event for addr2 missing");
     }
 
     #[tokio::test]
