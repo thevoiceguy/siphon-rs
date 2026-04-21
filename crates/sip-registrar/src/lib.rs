@@ -30,7 +30,9 @@ use chrono::Utc;
 use dashmap::DashMap;
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use sip_auth::Authenticator;
-use sip_core::{Headers, PathHeader, Request, Response, SipUri, StatusLine, TelUri, Uri};
+use sip_core::{
+    Headers, PathHeader, Request, Response, ServiceRouteHeader, SipUri, StatusLine, TelUri, Uri,
+};
 use sip_parse::{header, parse_to_header};
 use sip_ratelimit::RateLimiter;
 use smol_str::SmolStr;
@@ -472,6 +474,19 @@ pub struct Binding {
     /// Identifies the TLS/TCP connection for reusing inbound connections
     /// when routing requests to NAT'd clients.
     flow_token: Option<SmolStr>,
+
+    /// Instance-id from the Contact `+sip.instance` parameter
+    /// (RFC 5626 §4.1). Stable per-device identifier; together with
+    /// `reg_id` it disambiguates multiple flows from the same UA.
+    /// The value is stored verbatim — typically `"<urn:uuid:...>"`.
+    instance_id: Option<SmolStr>,
+
+    /// Registration flow identifier from the Contact `reg-id`
+    /// parameter (RFC 5626 §4.1). One UA may register the same
+    /// AOR over multiple flows (e.g. UDP and TCP) using distinct
+    /// reg-id values; the registrar treats each as a separate
+    /// binding even though the contact URI is identical.
+    reg_id: Option<u32>,
 }
 
 impl Binding {
@@ -495,6 +510,8 @@ impl Binding {
             user_agent: None,
             path: None,
             flow_token: None,
+            instance_id: None,
+            reg_id: None,
         })
     }
 
@@ -601,7 +618,40 @@ impl Binding {
             user_agent: None,
             path: None,
             flow_token: None,
+            instance_id: None,
+            reg_id: None,
         }
+    }
+
+    /// Set the Outbound instance-id (RFC 5626 §4.1 `+sip.instance`).
+    ///
+    /// The value should be the verbatim contents of the
+    /// `+sip.instance` Contact parameter, e.g.
+    /// `"<urn:uuid:f81d4fae-7dec-11d0-a765-00a0c91e6bf6>"`.
+    pub fn with_instance_id(mut self, instance_id: SmolStr) -> Self {
+        self.instance_id = Some(instance_id);
+        self
+    }
+
+    /// Get the instance-id (RFC 5626 §4.1).
+    pub fn instance_id(&self) -> Option<&str> {
+        self.instance_id.as_deref()
+    }
+
+    /// Set the Outbound reg-id (RFC 5626 §4.1 `reg-id`).
+    ///
+    /// Distinguishes multiple simultaneous flows from the same
+    /// device (e.g. one over UDP, one over TCP) so the registrar
+    /// can route responses back through the specific flow that
+    /// produced them.
+    pub fn with_reg_id(mut self, reg_id: u32) -> Self {
+        self.reg_id = Some(reg_id);
+        self
+    }
+
+    /// Get the reg-id (RFC 5626 §4.1).
+    pub fn reg_id(&self) -> Option<u32> {
+        self.reg_id
     }
 }
 
@@ -742,6 +792,8 @@ struct StoredBinding {
     user_agent: Option<SmolStr>,
     path: Option<PathHeader>,
     flow_token: Option<SmolStr>,
+    instance_id: Option<SmolStr>,
+    reg_id: Option<u32>,
 }
 
 impl MemoryLocationStore {
@@ -820,6 +872,8 @@ impl LocationStore for MemoryLocationStore {
             user_agent: binding.user_agent().map(SmolStr::new),
             path: binding.path().cloned(),
             flow_token: binding.flow_token().map(SmolStr::new),
+            instance_id: binding.instance_id().map(SmolStr::new),
+            reg_id: binding.reg_id(),
         });
 
         Ok(())
@@ -860,6 +914,8 @@ impl LocationStore for MemoryLocationStore {
                             user_agent: b.user_agent.clone(),
                             path: b.path.clone(),
                             flow_token: b.flow_token.clone(),
+                            instance_id: b.instance_id.clone(),
+                            reg_id: b.reg_id,
                         })
                     } else {
                         None
@@ -926,6 +982,18 @@ pub struct BasicRegistrar<S, A> {
     rate_limiter: Option<RateLimiter>,
     #[allow(clippy::type_complexity)]
     rate_limit_key_fn: Option<Arc<dyn Fn(&Request) -> Option<SmolStr> + Send + Sync>>,
+
+    /// Service-Route URIs emitted in 200 OK (RFC 3608). When non-empty,
+    /// every successful REGISTER response carries these URIs in a
+    /// `Service-Route` header; the UAC copies them to its outbound
+    /// Route set so requests traverse the registrar's authn/billing
+    /// infrastructure on the way out.
+    service_route: Option<ServiceRouteHeader>,
+
+    /// When true, a 200 OK also carries `Supported: outbound, path`.
+    /// This is how the registrar advertises RFC 5626 / RFC 3327
+    /// capability to the UA, enabling flow-aware routing.
+    advertise_outbound_and_path: bool,
 }
 
 impl<S, A> BasicRegistrar<S, A> {
@@ -938,7 +1006,28 @@ impl<S, A> BasicRegistrar<S, A> {
             max_expires: Duration::from_secs(86400),
             rate_limiter: None,
             rate_limit_key_fn: None,
+            service_route: None,
+            advertise_outbound_and_path: false,
         }
+    }
+
+    /// Configure the `Service-Route` header emitted in 200 OK
+    /// responses (RFC 3608). Pass a fully-constructed
+    /// [`ServiceRouteHeader`] — the route set is serialized verbatim
+    /// into a single `Service-Route` header value, comma-separated.
+    pub fn with_service_route(mut self, service_route: ServiceRouteHeader) -> Self {
+        self.service_route = Some(service_route);
+        self
+    }
+
+    /// Advertise RFC 5626 (outbound) and RFC 3327 (path) capability
+    /// on 200 OK responses via a `Supported: outbound, path` header.
+    /// Independent of actually accepting Path on the request — toggle
+    /// this on when the registrar is configured to honour either
+    /// extension.
+    pub fn with_advertise_outbound_and_path(mut self, advertise: bool) -> Self {
+        self.advertise_outbound_and_path = advertise;
+        self
     }
 
     pub fn with_default_expires(mut self, expires: Duration) -> Self {
@@ -995,6 +1084,79 @@ impl<S, A> BasicRegistrar<S, A> {
     /// Get a reference to the location store
     pub fn location_store(&self) -> &S {
         &self.store
+    }
+
+    /// Parses the `+sip.instance` Contact parameter (RFC 5626 §4.1).
+    /// The value is expected verbatim — typically
+    /// `"<urn:uuid:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx>"`. Returns
+    /// `None` if the parameter is absent and `Some(Err(_))` if the
+    /// parameter is malformed (the caller may then choose to reject).
+    fn parse_instance_id(&self, contact_value: &str) -> Result<Option<SmolStr>, ContactParamError> {
+        match self.contact_param_value(contact_value, "+sip.instance")? {
+            Some(value) => Ok(Some(SmolStr::new(value))),
+            None => Ok(None),
+        }
+    }
+
+    /// Parses the `reg-id` Contact parameter (RFC 5626 §4.1) as a u32.
+    /// Returns `Some(Err)` if the value is present but not numeric.
+    fn parse_reg_id(&self, contact_value: &str) -> Result<Option<u32>, ContactParamError> {
+        match self.contact_param_value(contact_value, "reg-id")? {
+            Some(value) => value
+                .parse::<u32>()
+                .map(Some)
+                .map_err(|_| ContactParamError::Invalid),
+            None => Ok(None),
+        }
+    }
+
+    /// Extracts the Path header from a REGISTER request, if any.
+    ///
+    /// Returns `Ok(None)` when no Path header is present, `Ok(Some)`
+    /// when a well-formed Path was supplied, and `Err(_)` when the
+    /// header was syntactically invalid.
+    fn extract_path(
+        request: &Request,
+    ) -> Result<Option<PathHeader>, sip_core::service_route::RouteError> {
+        if !request.headers().contains("Path") {
+            return Ok(None);
+        }
+        sip_parse::parse_path(request.headers()).map(Some)
+    }
+
+    /// Emit Service-Route, Supported and Path-echo headers on a 200
+    /// OK that's already had Via/From/To/Call-ID/CSeq/Contact and
+    /// the trailer (Date/Content-Length) populated. The caller
+    /// passes the bindings list so we can echo every distinct Path
+    /// back to the UA — RFC 3327 §5.3 doesn't strictly require this
+    /// but every interop target does it and clients use it as a
+    /// confirmation that the registrar honoured the Path.
+    fn append_extensions(&self, headers: &mut Headers, bindings: &[Binding]) -> Result<()> {
+        if let Some(service_route) = &self.service_route {
+            headers.push(
+                SmolStr::new("Service-Route"),
+                SmolStr::new(service_route.to_string()),
+            )?;
+        }
+        if self.advertise_outbound_and_path {
+            headers.push(SmolStr::new("Supported"), SmolStr::new("outbound, path"))?;
+        }
+        // Echo each binding's Path verbatim. We dedup at the surface
+        // level — multiple bindings may carry the same path set
+        // (common when a UA registers two contacts behind the same
+        // edge proxy), and emitting one Path entry per binding would
+        // confuse the UA.
+        let mut seen: Vec<String> = Vec::new();
+        for binding in bindings {
+            if let Some(path) = binding.path() {
+                let value = path.to_string();
+                if !seen.iter().any(|s| s == &value) {
+                    headers.push(SmolStr::new("Path"), SmolStr::new(&value))?;
+                    seen.push(value);
+                }
+            }
+        }
+        Ok(())
     }
 
     fn parse_expires(
@@ -1473,6 +1635,17 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
             )?);
         }
 
+        let request_path = match Self::extract_path(request) {
+            Ok(path) => path,
+            Err(_) => {
+                return self.build_error_response(
+                    request,
+                    400,
+                    "Bad Request - Invalid Path header",
+                );
+            }
+        };
+
         let existing = self.store.lookup(&aor).await?;
         let mut existing_by_contact = std::collections::HashMap::new();
         for binding in existing {
@@ -1531,6 +1704,23 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
                 }
             };
 
+            let instance_id = match self.parse_instance_id(contact.as_str()) {
+                Ok(value) => value,
+                Err(ContactParamError::Invalid) => {
+                    return self.build_error_response(
+                        request,
+                        400,
+                        "Bad Request - Invalid +sip.instance",
+                    );
+                }
+            };
+            let reg_id = match self.parse_reg_id(contact.as_str()) {
+                Ok(value) => value,
+                Err(ContactParamError::Invalid) => {
+                    return self.build_error_response(request, 400, "Bad Request - Invalid reg-id");
+                }
+            };
+
             if let Some(existing) = existing_by_contact.get(&contact_uri) {
                 if existing.call_id == call_id && cseq <= existing.cseq {
                     return self.build_error_response(
@@ -1553,6 +1743,15 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
 
                 if let Some(ua) = &user_agent {
                     binding = binding.with_user_agent(ua.clone())?;
+                }
+                if let Some(path) = &request_path {
+                    binding = binding.with_path(path.clone());
+                }
+                if let Some(instance) = &instance_id {
+                    binding = binding.with_instance_id(instance.clone());
+                }
+                if let Some(reg_id) = reg_id {
+                    binding = binding.with_reg_id(reg_id);
                 }
 
                 self.store.upsert(binding).await?;
@@ -1586,6 +1785,7 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
             )?;
         }
 
+        self.append_extensions(&mut headers, &bindings)?;
         headers.push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()))?;
         headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"))?;
 
@@ -1790,6 +1990,22 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
             )?);
         }
 
+        // RFC 3327 §5.3: extract Path once per request. If the
+        // header is present but malformed, reject with 400 — the UA
+        // asked us to record a path and we couldn't, so accepting
+        // the registration without it would silently break the
+        // return path for requests routed to this AOR.
+        let request_path = match Self::extract_path(request) {
+            Ok(path) => path,
+            Err(_) => {
+                return self.build_error_response(
+                    request,
+                    400,
+                    "Bad Request - Invalid Path header",
+                );
+            }
+        };
+
         // Process each contact
         let existing = self.store.lookup(&aor)?;
         let mut existing_by_contact = std::collections::HashMap::new();
@@ -1849,6 +2065,24 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
                 }
             };
 
+            // RFC 5626 §4.1 Outbound contact params.
+            let instance_id = match self.parse_instance_id(contact.as_str()) {
+                Ok(value) => value,
+                Err(ContactParamError::Invalid) => {
+                    return self.build_error_response(
+                        request,
+                        400,
+                        "Bad Request - Invalid +sip.instance",
+                    );
+                }
+            };
+            let reg_id = match self.parse_reg_id(contact.as_str()) {
+                Ok(value) => value,
+                Err(ContactParamError::Invalid) => {
+                    return self.build_error_response(request, 400, "Bad Request - Invalid reg-id");
+                }
+            };
+
             if let Some(existing) = existing_by_contact.get(&contact_uri) {
                 if existing.call_id == call_id && cseq <= existing.cseq {
                     return self.build_error_response(
@@ -1873,6 +2107,15 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
 
                 if let Some(ua) = &user_agent {
                     binding = binding.with_user_agent(ua.clone())?;
+                }
+                if let Some(path) = &request_path {
+                    binding = binding.with_path(path.clone());
+                }
+                if let Some(instance) = &instance_id {
+                    binding = binding.with_instance_id(instance.clone());
+                }
+                if let Some(reg_id) = reg_id {
+                    binding = binding.with_reg_id(reg_id);
                 }
 
                 self.store.upsert(binding)?;
@@ -1909,6 +2152,7 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
             )?;
         }
 
+        self.append_extensions(&mut headers, &bindings)?;
         headers.push(SmolStr::new("Date"), SmolStr::new(Utc::now().to_rfc2822()))?;
         headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"))?;
 
@@ -4087,5 +4331,269 @@ mod tests {
             total += entry.len();
         }
         assert_eq!(total, 100);
+    }
+
+    // =======================================================================
+    // RFC 3327 Path tests
+    // =======================================================================
+
+    /// Build a REGISTER request with optional extra headers.
+    fn build_register(
+        to: &str,
+        contact: &str,
+        call_id: &str,
+        cseq: u32,
+        extras: &[(&str, &str)],
+    ) -> Request {
+        let mut headers = base_headers();
+        headers.push("To", to).unwrap();
+        headers.push("Contact", contact).unwrap();
+        headers.push("Call-ID", call_id).unwrap();
+        headers.push("CSeq", format!("{} REGISTER", cseq)).unwrap();
+        for (name, value) in extras {
+            headers.push(*name, *value).unwrap();
+        }
+        Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid request")
+    }
+
+    fn registrar_unauthenticated(
+        store: MemoryLocationStore,
+    ) -> BasicRegistrar<MemoryLocationStore, DigestAuthenticator<MemoryCredentialStore>> {
+        BasicRegistrar::new(store, None)
+    }
+
+    #[test]
+    fn path_header_is_extracted_and_stored_on_binding() {
+        let store = MemoryLocationStore::new();
+        let registrar = registrar_unauthenticated(store.clone());
+
+        let request = build_register(
+            "<sip:alice@example.com>",
+            "<sip:ua.example.com>;expires=60",
+            "call-path-1",
+            1,
+            &[("Supported", "path"), ("Path", "<sip:edge.example.net;lr>")],
+        );
+
+        let response = registrar.handle_register(&request).expect("response");
+        assert_eq!(response.code(), 200);
+
+        let bindings = store.lookup("sip:alice@example.com").unwrap();
+        assert_eq!(bindings.len(), 1);
+        let path = bindings[0].path().expect("Path stored on binding");
+        assert_eq!(path.len(), 1);
+        assert_eq!(path.routes()[0].uri().as_str(), "sip:edge.example.net;lr");
+    }
+
+    #[test]
+    fn path_header_is_echoed_in_200_ok() {
+        let store = MemoryLocationStore::new();
+        let registrar = registrar_unauthenticated(store);
+
+        let request = build_register(
+            "<sip:alice@example.com>",
+            "<sip:ua.example.com>;expires=60",
+            "call-path-2",
+            1,
+            &[("Supported", "path"), ("Path", "<sip:edge.example.net;lr>")],
+        );
+
+        let response = registrar.handle_register(&request).expect("response");
+        let echoed = response
+            .headers()
+            .get("Path")
+            .expect("200 OK must echo Path");
+        assert!(
+            echoed.contains("edge.example.net"),
+            "Path echoed verbatim: {echoed}",
+        );
+    }
+
+    #[test]
+    fn multi_hop_path_round_trips_through_response() {
+        // Path may carry multiple URIs (each edge proxy prepends its
+        // own). The registrar must store and echo the full list.
+        let store = MemoryLocationStore::new();
+        let registrar = registrar_unauthenticated(store);
+
+        let request = build_register(
+            "<sip:alice@example.com>",
+            "<sip:ua.example.com>;expires=60",
+            "call-path-3",
+            1,
+            &[
+                ("Supported", "path"),
+                ("Path", "<sip:outer.example.net;lr>"),
+                ("Path", "<sip:inner.example.net;lr>"),
+            ],
+        );
+
+        let response = registrar.handle_register(&request).expect("response");
+        let echoed = response.headers().get("Path").expect("Path header present");
+        assert!(echoed.contains("outer.example.net"));
+        assert!(echoed.contains("inner.example.net"));
+    }
+
+    #[test]
+    fn invalid_path_header_returns_400() {
+        let store = MemoryLocationStore::new();
+        let registrar = registrar_unauthenticated(store);
+
+        // Malformed Path (no angle brackets, no URI scheme recognisable)
+        let request = build_register(
+            "<sip:alice@example.com>",
+            "<sip:ua.example.com>;expires=60",
+            "call-path-bad",
+            1,
+            &[("Path", "not-a-valid-uri")],
+        );
+
+        let response = registrar.handle_register(&request).expect("response");
+        assert_eq!(response.code(), 400);
+    }
+
+    // =======================================================================
+    // RFC 3608 Service-Route tests
+    // =======================================================================
+
+    #[test]
+    fn service_route_absent_when_not_configured() {
+        let store = MemoryLocationStore::new();
+        let registrar = registrar_unauthenticated(store);
+
+        let request = build_register(
+            "<sip:alice@example.com>",
+            "<sip:ua.example.com>;expires=60",
+            "call-sr-1",
+            1,
+            &[],
+        );
+
+        let response = registrar.handle_register(&request).expect("response");
+        assert_eq!(response.code(), 200);
+        assert!(response.headers().get("Service-Route").is_none());
+    }
+
+    #[test]
+    fn service_route_emitted_when_configured() {
+        let store = MemoryLocationStore::new();
+        let service_route = ServiceRouteHeader::from_uris(vec![Uri::Sip(
+            SipUri::parse("sip:scscf.example.com;lr").unwrap(),
+        )])
+        .expect("service-route valid");
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store, None).with_service_route(service_route);
+
+        let request = build_register(
+            "<sip:alice@example.com>",
+            "<sip:ua.example.com>;expires=60",
+            "call-sr-2",
+            1,
+            &[],
+        );
+
+        let response = registrar.handle_register(&request).expect("response");
+        let sr = response
+            .headers()
+            .get("Service-Route")
+            .expect("Service-Route emitted");
+        assert!(sr.contains("scscf.example.com"), "unexpected value: {sr}");
+        assert!(sr.contains(";lr"));
+    }
+
+    // =======================================================================
+    // RFC 5626 Outbound tests
+    // =======================================================================
+
+    #[test]
+    fn outbound_contact_params_stored_on_binding() {
+        let store = MemoryLocationStore::new();
+        let registrar = registrar_unauthenticated(store.clone());
+
+        let contact = "<sip:ua.example.com>;expires=60\
+            ;+sip.instance=\"<urn:uuid:f81d4fae-7dec-11d0-a765-00a0c91e6bf6>\"\
+            ;reg-id=1";
+        let request = build_register(
+            "<sip:alice@example.com>",
+            contact,
+            "call-ob-1",
+            1,
+            &[("Supported", "outbound, path")],
+        );
+
+        let response = registrar.handle_register(&request).expect("response");
+        assert_eq!(response.code(), 200);
+
+        let bindings = store.lookup("sip:alice@example.com").unwrap();
+        assert_eq!(bindings.len(), 1);
+        let b = &bindings[0];
+        assert_eq!(
+            b.instance_id(),
+            Some("\"<urn:uuid:f81d4fae-7dec-11d0-a765-00a0c91e6bf6>\""),
+            "+sip.instance must be stored verbatim",
+        );
+        assert_eq!(b.reg_id(), Some(1));
+    }
+
+    #[test]
+    fn outbound_reg_id_must_be_numeric() {
+        let store = MemoryLocationStore::new();
+        let registrar = registrar_unauthenticated(store);
+
+        let request = build_register(
+            "<sip:alice@example.com>",
+            "<sip:ua.example.com>;expires=60;reg-id=abc",
+            "call-ob-bad",
+            1,
+            &[],
+        );
+        let response = registrar.handle_register(&request).expect("response");
+        assert_eq!(response.code(), 400);
+    }
+
+    #[test]
+    fn advertise_outbound_adds_supported_header() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store, None).with_advertise_outbound_and_path(true);
+
+        let request = build_register(
+            "<sip:alice@example.com>",
+            "<sip:ua.example.com>;expires=60",
+            "call-ob-2",
+            1,
+            &[],
+        );
+
+        let response = registrar.handle_register(&request).expect("response");
+        let supported = response
+            .headers()
+            .get("Supported")
+            .expect("Supported header present");
+        assert!(
+            supported.contains("outbound") && supported.contains("path"),
+            "Supported must advertise outbound, path: {supported}",
+        );
+    }
+
+    #[test]
+    fn advertise_outbound_absent_when_not_configured() {
+        let store = MemoryLocationStore::new();
+        let registrar = registrar_unauthenticated(store);
+
+        let request = build_register(
+            "<sip:alice@example.com>",
+            "<sip:ua.example.com>;expires=60",
+            "call-ob-3",
+            1,
+            &[],
+        );
+        let response = registrar.handle_register(&request).expect("response");
+        assert!(response.headers().get("Supported").is_none());
     }
 }

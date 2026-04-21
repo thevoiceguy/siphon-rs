@@ -1,6 +1,6 @@
 [package]
 name = "sip-registrar"
-version = "0.2.3"
+version = "0.3.0"
 edition = "2021"
 license.workspace = true
 description = "REGISTER handling and location service for SIP."
