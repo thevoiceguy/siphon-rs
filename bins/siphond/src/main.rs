@@ -18,6 +18,7 @@ mod config;
 mod dispatcher;
 mod handlers;
 mod invite_state;
+mod metrics_http;
 mod proxy_state;
 mod proxy_utils;
 mod scenario;
@@ -163,6 +164,13 @@ struct Args {
     /// Maximum registration expiry (seconds)
     #[arg(long, default_value = "86400")]
     reg_max_expiry: u32,
+
+    /// Bind address for the Prometheus `/metrics` + `/health` +
+    /// `/ready` HTTP endpoints. Omit to disable. k8s default pattern
+    /// is `127.0.0.1:9090`; exposing to `0.0.0.0` is fine behind a
+    /// NetworkPolicy but otherwise keep it loopback-only.
+    #[arg(long)]
+    metrics_bind: Option<String>,
 }
 
 fn parse_mode(s: &str) -> Result<DaemonMode, String> {
@@ -303,6 +311,21 @@ async fn main() -> Result<()> {
 
     let transaction_mgr = Arc::new(TransactionManager::new(transport_dispatcher.clone()));
 
+    // Prometheus `/metrics` + `/health` + `/ready` HTTP endpoints.
+    // Optional; off by default. When enabled, we share the same
+    // TransactionMetrics instance the manager drives so the scrape
+    // response is live.
+    let metrics_state =
+        metrics_http::MetricsState::new(Arc::new(transaction_mgr.metrics().clone()));
+    let readiness = metrics_state.ready_flag();
+    if let Some(ref bind_str) = args.metrics_bind {
+        let bind: std::net::SocketAddr = bind_str
+            .parse()
+            .map_err(|e| anyhow::anyhow!("--metrics-bind {bind_str}: {e}"))?;
+        let (_addr, _handle) =
+            metrics_http::spawn_metrics_server(bind, metrics_state.clone()).await?;
+    }
+
     // Set transaction manager, transport dispatcher, UDP socket, and TLS client config in service registry
     if services
         .set_transaction_manager(transaction_mgr.clone())
@@ -381,6 +404,9 @@ async fn main() -> Result<()> {
     }
 
     info!("siphond ready - listening for requests");
+    // Flip readiness for the /ready probe once transports are bound
+    // and handlers registered.
+    readiness.store(true, std::sync::atomic::Ordering::Release);
 
     // Set up graceful shutdown signal handling
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
