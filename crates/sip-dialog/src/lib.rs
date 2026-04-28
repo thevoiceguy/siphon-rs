@@ -2412,10 +2412,7 @@ mod tests {
             let id = DialogId::unchecked_new(format!("call-{i}"), "from", "to");
             let v = mgr.next_rseq(&id);
             assert!(v >= 1, "RSeq must be >= 1, got {v}");
-            assert!(
-                v <= 0x7FFF_FFFF,
-                "RSeq must fit in 31 bits, got {v:#x}"
-            );
+            assert!(v <= 0x7FFF_FFFF, "RSeq must fit in 31 bits, got {v:#x}");
             assert!(seen.insert(v), "duplicate initial RSeq across dialogs: {v}");
         }
         // The old impl returned 1 for every dialog; assert at least one was

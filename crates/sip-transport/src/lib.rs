@@ -38,9 +38,7 @@ use tracing::{error, info, warn};
 #[cfg(feature = "ws")]
 use {
     futures_util::{SinkExt, StreamExt},
-    tokio_tungstenite::{
-        tungstenite::{self, handshake::server::Request},
-    },
+    tokio_tungstenite::tungstenite::{self, handshake::server::Request},
 };
 
 /// Maximum size of SIP headers before \r\n\r\n (64 KB).
@@ -554,8 +552,7 @@ pub async fn run_tcp(bind: &str, tx: mpsc::Sender<InboundPacket>) -> Result<()> 
 pub async fn send_tcp(to: &SocketAddr, data: &[u8]) -> Result<()> {
     let mut stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(to))
         .await
-        .map_err(|_| anyhow!("TCP connect timeout after {:?} to {}", CONNECT_TIMEOUT, to))?
-        ?;
+        .map_err(|_| anyhow!("TCP connect timeout after {:?} to {}", CONNECT_TIMEOUT, to))??;
     transport_metrics().on_connect(TransportLabel::Tcp);
     stream.write_all(data).await?;
     transport_metrics().on_packet_sent(TransportLabel::Tcp);
@@ -873,8 +870,7 @@ pub async fn send_tls(to: &SocketAddr, data: &[u8], config: &TlsConfig) -> Resul
         .map_err(|_| anyhow!("invalid TLS server name"))?;
     let stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(to))
         .await
-        .map_err(|_| anyhow!("TLS connect timeout after {:?} to {}", CONNECT_TIMEOUT, to))?
-        ?;
+        .map_err(|_| anyhow!("TLS connect timeout after {:?} to {}", CONNECT_TIMEOUT, to))??;
     let mut tls_stream = connector.connect(server_name, stream).await?;
     tls_stream.write_all(data).await?;
     transport_metrics().on_packet_sent(TransportLabel::Tls);
@@ -1034,8 +1030,8 @@ pub fn load_rustls_server_config(
 #[cfg(unix)]
 fn enforce_secure_key_perms(path: &str) -> Result<()> {
     use std::os::unix::fs::MetadataExt;
-    let meta = std::fs::metadata(path)
-        .map_err(|e| anyhow!("failed to stat TLS key {}: {}", path, e))?;
+    let meta =
+        std::fs::metadata(path).map_err(|e| anyhow!("failed to stat TLS key {}: {}", path, e))?;
     let mode = meta.mode() & 0o777;
     if mode & 0o077 != 0 {
         return Err(anyhow!(
@@ -1853,8 +1849,11 @@ mod tests {
 
         fn write_key(mode: u32) -> tempfile::NamedTempFile {
             let mut f = tempfile::NamedTempFile::new().expect("tempfile");
-            writeln!(f, "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----")
-                .expect("write");
+            writeln!(
+                f,
+                "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----"
+            )
+            .expect("write");
             let mut perms = f.as_file().metadata().unwrap().permissions();
             perms.set_mode(mode);
             f.as_file().set_permissions(perms).unwrap();
@@ -1882,15 +1881,13 @@ mod tests {
         #[test]
         fn accepts_owner_only_tls_key() {
             let f = write_key(0o600);
-            enforce_secure_key_perms(f.path().to_str().unwrap())
-                .expect("0600 should be accepted");
+            enforce_secure_key_perms(f.path().to_str().unwrap()).expect("0600 should be accepted");
         }
 
         #[test]
         fn accepts_owner_readonly_tls_key() {
             let f = write_key(0o400);
-            enforce_secure_key_perms(f.path().to_str().unwrap())
-                .expect("0400 should be accepted");
+            enforce_secure_key_perms(f.path().to_str().unwrap()).expect("0400 should be accepted");
         }
     }
 }

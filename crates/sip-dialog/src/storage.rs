@@ -62,10 +62,7 @@ impl DialogStore for InMemoryDialogStore {
         let dialog_id = dialog.id.clone();
         self.inner.insert(dialog.id.clone(), dialog);
         // Update secondary index
-        self.by_call_id
-            .entry(call_id)
-            .or_default()
-            .push(dialog_id);
+        self.by_call_id.entry(call_id).or_default().push(dialog_id);
     }
 
     async fn remove(&self, id: &DialogId) {

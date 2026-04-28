@@ -97,9 +97,8 @@ fn validate_host(host: &str) -> Result<(), UriError> {
     // strictly — the old char-set check accepted nonsense like
     // `[gggg::]` or `[:::::]`.
     if host.contains(':') {
-        host.parse::<std::net::Ipv6Addr>().map_err(|e| {
-            UriError::InvalidHost(format!("invalid IPv6 literal: {e}"))
-        })?;
+        host.parse::<std::net::Ipv6Addr>()
+            .map_err(|e| UriError::InvalidHost(format!("invalid IPv6 literal: {e}")))?;
         return Ok(());
     }
 
