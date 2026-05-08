@@ -257,7 +257,6 @@ pub struct IntegratedUAS {
     local_addr: SocketAddr,
     public_addr: Option<SocketAddr>,
     config: UASConfig,
-    #[allow(dead_code)]
     dialog_manager: Arc<DialogManager>,
     #[allow(dead_code)]
     subscription_manager: Arc<SubscriptionManager>,
@@ -331,18 +330,22 @@ impl IntegratedUAS {
             }
             "ACK" => {
                 // ACK doesn't get a response
-                let helper = self.helper.lock().await;
-                if let Some(dialog) = helper.dialog_manager.find_by_request(request) {
-                    drop(helper);
+                let dialog = {
+                    let helper = self.helper.lock().await;
+                    helper.dialog_manager.find_by_request(request)
+                };
+                if let Some(dialog) = dialog {
                     self.request_handler.on_ack(request, &dialog).await?;
                 } else {
                     warn!("Received ACK for unknown dialog");
                 }
             }
             "BYE" => {
-                let helper = self.helper.lock().await;
-                if let Some(dialog) = helper.dialog_manager.find_by_request(request) {
-                    drop(helper);
+                let dialog = {
+                    let helper = self.helper.lock().await;
+                    helper.dialog_manager.find_by_request(request)
+                };
+                if let Some(dialog) = dialog {
                     self.request_handler
                         .on_bye(request, handle, &dialog)
                         .await?;
@@ -382,9 +385,11 @@ impl IntegratedUAS {
                 self.request_handler.on_notify(request, handle).await?;
             }
             "REFER" => {
-                let helper = self.helper.lock().await;
-                if let Some(dialog) = helper.dialog_manager.find_by_request(request) {
-                    drop(helper);
+                let dialog = {
+                    let helper = self.helper.lock().await;
+                    helper.dialog_manager.find_by_request(request)
+                };
+                if let Some(dialog) = dialog {
                     self.request_handler
                         .on_refer(request, handle, &dialog)
                         .await?;
@@ -400,9 +405,11 @@ impl IntegratedUAS {
                 }
             }
             "UPDATE" => {
-                let helper = self.helper.lock().await;
-                if let Some(dialog) = helper.dialog_manager.find_by_request(request) {
-                    drop(helper);
+                let dialog = {
+                    let helper = self.helper.lock().await;
+                    helper.dialog_manager.find_by_request(request)
+                };
+                if let Some(dialog) = dialog {
                     self.request_handler
                         .on_update(request, handle, &dialog)
                         .await?;
@@ -418,9 +425,11 @@ impl IntegratedUAS {
                 }
             }
             "PRACK" => {
-                let helper = self.helper.lock().await;
-                if let Some(dialog) = helper.dialog_manager.find_by_request(request) {
-                    drop(helper);
+                let dialog = {
+                    let helper = self.helper.lock().await;
+                    helper.dialog_manager.find_by_request(request)
+                };
+                if let Some(dialog) = dialog {
                     self.request_handler
                         .on_prack(request, handle, &dialog)
                         .await?;
@@ -436,9 +445,11 @@ impl IntegratedUAS {
                 }
             }
             "INFO" => {
-                let helper = self.helper.lock().await;
-                if let Some(dialog) = helper.dialog_manager.find_by_request(request) {
-                    drop(helper);
+                let dialog = {
+                    let helper = self.helper.lock().await;
+                    helper.dialog_manager.find_by_request(request)
+                };
+                if let Some(dialog) = dialog {
                     self.request_handler
                         .on_info(request, handle, &dialog)
                         .await?;
@@ -463,6 +474,52 @@ impl IntegratedUAS {
         }
 
         Ok(())
+    }
+
+    /// Accept an INVITE: build a 2xx response with optional SDP body,
+    /// auto-fill Via/Contact/User-Agent headers, send it via the supplied
+    /// transaction handle, and register the resulting confirmed dialog
+    /// with the dialog manager that `dispatch` consults on subsequent
+    /// in-dialog requests (BYE, REFER, INFO, …).
+    ///
+    /// This is the canonical way to accept an INVITE from a
+    /// [`UasRequestHandler::on_invite`] implementation. Building a 2xx
+    /// manually with [`UserAgentServer::create_ok`] and sending it
+    /// straight through `handle.send_final` *does not* register the
+    /// dialog, and the next BYE on that call will fail dispatch with
+    /// "Received BYE for unknown dialog".
+    pub async fn accept_invite(
+        &self,
+        request: &Request,
+        handle: &ServerTransactionHandle,
+        ctx: &TransportContext,
+        sdp_body: Option<&str>,
+    ) -> Result<Dialog> {
+        let helper = self.helper.lock().await;
+        let (mut response, dialog) = helper.accept_invite(request, sdp_body)?;
+        drop(helper);
+        self.auto_fill_headers(&mut response, ctx).await;
+        handle.send_final(response).await;
+        Ok(dialog)
+    }
+
+    /// Access the embedded [`UserAgentServer`] helper.
+    ///
+    /// Useful for callers that need to invoke helper methods (e.g.
+    /// `create_response`, `reject_invite`, `with_authenticator`) and
+    /// want to share state — particularly the `dialog_manager` —
+    /// with the dispatcher. Holding a separate `UserAgentServer`
+    /// instance alongside an `IntegratedUAS` produces two independent
+    /// dialog managers and breaks dispatch lookups; use this accessor
+    /// instead.
+    pub fn helper(&self) -> Arc<Mutex<UserAgentServer>> {
+        Arc::clone(&self.helper)
+    }
+
+    /// Access the dialog manager used by dispatch for in-dialog
+    /// request lookup. Useful for tests and admin tooling.
+    pub fn dialog_manager(&self) -> Arc<DialogManager> {
+        Arc::clone(&self.dialog_manager)
     }
 
     /// Auto-fill Via and Contact headers in responses based on transport context.
