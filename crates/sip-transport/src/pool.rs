@@ -865,6 +865,13 @@ pub type TlsClientConfig = ClientConfig;
 const TLS_POOL_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
 
 #[cfg(feature = "tls")]
+impl Default for TlsPool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "tls")]
 impl TlsPool {
     pub fn new() -> Self {
         let (events_tx, _) = broadcast::channel(CONNECTION_EVENT_CHANNEL_CAPACITY);
