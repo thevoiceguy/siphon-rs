@@ -1,0 +1,23 @@
+[package]
+name = "sip-hep"
+version = "0.0.1"
+description = "HEP3 (Homer) emission glue for siphon-rs — ships parsed/serialized SIP messages to a HepSink."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+
+[dependencies]
+bytes.workspace     = true
+tracing.workspace   = true
+once_cell.workspace = true
+
+# The hep-rs crate lives in its own repo (github.com/thevoiceguy/hep-rs).
+# Git-pinned for the dev cycle; will move to a crates.io version once
+# hep-rs publishes a stable release.
+hep-rs = { git = "https://github.com/thevoiceguy/hep-rs", branch = "main" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time", "net"] }
