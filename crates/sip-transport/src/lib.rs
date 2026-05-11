@@ -361,7 +361,7 @@ pub(crate) fn check_stream_rate(peer: SocketAddr) -> bool {
 
     // Opportunistic cleanup so the map stays bounded under churn.
     let n = CHECKS.fetch_add(1, Ordering::Relaxed);
-    if n % STREAM_RATE_CLEANUP_EVERY == 0 {
+    if n.is_multiple_of(STREAM_RATE_CLEANUP_EVERY) {
         map.retain(|_, (_, last)| now.duration_since(*last) < STREAM_RATE_IDLE_TTL);
     }
 
@@ -469,6 +469,21 @@ pub async fn run_udp(socket: Arc<UdpSocket>, tx: mpsc::Sender<InboundPacket>) ->
     Ok(())
 }
 
+/// Map a stream-transport kind to the HEP3 IP-protocol byte.
+///
+/// HEP3 carries the *network* protocol of the captured payload — TCP
+/// for the actual wire, regardless of whether SIPS adds TLS on top.
+/// Homer's UI already labels the SIP message as SIPS based on
+/// `start.uri` / `via` headers, so collapsing TLS → TCP here matches
+/// what other emitters (Kamailio, FreeSWITCH) ship.
+fn hep_ip_for_stream(kind: TransportKind) -> sip_hep::IpProto {
+    match kind {
+        TransportKind::Sctp | TransportKind::TlsSctp => sip_hep::IpProto::Sctp,
+        // Tcp / Tls / Ws / Wss — all TCP underneath.
+        _ => sip_hep::IpProto::Tcp,
+    }
+}
+
 /// Sends a UDP datagram using an existing bound socket.
 pub async fn send_udp(socket: &UdpSocket, to: &std::net::SocketAddr, data: &[u8]) -> Result<()> {
     socket.send_to(data, to).await?;
@@ -514,6 +529,9 @@ pub async fn run_tcp(bind: &str, tx: mpsc::Sender<InboundPacket>) -> Result<()> 
         let std_listener: std::net::TcpListener = socket.into();
         TcpListener::from_std(std_listener)?
     };
+    // Resolve once outside the accept loop — the bind address may
+    // have been `:0`, so this reads the kernel-chosen port.
+    let local_addr = listener.local_addr()?;
     info!(%bind, "listening (tcp)");
     transport_metrics().on_accept(TransportLabel::Tcp);
     let limiter = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_SESSIONS));
@@ -567,6 +585,7 @@ pub async fn run_tcp(bind: &str, tx: mpsc::Sender<InboundPacket>) -> Result<()> 
             let _entered = span.enter();
             spawn_stream_session(
                 peer,
+                local_addr,
                 stream,
                 TransportKind::Tcp,
                 tx,
@@ -592,8 +611,22 @@ pub async fn send_tcp(to: &SocketAddr, data: &[u8]) -> Result<()> {
         .await
         .map_err(|_| anyhow!("TCP connect timeout after {:?} to {}", CONNECT_TIMEOUT, to))??;
     transport_metrics().on_connect(TransportLabel::Tcp);
+    // Capture local before write so we have it for HEP even if the
+    // write fails downstream — read once and reuse.
+    let local = stream.local_addr().ok();
     stream.write_all(data).await?;
     transport_metrics().on_packet_sent(TransportLabel::Tcp);
+    if let (Some(emitter), Some(local)) = (sip_hep::sip_hep(), local) {
+        let corr = sip_hep::extract_call_id(data);
+        emitter.emit_sip(
+            sip_hep::Direction::Outbound,
+            sip_hep::IpProto::Tcp,
+            local,
+            *to,
+            data,
+            corr,
+        );
+    }
     Ok(())
 }
 
@@ -661,6 +694,11 @@ pub async fn send_ws(url: &str, data: Bytes) -> Result<()> {
         ))
         .await?;
     transport_metrics().on_packet_sent(TransportLabel::Ws);
+    // tungstenite's high-level connect_async hides the underlying
+    // TcpStream, so we can't recover local/peer SocketAddrs here. SIP
+    // over a one-shot client WS connection is unusual; emit only when
+    // the URL parses as a literal host:port we can use as `dst`.
+    emit_one_shot_ws_outbound(url, &data);
     Ok(())
 }
 
@@ -682,12 +720,55 @@ pub async fn send_wss(url: &str, data: Bytes) -> Result<()> {
         ))
         .await?;
     transport_metrics().on_packet_sent(TransportLabel::Wss);
+    emit_one_shot_ws_outbound(url, &data);
     Ok(())
+}
+
+/// HEP3 emission for the one-shot `send_ws` / `send_wss` paths. The
+/// high-level tungstenite client hides the underlying stream, so we
+/// can't recover real `SocketAddr`s — best-effort: extract the
+/// `host:port` from the URL for `dst` and use the unspecified
+/// address for `src`. Skipped when no emitter is installed.
+#[cfg(feature = "ws")]
+fn emit_one_shot_ws_outbound(url: &str, data: &[u8]) {
+    let Some(emitter) = sip_hep::sip_hep() else {
+        return;
+    };
+    let Some(dst) = ws_url_to_socketaddr(url) else {
+        return;
+    };
+    let unspecified: SocketAddr = match dst {
+        SocketAddr::V4(_) => "0.0.0.0:0".parse().unwrap(),
+        SocketAddr::V6(_) => "[::]:0".parse().unwrap(),
+    };
+    let corr = sip_hep::extract_call_id(data);
+    emitter.emit_sip(
+        sip_hep::Direction::Outbound,
+        sip_hep::IpProto::Tcp,
+        unspecified,
+        dst,
+        data,
+        corr,
+    );
+}
+
+/// Parse `ws://host:port/...` or `wss://host:port/...` into a
+/// `SocketAddr`. Used only by the one-shot WS client emitters where
+/// the real local/peer addrs aren't available; returns `None` for
+/// hostnames (we don't run DNS for an observability hint).
+#[cfg(feature = "ws")]
+fn ws_url_to_socketaddr(url: &str) -> Option<SocketAddr> {
+    let rest = url
+        .strip_prefix("wss://")
+        .or_else(|| url.strip_prefix("ws://"))?;
+    let host_port = rest.split('/').next()?;
+    host_port.parse().ok()
 }
 
 #[cfg(feature = "ws")]
 async fn handle_ws_connection<S>(
     peer: SocketAddr,
+    local: SocketAddr,
     stream: S,
     transport: TransportKind,
     tx: mpsc::Sender<InboundPacket>,
@@ -746,6 +827,20 @@ where
                         break;
                     }
                     transport_metrics().on_packet_sent(transport.into());
+                    // HEP3 outbound capture. SIP-over-WS uses TCP
+                    // underneath; the SIP message text is what
+                    // Homer renders.
+                    if let Some(emitter) = sip_hep::sip_hep() {
+                        let corr = sip_hep::extract_call_id(&data);
+                        emitter.emit_sip(
+                            sip_hep::Direction::Outbound,
+                            sip_hep::IpProto::Tcp,
+                            local,
+                            peer,
+                            &data,
+                            corr,
+                        );
+                    }
                 } else {
                     break;
                 }
@@ -761,6 +856,18 @@ where
                             continue;
                         }
                         transport_metrics().on_packet_received(transport.into());
+                        // HEP3 inbound capture for binary WS frames.
+                        if let Some(emitter) = sip_hep::sip_hep() {
+                            let corr = sip_hep::extract_call_id(&data);
+                            emitter.emit_sip(
+                                sip_hep::Direction::Inbound,
+                                sip_hep::IpProto::Tcp,
+                                peer,
+                                local,
+                                &data,
+                                corr,
+                            );
+                        }
                         let packet = InboundPacket {
                             transport,
                             peer,
@@ -781,10 +888,23 @@ where
                             continue;
                         }
                         transport_metrics().on_packet_received(transport.into());
+                        let payload_bytes = text.into_bytes();
+                        // HEP3 inbound capture for text WS frames.
+                        if let Some(emitter) = sip_hep::sip_hep() {
+                            let corr = sip_hep::extract_call_id(&payload_bytes);
+                            emitter.emit_sip(
+                                sip_hep::Direction::Inbound,
+                                sip_hep::IpProto::Tcp,
+                                peer,
+                                local,
+                                &payload_bytes,
+                                corr,
+                            );
+                        }
                         let packet = InboundPacket {
                             transport,
                             peer,
-                            payload: Bytes::from(text.into_bytes()),
+                            payload: Bytes::from(payload_bytes),
                             stream: Some(writer_tx.clone()),
                         };
                         if tx.send(packet).await.is_err() {
@@ -818,6 +938,7 @@ where
 /// Runs a WebSocket listener and forwards SIP-over-WS packets to the channel.
 pub async fn run_ws(bind: &str, tx: mpsc::Sender<InboundPacket>) -> Result<()> {
     let listener = TcpListener::bind(bind).await?;
+    let local_addr = listener.local_addr()?;
     info!(%bind, "listening (ws)");
     transport_metrics().on_accept(TransportLabel::Ws);
     let limiter = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_SESSIONS));
@@ -841,7 +962,9 @@ pub async fn run_ws(bind: &str, tx: mpsc::Sender<InboundPacket>) -> Result<()> {
         let tx = tx.clone();
         tokio::spawn(async move {
             let _permit = permit;
-            if let Err(e) = handle_ws_connection(peer, stream, TransportKind::Ws, tx).await {
+            if let Err(e) =
+                handle_ws_connection(peer, local_addr, stream, TransportKind::Ws, tx).await
+            {
                 warn!(%peer, %e, "ws session ended with error");
             }
         });
@@ -858,6 +981,7 @@ pub async fn run_wss(
     use tokio_rustls::TlsAcceptor;
 
     let listener = TcpListener::bind(bind).await?;
+    let local_addr = listener.local_addr()?;
     let acceptor = TlsAcceptor::from(config);
     info!(%bind, "listening (wss)");
     transport_metrics().on_accept(TransportLabel::Wss);
@@ -886,7 +1010,8 @@ pub async fn run_wss(
             match acceptor.accept(stream).await {
                 Ok(tls_stream) => {
                     if let Err(e) =
-                        handle_ws_connection(peer, tls_stream, TransportKind::Wss, tx).await
+                        handle_ws_connection(peer, local_addr, tls_stream, TransportKind::Wss, tx)
+                            .await
                     {
                         warn!(%peer, %e, "wss session ended with error");
                     }
@@ -909,9 +1034,21 @@ pub async fn send_tls(to: &SocketAddr, data: &[u8], config: &TlsConfig) -> Resul
     let stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(to))
         .await
         .map_err(|_| anyhow!("TLS connect timeout after {:?} to {}", CONNECT_TIMEOUT, to))??;
+    let local = stream.local_addr().ok();
     let mut tls_stream = connector.connect(server_name, stream).await?;
     tls_stream.write_all(data).await?;
     transport_metrics().on_packet_sent(TransportLabel::Tls);
+    if let (Some(emitter), Some(local)) = (sip_hep::sip_hep(), local) {
+        let corr = sip_hep::extract_call_id(data);
+        emitter.emit_sip(
+            sip_hep::Direction::Outbound,
+            sip_hep::IpProto::Tcp,
+            local,
+            *to,
+            data,
+            corr,
+        );
+    }
     Ok(())
 }
 
@@ -925,6 +1062,7 @@ pub async fn run_tls(
     use tokio_rustls::TlsAcceptor;
 
     let listener = TcpListener::bind(bind).await?;
+    let local_addr = listener.local_addr()?;
     let acceptor = TlsAcceptor::from(config);
     info!(%bind, "listening (tls)");
     transport_metrics().on_accept(TransportLabel::Tls);
@@ -991,7 +1129,7 @@ pub async fn run_tls(
             transport_metrics().on_connect(TransportLabel::Tls);
 
             // Use TLS-specific session handler with proper shutdown support
-            spawn_tls_session(peer, tls_stream, tx).await;
+            spawn_tls_session(peer, local_addr, tls_stream, tx).await;
             // Decrement per-IP counter when session ends
             if let Some(mut count) = per_ip_clone.get_mut(&ip) {
                 *count = count.saturating_sub(1);
@@ -1142,6 +1280,7 @@ impl TransportPolicy for DefaultTransportPolicy {
 #[cfg(feature = "tls")]
 async fn spawn_tls_session(
     peer: SocketAddr,
+    local: SocketAddr,
     tls_stream: tokio_rustls::server::TlsStream<TcpStream>,
     tx: mpsc::Sender<InboundPacket>,
 ) {
@@ -1161,6 +1300,21 @@ async fn spawn_tls_session(
                 break;
             }
             transport_metrics().on_packet_sent(TransportLabel::Tls);
+            // HEP3 outbound capture — same shape as the plain-TCP
+            // path. `IpProto::Tcp` is intentional: TLS runs on TCP
+            // and Homer renders the SIP transport label from the
+            // message headers, not from the HEP proto byte.
+            if let Some(emitter) = sip_hep::sip_hep() {
+                let corr = sip_hep::extract_call_id(&buf);
+                emitter.emit_sip(
+                    sip_hep::Direction::Outbound,
+                    sip_hep::IpProto::Tcp,
+                    local,
+                    peer,
+                    &buf,
+                    corr,
+                );
+            }
         }
         writer // Return the WriteHalf for reuniting
     });
@@ -1197,6 +1351,19 @@ async fn spawn_tls_session(
                             // plain-TCP and WS paths.
                             if !check_stream_rate(peer) {
                                 continue;
+                            }
+                            // HEP3 inbound capture. Skipped when no
+                            // emitter is installed.
+                            if let Some(emitter) = sip_hep::sip_hep() {
+                                let corr = sip_hep::extract_call_id(&payload);
+                                emitter.emit_sip(
+                                    sip_hep::Direction::Inbound,
+                                    sip_hep::IpProto::Tcp,
+                                    peer,
+                                    local,
+                                    &payload,
+                                    corr,
+                                );
                             }
                             let packet = InboundPacket {
                                 transport: TransportKind::Tls,
@@ -1260,6 +1427,7 @@ async fn spawn_tls_session(
 
 async fn spawn_stream_session<S>(
     peer: SocketAddr,
+    local: SocketAddr,
     stream: S,
     transport: TransportKind,
     tx: mpsc::Sender<InboundPacket>,
@@ -1271,6 +1439,12 @@ async fn spawn_stream_session<S>(
     let (mut reader, mut writer) = tokio::io::split(stream);
     let (writer_tx, mut writer_rx) = mpsc::channel::<Bytes>(32);
 
+    // HEP3 capture chooses IP protocol from the transport kind once,
+    // outside the hot loop. Maps TCP/TLS to IpProto::Tcp because both
+    // run over TCP at the kernel level — the SIPS scheme is layered
+    // on top.
+    let hep_ip = hep_ip_for_stream(transport);
+
     let writer_handle = tokio::spawn(async move {
         while let Some(buf) = writer_rx.recv().await {
             if let Err(e) = writer.write_all(&buf).await {
@@ -1279,6 +1453,21 @@ async fn spawn_stream_session<S>(
                 break;
             }
             transport_metrics().on_packet_sent(transport.into());
+            // HEP3 outbound capture for stream transports. Frames are
+            // already SIP messages by the time they reach this writer
+            // task; capturing post-write means the bytes that actually
+            // hit the wire are what Homer sees.
+            if let Some(emitter) = sip_hep::sip_hep() {
+                let corr = sip_hep::extract_call_id(&buf);
+                emitter.emit_sip(
+                    sip_hep::Direction::Outbound,
+                    hep_ip,
+                    local,
+                    peer,
+                    &buf,
+                    corr,
+                );
+            }
         }
     });
 
@@ -1313,6 +1502,20 @@ async fn spawn_stream_session<S>(
                             // and exhaust CPU at the parser/dispatcher.
                             if !check_stream_rate(peer) {
                                 continue;
+                            }
+                            // HEP3 inbound capture per framed SIP
+                            // message. Skipped when no emitter is
+                            // installed.
+                            if let Some(emitter) = sip_hep::sip_hep() {
+                                let corr = sip_hep::extract_call_id(&payload);
+                                emitter.emit_sip(
+                                    sip_hep::Direction::Inbound,
+                                    hep_ip,
+                                    peer,
+                                    local,
+                                    &payload,
+                                    corr,
+                                );
                             }
                             let packet = InboundPacket {
                                 transport,
