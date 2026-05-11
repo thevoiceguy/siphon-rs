@@ -25,7 +25,7 @@
 //! # }
 //! ```
 
-use rand::{distributions::Alphanumeric, Rng};
+use rand::{distr::Alphanumeric, Rng};
 use sip_core::{Headers, Method, Request};
 use smol_str::SmolStr;
 
@@ -120,7 +120,7 @@ pub fn generate_branch_id() -> SmolStr {
         return SmolStr::new(format!("z9hG4bK{:016x}", counter));
     }
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let suffix: String = (&mut rng)
         .sample_iter(&Alphanumeric)
         .take(16)

@@ -1114,13 +1114,13 @@ impl UserAgentServer {
 
 /// Helper to generate a random tag.
 fn generate_tag() -> SmolStr {
-    use rand::{distributions::Alphanumeric, thread_rng, Rng};
+    use rand::{distr::Alphanumeric, Rng};
 
     if let Some(counter) = deterministic_counter() {
         return SmolStr::new(format!("t{:010x}", counter));
     }
 
-    let tag: String = thread_rng()
+    let tag: String = rand::rng()
         .sample_iter(&Alphanumeric)
         .take(10)
         .map(char::from)
@@ -1130,13 +1130,13 @@ fn generate_tag() -> SmolStr {
 
 /// Helper to generate a branch parameter (RFC 3261 magic cookie).
 fn generate_branch() -> String {
-    use rand::{distributions::Alphanumeric, thread_rng, Rng};
+    use rand::{distr::Alphanumeric, Rng};
 
     if let Some(counter) = deterministic_counter() {
         return format!("z9hG4bK{:016x}", counter);
     }
 
-    let random: String = thread_rng()
+    let random: String = rand::rng()
         .sample_iter(&Alphanumeric)
         .take(16)
         .map(char::from)
