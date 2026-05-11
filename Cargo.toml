@@ -14,6 +14,7 @@ members = [
     "crates/sip-uac",
     "crates/sip-sdp",
     "crates/sip-observe",
+    "crates/sip-hep",
     "crates/sip-testkit",
     "crates/sip-ratelimit",
 ]

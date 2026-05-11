@@ -371,6 +371,9 @@ pub(crate) fn check_stream_rate(peer: SocketAddr) -> bool {
 /// Runs a UDP receive loop and forwards packets to the provided channel.
 pub async fn run_udp(socket: Arc<UdpSocket>, tx: mpsc::Sender<InboundPacket>) -> Result<()> {
     let bind = socket.local_addr()?;
+    // Cached once for HEP capture below — avoids a syscall per
+    // inbound packet on the hot path.
+    let udp_local = bind;
     info!(%bind, "listening (udp)");
     transport_metrics().on_accept(TransportLabel::Udp);
     let mut buf = vec![0u8; 65_535];
@@ -426,6 +429,25 @@ pub async fn run_udp(socket: Arc<UdpSocket>, tx: mpsc::Sender<InboundPacket>) ->
                     );
                 }
                 transport_metrics().on_packet_received(TransportLabel::Udp);
+                // HEP3 capture (chunk type 0x01 = SIP). No-op when no
+                // emitter is installed at the process level — the
+                // global access is one atomic load.
+                if let Some(emitter) = sip_hep::sip_hep() {
+                    // Resolving local_addr per-packet would be a
+                    // syscall on every inbound; cache it once outside
+                    // the loop. We do that further up — but the lifetime
+                    // of `socket` here makes the cache trivial: we ask
+                    // once and reuse. See `udp_local` below.
+                    let corr = sip_hep::extract_call_id(&payload);
+                    emitter.emit_sip(
+                        sip_hep::Direction::Inbound,
+                        sip_hep::IpProto::Udp,
+                        peer,
+                        udp_local,
+                        &payload,
+                        corr,
+                    );
+                }
                 let packet = InboundPacket {
                     transport: TransportKind::Udp,
                     peer,
@@ -451,6 +473,22 @@ pub async fn run_udp(socket: Arc<UdpSocket>, tx: mpsc::Sender<InboundPacket>) ->
 pub async fn send_udp(socket: &UdpSocket, to: &std::net::SocketAddr, data: &[u8]) -> Result<()> {
     socket.send_to(data, to).await?;
     transport_metrics().on_packet_sent(TransportLabel::Udp);
+    // HEP3 outbound capture. `local_addr()` here is one syscall per
+    // outbound packet; cheap relative to a real SIP message. No-op
+    // when no emitter is installed.
+    if let Some(emitter) = sip_hep::sip_hep() {
+        if let Ok(local) = socket.local_addr() {
+            let corr = sip_hep::extract_call_id(data);
+            emitter.emit_sip(
+                sip_hep::Direction::Outbound,
+                sip_hep::IpProto::Udp,
+                local,
+                *to,
+                data,
+                corr,
+            );
+        }
+    }
     Ok(())
 }
 

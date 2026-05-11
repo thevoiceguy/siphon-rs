@@ -19,6 +19,7 @@ tokio-rustls = { version = "0.26", optional = true }
 rustls = { version = "0.23", optional = true }
 rustls-pki-types = { version = "1.2", optional = true }
 sip-observe = { path = "../sip-observe" }
+sip-hep = { path = "../sip-hep" }
 memchr = "2.7"
 dashmap = { workspace = true }
 tokio-tungstenite = { version = "0.21", optional = true }
@@ -30,6 +31,7 @@ tokio = { workspace = true }
 bytes = { workspace = true }
 tokio-tungstenite = { version = "0.21" }
 tempfile = "3"
+hep-rs = { git = "https://github.com/thevoiceguy/hep-rs", branch = "main" }
 
 [features]
 default = []
