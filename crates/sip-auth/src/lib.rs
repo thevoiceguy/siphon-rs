@@ -35,7 +35,7 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
 use dashmap::DashMap;
-use rand::{distributions::Alphanumeric, thread_rng, Rng};
+use rand::{distr::Alphanumeric, Rng};
 use sha2::{Digest, Sha256, Sha512};
 use sip_core::{Headers, Method, Request, Response, StatusLine};
 use sip_parse::parse_authorization_header;
@@ -428,7 +428,7 @@ pub struct Nonce {
 
 impl Nonce {
     pub fn new(ttl: Duration) -> Self {
-        let token: String = thread_rng()
+        let token: String = rand::rng()
             .sample_iter(&Alphanumeric)
             .take(32)
             .map(char::from)
@@ -1001,7 +1001,7 @@ impl<S> DigestAuthenticator<S> {
 impl<S> DigestAuthenticator<S> {
     pub fn new(realm: &str, store: S) -> Self {
         // Generate a random opaque value for this authenticator instance
-        let opaque: String = thread_rng()
+        let opaque: String = rand::rng()
             .sample_iter(&Alphanumeric)
             .take(32)
             .map(char::from)
@@ -1694,7 +1694,7 @@ fn ensure_to_tag(to_header: &str) -> SmolStr {
     }
 
     // Generate random tag (8 characters)
-    let tag: String = thread_rng()
+    let tag: String = rand::rng()
         .sample_iter(&Alphanumeric)
         .take(8)
         .map(char::from)
@@ -1728,7 +1728,7 @@ impl DigestClient {
     ) -> String {
         self.nc = self.nc.saturating_add(1);
         let nc_str = format!("{:08x}", self.nc);
-        let cnonce: String = thread_rng()
+        let cnonce: String = rand::rng()
             .sample_iter(&Alphanumeric)
             .take(16)
             .map(char::from)

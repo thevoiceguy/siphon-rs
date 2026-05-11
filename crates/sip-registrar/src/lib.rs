@@ -28,7 +28,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::Utc;
 use dashmap::DashMap;
-use rand::{distributions::Alphanumeric, thread_rng, Rng};
+use rand::{distr::Alphanumeric, Rng};
 use sip_auth::Authenticator;
 use sip_core::{
     Headers, PathHeader, Request, Response, ServiceRouteHeader, SipUri, StatusLine, TelUri, Uri,
@@ -2200,7 +2200,7 @@ fn ensure_to_tag(to_header: &str) -> SmolStr {
     }
 
     // Generate random tag (8 characters)
-    let tag: String = thread_rng()
+    let tag: String = rand::rng()
         .sample_iter(&Alphanumeric)
         .take(8)
         .map(char::from)

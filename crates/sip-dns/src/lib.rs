@@ -706,7 +706,7 @@ fn select_by_weight(mut records: Vec<(u16, SmolStr, u16)>) -> Vec<(SmolStr, u16)
         return Vec::new();
     }
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut result = Vec::new();
 
     while !records.is_empty() {
@@ -714,10 +714,10 @@ fn select_by_weight(mut records: Vec<(u16, SmolStr, u16)>) -> Vec<(SmolStr, u16)
 
         let idx = if total_weight == 0 {
             // All weights are 0, pick randomly
-            rng.gen_range(0..records.len())
+            rng.random_range(0..records.len())
         } else {
             // Pick based on weight (RFC 2782 algorithm)
-            let pick = rng.gen_range(0..total_weight);
+            let pick = rng.random_range(0..total_weight);
             let mut cumulative = 0u32;
             records
                 .iter()

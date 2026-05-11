@@ -1703,9 +1703,10 @@ impl Default for SubscriptionManager {
 /// off-path attackers (a deterministic RNG would let them guess the first
 /// reliable-provisional sequence).
 fn random_initial_rseq() -> u32 {
-    use rand::{rngs::OsRng, RngCore};
-    // RngCore::next_u32 may return 0; clamp into 1..=(2^31 - 1).
-    (OsRng.next_u32() & 0x7FFF_FFFF).max(1)
+    use rand::{rngs::OsRng, TryRngCore};
+    // try_next_u32 may return 0; clamp into 1..=(2^31 - 1).
+    let n = OsRng.try_next_u32().expect("OS RNG must not fail");
+    (n & 0x7FFF_FFFF).max(1)
 }
 
 /// RSeq (Reliable Sequence) manager for RFC 3262 PRACK support.
