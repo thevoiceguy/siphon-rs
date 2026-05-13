@@ -21,11 +21,15 @@ pub mod integrated;
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use sip_auth::Authenticator;
-use sip_core::{Headers, Method, Request, RequestLine, Response, SipUri, StatusLine};
+use sip_core::{
+    Headers, Method, RefresherRole, Request, RequestLine, Response, SipUri, StatusLine,
+};
 use sip_dialog::prack_validator::PrackValidator;
-use sip_dialog::session_timer_manager::validate_session_expires;
+use sip_dialog::session_timer_manager::{
+    negotiate_session_expires, validate_session_expires, MIN_SESSION_EXPIRES,
+};
 use sip_dialog::{Dialog, DialogManager, RSeqManager, Subscription, SubscriptionManager};
-use sip_parse::{header, parse_session_expires};
+use sip_parse::{header, parse_min_se, parse_session_expires};
 pub use sip_sdp::profiles::{MediaProfileBuilder, SdpProfile};
 use smol_str::SmolStr;
 use std::sync::Arc;
@@ -144,6 +148,72 @@ fn validate_user_agent(agent: &str) -> std::result::Result<(), UasError> {
         return Err(UasError::UserAgentContainsControlChars);
     }
     Ok(())
+}
+
+/// Policy controlling how [`UserAgentServer::accept_invite_with_session_timer`]
+/// negotiates RFC 4028 session timers against an inbound INVITE.
+///
+/// `min_se` defaults to RFC 4028's 90 s floor; UASes that want to refuse
+/// shorter sessions can raise it. `preferred_se` caps the value the UAS
+/// echoes when the request's `Session-Expires` exceeds it. `force_refresher`
+/// overrides the request's refresher hint — most callers leave it `None`
+/// (honour the UAC's choice; default to UAC when unspecified).
+#[derive(Debug, Clone)]
+pub struct SessionTimerPolicy {
+    pub min_se: Duration,
+    pub preferred_se: Option<Duration>,
+    pub force_refresher: Option<RefresherRole>,
+}
+
+impl Default for SessionTimerPolicy {
+    fn default() -> Self {
+        Self {
+            min_se: MIN_SESSION_EXPIRES,
+            preferred_se: None,
+            force_refresher: None,
+        }
+    }
+}
+
+/// Negotiation outcome handed back to callers of
+/// [`UserAgentServer::accept_invite_with_session_timer`]. Wraps the chosen
+/// `Session-Expires` value and refresher role so the caller can drive a
+/// [`sip_dialog::session_timer_manager::SessionTimerManager`] timer without
+/// re-parsing headers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NegotiatedSessionTimer {
+    pub session_expires: Duration,
+    pub refresher: RefresherRole,
+}
+
+/// Result of [`UserAgentServer::accept_invite_with_session_timer`]. Mirrors
+/// the RFC 4028 §6 / §10 fork: either the request negotiated cleanly
+/// (build a 2xx and start a timer if `session_timer` is `Some`), or the
+/// requested interval was below the UAS's `Min-SE` and the caller must
+/// send the 422 response carried here.
+// The Accepted variant is bigger than SessionIntervalTooSmall (Dialog
+// drags a chunk along), but this enum returns once per INVITE — not a
+// hot path. Boxing the variants would force every consumer through an
+// extra deref for a non-saving on call setup.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+pub enum AcceptInviteOutcome {
+    /// INVITE accepted. The `response` field carries the prepared 2xx
+    /// (Session-Expires + Require:timer already appended when
+    /// `session_timer.is_some()`). The `dialog` field is registered
+    /// with the helper's dialog manager before this variant is built.
+    Accepted {
+        response: Response,
+        dialog: Dialog,
+        session_timer: Option<NegotiatedSessionTimer>,
+    },
+    /// The request's `Session-Expires` was below the configured `Min-SE`.
+    /// `response` is a 422 with a `Min-SE` header per RFC 4028 §8; the
+    /// caller sends it and does not create a dialog.
+    SessionIntervalTooSmall {
+        response: Response,
+        required_min_se: Duration,
+    },
 }
 
 /// Trait implemented by SIP applications that consume transactions.
@@ -517,6 +587,143 @@ impl UserAgentServer {
         let _ = self.dialog_manager.insert(dialog.clone());
 
         Ok((response, dialog))
+    }
+
+    /// Accept an INVITE while honouring RFC 4028 session timers.
+    ///
+    /// The session-timer-aware sibling of [`Self::accept_invite`]. When the
+    /// request carries a `Session-Expires` header the value is validated
+    /// against `policy.min_se` (returning a 422 outcome on violation),
+    /// negotiated against `policy.preferred_se`, and echoed on the 2xx
+    /// alongside `Require: timer`. When the request has no
+    /// `Session-Expires` header the call falls back to legacy
+    /// behaviour: no echo, no timer — preserving compatibility with
+    /// peers that don't speak RFC 4028.
+    ///
+    /// The refresher role is selected as `policy.force_refresher` if set,
+    /// else the request's hint, defaulting to [`RefresherRole::Uac`]. UASes
+    /// that have no support for sending refreshes (e.g., gateway-style
+    /// daemons that never act as refresher) should leave `force_refresher`
+    /// unset; the IETF guidance is that the UAS picks the UAC as
+    /// refresher when neither side expressed a preference.
+    ///
+    /// # Returns
+    /// - `Ok(AcceptInviteOutcome::Accepted{..})` on a clean accept.
+    /// - `Ok(AcceptInviteOutcome::SessionIntervalTooSmall{..})` on a
+    ///   request below `policy.min_se`. The 422 response is built;
+    ///   the caller sends it via the transaction handle.
+    /// - `Err(_)` on any other failure (not an INVITE, malformed
+    ///   headers, authentication required, dialog construction).
+    pub fn accept_invite_with_session_timer(
+        &self,
+        request: &Request,
+        sdp_body: Option<&str>,
+        policy: &SessionTimerPolicy,
+    ) -> Result<AcceptInviteOutcome> {
+        if request.method().as_str() != "INVITE" {
+            return Err(anyhow!("Not an INVITE request"));
+        }
+
+        if let Err(_response) = Self::validate_invite_headers(request) {
+            return Err(anyhow!("Bad INVITE request"));
+        }
+
+        if let Some(auth) = &self.authenticator {
+            if !auth.verify(request, request.headers())? {
+                return Err(anyhow!(
+                    "Authentication required - use create_unauthorized first"
+                ));
+            }
+        }
+
+        // ─── RFC 4028 negotiation ──────────────────────────────────────
+        // Read request's Session-Expires (if any). Missing header is a
+        // legacy peer — fall through to the no-timer path.
+        let requested =
+            header(request.headers(), "Session-Expires").and_then(parse_session_expires);
+        // Peer's Min-SE constrains the negotiation floor alongside ours.
+        let remote_min_se = header(request.headers(), "Min-SE")
+            .and_then(parse_min_se)
+            .map(|m| Duration::from_secs(m.delta_seconds() as u64));
+
+        let negotiated = if let Some(req_se) = requested.as_ref() {
+            let requested_duration = Duration::from_secs(req_se.delta_seconds() as u64);
+            match negotiate_session_expires(
+                requested_duration,
+                policy.min_se,
+                remote_min_se,
+                policy.preferred_se,
+            ) {
+                Ok(value) => Some(value),
+                Err(required_min) => {
+                    // Request below our Min-SE — RFC 4028 §8.
+                    let response = Self::create_session_interval_too_small(
+                        request,
+                        required_min.as_secs() as u32,
+                    );
+                    return Ok(AcceptInviteOutcome::SessionIntervalTooSmall {
+                        response,
+                        required_min_se: required_min,
+                    });
+                }
+            }
+        } else {
+            None
+        };
+
+        // Build the 2xx body. We append Session-Expires + Require:timer
+        // AFTER `create_ok` runs so we don't have to touch its body /
+        // Content-Length handling.
+        let mut response = self.create_ok(request, sdp_body)?;
+
+        let session_timer = if let Some(session_expires) = negotiated {
+            // Pick the refresher: explicit override > peer's hint > UAC.
+            let refresher = policy.force_refresher.unwrap_or_else(|| {
+                requested
+                    .as_ref()
+                    .and_then(|se| se.refresher())
+                    .unwrap_or(RefresherRole::Uac)
+            });
+            let se_value = format!(
+                "{};refresher={}",
+                session_expires.as_secs(),
+                refresher.as_str()
+            );
+            response
+                .headers_mut()
+                .push(SmolStr::new("Session-Expires"), SmolStr::new(&se_value))
+                .map_err(|e| anyhow!("failed to set Session-Expires: {e}"))?;
+            response
+                .headers_mut()
+                .push(SmolStr::new("Require"), SmolStr::new("timer"))
+                .map_err(|e| anyhow!("failed to set Require: timer: {e}"))?;
+            Some(NegotiatedSessionTimer {
+                session_expires,
+                refresher,
+            })
+        } else {
+            None
+        };
+
+        // Dialog construction mirrors `accept_invite`.
+        let remote_uri = extract_from_uri(request)?;
+        let dialog = Dialog::new_uas(request, &response, self.local_uri.clone(), remote_uri)
+            .ok_or_else(|| anyhow!("Failed to create dialog"))?;
+
+        info!(
+            call_id = %dialog.id().call_id(),
+            state = ?dialog.state(),
+            session_timer = ?session_timer,
+            "UAS created dialog (session-timer aware)"
+        );
+
+        let _ = self.dialog_manager.insert(dialog.clone());
+
+        Ok(AcceptInviteOutcome::Accepted {
+            response,
+            dialog,
+            session_timer,
+        })
     }
 
     /// Rejects an INVITE request with the given status code.
@@ -2855,5 +3062,225 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("Not an INFO request"));
+    }
+
+    // ─── accept_invite_with_session_timer ────────────────────────────
+
+    fn invite_with_session_expires(session_expires: Option<&str>, min_se: Option<&str>) -> Request {
+        let mut headers = Headers::new();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK999"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=alice-st"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("st-call-id"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"))
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new("<sip:alice@10.0.0.5:5060>"),
+            )
+            .unwrap();
+        if let Some(se) = session_expires {
+            headers
+                .push(SmolStr::new("Session-Expires"), SmolStr::new(se))
+                .unwrap();
+        }
+        if let Some(ms) = min_se {
+            headers
+                .push(SmolStr::new("Min-SE"), SmolStr::new(ms))
+                .unwrap();
+        }
+        Request::new(
+            RequestLine::new(
+                Method::Invite,
+                SipUri::parse("sip:bob@example.com").unwrap(),
+            ),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid request")
+    }
+
+    fn fresh_uas() -> UserAgentServer {
+        let local_uri = SipUri::parse("sip:bob@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:bob@192.168.1.100:5060").unwrap();
+        UserAgentServer::new(local_uri, contact_uri)
+    }
+
+    #[test]
+    fn accept_with_session_timer_echoes_negotiated_value() {
+        // UAC requests 1800s with refresher=uac. UAS Min-SE default
+        // (90s); no preferred ceiling. Expect: Accepted, echo 1800s,
+        // Require: timer, refresher=uac.
+        let uas = fresh_uas();
+        let req = invite_with_session_expires(Some("1800;refresher=uac"), None);
+        let outcome = uas
+            .accept_invite_with_session_timer(&req, None, &SessionTimerPolicy::default())
+            .expect("ok");
+        match outcome {
+            AcceptInviteOutcome::Accepted {
+                response,
+                session_timer,
+                ..
+            } => {
+                assert_eq!(response.code(), 200);
+                let se = response.headers().get("Session-Expires").unwrap();
+                assert!(se.contains("1800"), "got Session-Expires={se}");
+                assert!(se.contains("refresher=uac"), "got Session-Expires={se}");
+                let require = response.headers().get("Require").unwrap();
+                assert!(
+                    require.split(',').any(|t| t.trim() == "timer"),
+                    "Require missing timer: {require}"
+                );
+                let st = session_timer.expect("timer negotiated");
+                assert_eq!(st.session_expires, Duration::from_secs(1800));
+                assert_eq!(st.refresher, RefresherRole::Uac);
+            }
+            other => panic!("expected Accepted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn accept_with_session_timer_no_header_falls_back_to_no_echo() {
+        // Legacy peer: no Session-Expires header. UAS must not add
+        // one to the 2xx (backward compat per RFC 4028 §10).
+        let uas = fresh_uas();
+        let req = invite_with_session_expires(None, None);
+        let outcome = uas
+            .accept_invite_with_session_timer(&req, None, &SessionTimerPolicy::default())
+            .expect("ok");
+        match outcome {
+            AcceptInviteOutcome::Accepted {
+                response,
+                session_timer,
+                ..
+            } => {
+                assert_eq!(response.code(), 200);
+                assert!(response.headers().get("Session-Expires").is_none());
+                let require = response.headers().get("Require");
+                assert!(
+                    require
+                        .map(|r| !r.split(',').any(|t| t.trim() == "timer"))
+                        .unwrap_or(true),
+                    "Require: timer should be absent",
+                );
+                assert!(session_timer.is_none());
+            }
+            other => panic!("expected Accepted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn accept_with_session_timer_below_min_se_returns_422() {
+        // UAC requests 120s; UAS Min-SE policy is 300s. Expect 422
+        // with Min-SE: 300. Note we can't drive the parser-level
+        // floor (sip-parse rejects raw values <90 outright — see
+        // `validates_session_expires_too_small`); the 422 path
+        // exercises a higher local Min-SE policy.
+        let uas = fresh_uas();
+        let req = invite_with_session_expires(Some("120"), None);
+        let policy = SessionTimerPolicy {
+            min_se: Duration::from_secs(300),
+            ..Default::default()
+        };
+        let outcome = uas
+            .accept_invite_with_session_timer(&req, None, &policy)
+            .expect("ok");
+        match outcome {
+            AcceptInviteOutcome::SessionIntervalTooSmall {
+                response,
+                required_min_se,
+            } => {
+                assert_eq!(response.code(), 422);
+                assert_eq!(required_min_se, Duration::from_secs(300));
+                let min_se = response.headers().get("Min-SE").unwrap();
+                assert!(min_se.contains("300"), "got Min-SE={min_se}");
+            }
+            other => panic!("expected SessionIntervalTooSmall, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn accept_with_session_timer_force_refresher_overrides_request() {
+        // UAC requests refresher=uac. UAS policy forces refresher=uas.
+        // Expect: 2xx echoes refresher=uas.
+        let uas = fresh_uas();
+        let req = invite_with_session_expires(Some("1800;refresher=uac"), None);
+        let policy = SessionTimerPolicy {
+            force_refresher: Some(RefresherRole::Uas),
+            ..Default::default()
+        };
+        let outcome = uas
+            .accept_invite_with_session_timer(&req, None, &policy)
+            .expect("ok");
+        match outcome {
+            AcceptInviteOutcome::Accepted { session_timer, .. } => {
+                assert_eq!(session_timer.unwrap().refresher, RefresherRole::Uas);
+            }
+            other => panic!("expected Accepted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn accept_with_session_timer_preferred_se_caps_above() {
+        // UAC requests 3600s; UAS preferred is 600s. Negotiation
+        // should cap to 600s per RFC 4028 §4 (UAS reduces if its
+        // preference is smaller).
+        let uas = fresh_uas();
+        let req = invite_with_session_expires(Some("3600"), None);
+        let policy = SessionTimerPolicy {
+            preferred_se: Some(Duration::from_secs(600)),
+            ..Default::default()
+        };
+        let outcome = uas
+            .accept_invite_with_session_timer(&req, None, &policy)
+            .expect("ok");
+        match outcome {
+            AcceptInviteOutcome::Accepted {
+                response,
+                session_timer,
+                ..
+            } => {
+                assert_eq!(
+                    session_timer.unwrap().session_expires,
+                    Duration::from_secs(600)
+                );
+                let se = response.headers().get("Session-Expires").unwrap();
+                assert!(se.contains("600"), "got Session-Expires={se}");
+            }
+            other => panic!("expected Accepted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn accept_with_session_timer_default_refresher_is_uac() {
+        // UAC sends Session-Expires WITHOUT refresher parameter.
+        // RFC 4028 §6: UAS picks; convention is UAC.
+        let uas = fresh_uas();
+        let req = invite_with_session_expires(Some("1800"), None);
+        let outcome = uas
+            .accept_invite_with_session_timer(&req, None, &SessionTimerPolicy::default())
+            .expect("ok");
+        match outcome {
+            AcceptInviteOutcome::Accepted { session_timer, .. } => {
+                assert_eq!(session_timer.unwrap().refresher, RefresherRole::Uac);
+            }
+            other => panic!("expected Accepted, got {other:?}"),
+        }
     }
 }

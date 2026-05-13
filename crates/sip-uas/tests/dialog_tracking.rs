@@ -95,12 +95,10 @@ impl UasRequestHandler for RecordingHandler {
         ctx: &TransportContext,
         _dialog: Option<&Dialog>,
     ) -> Result<()> {
-        let uas = self
-            .uas
-            .lock()
-            .await
-            .clone()
-            .expect("test must install IntegratedUAS handle on RecordingHandler before dispatch");
+        let uas =
+            self.uas.lock().await.clone().expect(
+                "test must install IntegratedUAS handle on RecordingHandler before dispatch",
+            );
         let dialog = uas.accept_invite(request, &handle, ctx, None).await?;
         *self.accepted.lock().await = Some(dialog);
         Ok(())
