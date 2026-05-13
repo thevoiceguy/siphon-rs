@@ -63,7 +63,28 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
-use crate::UserAgentServer;
+use crate::{AcceptInviteOutcome, NegotiatedSessionTimer, SessionTimerPolicy, UserAgentServer};
+use std::time::Duration;
+
+/// Async-flavoured sibling of [`crate::AcceptInviteOutcome`]. The helper's
+/// outcome already routes the 2xx / 422 through the transaction handle,
+/// so the async caller only needs to know whether a dialog was created
+/// (and the negotiated timer, if any) — the prepared response is gone.
+// Same rationale as `AcceptInviteOutcome`: returned once per INVITE,
+// boxing would impose a deref on every caller for no measurable win.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+pub enum AcceptInviteAsyncOutcome {
+    /// 200 OK was sent. `session_timer` is `Some` iff the peer requested
+    /// session timers and we negotiated them successfully.
+    Accepted {
+        dialog: Dialog,
+        session_timer: Option<NegotiatedSessionTimer>,
+    },
+    /// 422 was sent. No dialog created. `required_min_se` is the Min-SE
+    /// the peer must use to retry.
+    SessionIntervalTooSmall { required_min_se: Duration },
+}
 
 const ALLOW_HEADER_VALUE: &str =
     "INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, SUBSCRIBE, NOTIFY, REFER, UPDATE, PRACK, INFO";
@@ -501,6 +522,47 @@ impl IntegratedUAS {
         self.auto_fill_headers(&mut response, ctx).await;
         handle.send_final(response).await;
         Ok(dialog)
+    }
+
+    /// Session-timer-aware sibling of [`Self::accept_invite`]. Calls
+    /// [`UserAgentServer::accept_invite_with_session_timer`] under the
+    /// helper's lock, sends the prepared 2xx (or 422 on Min-SE violation),
+    /// and returns either the dialog + negotiation outcome or a
+    /// `SessionIntervalTooSmall` result so the caller can decide how to
+    /// react (typically: skip dialog/session setup and let the peer
+    /// retry with a larger Session-Expires).
+    pub async fn accept_invite_with_session_timer(
+        &self,
+        request: &Request,
+        handle: &ServerTransactionHandle,
+        ctx: &TransportContext,
+        sdp_body: Option<&str>,
+        policy: &SessionTimerPolicy,
+    ) -> Result<AcceptInviteAsyncOutcome> {
+        let helper = self.helper.lock().await;
+        let outcome = helper.accept_invite_with_session_timer(request, sdp_body, policy)?;
+        drop(helper);
+        match outcome {
+            AcceptInviteOutcome::Accepted {
+                mut response,
+                dialog,
+                session_timer,
+            } => {
+                self.auto_fill_headers(&mut response, ctx).await;
+                handle.send_final(response).await;
+                Ok(AcceptInviteAsyncOutcome::Accepted {
+                    dialog,
+                    session_timer,
+                })
+            }
+            AcceptInviteOutcome::SessionIntervalTooSmall {
+                response,
+                required_min_se,
+            } => {
+                handle.send_final(response).await;
+                Ok(AcceptInviteAsyncOutcome::SessionIntervalTooSmall { required_min_se })
+            }
+        }
     }
 
     /// Access the embedded [`UserAgentServer`] helper.
