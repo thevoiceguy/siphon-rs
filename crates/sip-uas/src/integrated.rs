@@ -50,7 +50,7 @@
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use sip_auth::Authenticator;
-use sip_core::{Method, Request, Response, SipUri};
+use sip_core::{Method, Request, Response, SipUri, ViaHeader};
 use sip_dialog::{Dialog, DialogManager, SubscriptionManager};
 use sip_sdp::profiles::MediaProfileBuilder;
 use sip_transaction::{
@@ -159,8 +159,13 @@ pub trait UasRequestHandler: Send + Sync {
     }
 
     /// Handle an incoming OPTIONS request.
+    ///
+    /// Default response advertises the methods the IntegratedUAS
+    /// dispatch loop knows how to route (per RFC 3261 §11.2). The
+    /// Contact header is left to [`IntegratedUAS::prepare_response`]
+    /// so it reflects the publicly-advertised transport address.
     async fn on_options(&self, request: &Request, handle: ServerTransactionHandle) -> Result<()> {
-        let response = UserAgentServer::create_response(request, 200, "OK");
+        let response = UserAgentServer::accept_options(request);
         handle.send_final(response).await;
         Ok(())
     }
@@ -397,7 +402,19 @@ impl IntegratedUAS {
                 self.request_handler.on_register(request, handle).await?;
             }
             "OPTIONS" => {
-                self.request_handler.on_options(request, handle).await?;
+                // OPTIONS is a capability query — RFC 3261 §11. The
+                // response is mechanical (Allow / Accept / Supported
+                // / Contact), so we build it here rather than going
+                // through the request handler. Applications that
+                // need custom OPTIONS handling should disable
+                // dispatch and drive the UAS directly. Going via
+                // `auto_fill_headers` gives us the Contact pointing
+                // at the public transport address plus the same
+                // rport / received Via mutation the rest of the
+                // dispatch loop emits.
+                let mut response = UserAgentServer::accept_options(request);
+                self.auto_fill_headers(&mut response, ctx).await;
+                handle.send_final(response).await;
             }
             "SUBSCRIBE" => {
                 self.request_handler.on_subscribe(request, handle).await?;
@@ -584,14 +601,37 @@ impl IntegratedUAS {
         Arc::clone(&self.dialog_manager)
     }
 
-    /// Auto-fill Via and Contact headers in responses based on transport context.
-    async fn auto_fill_headers(&self, response: &mut Response, _ctx: &TransportContext) {
+    /// Public alias of [`Self::auto_fill_headers`] so external response
+    /// builders (e.g. siphon-ai's trunk-rejection 403 path) can apply
+    /// the same header enrichment — Contact / User-Agent / topmost-Via
+    /// `rport` + `received` — without having to reimplement the rules.
+    /// Idempotent: re-calling it on a response that already has these
+    /// fields is a no-op.
+    pub async fn prepare_response(&self, response: &mut Response, ctx: &TransportContext) {
+        self.auto_fill_headers(response, ctx).await
+    }
+
+    /// Auto-fill Via and Contact headers in responses based on
+    /// transport context.
+    ///
+    /// - **Via**: mutates the topmost copied-from-request Via per
+    ///   RFC 3261 §18.2.1 and RFC 3581 §4 — fills `rport=<src_port>`
+    ///   when the request carried a bare `;rport`, and adds
+    ///   `received=<src_ip>` when the sent-by host differs from the
+    ///   actual source IP. Required for NAT traversal.
+    /// - **Contact**: pushes a single Contact pointing at the
+    ///   advertised public address. Idempotent — if the response
+    ///   already has a Contact (e.g. set by `create_ok`), the
+    ///   existing value is preserved and nothing is added, so 2xx
+    ///   dialog-forming responses don't end up with two competing
+    ///   Contacts (one strict stacks may reject or get wrong).
+    /// - **User-Agent**: added when missing.
+    async fn auto_fill_headers(&self, response: &mut Response, ctx: &TransportContext) {
         if self.config.auto_via_filling {
-            // Via already copied from request, no need to add
+            apply_via_rport_received(response, ctx.peer());
         }
 
-        if self.config.auto_contact_filling {
-            // Add Contact header from local address
+        if self.config.auto_contact_filling && response.headers().get("Contact").is_none() {
             let addr = self.public_addr.unwrap_or(self.local_addr);
             let helper = self.helper.lock().await;
             let contact_uri = &helper.contact_uri;
@@ -609,7 +649,6 @@ impl IntegratedUAS {
                 .unwrap();
         }
 
-        // Add User-Agent if not present
         if response.headers().get("User-Agent").is_none() {
             response
                 .headers_mut()
@@ -620,6 +659,74 @@ impl IntegratedUAS {
                 .unwrap();
         }
     }
+}
+
+/// Apply RFC 3261 §18.2.1 / RFC 3581 §4 mutations to the topmost
+/// Via header of `response`. The topmost Via was copied verbatim
+/// from the request; this fills `rport=<src_port>` when it was
+/// present without a value and adds `received=<src_ip>` when the
+/// sent-by host differs from the actual packet source.
+///
+/// Silently no-ops if the Via doesn't parse — we never want a
+/// malformed inbound Via to abort the response.
+fn apply_via_rport_received(response: &mut Response, source: SocketAddr) {
+    let Some(top_via) = response.headers().get("Via") else {
+        return;
+    };
+    let top_via = top_via.to_string();
+    let Ok(mut via) = ViaHeader::parse(&top_via) else {
+        return;
+    };
+
+    let mut changed = false;
+
+    // RFC 3581 §4: an inbound request with a bare `;rport` must
+    // have it rewritten to the actual source port on the response.
+    if matches!(via.param("rport"), Some(None))
+        && via
+            .set_param("rport", Some(source.port().to_string()))
+            .is_ok()
+    {
+        changed = true;
+    }
+
+    // RFC 3261 §18.2.1: when the sent-by host doesn't match the
+    // packet source IP, add `received=<src_ip>`. Extract the host
+    // portion from the sent-by ("host" or "host:port", with IPv6
+    // bracketed); compare against the source IP. Done as strings to
+    // sidestep DNS — the requirement is exact-bytes comparison per
+    // the RFC, not name resolution.
+    let sent_by_host = sent_by_host(via.sent_by());
+    let src_ip = source.ip().to_string();
+    if sent_by_host != src_ip
+        && via
+            .set_param("received", Some(src_ip.as_str()))
+            .is_ok()
+    {
+        changed = true;
+    }
+
+    if changed {
+        // `set_or_push` replaces just the first occurrence — exactly
+        // the topmost Via, which is what we want. Subsequent Via
+        // headers (if any) are response-routing artefacts and
+        // mustn't be touched.
+        let _ = response
+            .headers_mut()
+            .set_or_push("Via", via.to_string());
+    }
+}
+
+/// Strip the optional `:port` from a `sent-by` value, leaving the
+/// host. Handles bracketed IPv6 (`[2001:db8::1]:5060` → `2001:db8::1`).
+fn sent_by_host(sent_by: &str) -> &str {
+    let s = sent_by.trim();
+    if let Some(stripped) = s.strip_prefix('[') {
+        if let Some(end) = stripped.find(']') {
+            return &stripped[..end];
+        }
+    }
+    s.rsplit_once(':').map(|(host, _)| host).unwrap_or(s)
 }
 
 /// Builder for constructing IntegratedUAS instances.
@@ -771,5 +878,95 @@ impl IntegratedUASBuilder {
             request_handler,
             sdp_profile: self.sdp_profile,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{apply_via_rport_received, sent_by_host};
+    use bytes::Bytes;
+    use sip_core::{Headers, Response, StatusLine};
+    use smol_str::SmolStr;
+    use std::net::SocketAddr;
+
+    fn response_with_via(via: &str) -> Response {
+        let mut headers = Headers::new();
+        headers
+            .push(SmolStr::new("Via"), SmolStr::new(via))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
+            .unwrap();
+        Response::new(
+            StatusLine::new(200, "OK").unwrap(),
+            headers,
+            Bytes::new(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn sent_by_host_strips_port() {
+        assert_eq!(sent_by_host("194.195.208.34:5080"), "194.195.208.34");
+        assert_eq!(sent_by_host("194.195.208.34"), "194.195.208.34");
+        assert_eq!(sent_by_host("example.com:5060"), "example.com");
+        assert_eq!(sent_by_host("[2001:db8::1]:5060"), "2001:db8::1");
+        assert_eq!(sent_by_host("[::1]"), "::1");
+    }
+
+    #[test]
+    fn via_fills_bare_rport_when_present() {
+        // RFC 3581 §4 — request arrived with `;rport` (no value);
+        // the response must rewrite it to the source port.
+        let mut response = response_with_via(
+            "SIP/2.0/UDP 194.195.208.34:5080;rport;branch=z9hG4bK3pZSUr1r2Z3vF",
+        );
+        let source: SocketAddr = "194.195.208.34:5080".parse().unwrap();
+        apply_via_rport_received(&mut response, source);
+        let via = response.headers().get("Via").unwrap();
+        assert!(via.contains("rport=5080"), "Via must have rport=5080 (got {via})");
+        // sent-by host matches source IP → no `received` per RFC 3261 §18.2.1.
+        assert!(!via.contains("received="), "no received needed (got {via})");
+    }
+
+    #[test]
+    fn via_adds_received_when_sent_by_differs_from_source() {
+        // Scanner with spoofed/local sent-by; source IP is real.
+        // RFC 3261 §18.2.1 — server MUST add `received=<src_ip>`.
+        let mut response =
+            response_with_via("SIP/2.0/UDP 0.0.0.0:60207;branch=z9hG4bK1322767169");
+        let source: SocketAddr = "5.196.63.60:60207".parse().unwrap();
+        apply_via_rport_received(&mut response, source);
+        let via = response.headers().get("Via").unwrap();
+        assert!(
+            via.contains("received=5.196.63.60"),
+            "Via must have received=5.196.63.60 (got {via})"
+        );
+        // No bare rport in the request → response doesn't add it.
+        assert!(!via.contains("rport="), "no rport since not requested (got {via})");
+    }
+
+    #[test]
+    fn via_leaves_value_rport_alone() {
+        // If the request already specified `rport=N` (uncommon but
+        // valid), don't overwrite it. Only the bare form
+        // (`Some(None)`) triggers the §4 rewrite.
+        let mut response = response_with_via(
+            "SIP/2.0/UDP host:5060;rport=9999;branch=z9hG4bK1",
+        );
+        let source: SocketAddr = "192.0.2.1:5080".parse().unwrap();
+        apply_via_rport_received(&mut response, source);
+        let via = response.headers().get("Via").unwrap();
+        assert!(via.contains("rport=9999"), "existing rport preserved (got {via})");
+    }
+
+    #[test]
+    fn via_noop_when_unparseable() {
+        // Malformed inbound Via must not abort response. The header
+        // is left untouched and the function silently returns.
+        let mut response = response_with_via("not a real via header");
+        let source: SocketAddr = "192.0.2.1:5060".parse().unwrap();
+        apply_via_rport_received(&mut response, source);
+        assert_eq!(response.headers().get("Via"), Some("not a real via header"));
     }
 }

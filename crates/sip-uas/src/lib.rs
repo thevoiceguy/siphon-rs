@@ -299,7 +299,6 @@ impl UserAgentServer {
             headers.push(SmolStr::new("CSeq"), cseq).unwrap();
         }
 
-        // Add To header (without tag for now - will be added by specific methods)
         if let Some(to) = request.headers().get("To") {
             headers.push(SmolStr::new("To"), to).unwrap();
         }
@@ -309,12 +308,25 @@ impl UserAgentServer {
             .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
             .unwrap();
 
-        Response::new(
+        let mut response = Response::new(
             StatusLine::new(code, reason).expect("valid status line"),
             headers,
             Bytes::new(),
         )
-        .expect("valid response")
+        .expect("valid response");
+
+        // RFC 3261 §8.2.6.2 — a UAS-generated response MUST include
+        // a `tag` parameter on the To header, with the sole exception
+        // of `100 Trying`. Doing this in the canonical builder means
+        // every response path (success, error, defaults) is compliant
+        // without each caller having to remember to call `ensure_to_tag`.
+        // Idempotent: if a tag is already present (from a dialog
+        // response copying it forward), this is a no-op.
+        if code != 100 {
+            ensure_to_tag_header(&mut response);
+        }
+
+        response
     }
 
     /// Creates a 100 Trying response.
@@ -423,6 +435,46 @@ impl UserAgentServer {
     /// Creates an error response for MESSAGE or PUBLISH.
     pub fn reject_message_publish(&self, request: &Request, code: u16, reason: &str) -> Response {
         Self::create_response(request, code, reason)
+    }
+
+    /// Creates a 200 OK response to an OPTIONS request advertising
+    /// the UAS's capabilities.
+    ///
+    /// The bare `200 OK` produced by `create_response` satisfies
+    /// simple keepalive probes but doesn't tell the peer what
+    /// methods or body types we accept. Per RFC 3261 §11.2 the
+    /// response SHOULD include `Allow`, `Accept`, and `Supported`.
+    ///
+    /// The Contact header is intentionally omitted here so that
+    /// `IntegratedUAS::auto_fill_headers` (which has the public
+    /// transport address) can supply the correct value. Callers
+    /// that bypass `IntegratedUAS` should add Contact themselves.
+    pub fn accept_options(request: &Request) -> Response {
+        let mut response = Self::create_response(request, 200, "OK");
+        let headers = response.headers_mut();
+        // Methods we actually implement — keep this in sync with the
+        // `dispatch` match arms in `IntegratedUAS`. Don't advertise
+        // methods we don't handle.
+        headers
+            .set_or_push(
+                "Allow",
+                "INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, SUBSCRIBE, \
+                 NOTIFY, REFER, UPDATE, PRACK, INFO, MESSAGE, PUBLISH",
+            )
+            .expect("allow value valid");
+        // application/sdp is the only body type we currently parse.
+        headers
+            .set_or_push("Accept", "application/sdp")
+            .expect("accept value valid");
+        // No protocol extensions are advertised by default. An empty
+        // Supported header is valid per RFC 3261 §20.37 ("If an empty
+        // Supported header is present, it indicates the UA supports
+        // no extensions"). Callers that support specific extensions
+        // (e.g. `timer`, `100rel`) should append them after this call.
+        headers
+            .set_or_push("Supported", "")
+            .expect("supported value valid");
+        response
     }
 
     /// Creates a 401 Unauthorized response with WWW-Authenticate challenge.
@@ -1477,6 +1529,89 @@ mod tests {
                 request.body().clone(),
             )?)
         }
+    }
+
+    /// Helper that builds a minimal INVITE-like request for response
+    /// builder tests. Each test mutates the produced request rather
+    /// than re-typing the boilerplate.
+    fn sample_request(method: Method) -> Request {
+        let mut headers = Headers::new();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK123"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("From"),
+                SmolStr::new("<sip:alice@example.com>;tag=abc"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("test-call-id"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"))
+            .unwrap();
+
+        let uri = SipUri::parse("sip:bob@example.com").unwrap();
+        Request::new(RequestLine::new(method, uri), headers, Bytes::new()).expect("valid request")
+    }
+
+    #[test]
+    fn create_response_adds_to_tag_for_non_trying() {
+        // RFC 3261 §8.2.6.2 — UAS-generated responses MUST carry a
+        // To-tag, with 100 Trying as the only exception. Test that
+        // the canonical builder enforces this so every callsite is
+        // compliant without remembering to call ensure_to_tag.
+        let request = sample_request(Method::Invite);
+        let response = UserAgentServer::create_response(&request, 403, "Forbidden");
+        let to = response.headers().get("To").expect("To present");
+        assert!(
+            to.contains(";tag="),
+            "403 response must have To-tag (got {to})"
+        );
+    }
+
+    #[test]
+    fn create_response_skips_to_tag_for_100_trying() {
+        // 100 Trying is the explicit exception to §8.2.6.2 — the
+        // tag MAY appear but is not required and our convention is
+        // not to add one (since the dialog isn't yet identified).
+        let request = sample_request(Method::Invite);
+        let response = UserAgentServer::create_response(&request, 100, "Trying");
+        let to = response.headers().get("To").expect("To present");
+        assert!(
+            !to.contains(";tag="),
+            "100 Trying must NOT have To-tag (got {to})"
+        );
+    }
+
+    #[test]
+    fn accept_options_advertises_capabilities() {
+        // Bare 200 OK to OPTIONS satisfies keepalive, but for
+        // capability discovery we need Allow, Accept, and
+        // Supported per RFC 3261 §11.2.
+        let request = sample_request(Method::Options);
+        let response = UserAgentServer::accept_options(&request);
+        assert_eq!(response.code(), 200);
+        let allow = response.headers().get("Allow").expect("Allow present");
+        for method in &["INVITE", "ACK", "BYE", "CANCEL", "OPTIONS"] {
+            assert!(
+                allow.contains(method),
+                "Allow must list {method} (got {allow})"
+            );
+        }
+        assert_eq!(response.headers().get("Accept"), Some("application/sdp"));
+        assert!(response.headers().get("Supported").is_some());
+        // §8.2.6.2 tag rule applies — accept_options goes through
+        // create_response, which adds the tag.
+        let to = response.headers().get("To").expect("To present");
+        assert!(to.contains(";tag="), "OPTIONS 200 OK needs To-tag");
     }
 
     #[test]

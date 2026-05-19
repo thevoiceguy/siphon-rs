@@ -545,6 +545,40 @@ impl ViaHeader {
         self.params.insert(name, value);
         Ok(())
     }
+
+    /// Inserts or replaces a parameter.
+    ///
+    /// Unlike [`Self::add_param`], this is idempotent — if the
+    /// parameter already exists (with any value, including bare),
+    /// it is overwritten. Required for RFC 3581 `rport` filling
+    /// where the inbound request arrives with `;rport` (no value)
+    /// and the server must rewrite it to `;rport=<src_port>` on
+    /// the response.
+    pub fn set_param(
+        &mut self,
+        name: impl Into<SmolStr>,
+        value: Option<impl Into<SmolStr>>,
+    ) -> Result<(), ViaError> {
+        let name = name.into();
+        validate_param_name(&name)?;
+        let name = SmolStr::new(name.to_ascii_lowercase());
+        let already_present = self.params.contains_key(&name);
+        if !already_present && self.params.len() >= MAX_PARAMS {
+            return Err(ViaError::TooManyParameters { max: MAX_PARAMS });
+        }
+
+        let value = match value {
+            Some(v) => {
+                let v = v.into();
+                validate_param_value(&v)?;
+                Some(v)
+            }
+            None => None,
+        };
+
+        self.params.insert(name, value);
+        Ok(())
+    }
 }
 
 impl fmt::Display for ViaHeader {
@@ -738,6 +772,31 @@ mod tests {
         via.add_param("received", Some("192.0.2.1")).unwrap();
 
         assert_eq!(via.params().len(), 2);
+    }
+
+    #[test]
+    fn via_set_param_replaces_existing() {
+        // RFC 3581 rport flow: request arrives with `;rport` (no
+        // value); server must rewrite to `;rport=<src_port>` on
+        // the response. `add_param` rejects duplicates, so this
+        // case must use `set_param`.
+        let mut via = ViaHeader::parse("SIP/2.0/UDP host:5060;rport;branch=z9hG4bK776").unwrap();
+        assert!(matches!(via.param("rport"), Some(None)));
+        via.set_param("rport", Some("5080")).unwrap();
+        assert_eq!(via.param("rport"), Some(&Some(SmolStr::new("5080"))));
+        // received not yet present
+        assert!(via.param("received").is_none());
+        via.set_param("received", Some("192.0.2.1")).unwrap();
+        assert_eq!(
+            via.param("received"),
+            Some(&Some(SmolStr::new("192.0.2.1")))
+        );
+        // Replacing again is idempotent.
+        via.set_param("received", Some("192.0.2.2")).unwrap();
+        assert_eq!(
+            via.param("received"),
+            Some(&Some(SmolStr::new("192.0.2.2")))
+        );
     }
 
     #[test]
