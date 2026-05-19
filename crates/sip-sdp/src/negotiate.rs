@@ -259,6 +259,41 @@ fn negotiate_media(
         }
     }
 
+    // Carry forward `a=fmtp:` lines for each negotiated payload
+    // type. Local capabilities win over the offer — the answerer's
+    // fmtp declares how WE want to receive (e.g. opus minptime),
+    // which the offerer must honour. We only fall back to the
+    // offer's fmtp when local doesn't have one for that PT, which
+    // is the common case for telephone-event ranges (e.g. `0-16`)
+    // where echoing the offer is the standard practice per RFC
+    // 4733 §2.4.1. Without this carry-forward the answer would
+    // strip every fmtp line and peers can lose DTMF range
+    // metadata or Opus tuning hints.
+    for negotiated in &common_formats {
+        let pt = match parse_payload_type(&negotiated.offered_format) {
+            Some(pt) => pt,
+            None => continue,
+        };
+        if let Some(local_fmtp) = local_media.fmtp_for(pt) {
+            answer_media.set_fmtp(pt, &local_fmtp.params);
+        } else if let Some(offer_fmtp) = offer_media.fmtp_for(pt) {
+            answer_media.set_fmtp(pt, &offer_fmtp.params);
+        }
+    }
+
+    // Carry forward `a=ptime` if either side declared one. The
+    // local capabilities win — we set the packetization rate we
+    // want to RECEIVE, which is what `a=ptime` advertises per
+    // RFC 4566 §6. If only the offer declared a ptime, echo it
+    // so the offerer keeps its preference. If neither did, leave
+    // the answer without an explicit ptime — RFC 4566's default
+    // (20ms for most codecs) applies.
+    if let Some(local_ptime) = local_media.ptime() {
+        answer_media.set_ptime(local_ptime);
+    } else if let Some(offer_ptime) = offer_media.ptime() {
+        answer_media.set_ptime(offer_ptime);
+    }
+
     // Set negotiated direction
     answer_media = answer_media
         .with_direction(match answer_dir {
@@ -521,6 +556,172 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["0"]
         ); // Only PCMU
+    }
+
+    #[test]
+    fn carries_telephone_event_fmtp_forward_from_offer() {
+        // Mirrors the FreeSWITCH ↔ siphon-rs trace that surfaced
+        // the bug: offer advertises PCMU + telephone-event/8000
+        // with an `a=fmtp:101 0-16` event range, local supports
+        // PCMU + telephone-event but doesn't declare a local
+        // fmtp. The answer must echo the offer's fmtp so DTMF
+        // range metadata isn't lost.
+        let offer = SessionDescription::builder()
+            .origin("fs", "1", "192.168.1.100")
+            .unwrap()
+            .session_name("Call")
+            .unwrap()
+            .connection("192.168.1.100")
+            .unwrap()
+            .media(
+                MediaDescription::audio(51902)
+                    .add_format(0)
+                    .unwrap()
+                    .add_format(101)
+                    .unwrap()
+                    .add_rtpmap(0, "PCMU", 8000, None)
+                    .unwrap()
+                    .add_rtpmap(101, "telephone-event", 8000, None)
+                    .unwrap()
+                    .add_attribute("fmtp", "101 0-16")
+                    .unwrap()
+                    .with_direction("sendrecv")
+                    .unwrap(),
+            )
+            .unwrap()
+            .build();
+
+        let local_caps = SessionDescription::builder()
+            .origin("siphon-ai", "1", "10.0.0.1")
+            .unwrap()
+            .session_name("siphon-ai")
+            .unwrap()
+            .connection("10.0.0.1")
+            .unwrap()
+            .media(
+                MediaDescription::audio(40370)
+                    .add_format(0)
+                    .unwrap()
+                    .add_format(101)
+                    .unwrap()
+                    .add_rtpmap(0, "PCMU", 8000, None)
+                    .unwrap()
+                    .add_rtpmap(101, "telephone-event", 8000, None)
+                    .unwrap()
+                    .with_direction("sendrecv")
+                    .unwrap(),
+            )
+            .unwrap()
+            .build();
+
+        let answer = negotiate_answer(&offer, "10.0.0.1", &local_caps).unwrap();
+
+        let audio = answer
+            .find_media(crate::MediaType::Audio)
+            .expect("answer has audio");
+        let fmtp = audio
+            .fmtp_for(101)
+            .expect("answer must carry forward telephone-event fmtp");
+        assert_eq!(fmtp.params.as_str(), "0-16");
+    }
+
+    #[test]
+    fn local_fmtp_wins_over_offer_fmtp() {
+        // When local capabilities declare an fmtp for a negotiated
+        // PT, that fmtp is used (the answerer's preference is what
+        // ends up in the answer). Use a hypothetical PCMA fmtp to
+        // demonstrate the precedence; the value itself isn't
+        // standards-meaningful.
+        let offer = SessionDescription::builder()
+            .origin("alice", "1", "192.168.1.1")
+            .unwrap()
+            .session_name("Call")
+            .unwrap()
+            .connection("192.168.1.1")
+            .unwrap()
+            .media(
+                MediaDescription::audio(9000)
+                    .add_format(101)
+                    .unwrap()
+                    .add_rtpmap(101, "telephone-event", 8000, None)
+                    .unwrap()
+                    .add_attribute("fmtp", "101 0-11")
+                    .unwrap(),
+            )
+            .unwrap()
+            .build();
+
+        let local_caps = SessionDescription::builder()
+            .origin("bob", "1", "10.0.0.1")
+            .unwrap()
+            .session_name("Server")
+            .unwrap()
+            .connection("10.0.0.1")
+            .unwrap()
+            .media(
+                MediaDescription::audio(8000)
+                    .add_format(101)
+                    .unwrap()
+                    .add_rtpmap(101, "telephone-event", 8000, None)
+                    .unwrap()
+                    .add_attribute("fmtp", "101 0-15")
+                    .unwrap(),
+            )
+            .unwrap()
+            .build();
+
+        let answer = negotiate_answer(&offer, "10.0.0.1", &local_caps).unwrap();
+        let fmtp = answer
+            .find_media(crate::MediaType::Audio)
+            .unwrap()
+            .fmtp_for(101)
+            .unwrap();
+        assert_eq!(fmtp.params.as_str(), "0-15", "local fmtp wins");
+    }
+
+    #[test]
+    fn carries_ptime_forward_from_local() {
+        // Local declares ptime=20 (siphon-ai's 20ms packetization);
+        // offer doesn't mention ptime. Answer should advertise 20.
+        let offer = SessionDescription::builder()
+            .origin("alice", "1", "192.168.1.1")
+            .unwrap()
+            .session_name("Call")
+            .unwrap()
+            .connection("192.168.1.1")
+            .unwrap()
+            .media(
+                MediaDescription::audio(9000)
+                    .add_format(0)
+                    .unwrap()
+                    .add_rtpmap(0, "PCMU", 8000, None)
+                    .unwrap(),
+            )
+            .unwrap()
+            .build();
+
+        let local_caps = SessionDescription::builder()
+            .origin("bob", "1", "10.0.0.1")
+            .unwrap()
+            .session_name("Server")
+            .unwrap()
+            .connection("10.0.0.1")
+            .unwrap()
+            .media(
+                MediaDescription::audio(8000)
+                    .add_format(0)
+                    .unwrap()
+                    .add_rtpmap(0, "PCMU", 8000, None)
+                    .unwrap()
+                    .add_attribute("ptime", "20")
+                    .unwrap(),
+            )
+            .unwrap()
+            .build();
+
+        let answer = negotiate_answer(&offer, "10.0.0.1", &local_caps).unwrap();
+        let audio = answer.find_media(crate::MediaType::Audio).unwrap();
+        assert_eq!(audio.ptime(), Some(20));
     }
 
     #[test]
