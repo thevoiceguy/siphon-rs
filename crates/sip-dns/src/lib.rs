@@ -29,7 +29,7 @@ pub use enum_lookup::{
 use anyhow::{anyhow, Result};
 use hickory_resolver::{
     config::{ResolverConfig, ResolverOpts},
-    proto::rr::RecordType,
+    proto::rr::{RData, RecordType},
     TokioResolver,
 };
 use rand::Rng;
@@ -317,7 +317,9 @@ pub struct SipResolver {
 impl SipResolver {
     /// Creates a resolver using system DNS configuration.
     pub fn from_system() -> Result<Self> {
-        let resolver = TokioResolver::builder_tokio()?.build();
+        // hickory-resolver 0.26 made `build()` fallible; propagate the
+        // builder's `NetError` through the `anyhow::Result`.
+        let resolver = TokioResolver::builder_tokio()?.build()?;
         Ok(Self {
             resolver,
             enable_naptr: true,
@@ -327,11 +329,13 @@ impl SipResolver {
 
     /// Creates a resolver with custom configuration.
     pub fn with_config(config: ResolverConfig, opts: ResolverOpts) -> Result<Self> {
-        use hickory_resolver::name_server::TokioConnectionProvider;
+        // `TokioConnectionProvider` moved to `net::runtime::TokioRuntimeProvider`
+        // when hickory split into separate crates for the 0.26 release.
+        use hickory_resolver::net::runtime::TokioRuntimeProvider;
         let resolver =
-            TokioResolver::builder_with_config(config, TokioConnectionProvider::default())
+            TokioResolver::builder_with_config(config, TokioRuntimeProvider::default())
                 .with_options(opts)
-                .build();
+                .build()?;
         Ok(Self {
             resolver,
             enable_naptr: true,
@@ -526,10 +530,15 @@ impl SipResolver {
         })??;
 
         let mut records = Vec::new();
-        for rec in lookup.iter() {
-            if let Some(rdata) = rec.as_naptr() {
-                let service = String::from_utf8_lossy(rdata.services()).to_ascii_uppercase();
-                let replacement = rdata.replacement().to_utf8();
+        // hickory 0.26 dropped the typed-record convenience iterators
+        // and the `as_naptr()` accessor; walk the generic answer set
+        // and pattern-match on `RData::NAPTR` instead. `Record::data`
+        // is a public field (not a method) and `NAPTR`'s former
+        // accessors are now public fields too.
+        for rec in lookup.answers() {
+            if let RData::NAPTR(rdata) = &rec.data {
+                let service = String::from_utf8_lossy(&rdata.services).to_ascii_uppercase();
+                let replacement = rdata.replacement.to_utf8();
 
                 // Parse SIP service strings (RFC 3263 §4.1, RFC 4168)
                 let transport = if service.contains("SIPS+D2T") {
@@ -568,8 +577,8 @@ impl SipResolver {
                         Some(SmolStr::new(replacement))
                     };
                     records.push(NaptrRecord {
-                        order: rdata.order(),
-                        preference: rdata.preference(),
+                        order: rdata.order,
+                        preference: rdata.preference,
                         transport,
                         replacement,
                     });
@@ -611,10 +620,14 @@ impl SipResolver {
             )
         })??;
 
-        // Group by priority (RFC 2782 §3)
+        // Group by priority (RFC 2782 §3). hickory 0.26 returns a
+        // generic `Lookup` from `srv_lookup` rather than a typed
+        // `SrvLookup`; reach the SRV fields by pattern-matching on
+        // `RData::SRV` rather than calling accessors on `Record`.
         let mut priority_groups: BTreeMap<u16, Vec<(u16, SmolStr, u16)>> = BTreeMap::new();
-        for rec in lookup.iter() {
-            let target = rec.target().to_utf8();
+        for rec in lookup.answers() {
+            let RData::SRV(srv) = &rec.data else { continue };
+            let target = srv.target.to_utf8();
             if target == "." {
                 continue;
             }
@@ -622,10 +635,10 @@ impl SipResolver {
             if target.is_empty() {
                 continue;
             }
-            priority_groups.entry(rec.priority()).or_default().push((
-                rec.weight(),
+            priority_groups.entry(srv.priority).or_default().push((
+                srv.weight,
                 SmolStr::new(target),
-                rec.port(),
+                srv.port,
             ));
         }
 
