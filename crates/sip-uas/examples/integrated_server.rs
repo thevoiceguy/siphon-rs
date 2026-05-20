@@ -172,6 +172,7 @@ impl UasRequestHandler for AutoAnswerServer {
         &self,
         request: &Request,
         handle: ServerTransactionHandle,
+        _ctx: &TransportContext,
         dialog: &Dialog,
     ) -> Result<()> {
         println!("📴 Received BYE from dialog: {}", dialog.id().call_id());

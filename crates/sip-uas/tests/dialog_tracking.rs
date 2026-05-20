@@ -108,6 +108,7 @@ impl UasRequestHandler for RecordingHandler {
         &self,
         _request: &Request,
         handle: ServerTransactionHandle,
+        _ctx: &TransportContext,
         dialog: &Dialog,
     ) -> Result<()> {
         self.bye_seen_for
@@ -294,6 +295,7 @@ async fn create_ok_path_demonstrates_old_bug_for_documentation() {
             &self,
             request: &Request,
             handle: ServerTransactionHandle,
+            _ctx: &TransportContext,
             _dialog: &Dialog,
         ) -> Result<()> {
             // If we get here it means dispatch did find a dialog — the
