@@ -132,20 +132,37 @@ pub trait UasRequestHandler: Send + Sync {
     }
 
     /// Handle an incoming BYE request.
+    ///
+    /// `ctx` exposes the transport `peer` so implementations can apply
+    /// the same RFC 3261 §18.2.1 / RFC 3581 §4 Via mutation
+    /// (`received=` / `rport=`) to in-dialog 200 OKs that the
+    /// dispatch loop applies to non-dialog responses via
+    /// [`IntegratedUAS::prepare_response`].
     async fn on_bye(
         &self,
         request: &Request,
         handle: ServerTransactionHandle,
+        ctx: &TransportContext,
         dialog: &Dialog,
     ) -> Result<()> {
-        let _ = dialog;
+        let _ = (ctx, dialog);
         let response = UserAgentServer::create_response(request, 200, "OK");
         handle.send_final(response).await;
         Ok(())
     }
 
     /// Handle an incoming CANCEL request.
-    async fn on_cancel(&self, request: &Request, handle: ServerTransactionHandle) -> Result<()> {
+    ///
+    /// `ctx` exposes the transport `peer` so implementations can apply
+    /// the same RFC 3261 §18.2.1 / RFC 3581 §4 Via mutation
+    /// (`received=` / `rport=`) the dispatch loop applies elsewhere.
+    async fn on_cancel(
+        &self,
+        request: &Request,
+        handle: ServerTransactionHandle,
+        ctx: &TransportContext,
+    ) -> Result<()> {
+        let _ = ctx;
         let response = UserAgentServer::create_response(request, 200, "OK");
         handle.send_final(response).await;
         Ok(())
@@ -373,7 +390,7 @@ impl IntegratedUAS {
                 };
                 if let Some(dialog) = dialog {
                     self.request_handler
-                        .on_bye(request, handle, &dialog)
+                        .on_bye(request, handle, ctx, &dialog)
                         .await?;
                 } else {
                     warn!("Received BYE for unknown dialog");
@@ -387,7 +404,7 @@ impl IntegratedUAS {
                 }
             }
             "CANCEL" => {
-                self.request_handler.on_cancel(request, handle).await?;
+                self.request_handler.on_cancel(request, handle, ctx).await?;
                 if let Some(cancel_key) = TransactionKey::from_request(request, true) {
                     let invite_key = TransactionKey::new(cancel_key.branch(), Method::Invite, true);
                     let mut response =
