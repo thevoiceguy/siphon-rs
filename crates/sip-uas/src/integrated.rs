@@ -634,36 +634,53 @@ impl IntegratedUAS {
     /// - **Via**: mutates the topmost copied-from-request Via per
     ///   RFC 3261 §18.2.1 and RFC 3581 §4 — fills `rport=<src_port>`
     ///   when the request carried a bare `;rport`, and adds
-    ///   `received=<src_ip>` when the sent-by host differs from the
-    ///   actual source IP. Required for NAT traversal.
+    ///   `received=<src_ip>` whenever the sent-by host differs from
+    ///   the actual source IP or `rport` was filled. Required for
+    ///   NAT traversal.
     /// - **Contact**: pushes a single Contact pointing at the
-    ///   advertised public address. Idempotent — if the response
-    ///   already has a Contact (e.g. set by `create_ok`), the
-    ///   existing value is preserved and nothing is added, so 2xx
-    ///   dialog-forming responses don't end up with two competing
-    ///   Contacts (one strict stacks may reject or get wrong).
+    ///   advertised public address with the explicit `:port` and
+    ///   `;transport=<proto>` for the transport this response is
+    ///   going out on. Always overwrites any existing Contact when
+    ///   `auto_contact_filling` is on — bare URIs that
+    ///   [`UserAgentServer::create_ok`] inserts (which lack port /
+    ///   transport because the UAS template has no access to the
+    ///   listener metadata) get replaced here so 2xx dialog-forming
+    ///   responses advertise a Contact that PBXs and SBCs can dial
+    ///   back to without guessing.
     /// - **User-Agent**: added when missing.
     async fn auto_fill_headers(&self, response: &mut Response, ctx: &TransportContext) {
         if self.config.auto_via_filling {
             apply_via_rport_received(response, ctx.peer());
         }
 
-        if self.config.auto_contact_filling && response.headers().get("Contact").is_none() {
+        if self.config.auto_contact_filling {
             let addr = self.public_addr.unwrap_or(self.local_addr);
             let helper = self.helper.lock().await;
             let contact_uri = &helper.contact_uri;
 
+            // Transport param mirrors the transport this response
+            // is being sent over (UDP/TCP/TLS/WS/...). Lowercase
+            // per RFC 3261 §19.1.1 / RFC 4168. Always emitted —
+            // even for the UDP default — so the Contact is
+            // unambiguous to peers that don't apply the default
+            // and to ourselves when the SBC routes responses
+            // through us on a different transport later.
+            let transport = transport_param_for(ctx.transport());
+
             let contact_value = format!(
-                "<sip:{}@{}:{}>",
+                "<sip:{}@{}:{};transport={}>",
                 contact_uri.user().unwrap_or("server"),
                 addr.ip(),
-                addr.port()
+                addr.port(),
+                transport,
             );
 
-            response
-                .headers_mut()
-                .push(SmolStr::new("Contact"), SmolStr::new(&contact_value))
-                .unwrap();
+            // `set_or_push` replaces the first Contact in place if
+            // one exists, or pushes a new one otherwise. This
+            // unconditionally overwrites the bare Contact that
+            // `create_ok` inserts, so we never end up with two
+            // Contact headers in flight.
+            let _ = response.headers_mut().set_or_push("Contact", contact_value);
         }
 
         if response.headers().get("User-Agent").is_none() {
@@ -681,8 +698,17 @@ impl IntegratedUAS {
 /// Apply RFC 3261 §18.2.1 / RFC 3581 §4 mutations to the topmost
 /// Via header of `response`. The topmost Via was copied verbatim
 /// from the request; this fills `rport=<src_port>` when it was
-/// present without a value and adds `received=<src_ip>` when the
-/// sent-by host differs from the actual packet source.
+/// present without a value and adds `received=<src_ip>` whenever
+/// the sent-by host differs from the actual packet source OR the
+/// bare `rport` triggered a rewrite.
+///
+/// The unconditional `received=` on `rport` rewrites follows the
+/// RFC 3581 §4 RECOMMENDATION: clients implementing symmetric
+/// response routing want a single place to read the public
+/// reflection of their address back from, even when the sent-by
+/// IP happens to match the packet source. Adding it costs nothing
+/// and short-circuits a class of NAT-tracking bugs in clients
+/// that only inspect `received`.
 ///
 /// Silently no-ops if the Via doesn't parse — we never want a
 /// malformed inbound Via to abort the response.
@@ -696,6 +722,7 @@ fn apply_via_rport_received(response: &mut Response, source: SocketAddr) {
     };
 
     let mut changed = false;
+    let mut rport_filled = false;
 
     // RFC 3581 §4: an inbound request with a bare `;rport` must
     // have it rewritten to the actual source port on the response.
@@ -705,20 +732,26 @@ fn apply_via_rport_received(response: &mut Response, source: SocketAddr) {
             .is_ok()
     {
         changed = true;
+        rport_filled = true;
     }
 
     // RFC 3261 §18.2.1: when the sent-by host doesn't match the
-    // packet source IP, add `received=<src_ip>`. Extract the host
-    // portion from the sent-by ("host" or "host:port", with IPv6
-    // bracketed); compare against the source IP. Done as strings to
-    // sidestep DNS — the requirement is exact-bytes comparison per
-    // the RFC, not name resolution.
+    // packet source IP, the server MUST add `received=<src_ip>`.
+    // Extract the host portion from the sent-by ("host" or
+    // "host:port", with IPv6 bracketed); compare against the
+    // source IP. Done as strings to sidestep DNS — the requirement
+    // is exact-bytes comparison per the RFC, not name resolution.
+    //
+    // RFC 3581 §4 additionally RECOMMENDS adding `received=` even
+    // when sent-by matches src IP, provided we're also filling
+    // `rport`. We honour that recommendation by piggy-backing on
+    // `rport_filled` — the client asked for symmetric response
+    // routing, so it gets the full pair.
     let sent_by_host = sent_by_host(via.sent_by());
     let src_ip = source.ip().to_string();
-    if sent_by_host != src_ip
-        && via
-            .set_param("received", Some(src_ip.as_str()))
-            .is_ok()
+    if (sent_by_host != src_ip || rport_filled)
+        && via.param("received").is_none()
+        && via.set_param("received", Some(src_ip.as_str())).is_ok()
     {
         changed = true;
     }
@@ -728,9 +761,26 @@ fn apply_via_rport_received(response: &mut Response, source: SocketAddr) {
         // the topmost Via, which is what we want. Subsequent Via
         // headers (if any) are response-routing artefacts and
         // mustn't be touched.
-        let _ = response
-            .headers_mut()
-            .set_or_push("Via", via.to_string());
+        let _ = response.headers_mut().set_or_push("Via", via.to_string());
+    }
+}
+
+/// Lowercase transport token for a SIP URI `transport=` parameter
+/// (RFC 3261 §19.1.1, RFC 4168). Mirrors `sip_transport::TransportKind::as_str`
+/// — duplicated here because `TransportContext` (and therefore the
+/// dispatch entrypoints in this crate) work in terms of the
+/// `sip_transaction::TransportKind` re-export, which doesn't carry
+/// the helper. The two enums are isomorphic; keep them aligned.
+fn transport_param_for(kind: sip_transaction::TransportKind) -> &'static str {
+    use sip_transaction::TransportKind as T;
+    match kind {
+        T::Udp => "udp",
+        T::Tcp => "tcp",
+        T::Tls => "tls",
+        T::Sctp => "sctp",
+        T::TlsSctp => "tls-sctp",
+        T::Ws => "ws",
+        T::Wss => "wss",
     }
 }
 
@@ -914,12 +964,7 @@ mod tests {
         headers
             .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
             .unwrap();
-        Response::new(
-            StatusLine::new(200, "OK").unwrap(),
-            headers,
-            Bytes::new(),
-        )
-        .unwrap()
+        Response::new(StatusLine::new(200, "OK").unwrap(), headers, Bytes::new()).unwrap()
     }
 
     #[test]
@@ -932,26 +977,50 @@ mod tests {
     }
 
     #[test]
-    fn via_fills_bare_rport_when_present() {
+    fn via_fills_bare_rport_and_adds_received() {
         // RFC 3581 §4 — request arrived with `;rport` (no value);
-        // the response must rewrite it to the source port.
-        let mut response = response_with_via(
-            "SIP/2.0/UDP 194.195.208.34:5080;rport;branch=z9hG4bK3pZSUr1r2Z3vF",
-        );
+        // the response must rewrite it to the source port AND
+        // include `received=<src_ip>` even when sent-by matches
+        // the source (the §4 RECOMMENDATION beyond the §18.2.1 MUST).
+        let mut response =
+            response_with_via("SIP/2.0/UDP 194.195.208.34:5080;rport;branch=z9hG4bK3pZSUr1r2Z3vF");
         let source: SocketAddr = "194.195.208.34:5080".parse().unwrap();
         apply_via_rport_received(&mut response, source);
         let via = response.headers().get("Via").unwrap();
-        assert!(via.contains("rport=5080"), "Via must have rport=5080 (got {via})");
-        // sent-by host matches source IP → no `received` per RFC 3261 §18.2.1.
-        assert!(!via.contains("received="), "no received needed (got {via})");
+        assert!(
+            via.contains("rport=5080"),
+            "Via must have rport=5080 (got {via})"
+        );
+        assert!(
+            via.contains("received=194.195.208.34"),
+            "Via must have received=<src_ip> when rport was filled (got {via})"
+        );
+    }
+
+    #[test]
+    fn via_skips_received_when_no_rport_and_sent_by_matches() {
+        // No bare rport in the request and sent-by IP matches src
+        // IP → response gets neither rport nor received. This is
+        // the "plain compliant client on the same network" case.
+        let mut response = response_with_via("SIP/2.0/UDP 194.195.208.34:5080;branch=z9hG4bK1");
+        let source: SocketAddr = "194.195.208.34:5080".parse().unwrap();
+        apply_via_rport_received(&mut response, source);
+        let via = response.headers().get("Via").unwrap();
+        assert!(
+            !via.contains("rport="),
+            "no rport since not requested (got {via})"
+        );
+        assert!(
+            !via.contains("received="),
+            "no received since sent-by matches src (got {via})"
+        );
     }
 
     #[test]
     fn via_adds_received_when_sent_by_differs_from_source() {
         // Scanner with spoofed/local sent-by; source IP is real.
         // RFC 3261 §18.2.1 — server MUST add `received=<src_ip>`.
-        let mut response =
-            response_with_via("SIP/2.0/UDP 0.0.0.0:60207;branch=z9hG4bK1322767169");
+        let mut response = response_with_via("SIP/2.0/UDP 0.0.0.0:60207;branch=z9hG4bK1322767169");
         let source: SocketAddr = "5.196.63.60:60207".parse().unwrap();
         apply_via_rport_received(&mut response, source);
         let via = response.headers().get("Via").unwrap();
@@ -960,21 +1029,57 @@ mod tests {
             "Via must have received=5.196.63.60 (got {via})"
         );
         // No bare rport in the request → response doesn't add it.
-        assert!(!via.contains("rport="), "no rport since not requested (got {via})");
+        assert!(
+            !via.contains("rport="),
+            "no rport since not requested (got {via})"
+        );
     }
 
     #[test]
     fn via_leaves_value_rport_alone() {
         // If the request already specified `rport=N` (uncommon but
         // valid), don't overwrite it. Only the bare form
-        // (`Some(None)`) triggers the §4 rewrite.
+        // (`Some(None)`) triggers the §4 rewrite. The §4
+        // `received=` recommendation also keys off the rewrite —
+        // if we didn't fill rport here, we don't add received
+        // either (sent-by `host` would match neither way).
+        let mut response = response_with_via("SIP/2.0/UDP host:5060;rport=9999;branch=z9hG4bK1");
+        let source: SocketAddr = "192.0.2.1:5080".parse().unwrap();
+        apply_via_rport_received(&mut response, source);
+        let via = response.headers().get("Via").unwrap();
+        assert!(
+            via.contains("rport=9999"),
+            "existing rport preserved (got {via})"
+        );
+        // sent-by `host` doesn't match `192.0.2.1` → §18.2.1 still
+        // adds received= for this case.
+        assert!(
+            via.contains("received=192.0.2.1"),
+            "Via must have received= when sent-by differs from src (got {via})"
+        );
+    }
+
+    #[test]
+    fn via_preserves_existing_received() {
+        // If a downstream party already stamped `received=`, don't
+        // overwrite it — even when we're filling rport. Trust the
+        // first server in the chain to have recorded the true
+        // source address.
         let mut response = response_with_via(
-            "SIP/2.0/UDP host:5060;rport=9999;branch=z9hG4bK1",
+            "SIP/2.0/UDP 10.0.0.1:5080;rport;received=203.0.113.5;branch=z9hG4bK1",
         );
         let source: SocketAddr = "192.0.2.1:5080".parse().unwrap();
         apply_via_rport_received(&mut response, source);
         let via = response.headers().get("Via").unwrap();
-        assert!(via.contains("rport=9999"), "existing rport preserved (got {via})");
+        assert!(via.contains("rport=5080"), "rport still filled (got {via})");
+        assert!(
+            via.contains("received=203.0.113.5"),
+            "pre-existing received preserved (got {via})"
+        );
+        assert!(
+            !via.contains("received=192.0.2.1"),
+            "must not overwrite existing received (got {via})"
+        );
     }
 
     #[test]
