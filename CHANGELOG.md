@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Fix: 405 / OPTIONS `Allow` header advertises only supported methods** (sip-uas) - RFC 3261 §20.5 / §21.4.6 compliance:
+  * `405 Method Not Allowed` and `OPTIONS 200 OK` previously advertised `REGISTER, SUBSCRIBE, NOTIFY, REFER, UPDATE, PRACK, INFO` (plus `MESSAGE, PUBLISH` on OPTIONS) — methods the default `IntegratedUAS` itself rejects with 405. A scanner probing REGISTER received a 405 whose `Allow` listed REGISTER.
+  * Added `UasRequestHandler::supported_methods()` and `allow_header()`. The `Allow` header is now derived from the methods the installed handler actually answers (default: `INVITE, ACK, BYE, CANCEL, OPTIONS`). Both trait methods are provided with defaults, so this is a non-breaking addition for existing implementors.
+  * `UserAgentServer::accept_options` baseline `Allow` reduced to the honestly-supported set; `IntegratedUAS` overwrites it with the handler's capability set on both the OPTIONS and 405 paths.
+  * Handlers that override `on_register` / `on_refer` / `on_update` / etc. to return real responses should override `supported_methods()` to add those methods (see the updated `integrated_server` example).
+
 - **Security hardening: sip-uas crate** - CRLF injection and DoS prevention:
   * Added `UasError` enum with 7 detailed error variants
   * MAX_REASON_PHRASE_LENGTH = 128 bytes (CRLF injection prevention)
