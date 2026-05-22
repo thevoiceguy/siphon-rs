@@ -58,6 +58,16 @@ impl AutoAnswerServer {
 
 #[async_trait]
 impl UasRequestHandler for AutoAnswerServer {
+    /// This server answers INVITE/ACK/BYE/CANCEL/OPTIONS plus
+    /// REGISTER, REFER and UPDATE — declare them so the `Allow`
+    /// header on 405 and OPTIONS responses stays honest (RFC 3261
+    /// §20.5). The default would advertise only the first five.
+    fn supported_methods(&self) -> &'static [&'static str] {
+        &[
+            "INVITE", "ACK", "BYE", "CANCEL", "OPTIONS", "REGISTER", "REFER", "UPDATE",
+        ]
+    }
+
     /// Handle incoming INVITE requests
     async fn on_invite(
         &self,
@@ -237,11 +247,12 @@ impl UasRequestHandler for AutoAnswerServer {
 
         let mut response = UserAgentServer::create_response(request, 200, "OK");
 
-        // Add Allow header with supported methods
-        response.headers_mut().push(
-            "Allow",
-            "INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, SUBSCRIBE, NOTIFY, REFER, UPDATE, PRACK, INFO",
-        ).unwrap();
+        // Advertise exactly what this server implements — see
+        // `supported_methods` above (RFC 3261 §20.5).
+        response
+            .headers_mut()
+            .set_or_push("Allow", self.allow_header())
+            .unwrap();
 
         // Add Accept header
         let _ = response

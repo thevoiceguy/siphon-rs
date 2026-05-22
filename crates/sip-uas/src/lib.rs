@@ -452,15 +452,15 @@ impl UserAgentServer {
     pub fn accept_options(request: &Request) -> Response {
         let mut response = Self::create_response(request, 200, "OK");
         let headers = response.headers_mut();
-        // Methods we actually implement — keep this in sync with the
-        // `dispatch` match arms in `IntegratedUAS`. Don't advertise
-        // methods we don't handle.
+        // Baseline `Allow`: the methods any UAS built on this helper
+        // answers for real — INVITE/ACK plus the working BYE / CANCEL
+        // / OPTIONS defaults. RFC 3261 §20.5 — never advertise a
+        // method the UAS would then reject with 405. `IntegratedUAS`
+        // overwrites this with its request handler's actual capability
+        // set (see `UasRequestHandler::supported_methods`); callers
+        // that support more methods should likewise overwrite it.
         headers
-            .set_or_push(
-                "Allow",
-                "INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, SUBSCRIBE, \
-                 NOTIFY, REFER, UPDATE, PRACK, INFO, MESSAGE, PUBLISH",
-            )
+            .set_or_push("Allow", "INVITE, ACK, BYE, CANCEL, OPTIONS")
             .expect("allow value valid");
         // application/sdp is the only body type we currently parse.
         headers
@@ -1604,6 +1604,25 @@ mod tests {
             assert!(
                 allow.contains(method),
                 "Allow must list {method} (got {allow})"
+            );
+        }
+        // RFC 3261 §20.5 — the baseline must NOT advertise methods the
+        // helper's defaults reject with 405. (MESSAGE / PUBLISH were
+        // advertised here historically; neither was ever handled.)
+        for method in &[
+            "REGISTER",
+            "SUBSCRIBE",
+            "NOTIFY",
+            "REFER",
+            "UPDATE",
+            "PRACK",
+            "INFO",
+            "MESSAGE",
+            "PUBLISH",
+        ] {
+            assert!(
+                !allow.contains(method),
+                "Allow must not advertise unsupported {method} (got {allow})"
             );
         }
         assert_eq!(response.headers().get("Accept"), Some("application/sdp"));

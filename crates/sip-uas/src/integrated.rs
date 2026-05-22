@@ -86,14 +86,30 @@ pub enum AcceptInviteAsyncOutcome {
     SessionIntervalTooSmall { required_min_se: Duration },
 }
 
-const ALLOW_HEADER_VALUE: &str =
-    "INVITE, ACK, BYE, CANCEL, OPTIONS, REGISTER, SUBSCRIBE, NOTIFY, REFER, UPDATE, PRACK, INFO";
+/// Methods the `IntegratedUAS` dispatch loop and the *default*
+/// [`UasRequestHandler`] trait bodies answer for real: INVITE/ACK
+/// (driven by `dispatch`), BYE and CANCEL (the default `on_bye` /
+/// `on_cancel` send a genuine 200 OK) and OPTIONS (answered inline by
+/// `dispatch`). Every other method falls through to a default body
+/// that returns `405 Method Not Allowed`, so it MUST NOT appear here:
+/// RFC 3261 §20.5 defines `Allow` as the methods the UAS actually
+/// supports, and advertising one it then rejects with 405 is both
+/// non-compliant and a free capability hint to scanners.
+///
+/// A handler that overrides `on_register`, `on_subscribe`, `on_refer`,
+/// … to return real responses should override
+/// [`UasRequestHandler::supported_methods`] to add those methods.
+const DEFAULT_SUPPORTED_METHODS: &[&str] = &["INVITE", "ACK", "BYE", "CANCEL", "OPTIONS"];
 
-fn method_not_allowed_response(request: &Request) -> Response {
+/// Builds a `405 Method Not Allowed`. RFC 3261 §21.4.6 requires the
+/// response to carry an `Allow` header, and §20.5 defines that list as
+/// exactly the methods this UAS supports — `allow` is that list, as
+/// produced by [`UasRequestHandler::allow_header`].
+fn method_not_allowed_response(request: &Request, allow: &str) -> Response {
     let mut response = UserAgentServer::create_response(request, 405, "Method Not Allowed");
     response
         .headers_mut()
-        .push(SmolStr::new("Allow"), SmolStr::new(ALLOW_HEADER_VALUE))
+        .push(SmolStr::new("Allow"), SmolStr::new(allow))
         .unwrap();
     response
 }
@@ -105,6 +121,29 @@ fn method_not_allowed_response(request: &Request) -> Response {
 /// Default implementations send 405 Method Not Allowed for all methods.
 #[async_trait]
 pub trait UasRequestHandler: Send + Sync {
+    /// The SIP methods this UAS supports, used to build the `Allow`
+    /// header on `405 Method Not Allowed` and `OPTIONS` responses.
+    ///
+    /// RFC 3261 §20.5 defines `Allow` as *the set of methods supported
+    /// by the UA*, and §21.4.6 requires it on every 405. Listing a
+    /// method here that the UAS then answers with 405 is both
+    /// non-compliant and a free capability hint to scanners.
+    ///
+    /// The default — `INVITE, ACK, BYE, CANCEL, OPTIONS` — is the set
+    /// the `IntegratedUAS` dispatch loop and the default trait bodies
+    /// answer for real. Override this if, and only if, you also
+    /// override the matching `on_*` method (`on_register`,
+    /// `on_subscribe`, `on_refer`, …) to return real responses.
+    fn supported_methods(&self) -> &'static [&'static str] {
+        DEFAULT_SUPPORTED_METHODS
+    }
+
+    /// The `Allow` header value for this UAS: [`Self::supported_methods`]
+    /// rendered as the comma-separated list RFC 3261 §20.5 expects.
+    fn allow_header(&self) -> String {
+        self.supported_methods().join(", ")
+    }
+
     /// Handle an incoming INVITE request.
     ///
     /// # Arguments
@@ -120,7 +159,7 @@ pub trait UasRequestHandler: Send + Sync {
         dialog: Option<&Dialog>,
     ) -> Result<()> {
         let _ = (ctx, dialog);
-        let response = method_not_allowed_response(request);
+        let response = method_not_allowed_response(request, &self.allow_header());
         handle.send_final(response).await;
         Ok(())
     }
@@ -170,7 +209,7 @@ pub trait UasRequestHandler: Send + Sync {
 
     /// Handle an incoming REGISTER request.
     async fn on_register(&self, request: &Request, handle: ServerTransactionHandle) -> Result<()> {
-        let response = method_not_allowed_response(request);
+        let response = method_not_allowed_response(request, &self.allow_header());
         handle.send_final(response).await;
         Ok(())
     }
@@ -182,21 +221,28 @@ pub trait UasRequestHandler: Send + Sync {
     /// Contact header is left to [`IntegratedUAS::prepare_response`]
     /// so it reflects the publicly-advertised transport address.
     async fn on_options(&self, request: &Request, handle: ServerTransactionHandle) -> Result<()> {
-        let response = UserAgentServer::accept_options(request);
+        let mut response = UserAgentServer::accept_options(request);
+        // `accept_options` stamps a baseline `Allow`; overwrite it
+        // with this handler's actual capability set so OPTIONS
+        // discovery and 405 responses advertise the same methods.
+        response
+            .headers_mut()
+            .set_or_push("Allow", self.allow_header())
+            .expect("allow value valid");
         handle.send_final(response).await;
         Ok(())
     }
 
     /// Handle an incoming SUBSCRIBE request.
     async fn on_subscribe(&self, request: &Request, handle: ServerTransactionHandle) -> Result<()> {
-        let response = method_not_allowed_response(request);
+        let response = method_not_allowed_response(request, &self.allow_header());
         handle.send_final(response).await;
         Ok(())
     }
 
     /// Handle an incoming NOTIFY request.
     async fn on_notify(&self, request: &Request, handle: ServerTransactionHandle) -> Result<()> {
-        let response = method_not_allowed_response(request);
+        let response = method_not_allowed_response(request, &self.allow_header());
         handle.send_final(response).await;
         Ok(())
     }
@@ -209,7 +255,7 @@ pub trait UasRequestHandler: Send + Sync {
         dialog: &Dialog,
     ) -> Result<()> {
         let _ = dialog;
-        let response = method_not_allowed_response(request);
+        let response = method_not_allowed_response(request, &self.allow_header());
         handle.send_final(response).await;
         Ok(())
     }
@@ -222,7 +268,7 @@ pub trait UasRequestHandler: Send + Sync {
         dialog: &Dialog,
     ) -> Result<()> {
         let _ = dialog;
-        let response = method_not_allowed_response(request);
+        let response = method_not_allowed_response(request, &self.allow_header());
         handle.send_final(response).await;
         Ok(())
     }
@@ -235,7 +281,7 @@ pub trait UasRequestHandler: Send + Sync {
         dialog: &Dialog,
     ) -> Result<()> {
         let _ = dialog;
-        let response = method_not_allowed_response(request);
+        let response = method_not_allowed_response(request, &self.allow_header());
         handle.send_final(response).await;
         Ok(())
     }
@@ -248,7 +294,7 @@ pub trait UasRequestHandler: Send + Sync {
         dialog: &Dialog,
     ) -> Result<()> {
         let _ = dialog;
-        let response = method_not_allowed_response(request);
+        let response = method_not_allowed_response(request, &self.allow_header());
         handle.send_final(response).await;
         Ok(())
     }
@@ -430,6 +476,13 @@ impl IntegratedUAS {
                 // rport / received Via mutation the rest of the
                 // dispatch loop emits.
                 let mut response = UserAgentServer::accept_options(request);
+                // Advertise exactly what the installed request handler
+                // supports, not `accept_options`'s baseline (RFC 3261
+                // §20.5 — `Allow` is the methods we actually answer).
+                response
+                    .headers_mut()
+                    .set_or_push("Allow", self.request_handler.allow_header())
+                    .expect("allow value valid");
                 self.auto_fill_headers(&mut response, ctx).await;
                 handle.send_final(response).await;
             }
@@ -950,9 +1003,12 @@ impl IntegratedUASBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_via_rport_received, sent_by_host};
+    use super::{
+        apply_via_rport_received, method_not_allowed_response, sent_by_host, UasRequestHandler,
+        DEFAULT_SUPPORTED_METHODS,
+    };
     use bytes::Bytes;
-    use sip_core::{Headers, Response, StatusLine};
+    use sip_core::{Headers, Method, Request, RequestLine, Response, SipUri, StatusLine};
     use smol_str::SmolStr;
     use std::net::SocketAddr;
 
@@ -1090,5 +1146,114 @@ mod tests {
         let source: SocketAddr = "192.0.2.1:5060".parse().unwrap();
         apply_via_rport_received(&mut response, source);
         assert_eq!(response.headers().get("Via"), Some("not a real via header"));
+    }
+
+    // ── Allow-header honesty (RFC 3261 §20.5, §21.4.6) ──────────────
+
+    /// Minimal request for response-builder tests. `method` drives the
+    /// request line; the CSeq method is cosmetic for these assertions.
+    fn sample_request(method: Method) -> Request {
+        let mut headers = Headers::new();
+        headers
+            .push(
+                SmolStr::new("Via"),
+                SmolStr::new("SIP/2.0/UDP test;branch=z9hG4bK405"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("From"), SmolStr::new("<sip:a@test>;tag=1"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("To"), SmolStr::new("<sip:b@test>"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("allow-header-test"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 OPTIONS"))
+            .unwrap();
+        let uri = SipUri::parse("sip:b@test").unwrap();
+        Request::new(RequestLine::new(method, uri), headers, Bytes::new()).expect("valid request")
+    }
+
+    /// A handler that takes every `UasRequestHandler` default — i.e.
+    /// answers only INVITE/ACK/BYE/CANCEL/OPTIONS and 405s the rest.
+    struct DefaultHandler;
+    impl UasRequestHandler for DefaultHandler {}
+
+    /// A handler that overrides `on_register` to answer for real, so
+    /// it must also declare REGISTER via `supported_methods`.
+    struct RegistrarHandler;
+    impl UasRequestHandler for RegistrarHandler {
+        fn supported_methods(&self) -> &'static [&'static str] {
+            &["INVITE", "ACK", "BYE", "CANCEL", "OPTIONS", "REGISTER"]
+        }
+    }
+
+    #[test]
+    fn default_handler_advertises_only_baseline_methods() {
+        assert_eq!(
+            DefaultHandler.supported_methods(),
+            DEFAULT_SUPPORTED_METHODS
+        );
+        assert_eq!(
+            DefaultHandler.allow_header(),
+            "INVITE, ACK, BYE, CANCEL, OPTIONS"
+        );
+    }
+
+    #[test]
+    fn method_not_allowed_advertises_only_supported_methods() {
+        // A scanner probes REGISTER on a UAS that does not implement
+        // it. RFC 3261 §21.4.6 — the 405 carries `Allow`, and §20.5
+        // says that list is the methods we *do* support. It must not
+        // echo back REGISTER (or SUBSCRIBE/NOTIFY/REFER/…), each of
+        // which would itself only return another 405.
+        let response = method_not_allowed_response(
+            &sample_request(Method::Register),
+            &DefaultHandler.allow_header(),
+        );
+        assert_eq!(response.code(), 405);
+        let allow = response.headers().get("Allow").expect("405 needs Allow");
+        for method in &["INVITE", "ACK", "BYE", "CANCEL", "OPTIONS"] {
+            assert!(
+                allow.contains(method),
+                "Allow must list supported {method} (got {allow})"
+            );
+        }
+        for method in &[
+            "REGISTER",
+            "SUBSCRIBE",
+            "NOTIFY",
+            "REFER",
+            "UPDATE",
+            "PRACK",
+            "INFO",
+        ] {
+            assert!(
+                !allow.contains(method),
+                "405 Allow must not advertise unsupported {method} (got {allow})"
+            );
+        }
+    }
+
+    #[test]
+    fn supported_methods_override_widens_allow_header() {
+        // A handler that answers REGISTER for real declares it via
+        // `supported_methods`; its 405 (for, say, SUBSCRIBE) then
+        // honestly includes REGISTER but still omits SUBSCRIBE.
+        let response = method_not_allowed_response(
+            &sample_request(Method::Subscribe),
+            &RegistrarHandler.allow_header(),
+        );
+        let allow = response.headers().get("Allow").expect("405 needs Allow");
+        assert!(
+            allow.contains("REGISTER"),
+            "overridden handler must advertise REGISTER (got {allow})"
+        );
+        assert!(
+            !allow.contains("SUBSCRIBE"),
+            "still must not advertise unsupported SUBSCRIBE (got {allow})"
+        );
     }
 }
