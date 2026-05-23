@@ -1244,8 +1244,17 @@ impl UserAgentServer {
             )
             .unwrap();
 
-        // Add tag to To header if not present
-        self.ensure_to_tag(&mut response);
+        // RFC 3262 §3 / RFC 3261 §12.1.1 — `PrackValidator` keys the
+        // registration off the dialog id (which carries our local
+        // tag). The wire response MUST advertise the same tag in its
+        // `To` header, or an inbound PRACK won't match the
+        // registration we're about to make below, and the helper
+        // would silently retransmit the 1xx until the peer gave up.
+        //
+        // `create_response` already stamped a fresh random tag via
+        // `ensure_to_tag_header`; overwrite it with the dialog's so
+        // the wire tag and the registration key agree by construction.
+        replace_to_tag(&mut response, dialog.id().local_tag());
 
         if let Some(cseq) = header(request.headers(), "CSeq") {
             if let Some(cseq_num) = cseq.split_whitespace().next() {
@@ -1458,6 +1467,38 @@ fn validate_dialog_request(request: &Request, dialog: &Dialog) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Overwrites the `To` header's `tag` parameter, replacing any
+/// existing tag. Used when the response must carry a specific tag
+/// chosen by an already-built dialog (e.g. a reliable 1xx whose tag
+/// must match the `PrackValidator` registration key per RFC 3262 §3
+/// and RFC 3261 §12.1.1). For the common "add a fresh tag if missing"
+/// case, use [`ensure_to_tag_header`] instead.
+fn replace_to_tag(response: &mut Response, tag: &str) {
+    let to_value = response.headers().iter().find_map(|h| {
+        if h.name() == "To" {
+            Some(h.value_smol().clone())
+        } else {
+            None
+        }
+    });
+    let Some(to) = to_value else {
+        return;
+    };
+    // Strip any existing `;tag=...` (up to the next `;` or end).
+    let stripped = if let Some(idx) = to.find(";tag=") {
+        let after = &to[idx + 5..];
+        let end_off = after.find(';').map(|p| idx + 5 + p).unwrap_or(to.len());
+        format!("{}{}", &to[..idx], &to[end_off..])
+    } else {
+        to.to_string()
+    };
+    let new_to = format!("{};tag={}", stripped, tag);
+    response
+        .headers_mut()
+        .set_or_push("To", &new_to)
+        .expect("to header should be valid");
 }
 
 /// Adds a tag to the To header if not already present.
@@ -2527,9 +2568,17 @@ mod tests {
         // Verify Require: 100rel
         assert_eq!(response.headers().get("Require").unwrap(), "100rel");
 
-        // Verify To tag was added
+        // Verify To tag matches the dialog's local tag — this is the
+        // contract PRACK matching depends on (RFC 3262 §3 + RFC 3261
+        // §12.1.1). The wire tag and the `PrackValidator` registration
+        // key must agree, or inbound PRACK never matches.
         let to_header = response.headers().get("To").unwrap();
-        assert!(to_header.contains(";tag="));
+        assert!(
+            to_header.contains(&format!(";tag={}", dialog.id().local_tag())),
+            "response To-tag must equal dialog local tag '{}'; got `{}`",
+            dialog.id().local_tag(),
+            to_header
+        );
 
         // Verify Contact header
         assert!(response.headers().get("Contact").is_some());
