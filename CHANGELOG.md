@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Fix: `create_reliable_provisional` honours dialog's local tag** (sip-uas) — RFC 3262 §3 / RFC 3261 §12.1.1 compliance:
+  * `UserAgentServer::create_reliable_provisional` previously let `create_response` stamp a fresh random `To`-tag, ignoring the local tag carried by the passed-in `Dialog`. `PrackValidator` keys its registration off `dialog.id()` (which includes that tag), so the registration tag and the wire tag disagreed by default and any inbound PRACK addressed to the wire tag never matched the registration — 1xx retransmits would never cancel, and the helper would silently leak retransmissions until the peer gave up.
+  * The response now copies the `To`-tag from `dialog.id().local_tag()` (via a new internal `replace_to_tag` helper). Test extended to assert the wire tag equals the dialog's local tag.
+  * No API change. Callers that already build a `Dialog` via `Dialog::new_uas(req, &response, …)` get the matching tag for free; the contract becomes "the response carries the dialog's tag" rather than "PRACK only works if the dialog was built from this exact response."
+
 - **Fix: 405 / OPTIONS `Allow` header advertises only supported methods** (sip-uas) - RFC 3261 §20.5 / §21.4.6 compliance:
   * `405 Method Not Allowed` and `OPTIONS 200 OK` previously advertised `REGISTER, SUBSCRIBE, NOTIFY, REFER, UPDATE, PRACK, INFO` (plus `MESSAGE, PUBLISH` on OPTIONS) — methods the default `IntegratedUAS` itself rejects with 405. A scanner probing REGISTER received a 405 whose `Allow` listed REGISTER.
   * Added `UasRequestHandler::supported_methods()` and `allow_header()`. The `Allow` header is now derived from the methods the installed handler actually answers (default: `INVITE, ACK, BYE, CANCEL, OPTIONS`). Both trait methods are provided with defaults, so this is a non-breaking addition for existing implementors.
