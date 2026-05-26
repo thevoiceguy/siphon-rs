@@ -973,16 +973,35 @@ pub async fn run_ws(bind: &str, tx: mpsc::Sender<InboundPacket>) -> Result<()> {
 
 #[cfg(all(feature = "ws", feature = "tls"))]
 /// Runs a secure WebSocket listener (WSS) and forwards SIP-over-WS packets.
+///
+/// Static-config variant — see [`run_wss_with_swappable_config`]
+/// for the hot-reload-friendly equivalent.
 pub async fn run_wss(
     bind: &str,
     config: std::sync::Arc<tokio_rustls::rustls::ServerConfig>,
+    tx: mpsc::Sender<InboundPacket>,
+) -> Result<()> {
+    let swappable = std::sync::Arc::new(arc_swap::ArcSwap::from(config));
+    run_wss_with_swappable_config(bind, swappable, tx).await
+}
+
+#[cfg(all(feature = "ws", feature = "tls"))]
+/// Runs a WSS listener that picks up `ServerConfig` changes at
+/// runtime. Same semantics as [`run_tls_with_swappable_config`] —
+/// the caller holds the `Arc<ArcSwap<ServerConfig>>` and a SIGHUP
+/// (or any other) trigger calls `swappable.store(new)` to rotate
+/// the cert. New WSS connections handshake with the new cert; any
+/// already-upgraded WebSocket session keeps the cert it
+/// handshook with.
+pub async fn run_wss_with_swappable_config(
+    bind: &str,
+    swappable: std::sync::Arc<arc_swap::ArcSwap<tokio_rustls::rustls::ServerConfig>>,
     tx: mpsc::Sender<InboundPacket>,
 ) -> Result<()> {
     use tokio_rustls::TlsAcceptor;
 
     let listener = TcpListener::bind(bind).await?;
     let local_addr = listener.local_addr()?;
-    let acceptor = TlsAcceptor::from(config);
     info!(%bind, "listening (wss)");
     transport_metrics().on_accept(TransportLabel::Wss);
     let limiter = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_SESSIONS));
@@ -1004,7 +1023,10 @@ pub async fn run_wss(
             }
         };
         let tx = tx.clone();
-        let acceptor = acceptor.clone();
+        // Snapshot the current ServerConfig for this accept. See
+        // run_tls_with_swappable_config for the in-flight-safety
+        // story.
+        let acceptor = TlsAcceptor::from(swappable.load_full());
         tokio::spawn(async move {
             let _permit = permit;
             match acceptor.accept(stream).await {
@@ -1054,16 +1076,62 @@ pub async fn send_tls(to: &SocketAddr, data: &[u8], config: &TlsConfig) -> Resul
 
 #[cfg(feature = "tls")]
 /// Runs a TLS listener, forwarding decrypted payloads to the supplied channel.
+///
+/// This is the static-config variant — the `ServerConfig` you pass
+/// in is used for every accepted connection for the lifetime of
+/// the listener. Suitable for deployments where the cert is loaded
+/// once at startup and renewed via daemon restart.
+///
+/// For operators who want to rotate the cert without restarting
+/// (zero in-flight call drop), use
+/// [`run_tls_with_swappable_config`] instead and hold onto the
+/// `Arc<ArcSwap<ServerConfig>>` so a SIGHUP handler can replace
+/// the cert via `.store(new_config)`.
 pub async fn run_tls(
     bind: &str,
     config: std::sync::Arc<tokio_rustls::rustls::ServerConfig>,
+    tx: mpsc::Sender<InboundPacket>,
+) -> Result<()> {
+    // Wrap the static config in a swap that never gets swapped.
+    // Cheaper than maintaining two near-identical accept loops, and
+    // the `load_full()` cost per accept is one atomic load — well
+    // inside the noise of a TCP handshake + TLS negotiation.
+    let swappable = std::sync::Arc::new(arc_swap::ArcSwap::from(config));
+    run_tls_with_swappable_config(bind, swappable, tx).await
+}
+
+#[cfg(feature = "tls")]
+/// Runs a TLS listener that picks up `ServerConfig` changes at
+/// runtime — every newly-accepted connection uses whatever
+/// `ServerConfig` is currently inside the supplied swap.
+///
+/// **Hot cert reload pattern.** The caller holds the
+/// `Arc<ArcSwap<ServerConfig>>`; a SIGHUP handler (or whatever
+/// trigger fits the deployment) builds a fresh `ServerConfig`
+/// from a renewed cert + key on disk and calls
+/// `swappable.store(Arc::new(new_config))`. The next inbound TCP
+/// connection picks up the new cert.
+///
+/// **In-flight session safety.** TLS sessions that have already
+/// completed their handshake hold their own `TlsStream`
+/// independent of `swappable` — they keep using the cert they
+/// handshook with. Only new connections see the swap. This is
+/// exactly what RFC 5746-compliant rotation wants: existing dialogs
+/// don't get renegotiated; new dialogs get the fresh cert.
+///
+/// The accept loop builds a fresh `TlsAcceptor` per accept via
+/// `swappable.load_full()`. That's one atomic-load + one `Arc`
+/// clone per inbound connection — negligible relative to the TLS
+/// handshake cost on the same connection.
+pub async fn run_tls_with_swappable_config(
+    bind: &str,
+    swappable: std::sync::Arc<arc_swap::ArcSwap<tokio_rustls::rustls::ServerConfig>>,
     tx: mpsc::Sender<InboundPacket>,
 ) -> Result<()> {
     use tokio_rustls::TlsAcceptor;
 
     let listener = TcpListener::bind(bind).await?;
     let local_addr = listener.local_addr()?;
-    let acceptor = TlsAcceptor::from(config);
     info!(%bind, "listening (tls)");
     transport_metrics().on_accept(TransportLabel::Tls);
     let limiter = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_SESSIONS));
@@ -1104,7 +1172,12 @@ pub async fn run_tls(
             }
         };
         let tx = tx.clone();
-        let acceptor = acceptor.clone();
+        // Snapshot the current ServerConfig for THIS accept. A
+        // SIGHUP-triggered `swappable.store(new)` between two
+        // accepts swings the next connection onto the new cert
+        // while in-flight sessions continue with whatever they
+        // handshook with.
+        let acceptor = TlsAcceptor::from(swappable.load_full());
         let per_ip_clone = per_ip.clone();
         tokio::spawn(async move {
             let _permit = permit;
