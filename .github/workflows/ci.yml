@@ -1,6 +1,10 @@
 name: Rust CI
 
 on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
     inputs:
       run_sipp:
@@ -10,6 +14,12 @@ on:
 
 permissions:
   contents: read
+
+# Cancel superseded runs on the same PR / branch so a force-push
+# doesn't leave two builds racing.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
