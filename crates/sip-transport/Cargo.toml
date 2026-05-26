@@ -18,6 +18,7 @@ anyhow = { workspace = true }
 tokio-rustls = { version = "0.26", optional = true }
 rustls = { version = "0.23", optional = true }
 rustls-pki-types = { version = "1.2", optional = true }
+arc-swap = { version = "1.7", optional = true }
 sip-observe = { path = "../sip-observe" }
 sip-hep = { path = "../sip-hep" }
 memchr = "2.7"
@@ -32,8 +33,12 @@ bytes = { workspace = true }
 tokio-tungstenite = { version = "0.21" }
 tempfile = "3"
 hep-rs = { git = "https://github.com/thevoiceguy/hep-rs", branch = "main" }
+# Self-signed cert generation for the swappable-TLS-config test.
+# Pure Rust, no openssl dep at test time.
+rcgen = "0.13"
+rustls-pemfile = "2"
 
 [features]
 default = []
-tls = ["tokio-rustls", "rustls", "rustls-pki-types"]
+tls = ["tokio-rustls", "rustls", "rustls-pki-types", "arc-swap"]
 ws = ["tokio-tungstenite", "futures-util"]
