@@ -303,6 +303,21 @@ impl UserAgentServer {
             headers.push(SmolStr::new("To"), to).unwrap();
         }
 
+        // RFC 3261 §12.1.1 — a UAS MUST copy every Record-Route
+        // header value from the request into a dialog-establishing
+        // response (2xx, reliable 1xx), preserving order and every
+        // URI parameter unchanged (including ones the UAS doesn't
+        // understand). Without this, downstream loose-route proxies
+        // are dropped from the route set and subsequent in-dialog
+        // requests (ACK, BYE, re-INVITE) bypass them — silently
+        // broken with carriers like Twilio whose edge inserts itself
+        // into Record-Route. Copying unconditionally here matches
+        // how Via/From/To/Call-ID/CSeq are handled and is harmless
+        // for non-dialog responses (where Record-Route is ignored).
+        for rr in request.headers().get_all_smol("Record-Route") {
+            headers.push(SmolStr::new("Record-Route"), rr).unwrap();
+        }
+
         // Content-Length
         headers
             .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
@@ -1630,6 +1645,98 @@ mod tests {
             !to.contains(";tag="),
             "100 Trying must NOT have To-tag (got {to})"
         );
+    }
+
+    #[test]
+    fn create_response_copies_single_record_route() {
+        // RFC 3261 §12.1.1 — the UAS MUST echo Record-Route from
+        // request into a dialog-establishing response. Verified
+        // against a real Twilio INVITE in the wild: edge proxy
+        // (54.244.51.1) inserts itself and expects to see itself
+        // back in the 200 OK so in-dialog requests stay on path.
+        let mut request = sample_request(Method::Invite);
+        request
+            .headers_mut()
+            .push(
+                SmolStr::new("Record-Route"),
+                SmolStr::new("<sip:edge.example.com;lr>"),
+            )
+            .unwrap();
+
+        let response = UserAgentServer::create_response(&request, 200, "OK");
+        let routes: Vec<&str> = response.headers().get_all("Record-Route").collect();
+        assert_eq!(routes, vec!["<sip:edge.example.com;lr>"]);
+    }
+
+    #[test]
+    fn create_response_preserves_record_route_order() {
+        // §12.1.1 — "MUST maintain the order of those values". A
+        // proxy chain Record-Routes itself in reverse so the order
+        // the UAS sees IS the order in-dialog requests must traverse
+        // outward. Reordering or deduplicating here would break loose
+        // routing.
+        let mut request = sample_request(Method::Invite);
+        let headers = request.headers_mut();
+        headers
+            .push(
+                SmolStr::new("Record-Route"),
+                SmolStr::new("<sip:proxy1.example.com;lr>"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("Record-Route"),
+                SmolStr::new("<sip:proxy2.example.com;lr>"),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("Record-Route"),
+                SmolStr::new("<sip:proxy3.example.com;lr;transport=tcp>"),
+            )
+            .unwrap();
+
+        let response = UserAgentServer::create_response(&request, 200, "OK");
+        let routes: Vec<&str> = response.headers().get_all("Record-Route").collect();
+        assert_eq!(
+            routes,
+            vec![
+                "<sip:proxy1.example.com;lr>",
+                "<sip:proxy2.example.com;lr>",
+                "<sip:proxy3.example.com;lr;transport=tcp>",
+            ],
+            "Record-Route order must be preserved verbatim"
+        );
+    }
+
+    #[test]
+    fn create_response_omits_record_route_when_request_has_none() {
+        // No Record-Route in request → none in response. The
+        // common direct-UA-to-UA case must not synthesize one.
+        let request = sample_request(Method::Invite);
+        let response = UserAgentServer::create_response(&request, 200, "OK");
+        assert!(
+            response.headers().get_all("Record-Route").next().is_none(),
+            "response must not synthesize Record-Route when request had none"
+        );
+    }
+
+    #[test]
+    fn create_response_preserves_record_route_uri_params() {
+        // §12.1.1 — URI parameters AND any Record-Route header
+        // parameters must be carried through verbatim, including
+        // ones the UAS doesn't recognize. Re-parsing and
+        // re-serializing would lose unknown extensions.
+        let mut request = sample_request(Method::Invite);
+        let original = "<sip:gw.example.com;lr;maddr=10.0.0.1;transport=tls>;custom-param";
+        request
+            .headers_mut()
+            .push(SmolStr::new("Record-Route"), SmolStr::new(original))
+            .unwrap();
+
+        let response = UserAgentServer::create_response(&request, 200, "OK");
+        let routes: Vec<&str> = response.headers().get_all("Record-Route").collect();
+        assert_eq!(routes, vec![original]);
     }
 
     #[test]
