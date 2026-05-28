@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Fix: UAS copies `Record-Route` from request into response** (sip-uas) — RFC 3261 §12.1.1 compliance:
+  * `UserAgentServer::create_response` previously dropped every `Record-Route` header on the floor. Dialog-establishing responses (2xx, reliable 1xx) to an INVITE that arrived through one or more loose-route proxies omitted the route set entirely, so subsequent in-dialog requests (ACK / BYE / re-INVITE / REFER) bypassed those proxies and went straight to the UAS's `Contact`. Silent until a strict intermediary was in path: against Twilio's edge (which inserts itself into `Record-Route` on every inbound PSTN call) calls worked because Twilio's edge tolerates direct-to-Contact in-dialog routing, but a stricter SBC or a multi-proxy topology would drop the dialog mid-call.
+  * The response builder now copies every `Record-Route` value from the request verbatim — original order, every URI parameter (including unknown ones) preserved exactly. Applied unconditionally in the canonical helper, matching how `Via` / `From` / `To` / `Call-ID` / `CSeq` are handled; harmless on responses where `Record-Route` carries no dialog meaning.
+  * Four new unit tests cover: single header copy, multi-header order preservation, absence-in-request → absence-in-response, and verbatim URI/header-parameter preservation.
+
 - **Fix: `create_reliable_provisional` honours dialog's local tag** (sip-uas) — RFC 3262 §3 / RFC 3261 §12.1.1 compliance:
   * `UserAgentServer::create_reliable_provisional` previously let `create_response` stamp a fresh random `To`-tag, ignoring the local tag carried by the passed-in `Dialog`. `PrackValidator` keys its registration off `dialog.id()` (which includes that tag), so the registration tag and the wire tag disagreed by default and any inbound PRACK addressed to the wire tag never matched the registration — 1xx retransmits would never cancel, and the helper would silently leak retransmissions until the peer gave up.
   * The response now copies the `To`-tag from `dialog.id().local_tag()` (via a new internal `replace_to_tag` helper). Test extended to assert the wire tag equals the dialog's local tag.
