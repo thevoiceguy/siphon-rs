@@ -134,10 +134,12 @@ impl RequestHandler for OptionsHandler {
             "Contact",
             SmolStr::new(format!("<{}>", services.config.local_uri)),
         );
-        let _ = headers.push(
-            "User-Agent",
-            SmolStr::new(services.config.user_agent.clone()),
-        );
+        // RFC 3261 §20.41 / §20.50 — responses use `Server` (the UAS
+        // identifies itself), requests use `User-Agent` (the UAC
+        // identifies itself). The config field is `user_agent` for
+        // historical reasons but the wire header on a response is
+        // `Server`.
+        let _ = headers.push("Server", SmolStr::new(services.config.user_agent.clone()));
 
         let response = Response::new(
             StatusLine::new(200, "OK").expect("valid status line"),
