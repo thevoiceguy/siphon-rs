@@ -372,3 +372,80 @@ async fn create_ok_path_demonstrates_old_bug_for_documentation() {
 
     let _ = invite; // keep request alive across awaits for clarity
 }
+
+/// RFC 3261 §20.41 / §20.50: responses identify the UAS via the
+/// `Server` header; `User-Agent` is the *request* counterpart. The
+/// integrated dispatch path historically stamped `User-Agent` on
+/// every response, which carriers tolerated but was technically
+/// wrong. This test drives a real INVITE through dispatch and
+/// asserts the captured 200 OK wire bytes carry `Server:` and not
+/// `User-Agent:`.
+///
+/// It also asserts that the 200 OK carries an `Allow` header per
+/// §13.2.1, so the calling peer learns what mid-dialog methods we
+/// answer for (re-INVITE / UPDATE / REFER / INFO) without having
+/// to follow up with an OPTIONS probe.
+#[tokio::test(flavor = "current_thread")]
+async fn invite_2xx_uses_server_header_and_advertises_allow() {
+    let dispatcher = Arc::new(CapturingDispatcher::default());
+    let txm = Arc::new(TransactionManager::new(dispatcher.clone()));
+    let handler = Arc::new(RecordingHandler::new());
+
+    let uas = Arc::new(
+        IntegratedUAS::builder()
+            .local_uri("sip:5000@127.0.0.1:5070")
+            .contact_uri("sip:5000@127.0.0.1:5070")
+            .local_addr("127.0.0.1:5070")
+            .expect("local_addr")
+            .transaction_manager(Arc::clone(&txm))
+            .dispatcher(dispatcher.clone() as Arc<dyn TransportDispatcher>)
+            .request_handler(handler.clone() as Arc<dyn UasRequestHandler>)
+            .build()
+            .expect("builder"),
+    );
+    handler.install(Arc::clone(&uas)).await;
+
+    let invite = make_invite();
+    let invite_handle = txm.receive_request(invite.clone(), ctx()).await;
+    uas.dispatch(&invite, invite_handle, &ctx())
+        .await
+        .expect("dispatch INVITE");
+
+    // Last captured datagram is the 200 OK. (A 100 Trying may have
+    // been emitted first depending on config — we pick the final
+    // response by looking for the 2xx status line.)
+    let sent = dispatcher.snapshot().await;
+    let two_hundred = sent
+        .iter()
+        .map(|b| std::str::from_utf8(b).expect("response is UTF-8"))
+        .find(|s| s.starts_with("SIP/2.0 200"))
+        .expect("dispatch must have emitted a 200 OK");
+
+    // ── Server vs User-Agent (§20.41 / §20.50) ──
+    let header_names: Vec<&str> = two_hundred
+        .split("\r\n")
+        .filter_map(|line| line.split_once(':').map(|(name, _)| name.trim()))
+        .collect();
+    assert!(
+        header_names.iter().any(|n| n.eq_ignore_ascii_case("Server")),
+        "200 OK to INVITE must carry `Server:` (responses use Server, not User-Agent)\n{two_hundred}",
+    );
+    assert!(
+        !header_names
+            .iter()
+            .any(|n| n.eq_ignore_ascii_case("User-Agent")),
+        "200 OK to INVITE must NOT carry `User-Agent:` (that's the request-side header)\n{two_hundred}",
+    );
+
+    // ── Allow advertised per §13.2.1 ──
+    let allow_line = two_hundred
+        .split("\r\n")
+        .find(|line| line.to_ascii_lowercase().starts_with("allow:"))
+        .expect("200 OK to INVITE must include an Allow header (RFC 3261 §13.2.1)");
+    for required in &["INVITE", "ACK", "BYE", "CANCEL", "OPTIONS"] {
+        assert!(
+            allow_line.contains(required),
+            "Allow header must list {required} (got {allow_line:?})",
+        );
+    }
+}

@@ -481,14 +481,15 @@ impl UserAgentServer {
         headers
             .set_or_push("Accept", "application/sdp")
             .expect("accept value valid");
-        // No protocol extensions are advertised by default. An empty
-        // Supported header is valid per RFC 3261 §20.37 ("If an empty
-        // Supported header is present, it indicates the UA supports
-        // no extensions"). Callers that support specific extensions
-        // (e.g. `timer`, `100rel`) should append them after this call.
-        headers
-            .set_or_push("Supported", "")
-            .expect("supported value valid");
+        // `Supported` is intentionally NOT emitted here. RFC 3261
+        // §20.37 says the field "enumerates all the extensions
+        // supported by the UAC or UAS" — an empty enumeration
+        // implies nothing useful and some peers treat the blank
+        // value as a parse oddity. Callers that *do* support specific
+        // extensions (e.g. `timer`, `100rel`, `path`) should
+        // `set_or_push("Supported", ...)` after this call; the
+        // absence is the correct default for a UAS with no advertised
+        // extensions.
         response
     }
 
@@ -1774,7 +1775,16 @@ mod tests {
             );
         }
         assert_eq!(response.headers().get("Accept"), Some("application/sdp"));
-        assert!(response.headers().get("Supported").is_some());
+        // RFC 3261 §20.37 — an empty `Supported` value is technically
+        // legal but pointless ("the UA supports no extensions" is
+        // already implied by absence) and confuses some peers. The
+        // baseline omits the header; callers that *do* support
+        // specific extensions add their own `Supported` after this.
+        assert!(
+            response.headers().get("Supported").is_none(),
+            "baseline accept_options must omit Supported when there are no extensions to advertise (got {:?})",
+            response.headers().get("Supported")
+        );
         // §8.2.6.2 tag rule applies — accept_options goes through
         // create_response, which adds the tag.
         let to = response.headers().get("To").expect("To present");

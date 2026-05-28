@@ -700,7 +700,22 @@ impl IntegratedUAS {
     ///   listener metadata) get replaced here so 2xx dialog-forming
     ///   responses advertise a Contact that PBXs and SBCs can dial
     ///   back to without guessing.
-    /// - **User-Agent**: added when missing.
+    /// - **Server**: added when missing. RFC 3261 §20.41 / §20.50 —
+    ///   `Server` identifies the UAS on a response; `User-Agent`
+    ///   identifies the UAC on a request. Pre-0.2.x stamped
+    ///   `User-Agent` on responses, which is widely tolerated but
+    ///   technically wrong; we now emit `Server` so the wire is
+    ///   spec-correct without losing the identification.
+    /// - **Allow**: added when missing, sourced from the installed
+    ///   request handler's [`UasRequestHandler::allow_header`]. RFC
+    ///   3261 §13.2.1 — a 2xx response to INVITE SHOULD advertise
+    ///   the methods the UAS supports so the peer knows what
+    ///   mid-dialog requests (re-INVITE, UPDATE, REFER, INFO) are
+    ///   legal. Cheap to include on every response and saves the
+    ///   peer a follow-up OPTIONS probe. The OPTIONS / 405 paths
+    ///   already set `Allow` explicitly upstream of this call, so
+    ///   this is a backstop for the dialog-forming paths that
+    ///   previously stamped no `Allow` at all.
     async fn auto_fill_headers(&self, response: &mut Response, ctx: &TransportContext) {
         if self.config.auto_via_filling {
             apply_via_rport_received(response, ctx.peer());
@@ -736,11 +751,19 @@ impl IntegratedUAS {
             let _ = response.headers_mut().set_or_push("Contact", contact_value);
         }
 
-        if response.headers().get("User-Agent").is_none() {
+        if response.headers().get("Allow").is_none() {
+            let allow = self.request_handler.allow_header();
+            response
+                .headers_mut()
+                .push(SmolStr::new("Allow"), SmolStr::new(&allow))
+                .unwrap();
+        }
+
+        if response.headers().get("Server").is_none() {
             response
                 .headers_mut()
                 .push(
-                    SmolStr::new("User-Agent"),
+                    SmolStr::new("Server"),
                     SmolStr::new(&self.config.user_agent),
                 )
                 .unwrap();
