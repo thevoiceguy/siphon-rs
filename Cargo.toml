@@ -8,6 +8,7 @@ members = [
     "crates/sip-dns",
     "crates/sip-dialog",
     "crates/sip-auth",
+    "crates/sip-identity",
     "crates/sip-registrar",
     "crates/sip-proxy",
     "crates/sip-uas",
