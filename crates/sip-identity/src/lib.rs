@@ -13,18 +13,20 @@
 //!
 //! ## Scope of this revision
 //!
-//! **Parsing only.** This revision decodes the header structure and the
-//! PASSporT (protected header + claims) into typed values, and preserves
-//! the exact signing input + raw signature for a verification step that
-//! lands next. It deliberately does **not** yet:
+//! **Parsing + ES256 signature verification.** This revision decodes the
+//! header + PASSporT into typed values and verifies the ES256 signature
+//! against a supplied public key ([`Passport::verify_signature`]). It does
+//! **not** yet:
 //!
-//! - verify the ES256 signature,
 //! - fetch the `x5u` certificate, or
 //! - validate the certificate chain against the STI-PA trust anchors.
 //!
-//! A parsed [`IdentityHeader`] therefore asserts *well-formedness*, not
-//! *authenticity*. Callers must treat the attestation as unverified until
-//! the verification API (forthcoming) confirms it.
+//! So a *signature-verified* PASSporT proves the holder of the `x5u` cert's
+//! private key signed these claims — but until the cert is fetched and
+//! chain-validated, the caller doesn't yet know that key belongs to an
+//! authorized STI provider. A parsed-but-unverified [`IdentityHeader`]
+//! asserts only *well-formedness*. Treat attestation as untrusted until
+//! both signature **and** certificate chain check out.
 //!
 //! ```
 //! use sip_identity::{IdentityHeader, AttestationLevel};
@@ -41,10 +43,12 @@
 mod error;
 mod header;
 mod passport;
+mod verify;
 
 pub use error::IdentityError;
 pub use header::IdentityHeader;
 pub use passport::{AttestationLevel, Passport, PassportClaims, PassportHeader};
+pub use verify::VerifyError;
 
 #[cfg(test)]
 mod tests {
