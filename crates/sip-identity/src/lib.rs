@@ -13,20 +13,22 @@
 //!
 //! ## Scope of this revision
 //!
-//! **Parsing + ES256 signature verification.** This revision decodes the
-//! header + PASSporT into typed values and verifies the ES256 signature
-//! against a supplied public key ([`Passport::verify_signature`]). It does
-//! **not** yet:
+//! **Parsing + ES256 verification + X.509 chain validation.** This decodes
+//! the header + PASSporT, verifies the ES256 signature
+//! ([`Passport::verify_signature`] against a supplied key), and validates
+//! the signing certificate chains to a STI-PA trust anchor while verifying
+//! the signature under that validated cert ([`Passport::verify_with_chain`]).
 //!
-//! - fetch the `x5u` certificate, or
-//! - validate the certificate chain against the STI-PA trust anchors.
+//! Still **not** here:
 //!
-//! So a *signature-verified* PASSporT proves the holder of the `x5u` cert's
-//! private key signed these claims — but until the cert is fetched and
-//! chain-validated, the caller doesn't yet know that key belongs to an
-//! authorized STI provider. A parsed-but-unverified [`IdentityHeader`]
-//! asserts only *well-formedness*. Treat attestation as untrusted until
-//! both signature **and** certificate chain check out.
+//! - fetching the `x5u` certificate (async network I/O + TTL cache — owned
+//!   by the application layer), and
+//! - the TN-Authorization-List ↔ `orig` authorization check and `iat`
+//!   freshness (higher-level claim checks).
+//!
+//! A parsed-but-unverified [`IdentityHeader`] asserts only
+//! *well-formedness*; treat attestation as untrusted until
+//! [`Passport::verify_with_chain`] (or signature + caller-side chain) passes.
 //!
 //! ```
 //! use sip_identity::{IdentityHeader, AttestationLevel};
@@ -40,6 +42,7 @@
 //! assert_eq!(parsed.passport.claims.orig_tn.as_deref(), Some("+12155551212"));
 //! ```
 
+mod chain;
 mod error;
 mod header;
 mod passport;
