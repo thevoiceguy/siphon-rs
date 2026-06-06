@@ -40,6 +40,12 @@ pub enum VerifyError {
     /// so both land here — for a verifier the meaning is the same: do not
     /// trust this PASSporT.
     SignatureInvalid,
+    /// A certificate (end-entity, intermediate, or anchor) could not be
+    /// parsed as DER.
+    CertParse(String),
+    /// The signing certificate did not chain to a configured trust anchor
+    /// (untrusted issuer, expired, malformed path, …).
+    ChainInvalid(String),
 }
 
 impl fmt::Display for VerifyError {
@@ -56,6 +62,8 @@ impl fmt::Display for VerifyError {
                 "public key is not a 65-byte uncompressed P-256 point (got {len} bytes)"
             ),
             Self::SignatureInvalid => write!(f, "ES256 signature did not verify"),
+            Self::CertParse(msg) => write!(f, "certificate parse failed: {msg}"),
+            Self::ChainInvalid(msg) => write!(f, "certificate chain did not validate: {msg}"),
         }
     }
 }
