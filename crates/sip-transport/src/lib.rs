@@ -233,10 +233,19 @@ pub struct InboundPacket {
     peer: SocketAddr,
     payload: Bytes,
     stream: Option<mpsc::Sender<Bytes>>,
+    /// Local socket address of the listener that received this packet.
+    /// On a multi-listener daemon (e.g. UDP on 5060 + TLS on 5061) this
+    /// is how downstream code learns which listener — and therefore which
+    /// port — a request actually arrived on, so a Contact / Via can
+    /// advertise the matching `host:port;transport`. `None` when the
+    /// receiving listener's local address wasn't available.
+    local: Option<SocketAddr>,
 }
 
 impl InboundPacket {
-    /// Creates a new inbound packet.
+    /// Creates a new inbound packet. The receiving listener's local
+    /// address defaults to `None`; set it with
+    /// [`InboundPacket::with_local_addr`].
     pub fn new(
         transport: TransportKind,
         peer: SocketAddr,
@@ -248,7 +257,20 @@ impl InboundPacket {
             peer,
             payload,
             stream,
+            local: None,
         }
+    }
+
+    /// Sets the local address of the listener that received this packet.
+    pub fn with_local_addr(mut self, local: Option<SocketAddr>) -> Self {
+        self.local = local;
+        self
+    }
+
+    /// Returns the local address of the listener that received this
+    /// packet, if known.
+    pub fn local(&self) -> Option<SocketAddr> {
+        self.local
     }
 
     /// Returns the transport kind.
@@ -453,6 +475,7 @@ pub async fn run_udp(socket: Arc<UdpSocket>, tx: mpsc::Sender<InboundPacket>) ->
                     peer,
                     payload,
                     stream: None,
+                    local: Some(udp_local),
                 };
                 if tx.send(packet).await.is_err() {
                     error!("receiver dropped; shutting down udp loop");
@@ -873,6 +896,7 @@ where
                             peer,
                             payload: Bytes::from(data),
                             stream: Some(writer_tx.clone()),
+                            local: Some(local),
                         };
                         if tx.send(packet).await.is_err() {
                             warn!(%peer, "websocket receiver dropped");
@@ -906,6 +930,7 @@ where
                             peer,
                             payload: Bytes::from(payload_bytes),
                             stream: Some(writer_tx.clone()),
+                            local: Some(local),
                         };
                         if tx.send(packet).await.is_err() {
                             warn!(%peer, "websocket receiver dropped");
@@ -1443,6 +1468,7 @@ async fn spawn_tls_session(
                                 peer,
                                 payload,
                                 stream: Some(writer_tx.clone()),
+                                local: Some(local),
                             };
                             if tx.send(packet).await.is_err() {
                                 error!("receiver dropped; shutting down tls session");
@@ -1595,6 +1621,7 @@ async fn spawn_stream_session<S>(
                                 peer,
                                 payload,
                                 stream: Some(writer_tx.clone()),
+                                local: Some(local),
                             };
                             if tx.send(packet).await.is_err() {
                                 error!("receiver dropped; shutting down {:?} session", transport);

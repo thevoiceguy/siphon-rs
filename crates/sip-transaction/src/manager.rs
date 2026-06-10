@@ -207,6 +207,13 @@ pub struct TransportContext {
     /// Required for ClientTransactionUser implementations that need to send
     /// ACK for 2xx responses (e.g., REFER transfers, UAC call flows).
     udp_socket: Option<std::sync::Arc<tokio::net::UdpSocket>>,
+    /// Local address of the listener that received the request this
+    /// context belongs to. On a multi-listener daemon (UDP on one port,
+    /// TLS on another) this is how response-building learns which port
+    /// the request actually arrived on, so a Contact can advertise the
+    /// matching `host:port;transport`. `None` for contexts not tied to a
+    /// specific inbound listener (UAC-originated, tests, pooled reuse).
+    local_addr: Option<SocketAddr>,
 }
 
 impl TransportContext {
@@ -222,6 +229,7 @@ impl TransportContext {
             server_name: None,
             ws_uri: None,
             udp_socket: None,
+            local_addr: None,
         }
     }
 
@@ -255,6 +263,12 @@ impl TransportContext {
         self.udp_socket.as_ref()
     }
 
+    /// Returns the local address of the listener that received the
+    /// request, if known.
+    pub fn local_addr(&self) -> Option<SocketAddr> {
+        self.local_addr
+    }
+
     /// Builder-style helper to set server name (for TLS SNI).
     pub fn with_server_name(mut self, name: Option<String>) -> Self {
         self.server_name = name;
@@ -281,6 +295,14 @@ impl TransportContext {
     /// Used for RFC 5626 outbound flow support to reuse existing TLS/TCP connections.
     pub fn with_stream(mut self, stream: Option<mpsc::Sender<Bytes>>) -> Self {
         self.stream = stream;
+        self
+    }
+
+    /// Builder-style helper to set the local address of the receiving
+    /// listener. Lets response-building advertise a Contact on the same
+    /// port the request arrived on (see [`TransportContext::local_addr`]).
+    pub fn with_local_addr(mut self, local_addr: Option<SocketAddr>) -> Self {
+        self.local_addr = local_addr;
         self
     }
 }

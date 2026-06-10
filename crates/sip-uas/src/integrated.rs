@@ -722,26 +722,13 @@ impl IntegratedUAS {
         }
 
         if self.config.auto_contact_filling {
-            let addr = self.public_addr.unwrap_or(self.local_addr);
+            let advertised = self.public_addr.unwrap_or(self.local_addr);
             let helper = self.helper.lock().await;
-            let contact_uri = &helper.contact_uri;
+            let user = helper.contact_uri.user().unwrap_or("server").to_string();
+            drop(helper);
 
-            // Transport param mirrors the transport this response
-            // is being sent over (UDP/TCP/TLS/WS/...). Lowercase
-            // per RFC 3261 §19.1.1 / RFC 4168. Always emitted —
-            // even for the UDP default — so the Contact is
-            // unambiguous to peers that don't apply the default
-            // and to ourselves when the SBC routes responses
-            // through us on a different transport later.
-            let transport = transport_param_for(ctx.transport());
-
-            let contact_value = format!(
-                "<sip:{}@{}:{};transport={}>",
-                contact_uri.user().unwrap_or("server"),
-                addr.ip(),
-                addr.port(),
-                transport,
-            );
+            let contact_value =
+                build_contact_value(&user, advertised, ctx.local_addr(), ctx.transport());
 
             // `set_or_push` replaces the first Contact in place if
             // one exists, or pushes a new one otherwise. This
@@ -858,6 +845,39 @@ fn transport_param_for(kind: sip_transaction::TransportKind) -> &'static str {
         T::Ws => "ws",
         T::Wss => "wss",
     }
+}
+
+/// Build the auto-filled `Contact` header value for a response.
+///
+/// - **host** comes from `advertised` (the reachable/NAT public
+///   address), so peers dial back to where we're reachable.
+/// - **port** comes from `ctx_local` — the local address of the
+///   listener that received the request — when known, falling back to
+///   `advertised`'s port otherwise. This is the fix for multi-listener
+///   daemons: with UDP on 5060 and TLS on 5061, a single global port
+///   would emit `:5060;transport=tls` for a TLS dialog (a Contact the
+///   peer can't reach, breaking in-dialog ACK/BYE). Taking the port
+///   from the receiving listener keeps `port` and `transport`
+///   consistent. The fallback preserves the prior single-listener
+///   behaviour for contexts not tied to a listener (UAC-originated,
+///   pooled connection reuse, tests).
+/// - **transport** param mirrors the transport this response goes out
+///   on (RFC 3261 §19.1.1 / RFC 4168, lowercase), always emitted so the
+///   Contact is unambiguous even for the UDP default.
+fn build_contact_value(
+    user: &str,
+    advertised: SocketAddr,
+    ctx_local: Option<SocketAddr>,
+    transport: sip_transaction::TransportKind,
+) -> String {
+    let port = ctx_local.map(|l| l.port()).unwrap_or(advertised.port());
+    format!(
+        "<sip:{}@{}:{};transport={}>",
+        user,
+        advertised.ip(),
+        port,
+        transport_param_for(transport),
+    )
 }
 
 /// Strip the optional `:port` from a `sent-by` value, leaving the
@@ -1027,13 +1047,50 @@ impl IntegratedUASBuilder {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_via_rport_received, method_not_allowed_response, sent_by_host, UasRequestHandler,
-        DEFAULT_SUPPORTED_METHODS,
+        apply_via_rport_received, build_contact_value, method_not_allowed_response, sent_by_host,
+        UasRequestHandler, DEFAULT_SUPPORTED_METHODS,
     };
     use bytes::Bytes;
     use sip_core::{Headers, Method, Request, RequestLine, Response, SipUri, StatusLine};
+    use sip_transaction::TransportKind;
     use smol_str::SmolStr;
     use std::net::SocketAddr;
+
+    // ── Contact auto-fill: per-listener port (RFC 3261 §8.1.1.8) ────
+
+    #[test]
+    fn contact_port_tracks_tls_listener_not_global_addr() {
+        // The regression: daemon advertises a public IP whose configured
+        // port is the UDP listener's (5060), but the request arrived on
+        // the TLS listener (5061). The Contact MUST say `:5061;transport=tls`
+        // — otherwise the peer dials TLS to 5060 (no listener) and the
+        // in-dialog ACK/BYE is lost.
+        let advertised: SocketAddr = "203.0.113.7:5060".parse().unwrap();
+        let tls_local: SocketAddr = "0.0.0.0:5061".parse().unwrap();
+        let contact =
+            build_contact_value("siphon", advertised, Some(tls_local), TransportKind::Tls);
+        assert_eq!(contact, "<sip:siphon@203.0.113.7:5061;transport=tls>");
+    }
+
+    #[test]
+    fn contact_uses_public_ip_with_listener_port() {
+        // Host comes from the advertised (public/NAT) address; only the
+        // port follows the receiving listener.
+        let advertised: SocketAddr = "203.0.113.7:5060".parse().unwrap();
+        let udp_local: SocketAddr = "0.0.0.0:5060".parse().unwrap();
+        let contact =
+            build_contact_value("siphon", advertised, Some(udp_local), TransportKind::Udp);
+        assert_eq!(contact, "<sip:siphon@203.0.113.7:5060;transport=udp>");
+    }
+
+    #[test]
+    fn contact_falls_back_to_configured_port_without_listener() {
+        // No listener context (UAC-originated, pooled reuse, tests) →
+        // prior single-listener behaviour: use the configured port.
+        let advertised: SocketAddr = "203.0.113.7:5070".parse().unwrap();
+        let contact = build_contact_value("siphon", advertised, None, TransportKind::Tls);
+        assert_eq!(contact, "<sip:siphon@203.0.113.7:5070;transport=tls>");
+    }
 
     fn response_with_via(via: &str) -> Response {
         let mut headers = Headers::new();

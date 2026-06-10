@@ -586,6 +586,10 @@ impl ConnectionPool {
                                             peer,
                                             payload,
                                             stream: Some(writer_tx.clone()),
+                                            // Arrived on a pooled outbound connection
+                                            // (RFC 5923 reuse), not a listener — no
+                                            // listener port to advertise.
+                                            local: None,
                                         };
                                         if inbound_tx.send(packet).await.is_err() {
                                             warn!(peer = %peer, "TCP client inbound_tx channel closed");
@@ -737,6 +741,7 @@ impl ConnectionPool {
                                     peer,
                                     payload: Bytes::from(data),
                                     stream: None,
+                                    local: None,
                                 };
                                 if inbound_tx.send(packet).await.is_err() {
                                     debug!(url = %reader_key, "WS reader: inbound channel closed");
@@ -749,6 +754,7 @@ impl ConnectionPool {
                                     peer,
                                     payload: Bytes::from(text.into_bytes()),
                                     stream: None,
+                                    local: None,
                                 };
                                 if inbound_tx.send(packet).await.is_err() {
                                     break;
@@ -1129,6 +1135,7 @@ impl TlsPool {
                                         peer,
                                         payload,
                                         stream: Some(writer_tx.clone()),
+                                        local: None,
                                     };
                                     if inbound_tx.send(packet).await.is_err() {
                                         warn!(peer = %peer, "tls client inbound_tx channel closed");
