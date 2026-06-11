@@ -281,6 +281,72 @@ impl From<SipUri> for RequestTarget {
     }
 }
 
+/// An established inbound connection to send requests through (RFC 5626 flow).
+///
+/// When a peer reaches us over a connection-oriented transport (TCP/TLS),
+/// in-dialog requests we originate (BYE, REFER, re-INVITE) must ride the
+/// *same* connection: the peer's Contact usually names an ephemeral source
+/// port that nothing listens on, so opening a fresh connection per RFC 3263
+/// resolution fails. A `Flow` bundles what the `*_via_flow` methods need to
+/// reuse the connection instead.
+///
+/// `local_addr` is the local address of the listener that owns the
+/// connection. When set, the auto-filled `Via` advertises that listener's
+/// port instead of the UAC's configured (default-listener) port, keeping
+/// `Via` consistent with the transport the request actually leaves on —
+/// the same rule the UAS applies to `Contact`. Optional because responses
+/// ride the connection regardless (RFC 3261 §18.2.2).
+#[derive(Clone)]
+pub struct Flow {
+    stream: mpsc::Sender<Bytes>,
+    peer_addr: SocketAddr,
+    local_addr: Option<SocketAddr>,
+}
+
+impl Flow {
+    /// Creates a flow from a connection's write handle and the peer's address.
+    pub fn new(stream: mpsc::Sender<Bytes>, peer_addr: SocketAddr) -> Self {
+        Self {
+            stream,
+            peer_addr,
+            local_addr: None,
+        }
+    }
+
+    /// Sets the local address of the listener that owns this connection,
+    /// so the auto-filled `Via` can advertise the matching port.
+    pub fn with_local_addr(mut self, local_addr: SocketAddr) -> Self {
+        self.local_addr = Some(local_addr);
+        self
+    }
+}
+
+/// Build the auto-filled `Via` header value for a request.
+///
+/// - **host** comes from the advertised address (`via_advertised` /
+///   public / local preference chain), so NAT advertisement is unchanged.
+/// - **port** comes from `flow_local` — the local address of the listener
+///   that owns the connection the request is sent through — when known,
+///   falling back to the advertised port otherwise. On a multi-listener
+///   daemon (UDP on one port, TLS on another) the configured address names
+///   the default listener, so a flow-routed request would otherwise emit
+///   e.g. `SIP/2.0/TLS <ip>:5060` for a request leaving over the TLS
+///   listener's connection. Cosmetic (responses ride the connection per
+///   RFC 3261 §18.2.2), but keeps `Via` consistent with the `Contact` the
+///   UAS side advertises for the same dialog.
+fn build_via_value(
+    transport: &str,
+    advertised: SocketAddr,
+    flow_local: Option<SocketAddr>,
+    branch: &str,
+) -> String {
+    let mut addr = advertised;
+    if let Some(local) = flow_local {
+        addr.set_port(local.port());
+    }
+    format!("SIP/2.0/{} {};branch={};rport", transport, addr, branch)
+}
+
 fn prepare_in_dialog_request(dialog: &mut Dialog, request: &mut Request) -> SipUri {
     let method = request.method().clone();
     let body = request.body().clone();
@@ -838,9 +904,23 @@ impl IntegratedUAC {
         request: &mut Request,
         transport: Option<sip_dns::Transport>,
     ) {
+        self.auto_fill_headers_for_flow(request, transport, None)
+            .await
+    }
+
+    /// Like [`Self::auto_fill_headers`], but for requests sent through an
+    /// existing connection: `flow_local` is the local address of the
+    /// listener that owns the connection, and the auto-filled `Via`
+    /// advertises its port (see [`Flow::with_local_addr`]).
+    async fn auto_fill_headers_for_flow(
+        &self,
+        request: &mut Request,
+        transport: Option<sip_dns::Transport>,
+        flow_local: Option<SocketAddr>,
+    ) {
         let resolved_public = self.resolve_public_addr().await;
         if self.config.auto_via_filling {
-            self.fill_via_header(request, transport, resolved_public)
+            self.fill_via_header(request, transport, resolved_public, flow_local)
                 .await;
         }
 
@@ -863,6 +943,7 @@ impl IntegratedUAC {
         request: &mut Request,
         transport: Option<sip_dns::Transport>,
         resolved_public: Option<SocketAddr>,
+        flow_local: Option<SocketAddr>,
     ) {
         // Preference: resolver → via_advertised → public_addr → local_addr
         let via_addr = self
@@ -887,10 +968,7 @@ impl IntegratedUAC {
 
             // Replace with actual Via using selected transport
             let via_transport = transport.map(|t| t.as_via_str()).unwrap_or("UDP");
-            let new_via = format!(
-                "SIP/2.0/{} {};branch={};rport",
-                via_transport, via_addr, branch
-            );
+            let new_via = build_via_value(via_transport, via_addr, flow_local, &branch);
             let _ = request.headers_mut().set_or_push("Via", new_via);
         }
     }
@@ -1524,14 +1602,12 @@ impl IntegratedUAC {
     /// # Arguments
     /// * `target` - URI or resolved target of the callee
     /// * `sdp_body` - Optional SDP offer (None for late offer)
-    /// * `flow_stream` - The mpsc::Sender for the existing connection
-    /// * `peer_addr` - The peer's socket address for the TransportContext
+    /// * `flow` - The existing connection to send through
     pub async fn invite_via_flow(
         &self,
         target: impl Into<RequestTarget>,
         sdp_body: Option<&str>,
-        flow_stream: mpsc::Sender<Bytes>,
-        peer_addr: std::net::SocketAddr,
+        flow: Flow,
     ) -> Result<CallHandle> {
         let target = target.into();
 
@@ -1544,9 +1620,13 @@ impl IntegratedUAC {
         // Resolve target to get transport type
         let dns_target = self.resolve_target(&target).await?;
 
-        // Auto-fill Via/Contact using resolved transport
-        self.auto_fill_headers(&mut request, Some(dns_target.transport()))
-            .await;
+        // Auto-fill Via/Contact using resolved transport and the flow's listener port
+        self.auto_fill_headers_for_flow(
+            &mut request,
+            Some(dns_target.transport()),
+            flow.local_addr,
+        )
+        .await;
 
         // Create channels for responses
         let (prov_tx, prov_rx) = mpsc::channel(16);
@@ -1560,8 +1640,9 @@ impl IntegratedUAC {
             sip_dns::Transport::Tcp => TransportKind::Tcp,
             _ => TransportKind::Tls, // Default to TLS for flow-based routing
         };
-        let ctx = TransportContext::new(transport, peer_addr, Some(flow_stream))
-            .with_server_name(Some(dns_target.host().to_string()));
+        let ctx = TransportContext::new(transport, flow.peer_addr, Some(flow.stream))
+            .with_server_name(Some(dns_target.host().to_string()))
+            .with_local_addr(flow.local_addr);
 
         // Create early dialogs map for forking support
         let early_dialogs = Arc::new(Mutex::new(std::collections::HashMap::new()));
@@ -1790,21 +1871,15 @@ impl IntegratedUAC {
     /// This method allows sending BYE to TLS/TCP clients that registered
     /// through an inbound connection (NAT traversal scenario). Instead of
     /// opening a new connection to the client's ephemeral port, the BYE
-    /// is sent through the existing connection identified by the flow stream.
+    /// is sent through the existing connection identified by the flow.
     ///
     /// # Arguments
     /// * `dialog` - The dialog to terminate
-    /// * `flow_stream` - The mpsc::Sender for the existing connection
-    /// * `peer_addr` - The peer's socket address for the TransportContext
+    /// * `flow` - The existing connection to send through
     ///
     /// # Returns
     /// The final response (typically 200 OK)
-    pub async fn bye_via_flow(
-        &self,
-        dialog: &Dialog,
-        flow_stream: mpsc::Sender<Bytes>,
-        peer_addr: std::net::SocketAddr,
-    ) -> Result<Response> {
+    pub async fn bye_via_flow(&self, dialog: &Dialog, flow: Flow) -> Result<Response> {
         // Generate BYE using helper
         let helper = self.helper.lock().await;
         let mut request = helper.create_bye(dialog);
@@ -1814,19 +1889,40 @@ impl IntegratedUAC {
         let target = RequestTarget::Uri(dialog.remote_target().clone());
         let dns_target = self.resolve_target(&target).await?;
 
-        // Auto-fill Via with resolved transport
-        self.auto_fill_headers(&mut request, Some(dns_target.transport()))
-            .await;
+        // Auto-fill Via with resolved transport and the flow's listener port
+        self.auto_fill_headers_for_flow(
+            &mut request,
+            Some(dns_target.transport()),
+            flow.local_addr,
+        )
+        .await;
 
-        // Create transport context WITH the flow stream for connection reuse
+        info!("Sending BYE via flow for dialog {:?}", dialog.id());
+        self.send_non_invite_via_flow(request, &dns_target, &flow)
+            .await
+    }
+
+    /// Sends a non-INVITE request through an existing connection and waits
+    /// for the final response. Shared tail of the `*_via_flow` methods: the
+    /// transport context carries the flow's write handle so the transaction
+    /// layer reuses the connection instead of dialing the peer.
+    async fn send_non_invite_via_flow(
+        &self,
+        request: Request,
+        dns_target: &DnsTarget,
+        flow: &Flow,
+    ) -> Result<Response> {
         use sip_transaction::TransportKind;
         let transport = match dns_target.transport() {
             sip_dns::Transport::Tls => TransportKind::Tls,
             sip_dns::Transport::Tcp => TransportKind::Tcp,
             _ => TransportKind::Tls, // Default to TLS for flow-based routing
         };
-        let ctx = TransportContext::new(transport, peer_addr, Some(flow_stream))
-            .with_server_name(Some(dns_target.host().to_string()));
+        let ctx = TransportContext::new(transport, flow.peer_addr, Some(flow.stream.clone()))
+            .with_server_name(Some(dns_target.host().to_string()))
+            .with_local_addr(flow.local_addr);
+
+        let method = request.method().clone();
 
         // Create channels for response
         let (final_tx, final_rx) = oneshot::channel();
@@ -1841,23 +1937,19 @@ impl IntegratedUAC {
         // Start client transaction
         let key = self
             .transaction_manager
-            .start_client_transaction(request.clone(), ctx, tu)
+            .start_client_transaction(request, ctx, tu)
             .await?;
 
-        info!(
-            "Started BYE via flow transaction {} for dialog {:?}",
-            key.branch(),
-            dialog.id()
-        );
+        info!("Started {} via flow transaction {}", method, key.branch());
 
         // Wait for response
         tokio::select! {
             Ok(response) = final_rx => {
-                debug!("BYE via flow response: {}", response.code());
+                debug!("{} via flow response: {}", method, response.code());
                 Ok(response)
             }
-            Ok(reason) = term_rx => Err(anyhow!("BYE transaction terminated: {}", reason)),
-            else => Err(anyhow!("BYE response channels closed")),
+            Ok(reason) = term_rx => Err(anyhow!("{} transaction terminated: {}", method, reason)),
+            else => Err(anyhow!("{} response channels closed", method)),
         }
     }
 
@@ -2299,6 +2391,68 @@ impl IntegratedUAC {
         Ok((response, subscription))
     }
 
+    /// Sends a REFER through an existing connection (RFC 5626 flow support).
+    ///
+    /// The flow counterpart of [`Self::send_refer`], for transferring a call
+    /// whose dialog arrived over an inbound TCP/TLS connection: the peer's
+    /// Contact names an ephemeral source port nothing listens on, so the
+    /// REFER must reuse the connection like [`Self::bye_via_flow`] does for
+    /// BYE. In-dialog preparation (CSeq, route set, Request-URI) and the
+    /// implicit "refer" subscription on 202 are identical to `send_refer`.
+    ///
+    /// # Arguments
+    /// * `dialog` - The dialog to send the REFER within
+    /// * `refer_to` - Transfer target URI
+    /// * `target_dialog` - For attended transfer, the consult dialog to
+    ///   build the `Replaces` header from (RFC 3891); `None` for blind
+    /// * `flow` - The existing connection to send through
+    ///
+    /// # Returns
+    /// The final response, plus the implicit subscription if it was 202
+    pub async fn send_refer_via_flow(
+        &self,
+        dialog: &mut Dialog,
+        refer_to: &SipUri,
+        target_dialog: Option<&Dialog>,
+        flow: Flow,
+    ) -> Result<(Response, Option<Subscription>)> {
+        let helper = self.helper.lock().await;
+        let mut request = if let Some(target) = target_dialog {
+            helper.create_refer_with_replaces(dialog, refer_to, target)
+        } else {
+            helper.create_refer(dialog, refer_to)
+        };
+        drop(helper);
+
+        // Same in-dialog preparation as send_in_dialog_non_invite
+        let target_uri = prepare_in_dialog_request(dialog, &mut request);
+        let _ = self.dialog_manager.insert(dialog.clone());
+
+        // Resolved only for the Via transport token; routing follows the flow
+        let dns_target = self.resolve_target(&RequestTarget::Uri(target_uri)).await?;
+        self.auto_fill_headers_for_flow(
+            &mut request,
+            Some(dns_target.transport()),
+            flow.local_addr,
+        )
+        .await;
+
+        info!("Sending REFER via flow for dialog {:?}", dialog.id());
+        let response = self
+            .send_non_invite_via_flow(request.clone(), &dns_target, &flow)
+            .await?;
+        self.handle_in_dialog_response(dialog, &response)?;
+
+        let subscription = if response.code() == 202 {
+            let helper = self.helper.lock().await;
+            helper.process_subscribe_response(&request, &response)
+        } else {
+            None
+        };
+
+        Ok((response, subscription))
+    }
+
     /// Starts an INVITE transaction for an existing dialog and returns a handle.
     async fn start_dialog_invite_transaction(
         &self,
@@ -2512,6 +2666,137 @@ mod tests {
         let result = apply_in_dialog_response(&manager, &mut dialog, &response);
         assert!(result.is_err());
         assert_eq!(dialog.state(), DialogStateType::Terminated);
+    }
+
+    // ── Via auto-fill: flow-routed requests advertise the listener port ──
+
+    #[test]
+    fn via_port_tracks_flow_listener() {
+        // The nit from #56's sibling: a request leaving over the TLS
+        // listener's connection advertised the configured (UDP) port.
+        // Host stays the advertised one; only the port follows the flow.
+        let advertised: SocketAddr = "203.0.113.7:5070".parse().unwrap();
+        let tls_local: SocketAddr = "0.0.0.0:5071".parse().unwrap();
+        let via = build_via_value("TLS", advertised, Some(tls_local), "z9hG4bKabc");
+        assert_eq!(via, "SIP/2.0/TLS 203.0.113.7:5071;branch=z9hG4bKabc;rport");
+    }
+
+    #[test]
+    fn via_without_flow_keeps_advertised_port() {
+        let advertised: SocketAddr = "203.0.113.7:5070".parse().unwrap();
+        let via = build_via_value("UDP", advertised, None, "z9hG4bKabc");
+        assert_eq!(via, "SIP/2.0/UDP 203.0.113.7:5070;branch=z9hG4bKabc;rport");
+    }
+
+    // ── send_refer_via_flow: REFER rides the flow connection ──
+
+    #[derive(Default)]
+    struct CapturingDispatcher {
+        sent: Mutex<Vec<(TransportContext, Bytes)>>,
+    }
+
+    #[async_trait]
+    impl TransportDispatcher for CapturingDispatcher {
+        async fn dispatch(&self, ctx: &TransportContext, payload: Bytes) -> Result<()> {
+            self.sent.lock().await.push((ctx.clone(), payload));
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn send_refer_via_flow_reuses_connection_and_completes_on_202() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = Arc::new(
+            IntegratedUAC::builder()
+                .local_uri("sip:siphon@127.0.0.1")
+                .local_addr("127.0.0.1:5070")
+                .unwrap()
+                .transaction_manager(manager.clone())
+                .resolver(Arc::new(SipResolver::from_system().unwrap()))
+                .dispatcher(dispatcher.clone())
+                .build()
+                .unwrap(),
+        );
+
+        // UAS-side confirmed dialog whose peer arrived over TLS: the remote
+        // target names the peer's ephemeral source port, which nothing
+        // listens on — the whole reason the REFER must reuse the flow.
+        let dialog = Dialog::unchecked_new(
+            DialogId::unchecked_new("flow-call", "local-tag", "remote-tag"),
+            DialogStateType::Confirmed,
+            SipUri::parse("sip:siphon@127.0.0.1").unwrap(),
+            SipUri::parse("sip:tester@192.0.2.10").unwrap(),
+            SipUri::parse("sip:tester@192.0.2.10:49152;transport=tls").unwrap(),
+            1,      // local_cseq
+            1,      // remote_cseq
+            None,   // last_ack_cseq
+            vec![], // route_set
+            false,  // secure
+            None,   // session_expires
+            None,   // refresher
+            false,  // is_uac (we are the UAS of the original INVITE)
+        );
+
+        let (flow_tx, _flow_rx) = mpsc::channel::<Bytes>(8);
+        let flow = Flow::new(flow_tx, "192.0.2.10:49152".parse().unwrap())
+            .with_local_addr("127.0.0.1:5071".parse().unwrap());
+        let refer_to = SipUri::parse("sip:agent@198.51.100.20:5060").unwrap();
+
+        let task = {
+            let uac = uac.clone();
+            tokio::spawn(async move {
+                let mut dialog = dialog;
+                let result = uac
+                    .send_refer_via_flow(&mut dialog, &refer_to, None, flow)
+                    .await;
+                (result, dialog)
+            })
+        };
+
+        // Wait for the transaction layer to emit the REFER, then check it
+        // went out on the flow rather than a fresh dial-out.
+        let request = loop {
+            if let Some((ctx, payload)) = dispatcher.sent.lock().await.first().cloned() {
+                assert!(ctx.stream().is_some(), "REFER must carry the flow stream");
+                assert_eq!(ctx.peer(), "192.0.2.10:49152".parse().unwrap());
+                assert_eq!(ctx.local_addr(), Some("127.0.0.1:5071".parse().unwrap()));
+                break sip_parse::parse_request(&payload).expect("valid REFER on the wire");
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+
+        assert_eq!(request.method(), &Method::Refer);
+        assert_eq!(request.headers().get("CSeq"), Some("2 REFER"));
+        assert!(request.headers().get("Refer-To").is_some());
+        let via = request.headers().get("Via").unwrap();
+        assert!(
+            via.starts_with("SIP/2.0/TLS 127.0.0.1:5071;"),
+            "Via must advertise the flow listener's port, got: {via}"
+        );
+
+        // Answer 202 Accepted so the transaction completes.
+        let mut headers = Headers::new();
+        for name in ["Via", "From", "To", "Call-ID", "CSeq"] {
+            headers
+                .push(
+                    SmolStr::new(name),
+                    request.headers().get_smol(name).unwrap().clone(),
+                )
+                .unwrap();
+        }
+        let response = Response::new(
+            StatusLine::new(202, SmolStr::new("Accepted")).expect("valid status line"),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid response");
+        manager.receive_response(response).await;
+
+        let (result, dialog) = task.await.unwrap();
+        let (response, _subscription) = result.unwrap();
+        assert_eq!(response.code(), 202);
+        assert_eq!(dialog.local_cseq(), 2);
     }
 }
 
