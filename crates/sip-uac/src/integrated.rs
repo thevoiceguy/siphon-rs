@@ -2348,6 +2348,56 @@ impl IntegratedUAC {
         self.send_in_dialog_invite(dialog, request).await
     }
 
+    /// Sends a re-INVITE through an existing connection (RFC 5626 flow support).
+    ///
+    /// The flow counterpart of [`Self::send_reinvite`], for the case where the
+    /// UAC originates a re-INVITE on a dialog that arrived over an inbound
+    /// TCP/TLS connection: the peer's Contact names an ephemeral source port
+    /// nothing listens on, so the re-INVITE must reuse the connection like
+    /// [`Self::bye_via_flow`] and [`Self::send_refer_via_flow`] do. In-dialog
+    /// preparation (CSeq, route set, Request-URI) is identical to
+    /// `send_reinvite`, and the 2xx is auto-ACKed the same way (re-INVITE ACK
+    /// rides the connection per RFC 3261 §18.2.2).
+    ///
+    /// # Arguments
+    /// * `dialog` - The dialog to send the re-INVITE within
+    /// * `sdp_body` - The offer SDP (e.g. `a=sendonly` to hold)
+    /// * `flow` - The existing connection to send through
+    ///
+    /// # Returns
+    /// The final response.
+    pub async fn send_reinvite_via_flow(
+        &self,
+        dialog: &mut Dialog,
+        sdp_body: Option<&str>,
+        flow: Flow,
+    ) -> Result<Response> {
+        let helper = self.helper.lock().await;
+        let mut request = helper.create_reinvite(dialog, sdp_body);
+        drop(helper);
+
+        // Same in-dialog preparation as send_in_dialog_invite.
+        let target_uri = prepare_in_dialog_request(dialog, &mut request);
+        let _ = self.dialog_manager.insert(dialog.clone());
+
+        // Resolved only for the Via transport token; routing follows the flow.
+        let dns_target = self.resolve_target(&RequestTarget::Uri(target_uri)).await?;
+        self.auto_fill_headers_for_flow(
+            &mut request,
+            Some(dns_target.transport()),
+            flow.local_addr,
+        )
+        .await;
+
+        info!("Sending re-INVITE via flow for dialog {:?}", dialog.id());
+        let handle = self
+            .start_dialog_invite_transaction_via_flow(dialog.clone(), request, &dns_target, flow)
+            .await?;
+        let response = handle.await_final().await?;
+        self.handle_in_dialog_response(dialog, &response)?;
+        Ok(response)
+    }
+
     /// Convenience helper for INFO within a dialog.
     pub async fn send_info(
         &self,
@@ -2495,6 +2545,80 @@ impl IntegratedUAC {
 
         info!(
             "Started INVITE transaction {} for dialog {}",
+            key.branch(),
+            shared_dialog.read().await.id().call_id()
+        );
+
+        Ok(CallHandle {
+            dialog: shared_dialog,
+            transaction_key: key,
+            provisional_rx: Arc::new(Mutex::new(prov_rx)),
+            final_rx: Arc::new(Mutex::new(Some(final_rx))),
+            termination_rx: Arc::new(Mutex::new(Some(term_rx))),
+            invite_request: Arc::new(request),
+            transport_ctx: Arc::new(ctx),
+            dispatcher: self.transport_dispatcher.clone(),
+            transaction_manager: self.transaction_manager.clone(),
+            early_dialogs,
+            keepalive_cancel: Arc::new(Mutex::new(None)),
+            session_timer_cancel: Arc::new(Mutex::new(None)),
+        })
+    }
+
+    /// Flow-aware variant of [`Self::start_dialog_invite_transaction`]: the
+    /// transaction's transport context reuses the supplied connection instead
+    /// of resolving a fresh one (RFC 5626). Backs [`Self::send_reinvite_via_flow`].
+    async fn start_dialog_invite_transaction_via_flow(
+        &self,
+        dialog: Dialog,
+        request: Request,
+        dns_target: &DnsTarget,
+        flow: Flow,
+    ) -> Result<CallHandle> {
+        use sip_transaction::TransportKind;
+        let (prov_tx, prov_rx) = mpsc::channel(16);
+        let (final_tx, final_rx) = oneshot::channel();
+        let (term_tx, term_rx) = oneshot::channel();
+
+        let transport = match dns_target.transport() {
+            sip_dns::Transport::Tls => TransportKind::Tls,
+            sip_dns::Transport::Tcp => TransportKind::Tcp,
+            _ => TransportKind::Tls, // Default to TLS for flow-based routing
+        };
+        let ctx = TransportContext::new(transport, flow.peer_addr, Some(flow.stream))
+            .with_server_name(Some(dns_target.host().to_string()))
+            .with_local_addr(flow.local_addr);
+
+        let early_dialogs = Arc::new(Mutex::new(std::collections::HashMap::new()));
+
+        // Wrap dialog in Arc<RwLock> for sharing between CallHandle and transaction user
+        let shared_dialog = Arc::new(RwLock::new(dialog));
+
+        let tu = Arc::new(InviteTransactionUser {
+            prov_tx,
+            final_tx: Mutex::new(Some(final_tx)),
+            term_tx: Mutex::new(Some(term_tx)),
+            dialog_manager: self.dialog_manager.clone(),
+            helper: self.helper.clone(),
+            request: request.clone(),
+            config: self.config.clone(),
+            ctx: ctx.clone(),
+            auto_retry_auth: self.config.auto_retry_auth,
+            transaction_manager: self.transaction_manager.clone(),
+            dispatcher: self.transport_dispatcher.clone(),
+            early_dialogs: early_dialogs.clone(),
+            dialog: shared_dialog.clone(),
+            local_addr: self.local_addr,
+            public_addr: self.public_addr,
+        });
+
+        let key = self
+            .transaction_manager
+            .start_client_transaction(request.clone(), ctx.clone(), tu)
+            .await?;
+
+        info!(
+            "Started INVITE transaction {} for dialog {} via flow",
             key.branch(),
             shared_dialog.read().await.id().call_id()
         );
