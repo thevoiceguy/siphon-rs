@@ -59,10 +59,51 @@ pub(crate) const MAX_BUFFER_SIZE: usize = 16 * 1024 * 1024;
 /// Maximum number of concurrent inbound sessions per listener.
 const MAX_CONCURRENT_SESSIONS: usize = 1024;
 
-/// Maximum idle time (no data received) before closing a TCP/TLS session.
-/// Protects against Slowloris-style attacks where a client holds a session
-/// slot by sending data very slowly or not at all.
-const SESSION_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+/// Idle timeout applied to a stream (TCP/TLS) connection that has **not yet**
+/// framed its first complete SIP message — the Slowloris window. A peer that
+/// opens a connection and then stalls without ever completing a request is
+/// closed after this. Short and fixed.
+const HANDSHAKE_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Default idle timeout (seconds) for an **established** stream connection —
+/// one that has framed at least one complete SIP message. Long, because a SIP
+/// trunk keeps its TCP/TLS connection open for the whole life of a call while
+/// sending no SIP at all (RTP is out-of-band): closing an established
+/// connection at the Slowloris window drops mid-call re-INVITEs and BYEs and
+/// wedges the trunk. Abuse is bounded by the per-IP session cap
+/// ([`MAX_SESSIONS_PER_IP`]), not this timeout. Override at startup with
+/// [`set_established_idle_timeout`].
+const DEFAULT_ESTABLISHED_IDLE_TIMEOUT_SECS: u64 = 1800;
+
+/// Effectively-never duration used when the established idle timeout is `0`
+/// (disabled): ~10 years, so the `timeout` future simply never fires.
+const IDLE_DISABLED: std::time::Duration = std::time::Duration::from_secs(10 * 365 * 24 * 60 * 60);
+
+static ESTABLISHED_IDLE_TIMEOUT_SECS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(DEFAULT_ESTABLISHED_IDLE_TIMEOUT_SECS);
+
+/// Set the idle timeout (in seconds) for **established** inbound stream
+/// (TCP/TLS) connections — those that have framed at least one complete SIP
+/// message. Call once at startup, before listeners accept. `0` disables the
+/// established-phase idle close entirely (connections then live until FIN /
+/// read error / the per-IP cap evicts them). The Slowloris window for
+/// not-yet-established connections is unaffected.
+pub fn set_established_idle_timeout(secs: u64) {
+    ESTABLISHED_IDLE_TIMEOUT_SECS.store(secs, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Idle timeout for the connection's current phase: the short Slowloris
+/// window before the first complete message, the long (configurable)
+/// established timeout after — or [`IDLE_DISABLED`] when configured to `0`.
+fn select_idle_timeout(established: bool) -> std::time::Duration {
+    if !established {
+        return HANDSHAKE_IDLE_TIMEOUT;
+    }
+    match ESTABLISHED_IDLE_TIMEOUT_SECS.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => IDLE_DISABLED,
+        secs => std::time::Duration::from_secs(secs),
+    }
+}
 
 /// Timeout for outbound TCP/TLS connection establishment.
 /// Prevents indefinite blocking when a peer is unreachable or firewalled.
@@ -1418,6 +1459,9 @@ async fn spawn_tls_session(
     });
 
     let mut buf = BytesMut::with_capacity(4096);
+    // False until this connection frames its first complete SIP message;
+    // gates the Slowloris vs established idle timeout (see select_idle_timeout).
+    let mut established = false;
     loop {
         // Check if buffer has grown too large - protects against memory exhaustion
         if buf.len() >= MAX_BUFFER_SIZE {
@@ -1430,9 +1474,11 @@ async fn spawn_tls_session(
             break;
         }
 
-        // Apply idle timeout to prevent Slowloris-style DoS attacks.
-        // If no data is received within SESSION_IDLE_TIMEOUT, close the connection.
-        match tokio::time::timeout(SESSION_IDLE_TIMEOUT, reader.read_buf(&mut buf)).await {
+        // Idle timeout: a short Slowloris window until the peer completes its
+        // first SIP message, then the long (configurable) established timeout,
+        // so a quiet-but-live trunk connection isn't reaped mid-call.
+        let idle_timeout = select_idle_timeout(established);
+        match tokio::time::timeout(idle_timeout, reader.read_buf(&mut buf)).await {
             Ok(Ok(0)) => {
                 info!(%peer, "tls connection closed by peer (EOF)");
                 break;
@@ -1444,6 +1490,11 @@ async fn spawn_tls_session(
                 // Try to extract complete SIP messages
                 match drain_sip_frames(&mut buf) {
                     Ok(frames) => {
+                        // First complete message ⇒ a real SIP speaker; switch
+                        // off the Slowloris window to the established timeout.
+                        if !frames.is_empty() {
+                            established = true;
+                        }
                         for payload in frames {
                             // Per-IP frame rate limit shared with the
                             // plain-TCP and WS paths.
@@ -1495,7 +1546,7 @@ async fn spawn_tls_session(
                 break;
             }
             Err(_) => {
-                warn!(peer = %peer, timeout_secs = SESSION_IDLE_TIMEOUT.as_secs(),
+                warn!(peer = %peer, established, timeout_secs = idle_timeout.as_secs(),
                     "tls session idle timeout, closing connection");
                 transport_metrics().on_error(TransportLabel::Tls, StageLabel::Read);
                 break;
@@ -1571,6 +1622,9 @@ async fn spawn_stream_session<S>(
     });
 
     let mut buf = BytesMut::with_capacity(4096);
+    // False until this connection frames its first complete SIP message;
+    // gates the Slowloris vs established idle timeout (see select_idle_timeout).
+    let mut established = false;
     loop {
         // Check if buffer has grown too large - protects against memory exhaustion
         if buf.len() >= MAX_BUFFER_SIZE {
@@ -1583,9 +1637,11 @@ async fn spawn_stream_session<S>(
             break;
         }
 
-        // Apply idle timeout to prevent Slowloris-style DoS attacks.
-        // If no data is received within SESSION_IDLE_TIMEOUT, close the connection.
-        match tokio::time::timeout(SESSION_IDLE_TIMEOUT, reader.read_buf(&mut buf)).await {
+        // Idle timeout: a short Slowloris window until the peer completes its
+        // first SIP message, then the long (configurable) established timeout,
+        // so a quiet-but-live trunk connection isn't reaped mid-call.
+        let idle_timeout = select_idle_timeout(established);
+        match tokio::time::timeout(idle_timeout, reader.read_buf(&mut buf)).await {
             Ok(Ok(0)) => break,
             Ok(Ok(_)) => {
                 transport_metrics().on_packet_received(transport.into());
@@ -1593,6 +1649,11 @@ async fn spawn_stream_session<S>(
                 // Try to extract complete SIP messages
                 match drain_sip_frames(&mut buf) {
                     Ok(frames) => {
+                        // First complete message ⇒ a real SIP speaker; switch
+                        // off the Slowloris window to the established timeout.
+                        if !frames.is_empty() {
+                            established = true;
+                        }
                         for payload in frames {
                             // Per-IP frame rate limit shared across all
                             // stream sessions: a peer can hold up to 64
@@ -1648,7 +1709,7 @@ async fn spawn_stream_session<S>(
                 break;
             }
             Err(_) => {
-                warn!(peer = %peer, timeout_secs = SESSION_IDLE_TIMEOUT.as_secs(),
+                warn!(peer = %peer, established, timeout_secs = idle_timeout.as_secs(),
                     "stream session idle timeout, closing connection");
                 transport_metrics().on_error(transport.into(), StageLabel::Read);
                 break;
@@ -2167,6 +2228,37 @@ mod tests {
             allowed, STREAM_RATE_LIMIT_FPS,
             "expected exactly cap allowed in one window, got {allowed}"
         );
+    }
+
+    #[test]
+    fn idle_timeout_two_phase_and_configurable() {
+        // A not-yet-established connection always gets the short Slowloris
+        // window — this is the DoS guard and must not be relaxed.
+        assert_eq!(select_idle_timeout(false), HANDSHAKE_IDLE_TIMEOUT);
+
+        // An established connection gets the long, trunk-friendly timeout by
+        // default — the fix for CUCM-style trunks that go SIP-quiet mid-call.
+        assert_eq!(
+            select_idle_timeout(true),
+            std::time::Duration::from_secs(DEFAULT_ESTABLISHED_IDLE_TIMEOUT_SECS)
+        );
+        assert!(select_idle_timeout(true) > HANDSHAKE_IDLE_TIMEOUT);
+
+        // The established timeout is overridable at startup; the handshake
+        // window is unaffected by the override.
+        set_established_idle_timeout(45);
+        assert_eq!(
+            select_idle_timeout(true),
+            std::time::Duration::from_secs(45)
+        );
+        assert_eq!(select_idle_timeout(false), HANDSHAKE_IDLE_TIMEOUT);
+
+        // 0 disables the established-phase close (effectively never).
+        set_established_idle_timeout(0);
+        assert_eq!(select_idle_timeout(true), IDLE_DISABLED);
+
+        // Restore the default so other tests observe expected state.
+        set_established_idle_timeout(DEFAULT_ESTABLISHED_IDLE_TIMEOUT_SECS);
     }
 
     #[test]
