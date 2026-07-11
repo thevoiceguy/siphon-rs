@@ -420,7 +420,12 @@ impl ReferredByHeader {
                     let key = key.trim();
                     let value = value.trim();
 
-                    let value = if value.starts_with('"') && value.ends_with('"') {
+                    // Require len >= 2 so a lone '"' (which satisfies both
+                    // starts_with and ends_with) does not slice [1..0] and panic.
+                    let value = if value.len() >= 2
+                        && value.starts_with('"')
+                        && value.ends_with('"')
+                    {
                         &value[1..value.len() - 1]
                     } else {
                         value
@@ -583,6 +588,15 @@ mod tests {
         assert!(referred_by.name_addr().display_name().is_none());
         assert!(!referred_by.has_signature());
         assert_eq!(referred_by.cid, None);
+    }
+
+    // Regression: a parameter value that is a lone '"' satisfies both
+    // starts_with('"') and ends_with('"'); the quoted-string strip must not
+    // slice [1..0] and panic. Must return a graceful Result instead.
+    #[test]
+    fn referred_by_lone_quote_param_does_not_panic() {
+        let _ = ReferredByHeader::parse("<sip:a@b>;x=\"");
+        let _ = ReferredByHeader::parse("<sip:a@b>;x=\"\"");
     }
 
     #[test]

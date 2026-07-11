@@ -373,8 +373,12 @@ impl InviteHandler {
 
         // Parse the From URI (format: "Display Name" <sip:user@host>;tag=xxx or sip:user@host;tag=xxx)
         let from_uri = if let Some(start) = from_header.find('<') {
-            // Extract URI between < and >
-            let end = from_header.find('>').unwrap_or(from_header.len());
+            // Extract URI between < and >. Search for '>' only after '<' so a
+            // '>' preceding '<' cannot make end < start+1 and panic.
+            let end = from_header[start + 1..]
+                .find('>')
+                .map(|rel| start + 1 + rel)
+                .unwrap_or(from_header.len());
             &from_header[start + 1..end]
         } else {
             // No angle brackets, extract URI before semicolon
@@ -616,7 +620,10 @@ impl InviteHandler {
                 let local_uri =
                     if let Some(from_hdr) = header(call_leg.outgoing_invite.headers(), "From") {
                         let from_uri = if let Some(start) = from_hdr.find('<') {
-                            let end = from_hdr.find('>').unwrap_or(from_hdr.len());
+                            let end = from_hdr[start + 1..]
+                                .find('>')
+                                .map(|rel| start + 1 + rel)
+                                .unwrap_or(from_hdr.len());
                             &from_hdr[start + 1..end]
                         } else {
                             from_hdr
@@ -635,7 +642,10 @@ impl InviteHandler {
                 {
                     // Extract URI from Contact header
                     let contact_uri = if let Some(start) = contact.find('<') {
-                        let end = contact.find('>').unwrap_or(contact.len());
+                        let end = contact[start + 1..]
+                            .find('>')
+                            .map(|rel| start + 1 + rel)
+                            .unwrap_or(contact.len());
                         &contact[start + 1..end]
                     } else {
                         contact.split(';').next().unwrap_or(contact.as_str()).trim()
@@ -687,7 +697,10 @@ impl InviteHandler {
 
                 // Extract local and remote URIs for UAS dialog (from Bob's perspective)
                 let caller_uri_str = if let Some(start) = caller_from.find('<') {
-                    let end = caller_from.find('>').unwrap_or(caller_from.len());
+                    let end = caller_from[start + 1..]
+                        .find('>')
+                        .map(|rel| start + 1 + rel)
+                        .unwrap_or(caller_from.len());
                     &caller_from[start + 1..end]
                 } else {
                     caller_from

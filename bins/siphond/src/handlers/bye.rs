@@ -65,8 +65,10 @@ impl ByeHandler {
                         // Parse contact URI from Contact header (may have angle brackets)
                         let contact_str = contact_header;
                         if let Some(start) = contact_str.find('<') {
-                            if let Some(end) = contact_str.find('>') {
-                                &contact_str[start + 1..end]
+                            // Search for '>' only after '<' to avoid a panic when
+                            // '>' precedes '<'.
+                            if let Some(end) = contact_str[start + 1..].find('>') {
+                                &contact_str[start + 1..start + 1 + end]
                             } else {
                                 contact_str
                             }

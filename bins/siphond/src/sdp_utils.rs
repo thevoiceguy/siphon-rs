@@ -22,7 +22,13 @@ use crate::config::DaemonConfig;
 /// Parse a name-addr format URI (e.g., "Alice <sip:alice@example.com>")
 pub fn parse_name_addr_uri(value: &str) -> Option<SipUri> {
     if let Some(start) = value.find('<') {
-        let end = value.find('>').unwrap_or(value.len());
+        // Search for the closing '>' only *after* the opening '<'. Searching
+        // the whole string lets a '>' that precedes '<' produce end < start+1,
+        // which panics when slicing.
+        let end = value[start + 1..]
+            .find('>')
+            .map(|rel| start + 1 + rel)
+            .unwrap_or(value.len());
         SipUri::parse(&value[start + 1..end]).ok()
     } else {
         let uri = value.split(';').next()?.trim();
@@ -150,5 +156,15 @@ mod tests {
         let (username, host) = local_identity(&config);
         assert_eq!(username, "test");
         assert_eq!(host, "192.168.1.100");
+    }
+
+    // Regression: a '>' appearing before '<' must not panic on the slice.
+    // Reachable pre-auth via the INVITE `From` header (Supported: 100rel path).
+    #[test]
+    fn name_addr_close_bracket_before_open_does_not_panic() {
+        assert!(parse_name_addr_uri("\"a>b\" <sip:alice@example.com>").is_some());
+        // Pathological orderings that previously panicked; must return gracefully.
+        assert!(parse_name_addr_uri(">sip:a@b<").is_none());
+        assert!(parse_name_addr_uri("x>y<").is_none());
     }
 }
