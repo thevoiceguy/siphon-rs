@@ -281,10 +281,10 @@ impl TransportDispatcher for SiphonTransportDispatcher {
             sip_transport::TransportKind::Ws => {
                 #[cfg(feature = "ws")]
                 {
-                    let url = ctx.ws_uri.clone().unwrap_or_else(|| {
+                    let url = ctx.ws_uri().map(|s| s.to_string()).unwrap_or_else(|| {
                         let host = ctx
-                            .server_name
-                            .clone()
+                            .server_name()
+                            .map(|s| s.to_string())
                             .unwrap_or_else(|| ctx.peer().ip().to_string());
                         format!("ws://{}:{}", host, ctx.peer().port())
                     });
@@ -298,10 +298,10 @@ impl TransportDispatcher for SiphonTransportDispatcher {
             sip_transport::TransportKind::Wss => {
                 #[cfg(feature = "ws")]
                 {
-                    let url = ctx.ws_uri.clone().unwrap_or_else(|| {
+                    let url = ctx.ws_uri().map(|s| s.to_string()).unwrap_or_else(|| {
                         let host = ctx
-                            .server_name
-                            .clone()
+                            .server_name()
+                            .map(|s| s.to_string())
                             .unwrap_or_else(|| ctx.peer().ip().to_string());
                         format!("wss://{}:{}", host, ctx.peer().port())
                     });

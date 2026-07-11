@@ -376,8 +376,17 @@ fn empty_body_handling() {
 
 #[cfg(feature = "proptest")]
 proptest! {
+    // Generators are restricted to values valid in these header positions.
+    // The branch must carry the RFC 3261 `z9hG4bK` magic cookie (the parser
+    // rejects messages whose Via branch lacks it), and arbitrary Unicode
+    // (e.g. whitespace like U+00A0) is not valid in a token; the parser
+    // correctly rejects or trims it, so a roundtrip over arbitrary input
+    // would not — and should not — hold.
     #[test]
-    fn branch_and_callid_roundtrip(branch in "\\PC{1,32}", callid in "\\PC{1,32}") {
+    fn branch_and_callid_roundtrip(
+        branch in "z9hG4bK[a-zA-Z0-9._-]{1,24}",
+        callid in "[a-zA-Z0-9._-]{1,32}",
+    ) {
         let invite = build_invite("sip:test.com", &branch, &callid);
         let parsed = parse_request(&serialize_request(&invite)).unwrap();
         let via = parsed.headers().get("Via").unwrap();
@@ -387,7 +396,7 @@ proptest! {
     }
 
     #[test]
-    fn prack_rack_includes_sequence(rack in "\\PC{1,16}") {
+    fn prack_rack_includes_sequence(rack in "[a-zA-Z0-9._-]{1,16}") {
         let prack = build_prack("sip:bob@example.com", &rack, "call@example.com", 2);
         let parsed = parse_request(&serialize_request(&prack)).unwrap();
         let rack_header = parsed.headers().get("RAck").unwrap();

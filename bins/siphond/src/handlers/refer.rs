@@ -195,7 +195,7 @@ impl ClientTransactionUser for ReferTransferTransactionUser {
             sip_transaction::TransportKind::Ws | sip_transaction::TransportKind::Wss => {
                 #[cfg(feature = "ws")]
                 {
-                    if let Some(ws_uri) = ctx.ws_uri.as_deref() {
+                    if let Some(ws_uri) = ctx.ws_uri() {
                         let data = bytes::Bytes::from(payload.to_vec());
                         let result = if ctx.transport() == sip_transaction::TransportKind::Wss {
                             sip_transport::send_wss(ws_uri, data).await

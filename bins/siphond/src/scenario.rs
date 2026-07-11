@@ -85,7 +85,7 @@ impl ClientTransactionUser for ScenarioTransactionUser {
             TransportKind::Ws | TransportKind::Wss => {
                 #[cfg(feature = "ws")]
                 {
-                    if let Some(ws_uri) = ctx.ws_uri.as_deref() {
+                    if let Some(ws_uri) = ctx.ws_uri() {
                         let data = bytes::Bytes::from(payload.to_vec());
                         if ctx.transport() == TransportKind::Wss {
                             let _ = sip_transport::send_wss(ws_uri, data).await;
