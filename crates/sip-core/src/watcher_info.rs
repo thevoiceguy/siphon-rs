@@ -792,7 +792,14 @@ fn parse_watcher(xml: &str) -> Result<Watcher, WatcherinfoError> {
     }
 
     if let Some(content_start) = xml.find('>') {
-        if let Some(content_end) = xml.find("</watcher>") {
+        // Search for the closing tag only *after* the opening tag's '>'. If the
+        // opening <watcher ...> tag is unclosed, the first '>' found is the one
+        // inside </watcher>, which would make content_end < content_start and
+        // panic on the slice.
+        if let Some(content_end) = xml[content_start + 1..]
+            .find("</watcher>")
+            .map(|rel| content_start + 1 + rel)
+        {
             let uri = xml_unescape(xml[content_start + 1..content_end].trim())?;
             if !uri.is_empty() {
                 watcher = watcher.with_uri(uri)?;
@@ -908,6 +915,20 @@ mod tests {
     fn watcherinfo_rejects_invalid_state() {
         assert!(WatcherinfoDocument::new(0, "invalid").is_err());
         assert!(WatcherinfoDocument::new(0, "").is_err());
+    }
+
+    // Regression: an unclosed `<watcher ...>` opening tag makes the first '>'
+    // found the one inside `</watcher>`, which previously made
+    // content_end < content_start and panicked on the slice. Untrusted body.
+    #[test]
+    fn parse_watcherinfo_unclosed_watcher_tag_does_not_panic() {
+        let xml = concat!(
+            r#"<watcherinfo version="0" state="full">"#,
+            r#"<watcher-list resource="sip:a@b" package="presence">"#,
+            r#"<watcher id="a" status="active" event="subscribe""#,
+            r#"</watcher></watcher-list></watcherinfo>"#,
+        );
+        let _ = parse_watcherinfo(xml);
     }
 
     #[test]

@@ -300,6 +300,29 @@ pub(crate) fn usernames_equal(a: &str, b: &str) -> bool {
     a_nfc.eq_ignore_ascii_case(&b_nfc)
 }
 
+/// Extract the identity that an authenticated user must own to register a given
+/// normalized AOR, for RFC 3261 §10.3 registration authorization.
+///
+/// - `sip:user@host` / `sips:user@host` → `Some("user")`
+/// - `tel:+15551234567` (with optional `;params`) → `Some("+15551234567")`
+/// - host-only `sip:host` (no user part) → `None`
+///
+/// Returns `None` when the AOR carries no user identity to authorize against.
+/// Callers MUST treat `None` as "not authorized" (fail closed) rather than
+/// skipping the check — previously, `tel:` and host-only AORs took the skip
+/// path and allowed any authenticated user to hijack such a registration.
+pub(crate) fn aor_identity(aor: &str) -> Option<&str> {
+    let (scheme, rest) = aor.split_once(':')?;
+    if scheme.eq_ignore_ascii_case("tel") {
+        // The number runs up to the first parameter (';').
+        let number = rest.split(';').next().unwrap_or(rest);
+        (!number.is_empty()).then_some(number)
+    } else {
+        // sip/sips: the identity is the user part before '@'.
+        rest.split_once('@').map(|(user, _)| user)
+    }
+}
+
 pub fn normalize_aor(uri: &Uri) -> Result<String, NormalizeError> {
     match uri {
         Uri::Sip(sip_uri) => Ok(normalize_sip_aor(sip_uri)),
@@ -1531,29 +1554,27 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
         // RFC 3261 §10.3 step 4: The registrar SHOULD verify that the authenticated
         // user is authorized to modify registrations for the To address-of-record.
         if self.authenticator.is_some() {
-            if let Some(auth_user) = sip_auth::extract_auth_username(request.headers()) {
-                // Extract user part from AOR for comparison
-                // AOR format: "sip:user@host" or "sips:user@host"
-                let aor_user = aor
-                    .split_once(':')
-                    .and_then(|(_, rest)| rest.split_once('@'))
-                    .map(|(user, _)| user);
+            // Fail closed: reject unless the AOR carries an identity that
+            // matches the authenticated user. AORs with no user part (`tel:`
+            // numbers and host-only SIP URIs) previously yielded `None` and
+            // skipped this check entirely, letting any authenticated user
+            // hijack another party's `tel:` / host-only registration.
+            let authorized = sip_auth::extract_auth_username(request.headers())
+                .and_then(|auth_user| {
+                    aor_identity(&aor).map(|id| usernames_equal(id, auth_user.as_str()))
+                })
+                .unwrap_or(false);
 
-                if let Some(aor_user) = aor_user {
-                    if !usernames_equal(aor_user, auth_user.as_str()) {
-                        warn!(
-                            auth_user = %auth_user,
-                            aor_user = %aor_user,
-                            aor = %aor,
-                            "REGISTER rejected: authenticated user does not match AOR"
-                        );
-                        return self.build_error_response(
-                            request,
-                            403,
-                            "Forbidden - Not authorized for this address-of-record",
-                        );
-                    }
-                }
+            if !authorized {
+                warn!(
+                    aor = %aor,
+                    "REGISTER rejected: authenticated user not authorized for this AOR"
+                );
+                return self.build_error_response(
+                    request,
+                    403,
+                    "Forbidden - Not authorized for this address-of-record",
+                );
             }
         }
 
@@ -1880,29 +1901,27 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
         // RFC 3261 §10.3 step 4: The registrar SHOULD verify that the authenticated
         // user is authorized to modify registrations for the To address-of-record.
         if self.authenticator.is_some() {
-            if let Some(auth_user) = sip_auth::extract_auth_username(request.headers()) {
-                // Extract user part from AOR for comparison
-                // AOR format: "sip:user@host" or "sips:user@host"
-                let aor_user = aor
-                    .split_once(':')
-                    .and_then(|(_, rest)| rest.split_once('@'))
-                    .map(|(user, _)| user);
+            // Fail closed: reject unless the AOR carries an identity that
+            // matches the authenticated user. AORs with no user part (`tel:`
+            // numbers and host-only SIP URIs) previously yielded `None` and
+            // skipped this check entirely, letting any authenticated user
+            // hijack another party's `tel:` / host-only registration.
+            let authorized = sip_auth::extract_auth_username(request.headers())
+                .and_then(|auth_user| {
+                    aor_identity(&aor).map(|id| usernames_equal(id, auth_user.as_str()))
+                })
+                .unwrap_or(false);
 
-                if let Some(aor_user) = aor_user {
-                    if !usernames_equal(aor_user, auth_user.as_str()) {
-                        warn!(
-                            auth_user = %auth_user,
-                            aor_user = %aor_user,
-                            aor = %aor,
-                            "REGISTER rejected: authenticated user does not match AOR"
-                        );
-                        return self.build_error_response(
-                            request,
-                            403,
-                            "Forbidden - Not authorized for this address-of-record",
-                        );
-                    }
-                }
+            if !authorized {
+                warn!(
+                    aor = %aor,
+                    "REGISTER rejected: authenticated user not authorized for this AOR"
+                );
+                return self.build_error_response(
+                    request,
+                    403,
+                    "Forbidden - Not authorized for this address-of-record",
+                );
             }
         }
 
@@ -2496,6 +2515,130 @@ mod tests {
         assert_eq!(bindings[0].contact(), "sip:ua.example.com");
         assert_eq!(bindings[0].call_id(), "call123");
         assert_eq!(bindings[0].cseq(), 1);
+    }
+
+    #[test]
+    fn aor_identity_extracts_or_fails_closed() {
+        assert_eq!(aor_identity("sip:alice@example.com"), Some("alice"));
+        assert_eq!(aor_identity("sips:alice@example.com"), Some("alice"));
+        assert_eq!(aor_identity("tel:+15551234567"), Some("+15551234567"));
+        assert_eq!(
+            aor_identity("tel:5551234;phone-context=example.com"),
+            Some("5551234")
+        );
+        // No user identity to authorize against -> None (callers fail closed).
+        assert_eq!(aor_identity("sip:example.com"), None);
+        assert_eq!(aor_identity("sip:example.com:5060"), None);
+    }
+
+    // Stub authenticator: authentication always succeeds, so the test exercises
+    // the AOR-to-identity authorization step (not digest verification itself).
+    struct AlwaysAuthenticated;
+    impl Authenticator for AlwaysAuthenticated {
+        fn challenge(&self, _request: &Request) -> Result<sip_core::Response> {
+            Ok(sip_core::Response::new(
+                sip_core::StatusLine::new(401, SmolStr::new("Unauthorized")).unwrap(),
+                Headers::new(),
+                Bytes::new(),
+            )
+            .unwrap())
+        }
+        fn verify(&self, _request: &Request, _headers: &Headers) -> Result<bool> {
+            Ok(true)
+        }
+        fn credentials_for(&self, _method: &Method, _uri: &str) -> Option<Credentials> {
+            None
+        }
+    }
+
+    fn authed_register(to: &str, contact: &str, username: &str, call_id: &str) -> Request {
+        let mut headers = base_headers();
+        headers.push("To", to).unwrap();
+        headers.push("Contact", contact).unwrap();
+        headers.push("Call-ID", call_id).unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
+        // verify() is stubbed, so only the `username` param needs to be present.
+        headers
+            .push(
+                "Authorization",
+                &format!(
+                    "Digest username=\"{}\", realm=\"example.com\", \
+                     nonce=\"x\", uri=\"sip:example.com\", response=\"y\"",
+                    username
+                ),
+            )
+            .unwrap();
+        Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid request")
+    }
+
+    // Regression: a `tel:` or host-only AOR must NOT bypass AOR-to-identity
+    // authorization. Previously `aor_user` was `None` for these and the check
+    // was skipped, letting any authenticated user hijack the registration.
+    #[test]
+    fn register_authorization_blocks_tel_and_host_only_aor_hijack() {
+        let store = MemoryLocationStore::new();
+        let registrar = BasicRegistrar::new(store.clone(), Some(AlwaysAuthenticated));
+
+        // Matching sip AOR -> authorized.
+        let ok = registrar
+            .handle_register(&authed_register(
+                "<sip:alice@example.com>",
+                "<sip:ua.example.com>;expires=60",
+                "alice",
+                "c-ok",
+            ))
+            .expect("response");
+        assert_eq!(ok.code(), 200);
+
+        // tel: AOR that does NOT match the authenticated user -> rejected, no binding.
+        let tel_hijack = registrar
+            .handle_register(&authed_register(
+                "<tel:+15551234567>",
+                "<sip:attacker@evil.com>;expires=60",
+                "alice",
+                "c-tel",
+            ))
+            .expect("response");
+        assert_eq!(tel_hijack.code(), 403, "tel: AOR hijack must be rejected");
+        assert!(store.lookup("tel:+15551234567").unwrap().is_empty());
+
+        // Host-only AOR -> rejected (no user identity to authorize).
+        let host_only = registrar
+            .handle_register(&authed_register(
+                "<sip:example.com>",
+                "<sip:attacker@evil.com>;expires=60",
+                "alice",
+                "c-host",
+            ))
+            .expect("response");
+        assert_eq!(host_only.code(), 403, "host-only AOR hijack must be rejected");
+
+        // tel: AOR that DOES match the authenticated identity -> authorized.
+        let tel_ok = registrar
+            .handle_register(&authed_register(
+                "<tel:+15551234567>",
+                "<sip:device.example.com>;expires=60",
+                "+15551234567",
+                "c-tel-ok",
+            ))
+            .expect("response");
+        assert_eq!(tel_ok.code(), 200, "matching tel: identity must be allowed");
+
+        // Mismatched sip user -> still rejected (existing behavior preserved).
+        let mismatch = registrar
+            .handle_register(&authed_register(
+                "<sip:bob@example.com>",
+                "<sip:ua.example.com>;expires=60",
+                "alice",
+                "c-mismatch",
+            ))
+            .expect("response");
+        assert_eq!(mismatch.code(), 403);
     }
 
     #[test]

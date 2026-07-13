@@ -492,7 +492,13 @@ fn parse_tuple(xml: &str) -> Result<Tuple, PresenceError> {
 
     // Extract status
     if let Some(basic_start) = xml.find("<basic>") {
-        if let Some(basic_end) = xml.find("</basic>") {
+        // Search for the closing tag only *after* the opening tag, so a
+        // </basic> that precedes <basic> cannot make basic_end < basic_start+7
+        // and panic on the slice.
+        if let Some(basic_end) = xml[basic_start + 7..]
+            .find("</basic>")
+            .map(|rel| basic_start + 7 + rel)
+        {
             let status_str = &xml[basic_start + 7..basic_end].trim();
             tuple.status =
                 Some(BasicStatus::parse(status_str).ok_or_else(|| {
@@ -709,6 +715,14 @@ mod tests {
     fn reject_empty_entity() {
         let result = PresenceDocument::new("");
         assert!(matches!(result, Err(PresenceError::EmptyEntity)));
+    }
+
+    // Regression: `</basic>` appearing before `<basic>` must not make
+    // basic_end < basic_start+7 and panic on the slice. Untrusted PIDF body.
+    #[test]
+    fn parse_pidf_out_of_order_basic_tags_does_not_panic() {
+        let xml = r#"<presence entity="x"><tuple id="a"></basic><basic></tuple></presence>"#;
+        let _ = parse_pidf(xml);
     }
 
     #[test]
