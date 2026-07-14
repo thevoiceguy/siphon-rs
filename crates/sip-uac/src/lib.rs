@@ -24,7 +24,7 @@ pub use sip_sdp::profiles::{MediaProfileBuilder, SdpProfile};
 
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
-use rand::{distr::Alphanumeric, Rng};
+use rand::{distr::Alphanumeric, RngExt};
 use sip_auth::{DigestAlgorithm, DigestClient, Qop};
 use sip_core::{
     Header, Headers, Method, Request, RequestLine, Response, ServiceRouteHeader, SipUri,
@@ -3149,7 +3149,7 @@ fn generate_tag() -> SmolStr {
     }
 
     let tag: String = rand::rng()
-        .sample_iter(&Alphanumeric)
+        .sample_iter(Alphanumeric)
         .take(10)
         .map(char::from)
         .collect();
@@ -3162,7 +3162,7 @@ fn generate_branch() -> String {
     }
 
     let random: String = rand::rng()
-        .sample_iter(&Alphanumeric)
+        .sample_iter(Alphanumeric)
         .take(16)
         .map(char::from)
         .collect();
@@ -3175,7 +3175,7 @@ fn generate_call_id() -> String {
     }
 
     let random: String = rand::rng()
-        .sample_iter(&Alphanumeric)
+        .sample_iter(Alphanumeric)
         .take(20)
         .map(char::from)
         .collect();

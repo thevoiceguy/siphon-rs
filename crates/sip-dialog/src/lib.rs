@@ -1699,13 +1699,13 @@ impl Default for SubscriptionManager {
 }
 
 /// Returns a random initial RSeq value in the inclusive range `1..=2^31 - 1`,
-/// per RFC 3262 §3. Sourced from `OsRng` so the value is unpredictable to
-/// off-path attackers (a deterministic RNG would let them guess the first
-/// reliable-provisional sequence).
+/// per RFC 3262 §3. Sourced from `SysRng` (the OS entropy source) so the
+/// value is unpredictable to off-path attackers (a deterministic RNG would
+/// let them guess the first reliable-provisional sequence).
 fn random_initial_rseq() -> u32 {
-    use rand::{rngs::OsRng, TryRngCore};
+    use rand::{rngs::SysRng, TryRng};
     // try_next_u32 may return 0; clamp into 1..=(2^31 - 1).
-    let n = OsRng.try_next_u32().expect("OS RNG must not fail");
+    let n = SysRng.try_next_u32().expect("OS RNG must not fail");
     (n & 0x7FFF_FFFF).max(1)
 }
 

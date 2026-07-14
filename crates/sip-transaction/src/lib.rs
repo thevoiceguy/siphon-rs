@@ -25,7 +25,7 @@
 //! # }
 //! ```
 
-use rand::{distr::Alphanumeric, Rng};
+use rand::{distr::Alphanumeric, RngExt};
 use sip_core::{Headers, Method, Request};
 use smol_str::SmolStr;
 
@@ -122,7 +122,7 @@ pub fn generate_branch_id() -> SmolStr {
 
     let mut rng = rand::rng();
     let suffix: String = (&mut rng)
-        .sample_iter(&Alphanumeric)
+        .sample_iter(Alphanumeric)
         .take(16)
         .map(char::from)
         .collect();

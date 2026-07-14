@@ -32,7 +32,7 @@ use hickory_resolver::{
     proto::rr::{RData, RecordType},
     TokioResolver,
 };
-use rand::Rng;
+use rand::RngExt;
 use sip_core::SipUri;
 use smol_str::SmolStr;
 use std::collections::BTreeMap;
