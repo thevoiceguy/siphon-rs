@@ -1541,8 +1541,17 @@ async fn spawn_tls_session(
                 }
             }
             Ok(Err(e)) => {
-                error!(%e, "tls read error");
-                transport_metrics().on_error(TransportLabel::Tls, StageLabel::Read);
+                // Most SIP peers (Twilio, anything behind an AWS NLB) drop an
+                // idle TCP connection without sending a TLS close_notify;
+                // rustls surfaces that as UnexpectedEof. It's a routine
+                // disconnect, so treat it like the clean-EOF arm above rather
+                // than a transport error.
+                if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                    info!(%peer, "tls connection closed by peer without close_notify");
+                } else {
+                    error!(%peer, %e, "tls read error");
+                    transport_metrics().on_error(TransportLabel::Tls, StageLabel::Read);
+                }
                 break;
             }
             Err(_) => {
