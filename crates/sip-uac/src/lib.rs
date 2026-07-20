@@ -929,6 +929,20 @@ impl UserAgentClient {
     /// # Returns
     /// An INVITE request ready to send
     pub fn create_invite(&self, target_uri: &SipUri, sdp_body: Option<&str>) -> Request {
+        self.create_invite_with_from(target_uri, sdp_body, None)
+    }
+
+    /// Like [`Self::create_invite`], but overrides the From header URI
+    /// for this request only (per-call caller identity). `from_override`
+    /// is passed as an argument rather than read from shared state, so it
+    /// is safe under concurrent calls on one client. `None` reproduces
+    /// `create_invite` exactly.
+    pub fn create_invite_with_from(
+        &self,
+        target_uri: &SipUri,
+        sdp_body: Option<&str>,
+        from_override: Option<&SipUri>,
+    ) -> Request {
         warn_if_sips_contact_downgrade(target_uri, &self.contact_uri, "INVITE");
         let mut headers = Headers::new();
 
@@ -942,7 +956,7 @@ impl UserAgentClient {
             .unwrap();
 
         // From
-        let from = self.format_from_header();
+        let from = self.format_from_header_with(from_override);
         headers
             .push(SmolStr::new("From"), SmolStr::new(from))
             .unwrap();
@@ -3079,7 +3093,18 @@ impl UserAgentClient {
     }
 
     fn format_from_header(&self) -> String {
-        let uri = self.from_uri_override.as_ref().unwrap_or(&self.local_uri);
+        self.format_from_header_with(None)
+    }
+
+    /// Format the From header, optionally overriding the URI for this
+    /// one request. Precedence: per-call `from_override` (a caller
+    /// identity supplied for this INVITE only) → the stateful
+    /// `from_uri_override` (B2BUA identity preservation) → `local_uri`.
+    /// The local tag and display name are unchanged.
+    fn format_from_header_with(&self, from_override: Option<&SipUri>) -> String {
+        let uri = from_override
+            .or(self.from_uri_override.as_ref())
+            .unwrap_or(&self.local_uri);
 
         if let Some(ref display) = self.display_name {
             format!(
@@ -3420,6 +3445,44 @@ mod tests {
         assert!(request.headers().get("From").is_some());
         assert!(request.headers().get("To").is_some());
         assert!(request.headers().get("Contact").is_some());
+    }
+
+    #[test]
+    fn create_invite_with_from_overrides_from_uri_per_call() {
+        let local_uri = SipUri::parse("sip:siphon@139.177.205.140").unwrap();
+        let contact_uri = SipUri::parse("sip:siphon@139.177.205.140:5060").unwrap();
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+        let target_uri = SipUri::parse("sip:+15558675309@siphon.pstn.twilio.com").unwrap();
+
+        // Default: From carries the client's local identity.
+        let default_from = uac
+            .create_invite(&target_uri, None)
+            .headers()
+            .get("From")
+            .unwrap()
+            .to_string();
+        assert!(
+            default_from.contains("sip:siphon@139.177.205.140"),
+            "default From should be the local identity, got {default_from:?}"
+        );
+
+        // Override: the caller-ID reaches the From, the local tag is kept.
+        let caller_id = SipUri::parse("sip:+19292099901@siphon.pstn.twilio.com").unwrap();
+        let from = uac
+            .create_invite_with_from(&target_uri, None, Some(&caller_id))
+            .headers()
+            .get("From")
+            .unwrap()
+            .to_string();
+        assert!(
+            from.contains("sip:+19292099901@siphon.pstn.twilio.com"),
+            "overridden From should carry the caller-ID, got {from:?}"
+        );
+        assert!(
+            !from.contains("siphon@139.177.205.140"),
+            "overridden From must NOT carry the local identity, got {from:?}"
+        );
+        assert!(from.contains(";tag="), "From must still carry a local tag");
     }
 
     #[test]
