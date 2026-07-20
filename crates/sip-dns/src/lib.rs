@@ -176,6 +176,14 @@ pub struct DnsTarget {
     port: u16,
     transport: Transport,
     priority: u16,
+    /// TLS reference identity (RFC 5922 §4): the original domain name
+    /// from the request URI, kept for SNI and certificate-name
+    /// verification even after `host` has been replaced by a resolved
+    /// IP for the connection. `None` when the connect host *is* the
+    /// reference identity — an IP-literal URI, or an SRV target whose
+    /// name is already carried in `host`. Consumers should read
+    /// [`Self::sni`], which falls back to `host`.
+    tls_name: Option<SmolStr>,
 }
 
 impl DnsTarget {
@@ -200,6 +208,7 @@ impl DnsTarget {
             port,
             transport,
             priority: 0,
+            tls_name: None,
         })
     }
 
@@ -215,12 +224,22 @@ impl DnsTarget {
             port,
             transport,
             priority: 0,
+            tls_name: None,
         }
     }
 
     /// Sets the priority for this target.
     pub fn with_priority(mut self, priority: u16) -> Self {
         self.priority = priority;
+        self
+    }
+
+    /// Sets the TLS reference identity (the pre-resolution domain name)
+    /// used for SNI and certificate verification. Set this when `host`
+    /// has been replaced by a resolved IP so the original hostname is
+    /// not lost (RFC 5922 §4).
+    pub fn with_tls_name(mut self, tls_name: impl Into<SmolStr>) -> Self {
+        self.tls_name = Some(tls_name.into());
         self
     }
 
@@ -242,6 +261,21 @@ impl DnsTarget {
     /// Returns the priority (lower is higher priority).
     pub fn priority(&self) -> u16 {
         self.priority
+    }
+
+    /// Returns the TLS reference identity if one was set (the original
+    /// domain name), else `None`.
+    pub fn tls_name(&self) -> Option<&str> {
+        self.tls_name.as_deref()
+    }
+
+    /// Returns the name to use for TLS SNI and certificate verification:
+    /// the reference identity ([`Self::tls_name`]) when set, otherwise
+    /// the connect [`Self::host`]. This is the value TLS callers want —
+    /// it yields the original hostname when `host` is a resolved IP, and
+    /// the host itself for IP-literal or SRV-name targets.
+    pub fn sni(&self) -> &str {
+        self.tls_name.as_deref().unwrap_or(&self.host)
     }
 }
 
@@ -421,7 +455,12 @@ impl SipResolver {
             return enforce_target_limit(
                 ips.into_iter()
                     .map(|ip| {
+                        // `host` is the connect IP; keep the original
+                        // hostname as the TLS reference identity so SNI
+                        // and cert verification use it, not the IP
+                        // (RFC 5922 §4).
                         DnsTarget::unchecked_new(ip.to_string(), port, Self::default_transport(uri))
+                            .with_tls_name(host)
                     })
                     .collect(),
             );
@@ -464,16 +503,22 @@ impl SipResolver {
             }
         }
 
-        // RFC 3263 §4.3: Fallback to A/AAAA if no SRV records
+        // RFC 3263 §4.3: Fallback to A/AAAA if no SRV records. This is
+        // the Twilio Secure Trunking path (hostname URI, no SRV).
         if all_targets.is_empty() {
             let default_port = if uri.is_sips() { 5061 } else { 5060 };
             let ips = self.lookup_a_aaaa(host).await?;
             for ip in ips {
-                all_targets.push(DnsTarget::unchecked_new(
-                    ip.to_string(),
-                    default_port,
-                    Self::default_transport(uri),
-                ));
+                all_targets.push(
+                    DnsTarget::unchecked_new(
+                        ip.to_string(),
+                        default_port,
+                        Self::default_transport(uri),
+                    )
+                    // Preserve the original hostname for TLS SNI / cert
+                    // verification (RFC 5922 §4) — `host` is now the IP.
+                    .with_tls_name(host),
+                );
             }
         }
 
@@ -1316,6 +1361,41 @@ mod tests {
     fn numeric_ip_returns_directly() {
         assert!(SipResolver::is_numeric_ip("192.168.1.1"));
         assert!(!SipResolver::is_numeric_ip("example.com"));
+    }
+
+    #[test]
+    fn sni_falls_back_to_host_without_reference_identity() {
+        // No tls_name set (IP-literal / SRV-name targets): SNI == host.
+        let t = DnsTarget::unchecked_new("54.172.60.3", 5061, Transport::Tls);
+        assert_eq!(t.tls_name(), None);
+        assert_eq!(t.sni(), "54.172.60.3");
+    }
+
+    #[test]
+    fn with_tls_name_preserves_reference_identity_for_sni() {
+        // A resolved target: host is the IP for the connection, but the
+        // original hostname is kept for SNI + cert verification (the
+        // Twilio Secure Trunking fix — RFC 5922 §4).
+        let t = DnsTarget::unchecked_new("54.172.60.3", 5061, Transport::Tls)
+            .with_tls_name("siphon.pstn.twilio.com");
+        assert_eq!(t.host(), "54.172.60.3"); // connect to the IP
+        assert_eq!(t.sni(), "siphon.pstn.twilio.com"); // but SNI the name
+        assert_eq!(t.tls_name(), Some("siphon.pstn.twilio.com"));
+    }
+
+    #[test]
+    fn ip_literal_uri_keeps_ip_as_sni() {
+        // resolve_internal's numeric-IP branch must NOT attach a
+        // reference identity — SNI stays the IP (nothing else is
+        // available, and cert-by-IP is the only meaningful check).
+        let resolver = SipResolver::from_system().expect("system resolver");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        // Numeric host short-circuits before any network lookup.
+        let uri = SipUri::parse("sips:test@203.0.113.7:5061").unwrap();
+        let result = rt.block_on(resolver.resolve(&uri)).expect("resolve");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].sni(), "203.0.113.7");
+        assert_eq!(result[0].tls_name(), None);
     }
 
     #[test]
