@@ -1393,12 +1393,30 @@ impl IntegratedUAC {
         target: impl Into<RequestTarget>,
         sdp_body: Option<&str>,
     ) -> Result<CallHandle> {
+        self.invite_with_from(target, sdp_body, None).await
+    }
+
+    /// Like [`Self::invite`], but stamps the INVITE's From header from
+    /// `from_override` (the caller identity for this call) instead of the
+    /// client's local identity. The override is threaded per-call, so it
+    /// is safe under concurrent INVITEs on one client — unlike
+    /// [`Self::set_from_uri`], which mutates shared state. `None` behaves
+    /// exactly like [`Self::invite`]. Used by outbound origination to send
+    /// a trunk-supplied caller-ID (e.g. an owned/verified PSTN number)
+    /// that the provider will accept.
+    pub async fn invite_with_from(
+        &self,
+        target: impl Into<RequestTarget>,
+        sdp_body: Option<&str>,
+        from_override: Option<SipUri>,
+    ) -> Result<CallHandle> {
         let target = target.into();
 
         // Generate request using helper
         let helper = self.helper.lock().await;
         let target_uri = self.extract_uri(&target)?;
-        let mut request = helper.create_invite(&target_uri, sdp_body);
+        let mut request =
+            helper.create_invite_with_from(&target_uri, sdp_body, from_override.as_ref());
         drop(helper);
 
         // Resolve target
