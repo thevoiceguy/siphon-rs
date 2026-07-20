@@ -1268,9 +1268,12 @@ impl IntegratedUAC {
             }
         };
 
-        // Use hostname (from DNS target) for SNI when TLS/WSS is selected
+        // Use the DNS target's TLS reference identity for SNI when
+        // TLS/WSS is selected. `sni()` returns the original hostname when
+        // `host` has been replaced by a resolved IP (RFC 5922 §4), and
+        // falls back to `host` for IP-literal / SRV-name targets.
         let server_name = if matches!(transport, TransportKind::Tls | TransportKind::Wss) {
-            Some(dns_target.host().to_string())
+            Some(dns_target.sni().to_string())
         } else {
             None
         };
@@ -1641,7 +1644,7 @@ impl IntegratedUAC {
             _ => TransportKind::Tls, // Default to TLS for flow-based routing
         };
         let ctx = TransportContext::new(transport, flow.peer_addr, Some(flow.stream))
-            .with_server_name(Some(dns_target.host().to_string()))
+            .with_server_name(Some(dns_target.sni().to_string()))
             .with_local_addr(flow.local_addr);
 
         // Create early dialogs map for forking support
@@ -1919,7 +1922,7 @@ impl IntegratedUAC {
             _ => TransportKind::Tls, // Default to TLS for flow-based routing
         };
         let ctx = TransportContext::new(transport, flow.peer_addr, Some(flow.stream.clone()))
-            .with_server_name(Some(dns_target.host().to_string()))
+            .with_server_name(Some(dns_target.sni().to_string()))
             .with_local_addr(flow.local_addr);
 
         let method = request.method().clone();
@@ -2586,7 +2589,7 @@ impl IntegratedUAC {
             _ => TransportKind::Tls, // Default to TLS for flow-based routing
         };
         let ctx = TransportContext::new(transport, flow.peer_addr, Some(flow.stream))
-            .with_server_name(Some(dns_target.host().to_string()))
+            .with_server_name(Some(dns_target.sni().to_string()))
             .with_local_addr(flow.local_addr);
 
         let early_dialogs = Arc::new(Mutex::new(std::collections::HashMap::new()));
