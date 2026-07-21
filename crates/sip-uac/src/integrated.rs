@@ -2943,6 +2943,112 @@ mod tests {
         assert_eq!(response.code(), 202);
         assert_eq!(dialog.local_cseq(), 2);
     }
+
+    // ── builder: sharing a DialogManager with the UAS ──
+
+    /// Build a minimally-configured UAC, optionally sharing a store.
+    fn uac_with_optional_store(shared: Option<Arc<DialogManager>>) -> IntegratedUAC {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let mut builder = IntegratedUAC::builder()
+            .local_uri("sip:siphon@127.0.0.1")
+            .local_addr("127.0.0.1:5070")
+            .unwrap()
+            .transaction_manager(Arc::new(TransactionManager::new(dispatcher.clone())))
+            .resolver(Arc::new(SipResolver::from_system().unwrap()))
+            .dispatcher(dispatcher);
+        if let Some(mgr) = shared {
+            builder = builder.dialog_manager(mgr);
+        }
+        builder.build().unwrap()
+    }
+
+    /// An inbound in-dialog BYE as the peer would send it for a dialog we
+    /// created as UAC: From carries *their* tag, To carries ours.
+    fn inbound_bye(call_id: &str, our_tag: &str, their_tag: &str) -> Request {
+        let mut headers = Headers::new();
+        headers.push("Call-ID", call_id).unwrap();
+        headers
+            .push("From", &format!("<sip:remote@example.com>;tag={their_tag}"))
+            .unwrap();
+        headers
+            .push("To", &format!("<sip:local@example.com>;tag={our_tag}"))
+            .unwrap();
+        Request::new(
+            RequestLine::new(Method::Bye, SipUri::parse("sip:local@example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid BYE")
+    }
+
+    /// Both halves of the UAC — the `IntegratedUAC` handle and the inner
+    /// `UserAgentClient` helper — must land on the injected store.
+    /// Redirecting only one would relocate the split rather than close it,
+    /// since the helper registers dialogs on its own from 2xx responses.
+    #[tokio::test]
+    async fn builder_shares_injected_dialog_manager_with_helper_too() {
+        let shared = Arc::new(DialogManager::new());
+        let uac = uac_with_optional_store(Some(shared.clone()));
+
+        assert!(Arc::ptr_eq(uac.dialog_manager().unwrap(), &shared));
+        let helper = uac.helper.lock().await;
+        assert!(
+            Arc::ptr_eq(&helper.dialog_manager, &shared),
+            "helper must use the shared store, not its constructor default"
+        );
+    }
+
+    /// Omitting the setter leaves the private store intact, so existing
+    /// single-role embedders keep their current behaviour.
+    #[tokio::test]
+    async fn builder_without_injection_keeps_private_store() {
+        let unrelated = Arc::new(DialogManager::new());
+        let uac = uac_with_optional_store(None);
+
+        assert!(!Arc::ptr_eq(uac.dialog_manager().unwrap(), &unrelated));
+        let helper = uac.helper.lock().await;
+        assert!(
+            Arc::ptr_eq(&helper.dialog_manager, uac.dialog_manager().unwrap()),
+            "un-injected UAC still agrees with itself"
+        );
+    }
+
+    /// The regression this setter exists for: a dialog the UAC created
+    /// must be resolvable by the lookup UAS dispatch performs on an
+    /// inbound BYE. Before sharing was possible this missed, dispatch
+    /// answered 481, and the outbound call never tore down.
+    #[tokio::test]
+    async fn uac_dialog_is_found_by_shared_manager_lookup() {
+        let shared = Arc::new(DialogManager::new());
+        let uac = uac_with_optional_store(Some(shared.clone()));
+
+        // Register a confirmed UAC dialog the way the UAC does.
+        let dialog = base_dialog(); // id = (call, local=our tag, remote=peer tag)
+        let _ = uac.dialog_manager().unwrap().insert(dialog.clone());
+
+        let bye = inbound_bye("call", "local", "remote");
+        let found = shared
+            .find_by_request(&bye)
+            .expect("UAS dispatch must resolve the UAC's dialog through the shared store");
+        assert_eq!(found.id(), dialog.id());
+    }
+
+    /// The same lookup against a *separate* manager still misses — this
+    /// is the 481 path, pinned so the test above can't pass for the
+    /// wrong reason (e.g. a global/static store).
+    #[tokio::test]
+    async fn unshared_uac_dialog_is_invisible_to_another_manager() {
+        let uas_side = Arc::new(DialogManager::new());
+        let uac = uac_with_optional_store(None);
+
+        let _ = uac.dialog_manager().unwrap().insert(base_dialog());
+
+        let bye = inbound_bye("call", "local", "remote");
+        assert!(
+            uas_side.find_by_request(&bye).is_none(),
+            "a private UAC store must stay invisible to an unrelated manager"
+        );
+    }
 }
 
 /// Handle returned from INVITE/re-INVITE with CANCEL capability.
@@ -3513,6 +3619,7 @@ pub struct IntegratedUACBuilder {
     transaction_manager: Option<Arc<TransactionManager>>,
     resolver: Option<Arc<SipResolver>>,
     dispatcher: Option<Arc<dyn TransportDispatcher>>,
+    dialog_manager: Option<Arc<DialogManager>>,
     credentials: Option<(String, String)>,
     display_name: Option<String>,
     config: UACConfig,
@@ -3530,6 +3637,7 @@ impl IntegratedUACBuilder {
             transaction_manager: None,
             resolver: None,
             dispatcher: None,
+            dialog_manager: None,
             credentials: None,
             display_name: None,
             config: UACConfig::default(),
@@ -3640,6 +3748,43 @@ impl IntegratedUACBuilder {
     /// Sets the transport dispatcher.
     pub fn dispatcher(mut self, dispatcher: Arc<dyn TransportDispatcher>) -> Self {
         self.dispatcher = Some(dispatcher);
+        self
+    }
+
+    /// Shares a [`DialogManager`] with the rest of the stack — pass
+    /// [`IntegratedUAS::dialog_manager`] here when the same endpoint both
+    /// originates and receives calls.
+    ///
+    /// Without this, every `IntegratedUAC` owns a private dialog store,
+    /// and dialogs it creates are invisible to UAS dispatch. Dispatch
+    /// resolves an inbound in-dialog request (BYE, re-INVITE, INFO,
+    /// UPDATE) through *its* manager's `find_by_request`, so a peer
+    /// hanging up an outbound call gets `481 Call/Transaction Does Not
+    /// Exist` and the call never tears down. `IntegratedUAS`'s own
+    /// `dialog_manager()` doc already advises sharing the store; this is
+    /// the UAC-side input that makes it actionable.
+    ///
+    /// Optional: when unset the UAC keeps its private manager, so
+    /// existing single-role embedders are unaffected.
+    ///
+    /// A daemon running both roles passes the UAS's store — in practice
+    /// `uas.dialog_manager()` — to every UAC it constructs:
+    ///
+    /// ```no_run
+    /// # use std::sync::Arc;
+    /// # use sip_dialog::DialogManager;
+    /// # use sip_uac::integrated::IntegratedUAC;
+    /// # fn example(shared: Arc<DialogManager>) -> anyhow::Result<()> {
+    /// let uac = IntegratedUAC::builder()
+    ///     .local_uri("sip:agent@example.com")
+    ///     .dialog_manager(shared) // e.g. uas.dialog_manager()
+    ///     // … other required setters …
+    ///     .build()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn dialog_manager(mut self, mgr: Arc<DialogManager>) -> Self {
+        self.dialog_manager = Some(mgr);
         self
     }
 
@@ -3782,6 +3927,20 @@ impl IntegratedUACBuilder {
 
         if let Some(display_name) = self.display_name {
             helper = helper.with_display_name(display_name)?;
+        }
+
+        // Point the helper at the shared store *before* cloning the
+        // handle below, so both halves of the UAC agree.
+        //
+        // Redirecting only the `IntegratedUAC` handle would not fix
+        // anything: the confirmed dialog for an outbound call is
+        // registered by `UserAgentClient::process_invite_response`, which
+        // inserts into the *helper's* manager, and that runs on every
+        // INVITE response path here. Leave the helper on its constructor
+        // default and the dialog still lands somewhere UAS dispatch can't
+        // see — the 481 stays exactly as it was.
+        if let Some(shared) = self.dialog_manager {
+            helper.dialog_manager = shared;
         }
 
         let dialog_manager = helper.dialog_manager.clone();
