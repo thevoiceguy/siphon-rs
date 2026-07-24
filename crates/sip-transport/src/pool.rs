@@ -1103,7 +1103,7 @@ impl TlsPool {
     ) -> Result<()> {
         let key = (addr, server_name.clone());
 
-        // Try to use existing connection
+        // Try to use existing connection (same peer + SNI).
         if let Some(mut entry) = self.inner.get_mut(&key) {
             entry.touch(); // Update last activity time
             if entry.sender.send(payload.clone()).await.is_ok() {
@@ -1112,6 +1112,36 @@ impl TlsPool {
             // Connection failed, remove it
             drop(entry);
             self.inner.remove(&key);
+        }
+
+        // RFC 5923 connection reuse: fall back to any live connection to the
+        // same peer addr, regardless of SNI. An in-dialog request (BYE,
+        // re-INVITE, REFER) derives its target — and therefore its SNI — from
+        // the peer's Record-Route, which for a carrier edge is typically an IP
+        // literal; so its (addr, sni) key misses the connection the dialog was
+        // established on, whose SNI was the request-URI hostname. Dialing a
+        // fresh connection instead is doubly wrong: a carrier edge (e.g.
+        // Twilio) accepts only the original signaling connection, and the
+        // fresh handshake would present the IP as SNI and fail against the
+        // edge's hostname certificate. Reusing the existing socket sends the
+        // request down the connection the peer expects (its `twnat` Route
+        // param even names our original source port). Without this, locally
+        // terminated outbound calls never deliver their BYE and hold/transfer
+        // re-INVITEs never leave the box (siphon-ai #342 outbound half).
+        let addr_match = self
+            .inner
+            .iter()
+            .find(|e| e.key().0 == addr)
+            .map(|e| e.key().clone());
+        if let Some(k) = addr_match {
+            if let Some(mut entry) = self.inner.get_mut(&k) {
+                entry.touch();
+                if entry.sender.send(payload.clone()).await.is_ok() {
+                    return Ok(());
+                }
+                drop(entry);
+                self.inner.remove(&k);
+            }
         }
 
         // Atomically reserve a slot before connecting; see ConnectionPool.
@@ -1743,5 +1773,57 @@ mod tests {
             crlf_pairs, 6,
             "expected exactly one CRLFCRLF per OPTIONS (no extra keepalives); got {crlf_pairs}",
         );
+    }
+
+    /// Regression for siphon-ai #342 (outbound half): an in-dialog request
+    /// (BYE / re-INVITE / REFER) on an outbound dialog resolves its target
+    /// from the peer's Record-Route — an IP literal for a carrier edge — so
+    /// its SNI differs from the request-URI hostname the dialog's connection
+    /// was opened with. `send_tls` must reuse the existing connection to that
+    /// peer addr rather than dial a fresh one: the edge (e.g. Twilio) accepts
+    /// only the original signaling connection, and a fresh handshake would
+    /// present the IP as SNI and fail against the edge's hostname certificate.
+    /// Before the fix the (addr, sni) key missed and the request never left
+    /// the box — locally terminated outbound calls sent no BYE and hold
+    /// re-INVITEs silently failed.
+    #[cfg(feature = "tls")]
+    #[tokio::test]
+    async fn send_tls_reuses_connection_to_same_addr_across_sni() {
+        let pool = TlsPool::new();
+        // Nothing listens here, so the pre-fix "dial fresh" path fails fast
+        // instead of reusing — that's what makes this test discriminate.
+        let addr: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let (tx, mut rx) = mpsc::channel::<Bytes>(4);
+        // The dialog's connection was opened with the request-URI hostname.
+        pool.inner.insert(
+            (addr, "edge.example.com".to_string()),
+            PoolEntry::for_tests(tx),
+        );
+
+        // Empty-root client config: required by the signature but never used
+        // on the reuse path (we return before any handshake).
+        let config = std::sync::Arc::new(
+            ClientConfig::builder()
+                .with_root_certificates(tokio_rustls::rustls::RootCertStore::empty())
+                .with_no_client_auth(),
+        );
+        let payload =
+            Bytes::from_static(b"BYE sip:+15551234567@10.0.0.1:5060 SIP/2.0\r\n\r\n");
+
+        // The in-dialog request derives an IP-literal SNI that misses the
+        // exact (addr, sni) key but matches the peer addr.
+        let res = pool
+            .send_tls(addr, "127.0.0.1".to_string(), config, payload.clone())
+            .await;
+
+        assert!(
+            res.is_ok(),
+            "send_tls must reuse the existing connection to the peer addr, got {res:?}"
+        );
+        let got = rx
+            .recv()
+            .await
+            .expect("the in-dialog request must ride the reused connection");
+        assert_eq!(got, payload, "the exact request bytes must be sent");
     }
 }
