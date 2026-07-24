@@ -1239,10 +1239,14 @@ impl UserAgentClient {
             )
             .unwrap();
 
-        // From (with local tag)
+        // From (with local tag). RFC 3261 §12.2.1.1: the From URI is the
+        // dialog's *local* URI, which for a UAS-role dialog (an inbound call
+        // we answered) is the INVITE's To URI — not `self.local_uri`, the
+        // UAC's own configured identity. Using the latter put the wrong AOR
+        // in the BYE From on inbound-call teardown.
         let from = format!(
             "<{}>;tag={}",
-            self.local_uri.as_str(),
+            dialog.local_uri().as_str(),
             dialog.id().local_tag()
         );
         headers
