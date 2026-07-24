@@ -1875,9 +1875,22 @@ impl IntegratedUAC {
         let mut request = helper.create_bye(dialog);
         drop(helper);
 
-        // Use remote target from dialog for DNS resolution
-        let target = RequestTarget::Uri(dialog.remote_target().clone());
-        let dns_target = self.resolve_target(&target).await?;
+        // Apply the dialog route set (RFC 3261 §12.2.1.1). Without this the
+        // BYE carries no Route headers and its Request-URI is the peer's
+        // Contact — fine for a peer we talk to directly, but a record-routing
+        // proxy (e.g. a carrier edge) can't correlate it and answers 481,
+        // leaving the far leg stranded. Every other in-dialog sender routes
+        // through this helper; BYE was the exception. Clone because the
+        // public signature is `&Dialog` and the CSeq bump on a terminal
+        // dialog is inconsequential.
+        let mut routed = dialog.clone();
+        let target_uri = prepare_in_dialog_request(&mut routed, &mut request);
+
+        // Resolve the wire target (the loose-route proxy when record-routed,
+        // else the remote target) to pick the transport for Via auto-fill.
+        let dns_target = self
+            .resolve_target(&RequestTarget::Uri(target_uri))
+            .await?;
 
         // Auto-fill Via with resolved transport
         self.auto_fill_headers(&mut request, Some(dns_target.transport()))
@@ -1906,9 +1919,20 @@ impl IntegratedUAC {
         let mut request = helper.create_bye(dialog);
         drop(helper);
 
-        // Determine transport type from dialog's remote target
-        let target = RequestTarget::Uri(dialog.remote_target().clone());
-        let dns_target = self.resolve_target(&target).await?;
+        // Apply the dialog route set (RFC 3261 §12.2.1.1). The BYE rides the
+        // inbound flow either way, but a record-routing carrier edge still
+        // needs the Route headers to correlate the request to the dialog —
+        // without them it answers 481 and the caller is left in dead air
+        // until session-expires. `send_refer_via_flow` already routes through
+        // this helper; BYE-via-flow was the gap. See `bye` for the clone.
+        let mut routed = dialog.clone();
+        let target_uri = prepare_in_dialog_request(&mut routed, &mut request);
+
+        // Determine transport type from the wire target (loose-route proxy
+        // when record-routed, else the remote target).
+        let dns_target = self
+            .resolve_target(&RequestTarget::Uri(target_uri))
+            .await?;
 
         // Auto-fill Via with resolved transport and the flow's listener port
         self.auto_fill_headers_for_flow(
@@ -2942,6 +2966,120 @@ mod tests {
         let (response, _subscription) = result.unwrap();
         assert_eq!(response.code(), 202);
         assert_eq!(dialog.local_cseq(), 2);
+    }
+
+    // ── bye_via_flow: the closing BYE must carry the dialog route set ──
+
+    /// Regression for the stranded-caller bug: force-terminating an inbound
+    /// call answered through a record-routing carrier edge sent a BYE with
+    /// *no* Route headers and the peer's private Contact as Request-URI. The
+    /// edge could not correlate it, answered 481, and the far leg sat in dead
+    /// air until session-expires. The BYE must instead loose-route through the
+    /// record-route proxy, exactly as every other in-dialog request does.
+    #[tokio::test]
+    async fn bye_via_flow_carries_route_set_and_dialog_local_uri() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = Arc::new(
+            IntegratedUAC::builder()
+                .local_uri("sip:siphon@127.0.0.1")
+                .local_addr("127.0.0.1:5070")
+                .unwrap()
+                .transaction_manager(manager.clone())
+                .resolver(Arc::new(SipResolver::from_system().unwrap()))
+                .dispatcher(dispatcher.clone())
+                .build()
+                .unwrap(),
+        );
+
+        // UAS-role confirmed dialog for an inbound call answered through a
+        // record-routing edge. The route set holds the edge's loose-route
+        // URI; the remote target is the peer's private (unroutable) Contact.
+        // The dialog's local URI is the answered AOR — deliberately *not*
+        // the UAC's configured `local_uri` — so the From-URI fix is exercised.
+        // IP literal so `resolve_target` does no real DNS lookup in CI.
+        let proxy = SipUri::parse("sip:198.51.100.10:5061;transport=tls;lr").unwrap();
+        let local_aor = SipUri::parse("sip:+15551234567@127.0.0.1:5061;transport=tls").unwrap();
+        let dialog = Dialog::unchecked_new(
+            DialogId::unchecked_new("rr-call", "local-tag", "remote-tag"),
+            DialogStateType::Confirmed,
+            local_aor.clone(),
+            SipUri::parse("sip:+15551234567@carrier.example.net").unwrap(),
+            SipUri::parse("sip:+15551234567@10.8.0.4:5060;transport=udp").unwrap(),
+            0,                  // local_cseq (UAS role: first outbound is CSeq 1)
+            1,                  // remote_cseq
+            None,               // last_ack_cseq
+            vec![proxy.clone()], // route_set from Record-Route
+            false,              // secure
+            None,               // session_expires
+            None,               // refresher
+            false,              // is_uac (we answered the INVITE)
+        );
+
+        let (flow_tx, _flow_rx) = mpsc::channel::<Bytes>(8);
+        let flow = Flow::new(flow_tx, "10.8.0.4:49152".parse().unwrap())
+            .with_local_addr("127.0.0.1:5071".parse().unwrap());
+
+        let task = {
+            let uac = uac.clone();
+            tokio::spawn(async move { uac.bye_via_flow(&dialog, flow).await })
+        };
+
+        // Grab the BYE the transaction layer emitted and check the wire form.
+        let request = loop {
+            if let Some((ctx, payload)) = dispatcher.sent.lock().await.first().cloned() {
+                assert!(ctx.stream().is_some(), "BYE must reuse the inbound flow");
+                break sip_parse::parse_request(&payload).expect("valid BYE on the wire");
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+
+        assert_eq!(request.method(), &Method::Bye);
+        // The fix: the record-route proxy is present as a Route header and the
+        // Request-URI is the remote target (loose routing).
+        assert_eq!(
+            request.headers().get("Route"),
+            Some("<sip:198.51.100.10:5061;transport=tls;lr>"),
+            "BYE must loose-route through the record-route proxy"
+        );
+        assert_eq!(
+            request.uri(),
+            &SipUri::parse("sip:+15551234567@10.8.0.4:5060;transport=udp")
+                .unwrap()
+                .into(),
+            "loose routing keeps the remote target as Request-URI"
+        );
+        // The From URI is the dialog's local AOR, not the UAC's identity.
+        let from = request.headers().get("From").unwrap();
+        assert!(
+            from.contains("sip:+15551234567@127.0.0.1:5061;transport=tls"),
+            "From must be the dialog local URI, got: {from}"
+        );
+        assert!(
+            !from.contains("sip:siphon@127.0.0.1"),
+            "From must not be the UAC's configured identity, got: {from}"
+        );
+
+        // Answer 200 OK so the transaction — and the spawned task — complete.
+        let mut headers = Headers::new();
+        for name in ["Via", "From", "To", "Call-ID", "CSeq"] {
+            headers
+                .push(
+                    SmolStr::new(name),
+                    request.headers().get_smol(name).unwrap().clone(),
+                )
+                .unwrap();
+        }
+        let response = Response::new(
+            StatusLine::new(200, SmolStr::new("OK")).expect("valid status line"),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid response");
+        manager.receive_response(response).await;
+
+        let response = task.await.unwrap().expect("BYE completes on 200");
+        assert_eq!(response.code(), 200);
     }
 
     // ── builder: sharing a DialogManager with the UAS ──
