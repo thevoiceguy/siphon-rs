@@ -144,10 +144,42 @@ impl PoolEntry {
 ///
 /// Passing `keepalive = None` disables the ping entirely — useful for
 /// tests and for transports where the keepalive is unwanted.
+/// Emit one SIP message over the process-wide HEP emitter, if installed,
+/// for a *client-pool* connection (RFC 5923 reuse). Mirrors the shape the
+/// standalone `send_tcp`/`send_tls`/`run_tcp` paths use in `lib.rs` — the
+/// pool bypassed all of them, so outbound-originated (UAC) calls emitted
+/// no SIP HEP at all while inbound calls did (downstream: siphon-ai #341).
+///
+/// `IpProto::Tcp` for both TCP and TLS: TLS runs on TCP, and Homer renders
+/// the transport from the message headers, not the HEP proto byte — the
+/// same convention `lib.rs`'s TLS path already uses. Keepalive pings
+/// (`\r\n\r\n`) must not reach here; they're not SIP.
+fn emit_pool_hep(
+    direction: sip_hep::Direction,
+    local: Option<SocketAddr>,
+    peer: SocketAddr,
+    data: &[u8],
+) {
+    let (Some(emitter), Some(local)) = (sip_hep::sip_hep(), local) else {
+        return;
+    };
+    let corr = sip_hep::extract_call_id(data);
+    let (src, dst) = match direction {
+        sip_hep::Direction::Outbound => (local, peer),
+        sip_hep::Direction::Inbound => (peer, local),
+    };
+    emitter.emit_sip(direction, sip_hep::IpProto::Tcp, src, dst, data, corr);
+}
+
 async fn run_stream_writer_with_keepalive<W>(
     writer: &mut W,
     rx: &mut mpsc::Receiver<Bytes>,
     keepalive: Option<Duration>,
+    // HEP context for the outbound sends drained here. `local` is the
+    // pooled connection's local socket address (`None` disables emission
+    // for this connection, e.g. if it couldn't be resolved).
+    hep_local: Option<SocketAddr>,
+    hep_peer: SocketAddr,
 ) where
     W: AsyncWriteExt + Unpin,
 {
@@ -177,6 +209,9 @@ async fn run_stream_writer_with_keepalive<W>(
                 if writer.flush().await.is_err() {
                     break;
                 }
+                // Real SIP traffic — capture it. Only this branch emits;
+                // the keepalive branch below is `\r\n\r\n`, not a message.
+                emit_pool_hep(sip_hep::Direction::Outbound, hep_local, hep_peer, &buf);
                 // Real traffic means the NAT binding is fresh; reset
                 // the keepalive countdown.
                 if let Some(t) = keepalive_timer.as_mut() {
@@ -506,6 +541,11 @@ impl ConnectionPool {
                 .await
                 .map_err(|_| anyhow!("TCP pool connect timeout after 5s to {}", addr))??;
         debug!(peer = %addr, "TCP connection established");
+        // Local address for HEP src on this pooled connection, read once
+        // before the split — the outbound INVITE/ACK/BYE and the inbound
+        // responses on this connection are otherwise invisible to Homer
+        // (siphon-ai #341).
+        let hep_local = stream.local_addr().ok();
         let (mut reader, mut writer) = stream.into_split();
         let (tx, mut rx) = mpsc::channel::<Bytes>(64);
         let mut entry = PoolEntry::new(tx.clone(), permit);
@@ -518,7 +558,8 @@ impl ConnectionPool {
         let writer_tx = tx.clone();
         let keepalive = self.keepalive_interval;
         let writer_handle = tokio::spawn(async move {
-            run_stream_writer_with_keepalive(&mut writer, &mut rx, keepalive).await;
+            run_stream_writer_with_keepalive(&mut writer, &mut rx, keepalive, hep_local, addr)
+                .await;
         });
         entry.task_handles.push(writer_handle.abort_handle());
         // Supervise the writer: whenever it exits (graceful close,
@@ -580,6 +621,19 @@ impl ConnectionPool {
                                             .and_then(|line| std::str::from_utf8(line).ok())
                                             .unwrap_or("<invalid>");
                                         debug!(peer = %peer, first_line = %first_line, "TCP client sending frame to inbound_tx");
+
+                                        // Inbound half of the pooled
+                                        // connection: the responses (and
+                                        // any in-dialog requests) the peer
+                                        // sends back. Emitted here for the
+                                        // same reason as the writer's
+                                        // outbound half (#341).
+                                        emit_pool_hep(
+                                            sip_hep::Direction::Inbound,
+                                            hep_local,
+                                            peer,
+                                            &payload,
+                                        );
 
                                         let packet = InboundPacket {
                                             transport: TransportKind::Tcp,
@@ -1073,6 +1127,9 @@ impl TlsPool {
             tokio::time::timeout(std::time::Duration::from_secs(5), TcpStream::connect(addr))
                 .await
                 .map_err(|_| anyhow!("TLS pool connect timeout after 5s to {}", addr))??;
+        // HEP src for this pooled connection — read before the TCP stream
+        // is consumed by the TLS handshake (#341).
+        let hep_local = stream.local_addr().ok();
         let tls_stream = connector.connect(server_name, stream).await?;
         // Split so the reader and writer tasks own separate halves; without
         // this the writer task holds the only handle to the TLS stream and
@@ -1088,7 +1145,8 @@ impl TlsPool {
         // from the pool struct.
         let keepalive = self.keepalive_interval;
         let writer_handle = tokio::spawn(async move {
-            run_stream_writer_with_keepalive(&mut writer, &mut rx, keepalive).await;
+            run_stream_writer_with_keepalive(&mut writer, &mut rx, keepalive, hep_local, addr)
+                .await;
             // Perform proper TLS shutdown when connection closes.
             let _ = writer.shutdown().await;
         });
@@ -1130,6 +1188,14 @@ impl TlsPool {
                         Ok(_) => match drain_sip_frames(&mut buf) {
                             Ok(frames) => {
                                 for payload in frames {
+                                    // Inbound half of the pooled TLS
+                                    // connection (#341).
+                                    emit_pool_hep(
+                                        sip_hep::Direction::Inbound,
+                                        hep_local,
+                                        peer,
+                                        &payload,
+                                    );
                                     let packet = InboundPacket {
                                         transport: TransportKind::Tls,
                                         peer,
