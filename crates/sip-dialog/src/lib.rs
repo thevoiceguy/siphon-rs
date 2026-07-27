@@ -1186,8 +1186,11 @@ fn validate_subscription_cseq(cseq: u32) -> Result<(), SubscriptionError> {
 
 // Helper functions
 
-/// Extracts tag parameter from From/To header value.
-fn extract_tag(value: &SmolStr) -> Option<SmolStr> {
+/// Extracts the `tag` parameter from a From/To header value.
+///
+/// Returns `None` if the header carries no tag (e.g. the To header of an
+/// out-of-dialog request). Matching is case-insensitive per RFC 3261 §7.3.1.
+pub fn extract_tag(value: &SmolStr) -> Option<SmolStr> {
     value.split(';').find_map(|segment| {
         let trimmed = segment.trim();
         if trimmed.len() >= 4 && trimmed[..4].eq_ignore_ascii_case("tag=") {

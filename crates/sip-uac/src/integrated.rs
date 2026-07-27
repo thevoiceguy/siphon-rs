@@ -347,6 +347,19 @@ fn build_via_value(
     format!("SIP/2.0/{} {};branch={};rport", transport, addr, branch)
 }
 
+/// From tag of an outbound request, for seeding the early-dialog
+/// placeholder `DialogId` so it agrees with the on-wire From header.
+/// The helper generates a fresh tag per dialog-forming request
+/// (RFC 3261 §8.1.1.3), so the tag must be read back from the request
+/// rather than from any per-client state.
+fn request_from_tag(request: &Request) -> SmolStr {
+    request
+        .headers()
+        .get_smol("From")
+        .and_then(sip_dialog::extract_tag)
+        .unwrap_or_default()
+}
+
 fn prepare_in_dialog_request(dialog: &mut Dialog, request: &mut Request) -> SipUri {
     let method = request.method().clone();
     let body = request.body().clone();
@@ -1441,7 +1454,7 @@ impl IntegratedUAC {
         let helper = self.helper.lock().await;
         let dialog_id = sip_dialog::DialogId::unchecked_new(
             request.headers().get_smol("Call-ID").unwrap().clone(),
-            helper.local_tag.clone(),
+            request_from_tag(&request),
             SmolStr::new("pending"),
         );
         let placeholder_dialog = Dialog::unchecked_new(
@@ -1546,7 +1559,7 @@ impl IntegratedUAC {
         let helper = self.helper.lock().await;
         let dialog_id = sip_dialog::DialogId::unchecked_new(
             request.headers().get_smol("Call-ID").unwrap().clone(),
-            helper.local_tag.clone(),
+            request_from_tag(&request),
             SmolStr::new("pending"),
         );
         let placeholder_dialog = Dialog::unchecked_new(
@@ -1672,7 +1685,7 @@ impl IntegratedUAC {
         let helper = self.helper.lock().await;
         let dialog_id = sip_dialog::DialogId::unchecked_new(
             request.headers().get_smol("Call-ID").unwrap().clone(),
-            helper.local_tag.clone(),
+            request_from_tag(&request),
             SmolStr::new("pending"),
         );
         let placeholder_dialog = Dialog::unchecked_new(
@@ -1786,7 +1799,7 @@ impl IntegratedUAC {
         let helper = self.helper.lock().await;
         let dialog_id = sip_dialog::DialogId::unchecked_new(
             request.headers().get_smol("Call-ID").unwrap().clone(),
-            helper.local_tag.clone(),
+            request_from_tag(&request),
             SmolStr::new("pending"),
         );
         let placeholder_dialog = Dialog::unchecked_new(
