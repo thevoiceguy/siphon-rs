@@ -200,9 +200,6 @@ pub struct UserAgentClient {
     /// Optional digest client for authentication
     digest_client: Option<DigestClient>,
 
-    /// Local tag for From header (generated once)
-    local_tag: SmolStr,
-
     /// Service-Route from REGISTER response (RFC 3608)
     /// Stored route set to be used as preloaded Route headers in subsequent requests
     service_route: Option<ServiceRouteHeader>,
@@ -215,13 +212,18 @@ pub struct UserAgentClient {
     /// Call-ID is reused, the CSeq value MUST be greater than in the previous
     /// request").
     register_cseqs: Mutex<HashMap<String, u32>>,
+
+    /// Stable From tag per registrar, paired with `register_call_ids`.
+    /// A REGISTER refresh series reuses one Call-ID (RFC 3261 §10.2), and
+    /// the From tag stays with it so registrars that correlate refreshes
+    /// on (Call-ID, From tag) see one series. Every other request type
+    /// gets a fresh per-request tag (RFC 3261 §8.1.1.3, §19.3).
+    register_from_tags: Mutex<HashMap<String, SmolStr>>,
 }
 
 impl UserAgentClient {
     /// Creates a new UAC with the given local URI and contact.
     pub fn new(local_uri: SipUri, contact_uri: SipUri) -> Self {
-        let local_tag = generate_tag();
-
         Self {
             local_uri,
             contact_uri,
@@ -230,10 +232,10 @@ impl UserAgentClient {
             dialog_manager: Arc::new(DialogManager::new()),
             subscription_manager: Arc::new(SubscriptionManager::new()),
             digest_client: None,
-            local_tag,
             service_route: None,
             register_call_ids: Mutex::new(HashMap::new()),
             register_cseqs: Mutex::new(HashMap::new()),
+            register_from_tags: Mutex::new(HashMap::new()),
         }
     }
 
@@ -303,7 +305,7 @@ impl UserAgentClient {
                 SmolStr::new(format!(
                     "<{}>;tag={}",
                     self.local_uri.as_str(),
-                    self.local_tag
+                    generate_tag()
                 )),
             )
             .unwrap();
@@ -395,7 +397,7 @@ impl UserAgentClient {
                 SmolStr::new(format!(
                     "<{}>;tag={}",
                     self.local_uri.as_str(),
-                    self.local_tag
+                    generate_tag()
                 )),
             )
             .unwrap();
@@ -473,7 +475,7 @@ impl UserAgentClient {
                 SmolStr::new(format!(
                     "<{}>;tag={}",
                     self.local_uri.as_str(),
-                    self.local_tag
+                    generate_tag()
                 )),
             )
             .unwrap();
@@ -539,8 +541,10 @@ impl UserAgentClient {
             )
             .unwrap();
 
-        // From header
-        let from = self.format_from_header();
+        // From header (stable tag per registrar — the refresh series keeps
+        // one (Call-ID, From tag) identity, matching the reused Call-ID)
+        let from_tag = self.register_from_tag(registrar_uri);
+        let from = self.format_from_header_tagged(None, &from_tag);
         headers
             .push(SmolStr::new("From"), SmolStr::new(from))
             .unwrap();
@@ -3056,6 +3060,36 @@ impl UserAgentClient {
         call_id
     }
 
+    /// Returns the stable From tag for REGISTER requests to this registrar.
+    /// Paired with `register_call_id`: a refresh series reuses one Call-ID
+    /// (RFC 3261 §10.2), and keeping the From tag with it lets registrars
+    /// that correlate refresh series on (Call-ID, From tag) see one series.
+    /// Capped like the Call-ID map; when full, fall back to uncached fresh
+    /// tags (still valid, just no refresh-series stability).
+    fn register_from_tag(&self, registrar_uri: &SipUri) -> SmolStr {
+        let key = registrar_uri.as_str().to_string();
+        let mut map = self
+            .register_from_tags
+            .lock()
+            .expect("register_from_tags lock poisoned");
+        if let Some(tag) = map.get(&key) {
+            return tag.clone();
+        }
+
+        if map.len() >= MAX_REGISTRAR_CALL_IDS {
+            tracing::warn!(
+                registrar = %registrar_uri.as_str(),
+                max = MAX_REGISTRAR_CALL_IDS,
+                "Max registrar From-tag tracking limit reached, not caching"
+            );
+            return generate_tag();
+        }
+
+        let tag = generate_tag();
+        map.insert(key, tag.clone());
+        tag
+    }
+
     /// Returns the next CSeq to use on a REGISTER for this registrar. Starts
     /// at 1 for the first request, increments monotonically on each
     /// subsequent call. Paired with `register_call_id` so refresh and
@@ -3096,16 +3130,24 @@ impl UserAgentClient {
         1
     }
 
+    /// Format the From header with a fresh tag. RFC 3261 §8.1.1.3 requires
+    /// a new From tag for each request; REGISTER is the one exception and
+    /// goes through `format_from_header_tagged` with a stable
+    /// per-registrar tag instead.
     fn format_from_header(&self) -> String {
         self.format_from_header_with(None)
     }
 
-    /// Format the From header, optionally overriding the URI for this
-    /// one request. Precedence: per-call `from_override` (a caller
-    /// identity supplied for this INVITE only) → the stateful
+    /// Format the From header with a fresh tag, optionally overriding the
+    /// URI for this one request. Precedence: per-call `from_override` (a
+    /// caller identity supplied for this INVITE only) → the stateful
     /// `from_uri_override` (B2BUA identity preservation) → `local_uri`.
-    /// The local tag and display name are unchanged.
+    /// The display name is unchanged.
     fn format_from_header_with(&self, from_override: Option<&SipUri>) -> String {
+        self.format_from_header_tagged(from_override, &generate_tag())
+    }
+
+    fn format_from_header_tagged(&self, from_override: Option<&SipUri>, tag: &str) -> String {
         let uri = from_override
             .or(self.from_uri_override.as_ref())
             .unwrap_or(&self.local_uri);
@@ -3115,10 +3157,10 @@ impl UserAgentClient {
                 "\"{}\" <{}>;tag={}",
                 escape_quoted_string(display),
                 uri.as_str(),
-                self.local_tag.as_str()
+                tag
             )
         } else {
-            format!("<{}>;tag={}", uri.as_str(), self.local_tag.as_str())
+            format!("<{}>;tag={}", uri.as_str(), tag)
         }
     }
 }
@@ -3505,6 +3547,74 @@ mod tests {
             request.headers().get("Content-Type").unwrap(),
             "application/sdp"
         );
+    }
+
+    /// Pulls the `tag` parameter out of a request's From header.
+    fn from_tag_of(request: &Request) -> String {
+        let from = request.headers().get("From").expect("From header present");
+        from.split(';')
+            .find_map(|p| p.trim().strip_prefix("tag="))
+            .expect("From tag present")
+            .to_string()
+    }
+
+    #[test]
+    fn invite_from_tag_is_fresh_per_request() {
+        // RFC 3261 §8.1.1.3: "The From header field MUST contain a new
+        // 'tag' parameter, chosen by the UAC." A per-client tag reused
+        // across unrelated calls is the regression this guards against.
+        let uac = UserAgentClient::new(
+            SipUri::parse("sip:alice@example.com").unwrap(),
+            SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
+        );
+        let target = SipUri::parse("sip:bob@example.com").unwrap();
+
+        let first = uac.create_invite(&target, None);
+        let second = uac.create_invite(&target, None);
+        assert_ne!(from_tag_of(&first), from_tag_of(&second));
+    }
+
+    #[test]
+    fn out_of_dialog_requests_get_fresh_from_tags() {
+        let uac = UserAgentClient::new(
+            SipUri::parse("sip:alice@example.com").unwrap(),
+            SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
+        );
+        let target = SipUri::parse("sip:bob@example.com").unwrap();
+
+        let tags = vec![
+            from_tag_of(&uac.create_options(&target)),
+            from_tag_of(&uac.create_options(&target)),
+            from_tag_of(&uac.create_subscribe(&target, "presence", 3600)),
+            from_tag_of(&uac.create_message(&target, "text/plain", "hi")),
+            from_tag_of(&uac.create_unsolicited_notify(
+                &target,
+                "message-summary",
+                "application/simple-message-summary",
+                "Messages-Waiting: yes\r\n",
+            )),
+        ];
+        let unique: std::collections::HashSet<_> = tags.iter().collect();
+        assert_eq!(unique.len(), tags.len(), "duplicate From tag: {:?}", tags);
+    }
+
+    #[test]
+    fn register_from_tag_is_stable_per_registrar() {
+        // REGISTER is the deliberate exception: the refresh series reuses
+        // the Call-ID (RFC 3261 §10.2) and keeps the From tag with it.
+        let uac = UserAgentClient::new(
+            SipUri::parse("sip:alice@example.com").unwrap(),
+            SipUri::parse("sip:alice@192.168.1.100:5060").unwrap(),
+        );
+        let registrar_a = SipUri::parse("sip:registrar-a.example.com").unwrap();
+        let registrar_b = SipUri::parse("sip:registrar-b.example.com").unwrap();
+
+        let a1 = uac.create_register(&registrar_a, 3600);
+        let a2 = uac.create_register(&registrar_a, 3600);
+        let b1 = uac.create_register(&registrar_b, 3600);
+
+        assert_eq!(from_tag_of(&a1), from_tag_of(&a2));
+        assert_ne!(from_tag_of(&a1), from_tag_of(&b1));
     }
 
     #[test]
