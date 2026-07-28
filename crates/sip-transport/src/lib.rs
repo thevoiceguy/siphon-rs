@@ -105,6 +105,44 @@ fn select_idle_timeout(established: bool) -> std::time::Duration {
     }
 }
 
+static STREAM_KEEPALIVE_SECS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Set the interval (in seconds) for server-side CRLF keepalives on
+/// **established** inbound stream (TCP/TLS) connections. Call once at
+/// startup, before listeners accept. `0` (the default) disables them.
+///
+/// Carriers idle-close a quiet trunk connection well before our own
+/// established idle timeout (~2 minutes observed on Twilio Secure
+/// Trunking vs our 1800 s default), after which locally-originated
+/// in-dialog requests need the pool-fallback recovery path. A keepalive
+/// below the carrier's idle window keeps the signaling path warm so the
+/// common case never needs recovering. A single CRLF is invisible to any
+/// compliant framer (RFC 3261 §7.5 / RFC 5626) and requests no pong.
+pub fn set_stream_keepalive_interval(secs: u64) {
+    STREAM_KEEPALIVE_SECS.store(secs, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The configured keepalive interval, or `None` when disabled.
+fn stream_keepalive_interval() -> Option<std::time::Duration> {
+    match STREAM_KEEPALIVE_SECS.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => None,
+        secs => Some(std::time::Duration::from_secs(secs)),
+    }
+}
+
+/// Tick the keepalive interval, or pend forever when keepalives are
+/// disabled. Shaped this way so a `tokio::select!` arm can poll it
+/// without unwrapping the `Option` (select arms are constructed before
+/// their `if` guards are evaluated).
+async fn maybe_keepalive_tick(interval: &mut Option<tokio::time::Interval>) {
+    match interval {
+        Some(interval) => {
+            interval.tick().await;
+        }
+        None => std::future::pending().await,
+    }
+}
+
 /// Timeout for outbound TCP/TLS connection establishment.
 /// Prevents indefinite blocking when a peer is unreachable or firewalled.
 const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -1428,11 +1466,29 @@ async fn spawn_tls_session(
     // Split by ownership so we can reunite later for shutdown
     let (mut reader, writer) = tokio::io::split(tls_stream);
     let (writer_tx, mut writer_rx) = mpsc::channel::<Bytes>(32);
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
     // Spawn writer task that returns the WriteHalf when done
     let writer_handle = tokio::spawn(async move {
         let mut writer = writer;
-        while let Some(buf) = writer_rx.recv().await {
+        let mut read_side_gone = false;
+        loop {
+            let buf = tokio::select! {
+                _ = &mut shutdown_rx, if !read_side_gone => {
+                    // The read side ended (peer FIN / error / idle
+                    // timeout). Close the channel so the long-lived
+                    // `Flow` clones of `writer_tx` fail fast instead of
+                    // buffering into a half-closed socket, then drain
+                    // frames that were queued before the close raced in.
+                    read_side_gone = true;
+                    writer_rx.close();
+                    continue;
+                }
+                msg = writer_rx.recv() => match msg {
+                    Some(buf) => buf,
+                    None => break,
+                },
+            };
             if let Err(e) = writer.write_all(&buf).await {
                 error!(%e, "tls write error");
                 transport_metrics().on_error(TransportLabel::Tls, StageLabel::Write);
@@ -1443,7 +1499,9 @@ async fn spawn_tls_session(
             // path. `IpProto::Tcp` is intentional: TLS runs on TCP
             // and Homer renders the SIP transport label from the
             // message headers, not from the HEP proto byte.
-            if let Some(emitter) = sip_hep::sip_hep() {
+            // CRLF-only keepalive frames aren't SIP; skip capture.
+            let crlf_only = buf.iter().all(|&b| b == b'\r' || b == b'\n');
+            if let Some(emitter) = sip_hep::sip_hep().filter(|_| !crlf_only) {
                 let corr = sip_hep::extract_call_id(&buf);
                 emitter.emit_sip(
                     sip_hep::Direction::Outbound,
@@ -1462,6 +1520,11 @@ async fn spawn_tls_session(
     // False until this connection frames its first complete SIP message;
     // gates the Slowloris vs established idle timeout (see select_idle_timeout).
     let mut established = false;
+    // Optional CRLF keepalive on established connections, so a quiet
+    // trunk call's signaling path survives carrier idle windows (see
+    // set_stream_keepalive_interval).
+    let mut keepalive = stream_keepalive_interval()
+        .map(|d| tokio::time::interval_at(tokio::time::Instant::now() + d, d));
     loop {
         // Check if buffer has grown too large - protects against memory exhaustion
         if buf.len() >= MAX_BUFFER_SIZE {
@@ -1478,7 +1541,13 @@ async fn spawn_tls_session(
         // first SIP message, then the long (configurable) established timeout,
         // so a quiet-but-live trunk connection isn't reaped mid-call.
         let idle_timeout = select_idle_timeout(established);
-        match tokio::time::timeout(idle_timeout, reader.read_buf(&mut buf)).await {
+        tokio::select! {
+            _ = maybe_keepalive_tick(&mut keepalive), if established => {
+                // 2 bytes of CRLF, invisible to the peer's framer.
+                // try_send so a wedged writer can never stall reads.
+                let _ = writer_tx.try_send(Bytes::from_static(b"\r\n"));
+            }
+            result = tokio::time::timeout(idle_timeout, reader.read_buf(&mut buf)) => match result {
             Ok(Ok(0)) => {
                 info!(%peer, "tls connection closed by peer (EOF)");
                 break;
@@ -1560,10 +1629,17 @@ async fn spawn_tls_session(
                 transport_metrics().on_error(TransportLabel::Tls, StageLabel::Read);
                 break;
             }
+            }
         }
     }
 
-    // Signal writer task to finish and get back the WriteHalf
+    // Tear the writer down and get back the WriteHalf. The explicit
+    // shutdown signal matters: `Flow` clones of `writer_tx` held by
+    // dialogs outlive the session, so waiting for every sender to drop
+    // would park the writer task forever, skip the TLS shutdown below,
+    // and leak the fd in CLOSE-WAIT while sends keep buffering into the
+    // dead socket until Timer B (issue #73).
+    let _ = shutdown_tx.send(());
     drop(writer_tx);
     match writer_handle.await {
         Ok(writer) => {
@@ -1597,6 +1673,7 @@ async fn spawn_stream_session<S>(
 {
     let (mut reader, mut writer) = tokio::io::split(stream);
     let (writer_tx, mut writer_rx) = mpsc::channel::<Bytes>(32);
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
     // HEP3 capture chooses IP protocol from the transport kind once,
     // outside the hot loop. Maps TCP/TLS to IpProto::Tcp because both
@@ -1605,7 +1682,24 @@ async fn spawn_stream_session<S>(
     let hep_ip = hep_ip_for_stream(transport);
 
     let writer_handle = tokio::spawn(async move {
-        while let Some(buf) = writer_rx.recv().await {
+        let mut read_side_gone = false;
+        loop {
+            let buf = tokio::select! {
+                _ = &mut shutdown_rx, if !read_side_gone => {
+                    // The read side ended (peer FIN / error / idle
+                    // timeout). Close the channel so the long-lived
+                    // `Flow` clones of `writer_tx` fail fast instead of
+                    // buffering into a half-closed socket, then drain
+                    // frames that were queued before the close raced in.
+                    read_side_gone = true;
+                    writer_rx.close();
+                    continue;
+                }
+                msg = writer_rx.recv() => match msg {
+                    Some(buf) => buf,
+                    None => break,
+                },
+            };
             if let Err(e) = writer.write_all(&buf).await {
                 error!(%e, "{}", write_label);
                 transport_metrics().on_error(transport.into(), StageLabel::Write);
@@ -1616,7 +1710,9 @@ async fn spawn_stream_session<S>(
             // already SIP messages by the time they reach this writer
             // task; capturing post-write means the bytes that actually
             // hit the wire are what Homer sees.
-            if let Some(emitter) = sip_hep::sip_hep() {
+            // CRLF-only keepalive frames aren't SIP; skip capture.
+            let crlf_only = buf.iter().all(|&b| b == b'\r' || b == b'\n');
+            if let Some(emitter) = sip_hep::sip_hep().filter(|_| !crlf_only) {
                 let corr = sip_hep::extract_call_id(&buf);
                 emitter.emit_sip(
                     sip_hep::Direction::Outbound,
@@ -1628,12 +1724,20 @@ async fn spawn_stream_session<S>(
                 );
             }
         }
+        // Close the socket's write side so the peer sees our FIN and the
+        // fd is released even while `Flow` clones of `writer_tx` live on.
+        let _ = writer.shutdown().await;
     });
 
     let mut buf = BytesMut::with_capacity(4096);
     // False until this connection frames its first complete SIP message;
     // gates the Slowloris vs established idle timeout (see select_idle_timeout).
     let mut established = false;
+    // Optional CRLF keepalive on established connections, so a quiet
+    // trunk call's signaling path survives carrier idle windows (see
+    // set_stream_keepalive_interval).
+    let mut keepalive = stream_keepalive_interval()
+        .map(|d| tokio::time::interval_at(tokio::time::Instant::now() + d, d));
     loop {
         // Check if buffer has grown too large - protects against memory exhaustion
         if buf.len() >= MAX_BUFFER_SIZE {
@@ -1650,7 +1754,13 @@ async fn spawn_stream_session<S>(
         // first SIP message, then the long (configurable) established timeout,
         // so a quiet-but-live trunk connection isn't reaped mid-call.
         let idle_timeout = select_idle_timeout(established);
-        match tokio::time::timeout(idle_timeout, reader.read_buf(&mut buf)).await {
+        tokio::select! {
+            _ = maybe_keepalive_tick(&mut keepalive), if established => {
+                // 2 bytes of CRLF, invisible to the peer's framer.
+                // try_send so a wedged writer can never stall reads.
+                let _ = writer_tx.try_send(Bytes::from_static(b"\r\n"));
+            }
+            result = tokio::time::timeout(idle_timeout, reader.read_buf(&mut buf)) => match result {
             Ok(Ok(0)) => break,
             Ok(Ok(_)) => {
                 transport_metrics().on_packet_received(transport.into());
@@ -1723,9 +1833,14 @@ async fn spawn_stream_session<S>(
                 transport_metrics().on_error(transport.into(), StageLabel::Read);
                 break;
             }
+            }
         }
     }
 
+    // Tear the writer down. As with the TLS session above, sender-drop
+    // alone can never finish here — `Flow` clones of `writer_tx` outlive
+    // the session — so signal the writer explicitly (issue #73).
+    let _ = shutdown_tx.send(());
     drop(writer_tx);
     let _ = writer_handle.await;
 }
