@@ -180,6 +180,19 @@ pub struct UACConfig {
 
     /// Registration identifier for outbound flows (RFC 5626 reg-id).
     pub outbound_reg_id: u32,
+
+    /// TLS certificate name (SNI + verification) to use when dialing a
+    /// target whose host is an IP literal (default: None).
+    ///
+    /// In-dialog requests are routed by the dialog's route set, and
+    /// carrier edges Record-Route themselves as IP literals. A fresh
+    /// TLS dial to such a hop would use the IP as SNI and fail the
+    /// certificate check — real carrier certs carry no IP SANs (issue
+    /// #76). Set this to the trunk's hostname (e.g.
+    /// `example.pstn.twilio.com`) so fresh dials verify against the
+    /// configured name instead. Targets that already resolve to a
+    /// hostname are unaffected.
+    pub tls_server_name: Option<String>,
 }
 
 impl Default for UACConfig {
@@ -209,6 +222,7 @@ impl Default for UACConfig {
             instance_id: None,
             flow_token_salt: None,
             outbound_reg_id: 1,
+            tls_server_name: None,
         }
     }
 }
@@ -358,6 +372,28 @@ fn request_from_tag(request: &Request) -> SmolStr {
         .get_smol("From")
         .and_then(sip_dialog::extract_tag)
         .unwrap_or_default()
+}
+
+/// Applies the configured TLS certificate name to a resolved target
+/// whose SNI would otherwise be an IP literal (issue #76). Route sets
+/// from carrier edges name IP literals; a fresh TLS dial to one would
+/// send the IP as SNI and fail verification against a
+/// hostname-only certificate. Targets already carrying a hostname
+/// (from the URI or an RFC 3263 reference identity) are left alone,
+/// as are non-TLS transports.
+fn apply_tls_server_name(target: DnsTarget, tls_server_name: Option<&str>) -> DnsTarget {
+    let Some(name) = tls_server_name else {
+        return target;
+    };
+    let tls_transport = matches!(
+        target.transport(),
+        sip_dns::Transport::Tls | sip_dns::Transport::Wss | sip_dns::Transport::TlsSctp
+    );
+    if tls_transport && target.sni().parse::<std::net::IpAddr>().is_ok() {
+        target.with_tls_name(name)
+    } else {
+        target
+    }
 }
 
 fn prepare_in_dialog_request(dialog: &mut Dialog, request: &mut Request) -> SipUri {
@@ -1071,16 +1107,12 @@ impl IntegratedUAC {
 
     /// Resolves a RequestTarget to a DnsTarget.
     async fn resolve_target(&self, target: &RequestTarget) -> Result<DnsTarget> {
-        match target {
-            RequestTarget::Resolved(dns) => Ok(dns.clone()),
+        let resolved = match target {
+            RequestTarget::Resolved(dns) => dns.clone(),
             RequestTarget::Uri(uri) if !self.config.auto_dns_resolution => {
                 // No auto resolution - create simple target
                 let port = uri.port().unwrap_or(5060);
-                Ok(sip_dns::DnsTarget::unchecked_new(
-                    uri.host(),
-                    port,
-                    sip_dns::Transport::Udp,
-                ))
+                sip_dns::DnsTarget::unchecked_new(uri.host(), port, sip_dns::Transport::Udp)
             }
             RequestTarget::Uri(uri) => {
                 // Auto-resolve via DNS
@@ -1095,9 +1127,13 @@ impl IntegratedUAC {
                 targets
                     .into_iter()
                     .next()
-                    .ok_or_else(|| anyhow!("No DNS targets found for {}", uri.as_str()))
+                    .ok_or_else(|| anyhow!("No DNS targets found for {}", uri.as_str()))?
             }
-        }
+        };
+        Ok(apply_tls_server_name(
+            resolved,
+            self.config.tls_server_name.as_deref(),
+        ))
     }
 
     /// Sends a non-INVITE request and waits for the final response.
@@ -2778,6 +2814,46 @@ mod tests {
         )
     }
 
+    /// Issue #76: a fresh TLS dial to an IP-literal route-set hop must
+    /// use the configured trunk hostname for SNI/verification, not the IP.
+    #[test]
+    fn tls_server_name_overrides_ip_literal_sni() {
+        let target = DnsTarget::unchecked_new("203.0.113.5", 5061, sip_dns::Transport::Tls);
+        let out = apply_tls_server_name(target, Some("example.pstn.twilio.com"));
+        assert_eq!(out.sni(), "example.pstn.twilio.com");
+        assert_eq!(out.host(), "203.0.113.5", "connect addr is unchanged");
+    }
+
+    /// The override must not clobber a real hostname target, an existing
+    /// RFC 3263 reference identity, or non-TLS transports.
+    #[test]
+    fn tls_server_name_leaves_hostnames_and_non_tls_alone() {
+        let hostname = DnsTarget::unchecked_new("edge.example.com", 5061, sip_dns::Transport::Tls);
+        assert_eq!(
+            apply_tls_server_name(hostname, Some("other.example.com")).sni(),
+            "edge.example.com"
+        );
+
+        let with_ref = DnsTarget::unchecked_new("203.0.113.5", 5061, sip_dns::Transport::Tls)
+            .with_tls_name("resolved.example.com");
+        assert_eq!(
+            apply_tls_server_name(with_ref, Some("other.example.com")).sni(),
+            "resolved.example.com"
+        );
+
+        let udp = DnsTarget::unchecked_new("203.0.113.5", 5060, sip_dns::Transport::Udp);
+        assert_eq!(
+            apply_tls_server_name(udp, Some("other.example.com")).sni(),
+            "203.0.113.5"
+        );
+
+        let no_override = DnsTarget::unchecked_new("203.0.113.5", 5061, sip_dns::Transport::Tls);
+        assert_eq!(
+            apply_tls_server_name(no_override, None).sni(),
+            "203.0.113.5"
+        );
+    }
+
     // Helper to create dialog with custom route_set
     fn dialog_with_route_set(route_set: Vec<SipUri>) -> Dialog {
         let dialog_id = DialogId::unchecked_new("call", "local", "remote");
@@ -4023,6 +4099,15 @@ impl IntegratedUACBuilder {
     /// Sets a WS path suffix to append when building ws://host/path from DNS targets.
     pub fn ws_path(mut self, path: impl AsRef<str>) -> Self {
         self.config.ws_path = Some(path.as_ref().to_string());
+        self
+    }
+
+    /// Sets the TLS certificate name (SNI + verification) used when
+    /// dialing an IP-literal target — e.g. the trunk hostname
+    /// (`example.pstn.twilio.com`) for route-set hops that name the
+    /// carrier edge by IP (issue #76).
+    pub fn tls_server_name(mut self, name: impl AsRef<str>) -> Self {
+        self.config.tls_server_name = Some(name.as_ref().to_string());
         self
     }
 
