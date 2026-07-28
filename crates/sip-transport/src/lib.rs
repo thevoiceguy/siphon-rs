@@ -107,6 +107,15 @@ fn select_idle_timeout(established: bool) -> std::time::Duration {
 
 static STREAM_KEEPALIVE_SECS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// The keepalive we write on a quiet stream: the RFC 5626 §3.5.1
+/// double-CRLF *ping*. A bare single CRLF is the *pong* shape in that
+/// state machine; sending it unsolicited made at least one carrier SBC
+/// (Twilio Secure Trunking) reap the connection ~25 s later — the exact
+/// opposite of a keepalive (issue #77). Our own framer discards any
+/// number of leading CRLFs, so an incoming single-CRLF pong is already
+/// tolerated.
+const CRLF_KEEPALIVE_PING: &[u8] = b"\r\n\r\n";
+
 /// Set the interval (in seconds) for server-side CRLF keepalives on
 /// **established** inbound stream (TCP/TLS) connections. Call once at
 /// startup, before listeners accept. `0` (the default) disables them.
@@ -116,8 +125,14 @@ static STREAM_KEEPALIVE_SECS: std::sync::atomic::AtomicU64 = std::sync::atomic::
 /// Trunking vs our 1800 s default), after which locally-originated
 /// in-dialog requests need the pool-fallback recovery path. A keepalive
 /// below the carrier's idle window keeps the signaling path warm so the
-/// common case never needs recovering. A single CRLF is invisible to any
-/// compliant framer (RFC 3261 §7.5 / RFC 5626) and requests no pong.
+/// common case never needs recovering. The keepalive is the RFC 5626
+/// §3.5.1 double-CRLF ping ([`CRLF_KEEPALIVE_PING`]); the peer may
+/// answer with a single-CRLF pong, which the framer discards.
+///
+/// Caveat: a carrier whose idle timer counts *SIP messages* rather than
+/// bytes may reap the connection regardless of pings; measure the
+/// connection lifetime with the knob on before relying on it, and leave
+/// it at `0` if it doesn't extend the idle window on your trunk.
 pub fn set_stream_keepalive_interval(secs: u64) {
     STREAM_KEEPALIVE_SECS.store(secs, std::sync::atomic::Ordering::Relaxed);
 }
@@ -1543,9 +1558,9 @@ async fn spawn_tls_session(
         let idle_timeout = select_idle_timeout(established);
         tokio::select! {
             _ = maybe_keepalive_tick(&mut keepalive), if established => {
-                // 2 bytes of CRLF, invisible to the peer's framer.
+                // RFC 5626 double-CRLF ping (see CRLF_KEEPALIVE_PING).
                 // try_send so a wedged writer can never stall reads.
-                let _ = writer_tx.try_send(Bytes::from_static(b"\r\n"));
+                let _ = writer_tx.try_send(Bytes::from_static(CRLF_KEEPALIVE_PING));
             }
             result = tokio::time::timeout(idle_timeout, reader.read_buf(&mut buf)) => match result {
             Ok(Ok(0)) => {
@@ -1756,9 +1771,9 @@ async fn spawn_stream_session<S>(
         let idle_timeout = select_idle_timeout(established);
         tokio::select! {
             _ = maybe_keepalive_tick(&mut keepalive), if established => {
-                // 2 bytes of CRLF, invisible to the peer's framer.
+                // RFC 5626 double-CRLF ping (see CRLF_KEEPALIVE_PING).
                 // try_send so a wedged writer can never stall reads.
-                let _ = writer_tx.try_send(Bytes::from_static(b"\r\n"));
+                let _ = writer_tx.try_send(Bytes::from_static(CRLF_KEEPALIVE_PING));
             }
             result = tokio::time::timeout(idle_timeout, reader.read_buf(&mut buf)) => match result {
             Ok(Ok(0)) => break,
