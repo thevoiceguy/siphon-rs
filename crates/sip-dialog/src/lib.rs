@@ -268,7 +268,10 @@ pub struct Dialog {
     /// Remote target URI (Contact header from remote party)
     remote_target: SipUri,
 
-    /// Route set (from Record-Route headers, stored in reverse order)
+    /// Route set, ordered for our outgoing requests: first element is
+    /// the next hop closest to us. Built from Record-Route headers —
+    /// reversed for UAC (from the response), as-received for UAS (from
+    /// the request) per RFC 3261 §12.1.1/§12.1.2.
     route_set: Vec<SipUri>,
 
     /// Local CSeq number (incremented for each request we send)
@@ -325,9 +328,10 @@ impl Dialog {
         validate_uri(&remote_uri).ok()?;
         validate_uri(&remote_target).ok()?;
 
-        // Build route set from Record-Route (stored in reverse for requests)
+        // Build route set from Record-Route in the response, reversed
+        // (RFC 3261 §12.1.2 — UAC perspective)
         // Note: Validation errors are converted to None to maintain Option signature
-        let route_set = build_route_set(resp.headers()).ok()?;
+        let route_set = build_route_set(resp.headers(), true).ok()?;
         validate_route_set(&route_set).ok()?;
 
         // Parse CSeq from request
@@ -385,9 +389,13 @@ impl Dialog {
         validate_uri(&remote_uri).ok()?;
         validate_uri(&remote_target).ok()?;
 
-        // Build route set from Record-Route (from initial request for UAS)
+        // Build route set from Record-Route in the initial request, in
+        // as-received order (RFC 3261 §12.1.1 — UAS perspective, no
+        // reversal): the topmost Record-Route is the hop closest to us
+        // and must stay first so in-dialog requests dial it, not the
+        // far end of the proxy chain (issue #75).
         // Note: Validation errors are converted to None to maintain Option signature
-        let route_set = build_route_set(req.headers()).ok()?;
+        let route_set = build_route_set(req.headers(), false).ok()?;
         validate_route_set(&route_set).ok()?;
 
         // Parse CSeq from request (this is remote CSeq since they sent it)
@@ -580,8 +588,10 @@ impl Dialog {
             self.remote_target = contact;
         }
 
-        // Update route set if Record-Route present
-        if let Ok(new_route_set) = build_route_set(resp.headers()) {
+        // Update route set if Record-Route present. Reversed regardless
+        // of dialog role: this is a response to a request *we* sent, so
+        // the topmost Record-Route is the hop closest to the peer.
+        if let Ok(new_route_set) = build_route_set(resp.headers(), true) {
             if !new_route_set.is_empty() {
                 self.route_set = new_route_set;
             }
@@ -1201,8 +1211,18 @@ pub fn extract_tag(value: &SmolStr) -> Option<SmolStr> {
     })
 }
 
-/// Builds route set from Record-Route headers (reversed for UAC).
-fn build_route_set(headers: &Headers) -> Result<Vec<SipUri>, DialogError> {
+/// Builds a dialog route set from Record-Route headers.
+///
+/// Direction matters (RFC 3261 §12.1.1 / §12.1.2): each proxy inserts
+/// its Record-Route at the *top*, so in a message you received from the
+/// peer the topmost entry is the hop closest to *you* — already the
+/// right order for your future requests. In a response to a request
+/// *you* sent, the topmost entry is the hop closest to the peer, so the
+/// set must be reversed. Pass `reverse = true` when the headers come
+/// from a response to a request we sent (UAC establishment, target
+/// refresh), `false` when they come from a request we received (UAS
+/// establishment).
+fn build_route_set(headers: &Headers, reverse: bool) -> Result<Vec<SipUri>, DialogError> {
     let mut routes: Vec<SipUri> = Vec::new();
 
     for value in headers.get_all_smol("Record-Route") {
@@ -1223,8 +1243,9 @@ fn build_route_set(headers: &Headers) -> Result<Vec<SipUri>, DialogError> {
         }
     }
 
-    // Reverse for proper routing
-    routes.reverse();
+    if reverse {
+        routes.reverse();
+    }
     Ok(routes)
 }
 
@@ -1868,6 +1889,93 @@ mod tests {
             bytes::Bytes::new(),
         )
         .expect("valid response")
+    }
+
+    /// Rebuilds a request with Record-Route headers pushed in the given
+    /// order (first = topmost, as a proxy chain would leave them).
+    fn with_record_routes(req: &Request, routes: &[&str]) -> Request {
+        let mut headers = Headers::new();
+        for rr in routes {
+            headers
+                .push(
+                    SmolStr::new("Record-Route"),
+                    SmolStr::new(format!("<{rr}>")),
+                )
+                .unwrap();
+        }
+        for header in req.headers().iter() {
+            headers
+                .push(header.name_smol().clone(), header.value_smol().clone())
+                .unwrap();
+        }
+        Request::new(req.start_line().clone(), headers, bytes::Bytes::new()).expect("valid request")
+    }
+
+    fn with_record_routes_resp(resp: &Response, routes: &[&str]) -> Response {
+        let mut headers = Headers::new();
+        for rr in routes {
+            headers
+                .push(
+                    SmolStr::new("Record-Route"),
+                    SmolStr::new(format!("<{rr}>")),
+                )
+                .unwrap();
+        }
+        for header in resp.headers().iter() {
+            headers
+                .push(header.name_smol().clone(), header.value_smol().clone())
+                .unwrap();
+        }
+        Response::new(resp.start_line().clone(), headers, bytes::Bytes::new())
+            .expect("valid response")
+    }
+
+    /// RFC 3261 §12.1.1: a UAS takes the route set from the request's
+    /// Record-Route headers in as-received order — the topmost entry is
+    /// the hop closest to us and must stay first. Regression test for
+    /// issue #75 (in-dialog requests on an inbound leg dialed the far
+    /// end of the proxy chain).
+    #[test]
+    fn uas_route_set_keeps_as_received_order() {
+        let top = "sip:edge.example.com:5061;transport=tls;lr";
+        let bottom = "sip:core.example.com;lr";
+        let req = with_record_routes(
+            &make_request(Method::Invite, "call-rr-uas", "uac-tag", None, 1),
+            &[top, bottom],
+        );
+        let resp = make_response(200, &req, "uas-tag");
+
+        let dialog = Dialog::new_uas(
+            &req,
+            &resp,
+            SipUri::parse("sip:bob@example.com").unwrap(),
+            SipUri::parse("sip:alice@example.com").unwrap(),
+        )
+        .unwrap();
+
+        let set: Vec<&str> = dialog.route_set().iter().map(|u| u.as_str()).collect();
+        assert_eq!(set, vec![top, bottom], "UAS route set must not be reversed");
+    }
+
+    /// RFC 3261 §12.1.2: a UAC takes the route set from the response's
+    /// Record-Route headers in reverse order.
+    #[test]
+    fn uac_route_set_is_reversed() {
+        let top = "sip:edge.example.com:5061;transport=tls;lr";
+        let bottom = "sip:core.example.com;lr";
+        let req = make_request(Method::Invite, "call-rr-uac", "uac-tag", None, 1);
+        let resp = with_record_routes_resp(&make_response(200, &req, "uas-tag"), &[top, bottom]);
+
+        let dialog = Dialog::new_uac(
+            &req,
+            &resp,
+            SipUri::parse("sip:alice@example.com").unwrap(),
+            SipUri::parse("sip:bob@example.com").unwrap(),
+        )
+        .unwrap();
+
+        let set: Vec<&str> = dialog.route_set().iter().map(|u| u.as_str()).collect();
+        assert_eq!(set, vec![bottom, top], "UAC route set must be reversed");
     }
 
     #[test]
