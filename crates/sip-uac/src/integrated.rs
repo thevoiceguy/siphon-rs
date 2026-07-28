@@ -1252,6 +1252,53 @@ impl IntegratedUAC {
         Ok(response)
     }
 
+    /// Resolves a DnsTarget's host to a SocketAddr, falling back to OS
+    /// DNS resolution for SRV hostnames.
+    async fn resolve_peer_addr(dns_target: &DnsTarget) -> Result<SocketAddr> {
+        let addr_str = format!("{}:{}", dns_target.host(), dns_target.port());
+        match addr_str.parse() {
+            Ok(addr) => Ok(addr),
+            Err(_) => {
+                // SRV targets are hostnames; resolve to first A/AAAA
+                let mut addrs = tokio::net::lookup_host(&addr_str)
+                    .await
+                    .map_err(|e| anyhow!("DNS lookup failed for {}: {}", addr_str, e))?;
+                addrs
+                    .next()
+                    .ok_or_else(|| anyhow!("No A/AAAA results for {}", addr_str))
+            }
+        }
+    }
+
+    /// Builds the pool-dialing fallback target for a `*_via_flow` send:
+    /// the same transport and SNI the flow context uses, but no stream,
+    /// so the dispatcher dials the resolved route-set edge through the
+    /// connection pool. The peer idle-closing the inbound connection
+    /// (carriers do, ~2 minutes observed) makes the flow send fail fast;
+    /// this second target lets the transaction's RFC 3263 §4.3 failover
+    /// recover instead of blackholing the request (issue #73). `None`
+    /// when the edge can't be resolved — the flow is then the only try.
+    async fn flow_fallback_context(
+        &self,
+        transport: sip_transaction::TransportKind,
+        dns_target: &DnsTarget,
+    ) -> Option<TransportContext> {
+        match Self::resolve_peer_addr(dns_target).await {
+            Ok(peer) => Some(
+                TransportContext::new(transport, peer, None)
+                    .with_server_name(Some(dns_target.sni().to_string())),
+            ),
+            Err(e) => {
+                warn!(
+                    "No pool fallback for flow send, could not resolve {}: {}",
+                    dns_target.host(),
+                    e
+                );
+                None
+            }
+        }
+    }
+
     /// Creates a TransportContext from a DnsTarget.
     async fn create_transport_context(&self, dns_target: &DnsTarget) -> Result<TransportContext> {
         use sip_transaction::TransportKind;
@@ -1266,20 +1313,7 @@ impl IntegratedUAC {
             sip_dns::Transport::TlsSctp => TransportKind::TlsSctp,
         };
 
-        // Parse host to SocketAddr, falling back to OS DNS resolution for SRV hostnames
-        let addr_str = format!("{}:{}", dns_target.host(), dns_target.port());
-        let peer = match addr_str.parse() {
-            Ok(addr) => addr,
-            Err(_) => {
-                // SRV targets are hostnames; resolve to first A/AAAA
-                let mut addrs = tokio::net::lookup_host(&addr_str)
-                    .await
-                    .map_err(|e| anyhow!("DNS lookup failed for {}: {}", addr_str, e))?;
-                addrs
-                    .next()
-                    .ok_or_else(|| anyhow!("No A/AAAA results for {}", addr_str))?
-            }
-        };
+        let peer = Self::resolve_peer_addr(dns_target).await?;
 
         // Use the DNS target's TLS reference identity for SNI when
         // TLS/WSS is selected. `sni()` returns the original hostname when
@@ -1901,9 +1935,7 @@ impl IntegratedUAC {
 
         // Resolve the wire target (the loose-route proxy when record-routed,
         // else the remote target) to pick the transport for Via auto-fill.
-        let dns_target = self
-            .resolve_target(&RequestTarget::Uri(target_uri))
-            .await?;
+        let dns_target = self.resolve_target(&RequestTarget::Uri(target_uri)).await?;
 
         // Auto-fill Via with resolved transport
         self.auto_fill_headers(&mut request, Some(dns_target.transport()))
@@ -1943,9 +1975,7 @@ impl IntegratedUAC {
 
         // Determine transport type from the wire target (loose-route proxy
         // when record-routed, else the remote target).
-        let dns_target = self
-            .resolve_target(&RequestTarget::Uri(target_uri))
-            .await?;
+        let dns_target = self.resolve_target(&RequestTarget::Uri(target_uri)).await?;
 
         // Auto-fill Via with resolved transport and the flow's listener port
         self.auto_fill_headers_for_flow(
@@ -1980,6 +2010,11 @@ impl IntegratedUAC {
             .with_server_name(Some(dns_target.sni().to_string()))
             .with_local_addr(flow.local_addr);
 
+        // Second target: dial the route-set edge through the pool if the
+        // inbound connection turns out to be dead (issue #73).
+        let mut targets = vec![ctx];
+        targets.extend(self.flow_fallback_context(transport, dns_target).await);
+
         let method = request.method().clone();
 
         // Create channels for response
@@ -1995,7 +2030,7 @@ impl IntegratedUAC {
         // Start client transaction
         let key = self
             .transaction_manager
-            .start_client_transaction(request, ctx, tu)
+            .start_client_transaction_with_targets(request, targets, tu)
             .await?;
 
         info!("Started {} via flow transaction {}", method, key.branch());
@@ -2647,6 +2682,11 @@ impl IntegratedUAC {
             .with_server_name(Some(dns_target.sni().to_string()))
             .with_local_addr(flow.local_addr);
 
+        // Second target: dial the route-set edge through the pool if the
+        // inbound connection turns out to be dead (issue #73).
+        let mut targets = vec![ctx.clone()];
+        targets.extend(self.flow_fallback_context(transport, dns_target).await);
+
         let early_dialogs = Arc::new(Mutex::new(std::collections::HashMap::new()));
 
         // Wrap dialog in Arc<RwLock> for sharing between CallHandle and transaction user
@@ -2672,7 +2712,7 @@ impl IntegratedUAC {
 
         let key = self
             .transaction_manager
-            .start_client_transaction(request.clone(), ctx.clone(), tu)
+            .start_client_transaction_with_targets(request.clone(), targets, tu)
             .await?;
 
         info!(
@@ -3019,14 +3059,14 @@ mod tests {
             local_aor.clone(),
             SipUri::parse("sip:+15551234567@carrier.example.net").unwrap(),
             SipUri::parse("sip:+15551234567@10.8.0.4:5060;transport=udp").unwrap(),
-            0,                  // local_cseq (UAS role: first outbound is CSeq 1)
-            1,                  // remote_cseq
-            None,               // last_ack_cseq
+            0,                   // local_cseq (UAS role: first outbound is CSeq 1)
+            1,                   // remote_cseq
+            None,                // last_ack_cseq
             vec![proxy.clone()], // route_set from Record-Route
-            false,              // secure
-            None,               // session_expires
-            None,               // refresher
-            false,              // is_uac (we answered the INVITE)
+            false,               // secure
+            None,                // session_expires
+            None,                // refresher
+            false,               // is_uac (we answered the INVITE)
         );
 
         let (flow_tx, _flow_rx) = mpsc::channel::<Bytes>(8);
@@ -3092,6 +3132,144 @@ mod tests {
         manager.receive_response(response).await;
 
         let response = task.await.unwrap().expect("BYE completes on 200");
+        assert_eq!(response.code(), 200);
+    }
+
+    // ── via-flow sends recover when the inbound connection is dead ──
+
+    /// Dispatcher shaped like the production one: a context carrying a
+    /// flow stream sends through it (and surfaces the channel error when
+    /// the connection's writer is gone); a context without one is a pool
+    /// dial-out, captured for inspection.
+    #[derive(Default)]
+    struct StreamAwareDispatcher {
+        pool_sent: Mutex<Vec<(TransportContext, Bytes)>>,
+        flow_attempts: Mutex<usize>,
+    }
+
+    #[async_trait]
+    impl TransportDispatcher for StreamAwareDispatcher {
+        async fn dispatch(&self, ctx: &TransportContext, payload: Bytes) -> Result<()> {
+            if let Some(stream) = ctx.stream() {
+                *self.flow_attempts.lock().await += 1;
+                stream
+                    .send(payload)
+                    .await
+                    .map_err(|_| anyhow!("connection writer dropped"))?;
+                Ok(())
+            } else {
+                self.pool_sent.lock().await.push((ctx.clone(), payload));
+                Ok(())
+            }
+        }
+    }
+
+    /// Regression for issue #73: the peer idle-closed the inbound TCP/TLS
+    /// connection, so the flow send fails fast (post-teardown-fix) — and
+    /// the BYE must fail over to dialing the dialog's route-set edge
+    /// through the pool instead of dying at Timer B with the caller in
+    /// dead air.
+    #[tokio::test]
+    async fn bye_via_flow_falls_back_to_pool_when_flow_is_dead() {
+        let dispatcher = Arc::new(StreamAwareDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = Arc::new(
+            IntegratedUAC::builder()
+                .local_uri("sip:siphon@127.0.0.1")
+                .local_addr("127.0.0.1:5070")
+                .unwrap()
+                .transaction_manager(manager.clone())
+                .resolver(Arc::new(SipResolver::from_system().unwrap()))
+                .dispatcher(dispatcher.clone())
+                .build()
+                .unwrap(),
+        );
+
+        // Same record-routed inbound-call shape as the test above: the
+        // route set names the carrier edge (IP literal: no DNS in CI),
+        // the remote target is the peer's private Contact.
+        let proxy = SipUri::parse("sip:198.51.100.10:5061;transport=tls;lr").unwrap();
+        let dialog = Dialog::unchecked_new(
+            DialogId::unchecked_new("dead-flow-call", "local-tag", "remote-tag"),
+            DialogStateType::Confirmed,
+            SipUri::parse("sip:+15551234567@127.0.0.1:5061;transport=tls").unwrap(),
+            SipUri::parse("sip:+15551234567@carrier.example.net").unwrap(),
+            SipUri::parse("sip:+15551234567@10.8.0.4:5060;transport=udp").unwrap(),
+            0,                   // local_cseq
+            1,                   // remote_cseq
+            None,                // last_ack_cseq
+            vec![proxy.clone()], // route_set from Record-Route
+            false,               // secure
+            None,                // session_expires
+            None,                // refresher
+            false,               // is_uac (we answered the INVITE)
+        );
+
+        // A dead flow: the receiver is dropped, exactly what the
+        // transport's writer teardown does once the peer FINs.
+        let (flow_tx, flow_rx) = mpsc::channel::<Bytes>(8);
+        drop(flow_rx);
+        let flow = Flow::new(flow_tx, "10.8.0.4:49152".parse().unwrap())
+            .with_local_addr("127.0.0.1:5071".parse().unwrap());
+
+        let task = {
+            let uac = uac.clone();
+            tokio::spawn(async move { uac.bye_via_flow(&dialog, flow).await })
+        };
+
+        // The BYE must show up as a pool dial-out to the route-set edge.
+        let (ctx, request) = loop {
+            if let Some((ctx, payload)) = dispatcher.pool_sent.lock().await.first().cloned() {
+                break (
+                    ctx,
+                    sip_parse::parse_request(&payload).expect("valid BYE on the wire"),
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+
+        assert!(
+            *dispatcher.flow_attempts.lock().await >= 1,
+            "the flow must be tried first"
+        );
+        assert!(ctx.stream().is_none(), "fallback target dials the pool");
+        assert_eq!(
+            ctx.peer(),
+            "198.51.100.10:5061".parse().unwrap(),
+            "fallback dials the route-set edge, not the peer's ephemeral port"
+        );
+        assert_eq!(
+            ctx.server_name(),
+            Some("198.51.100.10"),
+            "fallback keeps the SNI for the TLS pool"
+        );
+        assert_eq!(request.method(), &Method::Bye);
+        assert_eq!(
+            request.headers().get("Route"),
+            Some("<sip:198.51.100.10:5061;transport=tls;lr>"),
+            "the fallback BYE still loose-routes through the edge"
+        );
+
+        // Answer 200 OK: the response completes the transaction even
+        // though it was transmitted on the fallback target.
+        let mut headers = Headers::new();
+        for name in ["Via", "From", "To", "Call-ID", "CSeq"] {
+            headers
+                .push(
+                    SmolStr::new(name),
+                    request.headers().get_smol(name).unwrap().clone(),
+                )
+                .unwrap();
+        }
+        let response = Response::new(
+            StatusLine::new(200, SmolStr::new("OK")).expect("valid status line"),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid response");
+        manager.receive_response(response).await;
+
+        let response = task.await.unwrap().expect("BYE completes via fallback");
         assert_eq!(response.code(), 200);
     }
 
@@ -3599,8 +3777,18 @@ impl ClientTransactionUser for InviteTransactionUser {
 
         // Send ACK directly (ACK for 2xx doesn't go through transaction layer)
         if let Some(stream) = &ctx.stream() {
-            if let Err(e) = stream.send(ack_bytes).await {
-                error!("Failed to send ACK via stream: {}", e);
+            if let Err(e) = stream.send(ack_bytes.clone()).await {
+                // The connection died between the 2xx and the ACK; retry
+                // through the dispatcher's pool with the stream cleared
+                // (issue #73).
+                warn!(
+                    "Failed to send ACK via stream ({}), retrying via dispatcher",
+                    e
+                );
+                let fallback = ctx.clone().with_stream(None);
+                if let Err(e) = self.dispatcher.dispatch(&fallback, ack_bytes).await {
+                    error!("Failed to send ACK via dispatcher fallback: {}", e);
+                }
             }
         } else if let Err(e) = self.dispatcher.dispatch(ctx, ack_bytes).await {
             error!("Failed to send ACK via dispatcher: {}", e);
