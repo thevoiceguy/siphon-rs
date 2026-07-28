@@ -588,10 +588,22 @@ impl Dialog {
             self.remote_target = contact;
         }
 
-        // Update route set if Record-Route present. Reversed regardless
-        // of dialog role: this is a response to a request *we* sent, so
+        // Recompute the route set only when this 2xx confirms an early
+        // dialog (RFC 3261 §13.2.2.4 — RFC 2543 peers mirrored
+        // Record-Route in the 2xx only, so the early set may be
+        // incomplete). Once the dialog is confirmed the route set is
+        // fixed: §12.2.1.2 refreshes the remote target and nothing else.
+        // Re-reading it from, say, a re-INVITE's 2xx adopts hop
+        // parameters scoped to whichever connection that transaction
+        // happened to use, and the next request — usually the BYE —
+        // carries them to a peer that can no longer route it (#81).
+        //
+        // Reversed because this is a response to a request *we* sent, so
         // the topmost Record-Route is the hop closest to the peer.
-        if let Ok(new_route_set) = build_route_set(resp.headers(), true) {
+        let confirms_early_dialog =
+            self.state == DialogStateType::Early && resp.code() >= 200 && resp.code() < 300;
+        if confirms_early_dialog {
+            let new_route_set = build_route_set(resp.headers(), true).unwrap_or_default();
             if !new_route_set.is_empty() {
                 self.route_set = new_route_set;
             }
@@ -1976,6 +1988,72 @@ mod tests {
 
         let set: Vec<&str> = dialog.route_set().iter().map(|u| u.as_str()).collect();
         assert_eq!(set, vec![bottom, top], "UAC route set must be reversed");
+    }
+
+    /// RFC 3261 §12.2.1.2: a 2xx to an in-dialog target-refresh request
+    /// refreshes the remote target — the route set is fixed when the
+    /// dialog is created. Regression test for issue #81: adopting the
+    /// response's Record-Route let a peer rewrite the path mid-dialog,
+    /// and on a re-dialed connection the carrier returns hop parameters
+    /// scoped to that connection, which the following BYE then carried
+    /// to a peer that could no longer route it (30 s stall, 408).
+    #[test]
+    fn confirmed_dialog_keeps_its_route_set_across_a_target_refresh() {
+        let original = "sip:edge.example.com:5061;transport=tls;lr";
+        let req = make_request(Method::Invite, "call-rr-refresh", "uac-tag", None, 1);
+        let resp = with_record_routes_resp(&make_response(200, &req, "uas-tag"), &[original]);
+
+        let mut dialog = Dialog::new_uac(
+            &req,
+            &resp,
+            SipUri::parse("sip:alice@example.com").unwrap(),
+            SipUri::parse("sip:bob@example.com").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(dialog.state, DialogStateType::Confirmed);
+
+        // The re-INVITE's 2xx names a different path and a new Contact.
+        let rewritten = "sip:edge.example.com:5060;lr;twnat=sip:198.51.100.7:50198";
+        let reinvite_resp =
+            with_record_routes_resp(&make_response(200, &req, "uas-tag"), &[rewritten]);
+        dialog.update_from_response(&reinvite_resp);
+
+        let set: Vec<&str> = dialog.route_set().iter().map(|u| u.as_str()).collect();
+        assert_eq!(
+            set,
+            vec![original],
+            "a confirmed dialog's route set must survive a target refresh"
+        );
+        // The other half of §12.2.1.2 — that the remote target *does*
+        // refresh — stays covered by `target_refresh_updates_contact`.
+    }
+
+    /// RFC 3261 §13.2.2.4: the one time a 2xx *does* recompute the route
+    /// set — it confirms an early dialog, whose set may be incomplete
+    /// because RFC 2543 peers mirrored Record-Route only in the 2xx.
+    #[test]
+    fn early_dialog_recomputes_its_route_set_on_the_confirming_2xx() {
+        let req = make_request(Method::Invite, "call-rr-early", "uac-tag", None, 1);
+        let resp_180 = make_response(180, &req, "uas-tag");
+
+        let mut dialog = Dialog::new_uac(
+            &req,
+            &resp_180,
+            SipUri::parse("sip:alice@example.com").unwrap(),
+            SipUri::parse("sip:bob@example.com").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(dialog.state, DialogStateType::Early);
+
+        let top = "sip:edge.example.com:5061;transport=tls;lr";
+        let bottom = "sip:core.example.com;lr";
+        let resp_200 =
+            with_record_routes_resp(&make_response(200, &req, "uas-tag"), &[top, bottom]);
+        dialog.update_from_response(&resp_200);
+
+        assert_eq!(dialog.state, DialogStateType::Confirmed);
+        let set: Vec<&str> = dialog.route_set().iter().map(|u| u.as_str()).collect();
+        assert_eq!(set, vec![bottom, top], "confirming 2xx sets the route set");
     }
 
     #[test]
