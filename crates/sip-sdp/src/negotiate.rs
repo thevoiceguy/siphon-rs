@@ -182,10 +182,26 @@ pub fn negotiate_answer(
         .map_err(|e| NegotiationError::InvalidSdp(e.to_string()))?
         .time(0, 0);
 
-    // Process each media stream in the offer
+    // Process each media stream in the offer. An offer may carry
+    // alternative m-lines of the same media type (e.g. FreeSWITCH
+    // advertising RTP/SAVP and RTP/AVP audio on the same port,
+    // expecting the answerer to take one and zero the other per
+    // RFC 3264 §6). Accepting more than one would put two
+    // indistinguishable streams on the same local port, so the
+    // first acceptable alternative wins and later m-lines of an
+    // already-accepted type are rejected.
+    let mut accepted_types: Vec<MediaType> = Vec::new();
     for offer_media in &offer.media {
+        if accepted_types.contains(&offer_media.media_type) {
+            let rejected = create_rejected_media(offer_media)?;
+            answer_builder = answer_builder
+                .media(rejected)
+                .map_err(|e| NegotiationError::InvalidSdp(e.to_string()))?;
+            continue;
+        }
         match negotiate_media(offer_media, local_capabilities) {
             Ok(answer_media) => {
+                accepted_types.push(offer_media.media_type.clone());
                 answer_builder = answer_builder
                     .media(answer_media)
                     .map_err(|e| NegotiationError::InvalidSdp(e.to_string()))?;
@@ -777,6 +793,177 @@ mod tests {
         // SendRecv + SendOnly = RecvOnly (from answerer's perspective)
         let result = sendrecv.reverse().negotiate(&sendonly).unwrap();
         assert_eq!(result, Direction::SendOnly);
+    }
+
+    fn savp_avp_alternatives_offer(savp_first: bool) -> SessionDescription {
+        // Mirrors FreeSWITCH's late-negotiation offer: secure and
+        // plaintext audio alternatives on the same port, plus two
+        // video alternatives.
+        let mut secure = MediaDescription::audio(30990)
+            .add_format(0)
+            .unwrap()
+            .add_format(8)
+            .unwrap()
+            .add_rtpmap(0, "PCMU", 8000, None)
+            .unwrap()
+            .add_rtpmap(8, "PCMA", 8000, None)
+            .unwrap();
+        secure.protocol = Protocol::RtpSavp;
+        let plain = MediaDescription::audio(30990)
+            .add_format(0)
+            .unwrap()
+            .add_format(8)
+            .unwrap()
+            .add_rtpmap(0, "PCMU", 8000, None)
+            .unwrap()
+            .add_rtpmap(8, "PCMA", 8000, None)
+            .unwrap();
+        let (first, second) = if savp_first {
+            (secure, plain)
+        } else {
+            (plain, secure)
+        };
+        SessionDescription::builder()
+            .origin("fs", "1", "192.168.1.100")
+            .unwrap()
+            .session_name("Call")
+            .unwrap()
+            .connection("192.168.1.100")
+            .unwrap()
+            .media(first)
+            .unwrap()
+            .media(second)
+            .unwrap()
+            .media(
+                MediaDescription::video(32670)
+                    .add_format(103)
+                    .unwrap()
+                    .add_rtpmap(103, "H264", 90000, None)
+                    .unwrap(),
+            )
+            .unwrap()
+            .build()
+    }
+
+    fn plain_audio_caps() -> SessionDescription {
+        SessionDescription::builder()
+            .origin("bob", "456", "10.0.0.1")
+            .unwrap()
+            .session_name("Server")
+            .unwrap()
+            .connection("10.0.0.1")
+            .unwrap()
+            .media(
+                MediaDescription::audio(40400)
+                    .add_format(0)
+                    .unwrap()
+                    .add_format(8)
+                    .unwrap()
+                    .add_rtpmap(0, "PCMU", 8000, None)
+                    .unwrap()
+                    .add_rtpmap(8, "PCMA", 8000, None)
+                    .unwrap(),
+            )
+            .unwrap()
+            .build()
+    }
+
+    #[test]
+    fn accepts_only_one_of_savp_avp_audio_alternatives() {
+        // Plaintext-only capabilities against an [SAVP, AVP] offer:
+        // the SAVP line is rejected (protocol mismatch), the AVP
+        // line accepted, and m-line count/order preserved.
+        let offer = savp_avp_alternatives_offer(true);
+        let answer = negotiate_answer(&offer, "10.0.0.1", &plain_audio_caps()).unwrap();
+
+        assert_eq!(answer.media.len(), 3);
+        assert_eq!(answer.media[0].port, 0, "SAVP alternative rejected");
+        assert_eq!(answer.media[0].protocol, Protocol::RtpSavp);
+        assert_eq!(answer.media[1].port, 40400, "AVP alternative accepted");
+        assert_eq!(answer.media[2].port, 0, "unsupported video rejected");
+    }
+
+    #[test]
+    fn accepts_only_first_audio_alternative_when_plaintext_first() {
+        // [AVP, SAVP] order: the AVP line is accepted first, and the
+        // SAVP alternative must be rejected as a duplicate of an
+        // already-accepted type — not negotiated onto the same port.
+        let offer = savp_avp_alternatives_offer(false);
+        let answer = negotiate_answer(&offer, "10.0.0.1", &plain_audio_caps()).unwrap();
+
+        assert_eq!(answer.media.len(), 3);
+        assert_eq!(answer.media[0].port, 40400, "AVP alternative accepted");
+        assert_eq!(answer.media[1].port, 0, "second audio alternative rejected");
+        assert_eq!(answer.media[2].port, 0, "unsupported video rejected");
+    }
+
+    #[test]
+    fn rejects_second_audio_even_when_both_would_match() {
+        // Two identical AVP audio m-lines: only the first is
+        // accepted even though both are individually negotiable.
+        let audio = || {
+            MediaDescription::audio(30990)
+                .add_format(0)
+                .unwrap()
+                .add_rtpmap(0, "PCMU", 8000, None)
+                .unwrap()
+        };
+        let offer = SessionDescription::builder()
+            .origin("fs", "1", "192.168.1.100")
+            .unwrap()
+            .session_name("Call")
+            .unwrap()
+            .connection("192.168.1.100")
+            .unwrap()
+            .media(audio())
+            .unwrap()
+            .media(audio())
+            .unwrap()
+            .build();
+
+        let answer = negotiate_answer(&offer, "10.0.0.1", &plain_audio_caps()).unwrap();
+        assert_eq!(answer.media.len(), 2);
+        assert_eq!(answer.media[0].port, 40400);
+        assert_eq!(answer.media[1].port, 0);
+    }
+
+    #[test]
+    fn interleaved_duplicate_type_is_rejected() {
+        // [audio, video, audio]: the second audio is rejected as a
+        // duplicate even though a video m-line sits between them.
+        let audio = || {
+            MediaDescription::audio(30990)
+                .add_format(0)
+                .unwrap()
+                .add_rtpmap(0, "PCMU", 8000, None)
+                .unwrap()
+        };
+        let offer = SessionDescription::builder()
+            .origin("fs", "1", "192.168.1.100")
+            .unwrap()
+            .session_name("Call")
+            .unwrap()
+            .connection("192.168.1.100")
+            .unwrap()
+            .media(audio())
+            .unwrap()
+            .media(
+                MediaDescription::video(32670)
+                    .add_format(103)
+                    .unwrap()
+                    .add_rtpmap(103, "H264", 90000, None)
+                    .unwrap(),
+            )
+            .unwrap()
+            .media(audio())
+            .unwrap()
+            .build();
+
+        let answer = negotiate_answer(&offer, "10.0.0.1", &plain_audio_caps()).unwrap();
+        assert_eq!(answer.media.len(), 3);
+        assert_eq!(answer.media[0].port, 40400);
+        assert_eq!(answer.media[1].port, 0, "unsupported video rejected");
+        assert_eq!(answer.media[2].port, 0, "duplicate audio rejected");
     }
 
     #[test]
