@@ -542,8 +542,10 @@ pub struct CallHandle {
     /// Termination reason if transaction failed
     termination_rx: Arc<Mutex<Option<oneshot::Receiver<String>>>>,
 
-    /// Original INVITE request (needed for CANCEL generation)
-    invite_request: Arc<Request>,
+    /// The live attempt's INVITE request (needed for CANCEL generation).
+    /// Shared with the transaction user and replaced when an auth retry
+    /// re-sends the INVITE, so CANCEL targets the current attempt.
+    invite_request: Arc<RwLock<Arc<Request>>>,
 
     /// Transport context (needed for sending CANCEL)
     transport_ctx: Arc<TransportContext>,
@@ -567,9 +569,10 @@ pub struct CallHandle {
 }
 
 impl CallHandle {
-    /// Get a reference to the original INVITE request.
-    pub fn invite_request(&self) -> &Request {
-        &self.invite_request
+    /// Get the INVITE request for the live attempt (replaced when an
+    /// auth retry re-sends the INVITE with credentials).
+    pub async fn invite_request(&self) -> Arc<Request> {
+        self.invite_request.read().await.clone()
     }
 
     /// Stop keepalives on drop if still running.
@@ -1512,6 +1515,7 @@ impl IntegratedUAC {
         let shared_dialog = Arc::new(RwLock::new(placeholder_dialog));
 
         // Create INVITE transaction user
+        let live_request = Arc::new(RwLock::new(Arc::new(request.clone())));
         let tu = Arc::new(InviteTransactionUser {
             prov_tx,
             final_tx: Mutex::new(Some(final_tx)),
@@ -1522,6 +1526,8 @@ impl IntegratedUAC {
             config: self.config.clone(),
             ctx: ctx.clone(),
             auto_retry_auth: self.config.auto_retry_auth,
+            auth_attempt: 0,
+            live_request: live_request.clone(),
             transaction_manager: self.transaction_manager.clone(),
             dispatcher: self.transport_dispatcher.clone(),
             early_dialogs: early_dialogs.clone(),
@@ -1548,7 +1554,7 @@ impl IntegratedUAC {
             provisional_rx: Arc::new(Mutex::new(prov_rx)),
             final_rx: Arc::new(Mutex::new(Some(final_rx))),
             termination_rx: Arc::new(Mutex::new(Some(term_rx))),
-            invite_request: Arc::new(request),
+            invite_request: live_request,
             transport_ctx: Arc::new(ctx),
             dispatcher: self.transport_dispatcher.clone(),
             transaction_manager: self.transaction_manager.clone(),
@@ -1615,6 +1621,7 @@ impl IntegratedUAC {
 
         let shared_dialog = Arc::new(RwLock::new(placeholder_dialog));
 
+        let live_request = Arc::new(RwLock::new(Arc::new(request.clone())));
         let tu = Arc::new(InviteTransactionUser {
             prov_tx,
             final_tx: Mutex::new(Some(final_tx)),
@@ -1625,6 +1632,8 @@ impl IntegratedUAC {
             config: self.config.clone(),
             ctx: ctx.clone(),
             auto_retry_auth: self.config.auto_retry_auth,
+            auth_attempt: 0,
+            live_request: live_request.clone(),
             transaction_manager: self.transaction_manager.clone(),
             dispatcher: self.transport_dispatcher.clone(),
             early_dialogs: early_dialogs.clone(),
@@ -1650,7 +1659,7 @@ impl IntegratedUAC {
             provisional_rx: Arc::new(Mutex::new(prov_rx)),
             final_rx: Arc::new(Mutex::new(Some(final_rx))),
             termination_rx: Arc::new(Mutex::new(Some(term_rx))),
-            invite_request: Arc::new(request),
+            invite_request: live_request,
             transport_ctx: Arc::new(ctx),
             dispatcher: self.transport_dispatcher.clone(),
             transaction_manager: self.transaction_manager.clone(),
@@ -1743,6 +1752,7 @@ impl IntegratedUAC {
         let shared_dialog = Arc::new(RwLock::new(placeholder_dialog));
 
         // Create INVITE transaction user
+        let live_request = Arc::new(RwLock::new(Arc::new(request.clone())));
         let tu = Arc::new(InviteTransactionUser {
             prov_tx,
             final_tx: Mutex::new(Some(final_tx)),
@@ -1753,6 +1763,8 @@ impl IntegratedUAC {
             config: self.config.clone(),
             ctx: ctx.clone(),
             auto_retry_auth: self.config.auto_retry_auth,
+            auth_attempt: 0,
+            live_request: live_request.clone(),
             transaction_manager: self.transaction_manager.clone(),
             dispatcher: self.transport_dispatcher.clone(),
             early_dialogs: early_dialogs.clone(),
@@ -1779,7 +1791,7 @@ impl IntegratedUAC {
             provisional_rx: Arc::new(Mutex::new(prov_rx)),
             final_rx: Arc::new(Mutex::new(Some(final_rx))),
             termination_rx: Arc::new(Mutex::new(Some(term_rx))),
-            invite_request: Arc::new(request),
+            invite_request: live_request,
             transport_ctx: Arc::new(ctx),
             dispatcher: self.transport_dispatcher.clone(),
             transaction_manager: self.transaction_manager.clone(),
@@ -1857,6 +1869,7 @@ impl IntegratedUAC {
         let shared_dialog = Arc::new(RwLock::new(placeholder_dialog));
 
         // Create INVITE transaction user
+        let live_request = Arc::new(RwLock::new(Arc::new(request.clone())));
         let tu = Arc::new(InviteTransactionUser {
             prov_tx,
             final_tx: Mutex::new(Some(final_tx)),
@@ -1867,6 +1880,8 @@ impl IntegratedUAC {
             config: self.config.clone(),
             ctx: ctx.clone(),
             auto_retry_auth: self.config.auto_retry_auth,
+            auth_attempt: 0,
+            live_request: live_request.clone(),
             transaction_manager: self.transaction_manager.clone(),
             dispatcher: self.transport_dispatcher.clone(),
             early_dialogs: early_dialogs.clone(),
@@ -1893,7 +1908,7 @@ impl IntegratedUAC {
             provisional_rx: Arc::new(Mutex::new(prov_rx)),
             final_rx: Arc::new(Mutex::new(Some(final_rx))),
             termination_rx: Arc::new(Mutex::new(Some(term_rx))),
-            invite_request: Arc::new(request),
+            invite_request: live_request,
             transport_ctx: Arc::new(ctx),
             dispatcher: self.transport_dispatcher.clone(),
             transaction_manager: self.transaction_manager.clone(),
@@ -2613,6 +2628,7 @@ impl IntegratedUAC {
         // Wrap dialog in Arc<RwLock> for sharing between CallHandle and transaction user
         let shared_dialog = Arc::new(RwLock::new(dialog));
 
+        let live_request = Arc::new(RwLock::new(Arc::new(request.clone())));
         let tu = Arc::new(InviteTransactionUser {
             prov_tx,
             final_tx: Mutex::new(Some(final_tx)),
@@ -2623,6 +2639,8 @@ impl IntegratedUAC {
             config: self.config.clone(),
             ctx: ctx.clone(),
             auto_retry_auth: self.config.auto_retry_auth,
+            auth_attempt: 0,
+            live_request: live_request.clone(),
             transaction_manager: self.transaction_manager.clone(),
             dispatcher: self.transport_dispatcher.clone(),
             early_dialogs: early_dialogs.clone(),
@@ -2648,7 +2666,7 @@ impl IntegratedUAC {
             provisional_rx: Arc::new(Mutex::new(prov_rx)),
             final_rx: Arc::new(Mutex::new(Some(final_rx))),
             termination_rx: Arc::new(Mutex::new(Some(term_rx))),
-            invite_request: Arc::new(request),
+            invite_request: live_request,
             transport_ctx: Arc::new(ctx),
             dispatcher: self.transport_dispatcher.clone(),
             transaction_manager: self.transaction_manager.clone(),
@@ -2692,6 +2710,7 @@ impl IntegratedUAC {
         // Wrap dialog in Arc<RwLock> for sharing between CallHandle and transaction user
         let shared_dialog = Arc::new(RwLock::new(dialog));
 
+        let live_request = Arc::new(RwLock::new(Arc::new(request.clone())));
         let tu = Arc::new(InviteTransactionUser {
             prov_tx,
             final_tx: Mutex::new(Some(final_tx)),
@@ -2702,6 +2721,8 @@ impl IntegratedUAC {
             config: self.config.clone(),
             ctx: ctx.clone(),
             auto_retry_auth: self.config.auto_retry_auth,
+            auth_attempt: 0,
+            live_request: live_request.clone(),
             transaction_manager: self.transaction_manager.clone(),
             dispatcher: self.transport_dispatcher.clone(),
             early_dialogs: early_dialogs.clone(),
@@ -2727,7 +2748,7 @@ impl IntegratedUAC {
             provisional_rx: Arc::new(Mutex::new(prov_rx)),
             final_rx: Arc::new(Mutex::new(Some(final_rx))),
             termination_rx: Arc::new(Mutex::new(Some(term_rx))),
-            invite_request: Arc::new(request),
+            invite_request: live_request,
             transport_ctx: Arc::new(ctx),
             dispatcher: self.transport_dispatcher.clone(),
             transaction_manager: self.transaction_manager.clone(),
@@ -3378,6 +3399,307 @@ mod tests {
             "a private UAC store must stay invisible to an unrelated manager"
         );
     }
+
+    // ── INVITE auth retry on 401/407 (issue #83) ──
+
+    fn auth_test_uac(
+        dispatcher: Arc<CapturingDispatcher>,
+        manager: Arc<TransactionManager>,
+        config: Option<UACConfig>,
+    ) -> Arc<IntegratedUAC> {
+        let mut builder = IntegratedUAC::builder()
+            .local_uri("sip:alice@127.0.0.1")
+            .local_addr("127.0.0.1:5070")
+            .unwrap()
+            .credentials("alice", "secret")
+            .transaction_manager(manager)
+            .resolver(Arc::new(SipResolver::from_system().unwrap()))
+            .dispatcher(dispatcher);
+        if let Some(config) = config {
+            builder = builder.config(config);
+        }
+        Arc::new(builder.build().unwrap())
+    }
+
+    async fn sent_requests(dispatcher: &CapturingDispatcher) -> Vec<Request> {
+        dispatcher
+            .sent
+            .lock()
+            .await
+            .iter()
+            .filter_map(|(_, payload)| sip_parse::parse_request(payload))
+            .collect()
+    }
+
+    async fn wait_for_request<F>(dispatcher: &CapturingDispatcher, pred: F) -> Request
+    where
+        F: Fn(&Request) -> bool,
+    {
+        loop {
+            if let Some(request) = sent_requests(dispatcher).await.into_iter().find(&pred) {
+                return request;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    fn via_branch(request: &Request) -> String {
+        let via = request.headers().get("Via").unwrap();
+        via.split("branch=").nth(1).unwrap().to_string()
+    }
+
+    /// 401/407 challenge echoing the request's transaction identifiers,
+    /// shaped like FreeSWITCH's (To tag, MD5 digest with qop).
+    fn challenge_response(request: &Request, code: u16) -> Response {
+        let mut headers = Headers::new();
+        for name in ["Via", "From", "Call-ID", "CSeq"] {
+            headers
+                .push(
+                    SmolStr::new(name),
+                    request.headers().get_smol(name).unwrap().clone(),
+                )
+                .unwrap();
+        }
+        headers
+            .push(
+                SmolStr::new("To"),
+                SmolStr::new(format!("{};tag=chal", request.headers().get("To").unwrap())),
+            )
+            .unwrap();
+        let (reason, auth_header) = if code == 407 {
+            ("Proxy Authentication Required", "Proxy-Authenticate")
+        } else {
+            ("Unauthorized", "WWW-Authenticate")
+        };
+        headers
+            .push(
+                SmolStr::new(auth_header),
+                SmolStr::new(
+                    "Digest realm=\"127.0.0.1\", nonce=\"abc123\", algorithm=MD5, qop=\"auth\"",
+                ),
+            )
+            .unwrap();
+        Response::new(
+            StatusLine::new(code, SmolStr::new(reason)).expect("valid status line"),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid response")
+    }
+
+    fn ok_response(request: &Request) -> Response {
+        let mut headers = Headers::new();
+        for name in ["Via", "From", "Call-ID", "CSeq"] {
+            headers
+                .push(
+                    SmolStr::new(name),
+                    request.headers().get_smol(name).unwrap().clone(),
+                )
+                .unwrap();
+        }
+        headers
+            .push(
+                SmolStr::new("To"),
+                SmolStr::new(format!(
+                    "{};tag=uas-ok",
+                    request.headers().get("To").unwrap()
+                )),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new("<sip:9196@127.0.0.1:5060>"),
+            )
+            .unwrap();
+        Response::new(
+            StatusLine::new(200, SmolStr::new("OK")).expect("valid status line"),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid response")
+    }
+
+    /// The headline regression from issue #83: an INVITE answered with 407
+    /// must be re-sent with Proxy-Authorization (same Call-ID and From tag,
+    /// CSeq+1, fresh branch, original body), and the application must see
+    /// only the authenticated attempt's final response.
+    #[tokio::test]
+    async fn invite_407_is_retried_and_confirms_dialog() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = auth_test_uac(dispatcher.clone(), manager.clone(), None);
+
+        let sdp = "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=-\r\n";
+        let call = uac
+            .invite("sip:9196@127.0.0.1:5060", Some(sdp))
+            .await
+            .unwrap();
+
+        let invite1 = wait_for_request(&dispatcher, |r| r.method() == &Method::Invite).await;
+        assert!(invite1.headers().get("Proxy-Authorization").is_none());
+        assert_eq!(invite1.headers().get("CSeq"), Some("1 INVITE"));
+
+        manager
+            .receive_response(challenge_response(&invite1, 407))
+            .await;
+
+        // The transaction layer ACKs the challenge...
+        let ack = wait_for_request(&dispatcher, |r| r.method() == &Method::Ack).await;
+        assert_eq!(via_branch(&ack), via_branch(&invite1));
+
+        // ...and the authenticated re-INVITE goes out as a new transaction.
+        let invite2 = wait_for_request(&dispatcher, |r| {
+            r.method() == &Method::Invite && r.headers().get("Proxy-Authorization").is_some()
+        })
+        .await;
+        assert_eq!(invite2.headers().get("CSeq"), Some("2 INVITE"));
+        assert_eq!(
+            invite2.headers().get("Call-ID"),
+            invite1.headers().get("Call-ID")
+        );
+        assert_eq!(invite2.headers().get("From"), invite1.headers().get("From"));
+        assert_ne!(via_branch(&invite2), via_branch(&invite1));
+        assert_eq!(invite2.body(), invite1.body(), "retry keeps the SDP offer");
+
+        manager.receive_response(ok_response(&invite2)).await;
+
+        let final_response = call.await_final().await.unwrap();
+        assert_eq!(final_response.code(), 200, "only the 200 reaches the app");
+        assert_eq!(call.dialog.read().await.id().remote_tag(), "uas-ok");
+
+        // CANCEL/ACK bookkeeping follows the live attempt.
+        assert_eq!(
+            call.invite_request().await.headers().get("CSeq"),
+            Some("2 INVITE")
+        );
+    }
+
+    /// Same retry for a 401 challenge: the retry carries Authorization
+    /// (not Proxy-Authorization), per the challenge header form.
+    #[tokio::test]
+    async fn invite_401_is_retried_with_authorization() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = auth_test_uac(dispatcher.clone(), manager.clone(), None);
+
+        let _call = uac
+            .invite("sip:9196@127.0.0.1:5060", Some("v=0\r\n"))
+            .await
+            .unwrap();
+        let invite1 = wait_for_request(&dispatcher, |r| r.method() == &Method::Invite).await;
+
+        manager
+            .receive_response(challenge_response(&invite1, 401))
+            .await;
+
+        let invite2 = wait_for_request(&dispatcher, |r| {
+            r.method() == &Method::Invite && r.headers().get("Authorization").is_some()
+        })
+        .await;
+        assert_eq!(invite2.headers().get("CSeq"), Some("2 INVITE"));
+        assert!(invite2.headers().get("Proxy-Authorization").is_none());
+    }
+
+    /// Delayed-offer INVITEs retry with the body they originally had:
+    /// none. The authenticated attempt must not grow an SDP body.
+    #[tokio::test]
+    async fn offerless_invite_retry_keeps_empty_body() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = auth_test_uac(dispatcher.clone(), manager.clone(), None);
+
+        let _call = uac.invite("sip:9196@127.0.0.1:5060", None).await.unwrap();
+        let invite1 = wait_for_request(&dispatcher, |r| r.method() == &Method::Invite).await;
+        assert!(invite1.body().is_empty());
+
+        manager
+            .receive_response(challenge_response(&invite1, 407))
+            .await;
+
+        let invite2 = wait_for_request(&dispatcher, |r| {
+            r.method() == &Method::Invite && r.headers().get("Proxy-Authorization").is_some()
+        })
+        .await;
+        assert!(invite2.body().is_empty(), "offerless retry stays offerless");
+        assert_eq!(invite2.headers().get("Content-Length"), Some("0"));
+    }
+
+    /// Persistent challenges stop at `max_auth_retries`, and the last
+    /// challenge is surfaced as the final response (matching non-INVITE
+    /// retry semantics).
+    #[tokio::test]
+    async fn invite_auth_retry_limit_surfaces_last_challenge() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let config = UACConfig {
+            max_auth_retries: 1,
+            ..Default::default()
+        };
+        let uac = auth_test_uac(dispatcher.clone(), manager.clone(), Some(config));
+
+        let call = uac
+            .invite("sip:9196@127.0.0.1:5060", Some("v=0\r\n"))
+            .await
+            .unwrap();
+        let invite1 = wait_for_request(&dispatcher, |r| r.method() == &Method::Invite).await;
+
+        manager
+            .receive_response(challenge_response(&invite1, 407))
+            .await;
+
+        let invite2 = wait_for_request(&dispatcher, |r| {
+            r.method() == &Method::Invite && r.headers().get("Proxy-Authorization").is_some()
+        })
+        .await;
+
+        // Challenge the authenticated attempt too: budget (1) exhausted.
+        manager
+            .receive_response(challenge_response(&invite2, 407))
+            .await;
+
+        let final_response = call.await_final().await.unwrap();
+        assert_eq!(final_response.code(), 407, "last challenge surfaces");
+
+        // Exactly two INVITE attempts went out (distinct branches).
+        let branches: std::collections::HashSet<String> = sent_requests(&dispatcher)
+            .await
+            .iter()
+            .filter(|r| r.method() == &Method::Invite)
+            .map(via_branch)
+            .collect();
+        assert_eq!(branches.len(), 2);
+    }
+
+    /// `auto_retry_auth = false` preserves the old behaviour: the
+    /// challenge is the final response and nothing is re-sent.
+    #[tokio::test]
+    async fn invite_auth_retry_disabled_surfaces_challenge() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let config = UACConfig {
+            auto_retry_auth: false,
+            ..Default::default()
+        };
+        let uac = auth_test_uac(dispatcher.clone(), manager.clone(), Some(config));
+
+        let call = uac
+            .invite("sip:9196@127.0.0.1:5060", Some("v=0\r\n"))
+            .await
+            .unwrap();
+        let invite1 = wait_for_request(&dispatcher, |r| r.method() == &Method::Invite).await;
+
+        manager
+            .receive_response(challenge_response(&invite1, 407))
+            .await;
+
+        let final_response = call.await_final().await.unwrap();
+        assert_eq!(final_response.code(), 407);
+        assert!(sent_requests(&dispatcher)
+            .await
+            .iter()
+            .all(|r| r.headers().get("Proxy-Authorization").is_none()));
+    }
 }
 
 /// Handle returned from INVITE/re-INVITE with CANCEL capability.
@@ -3420,8 +3742,13 @@ impl CallHandle {
 
         let mut cancel_headers = sip_core::Headers::new();
 
+        // Snapshot the live attempt's INVITE: after an auth retry the
+        // original transaction is already complete, so the CANCEL must
+        // match the current attempt's Via branch and CSeq.
+        let invite_request = self.invite_request.read().await.clone();
+
         // Copy essential headers from INVITE
-        for header in self.invite_request.headers().iter() {
+        for header in invite_request.headers().iter() {
             match header.name() {
                 "Via" => {
                     // RFC 3261 §9.1: CANCEL MUST have the same Via branch as the INVITE
@@ -3472,7 +3799,7 @@ impl CallHandle {
 
         // Create CANCEL request
         let cancel_request = Request::new(
-            RequestLine::new(Method::Cancel, self.invite_request.uri().clone()),
+            RequestLine::new(Method::Cancel, invite_request.uri().clone()),
             cancel_headers,
             Bytes::new(),
         )
@@ -3521,10 +3848,14 @@ struct InviteTransactionUser {
     helper: Arc<Mutex<UserAgentClient>>,
     request: Request,
     config: UACConfig,
-    #[allow(dead_code)]
     ctx: TransportContext,
-    #[allow(dead_code)]
     auto_retry_auth: bool,
+    /// Which auth attempt this transaction represents (0 = original
+    /// INVITE, incremented per authenticated retry).
+    auth_attempt: u32,
+    /// The live attempt's request, shared with the CallHandle so CANCEL
+    /// targets the current transaction after an auth retry.
+    live_request: Arc<RwLock<Arc<Request>>>,
     transaction_manager: Arc<TransactionManager>,
     dispatcher: Arc<dyn TransportDispatcher>,
     /// Track early dialogs for forking support (shared with CallHandle)
@@ -3533,6 +3864,79 @@ struct InviteTransactionUser {
     dialog: Arc<RwLock<Dialog>>,
     local_addr: SocketAddr,
     public_addr: Option<SocketAddr>,
+}
+
+impl InviteTransactionUser {
+    /// Starts an authenticated re-INVITE after a 401/407 challenge
+    /// (issue #83).
+    ///
+    /// The transaction layer has already ACK'd the challenge, so the
+    /// authenticated request — same Call-ID and From tag, CSeq+1, fresh
+    /// branch, original body, built by `create_authenticated_request_with`
+    /// — goes out as a new client transaction. Its transaction user
+    /// inherits this attempt's response channels and shared dialog state,
+    /// so the caller's `CallHandle` transparently observes the retry.
+    async fn retry_invite_with_auth(&self, challenge: &Response) -> Result<()> {
+        let realm = extract_realm(challenge);
+        let creds = match (&self.config.credential_provider, realm.as_deref()) {
+            (Some(provider), Some(realm)) => provider.credentials(realm).await,
+            _ => None,
+        };
+
+        let mut helper = self.helper.lock().await;
+        let auth_request =
+            helper.create_authenticated_request_with(&self.request, challenge, creds)?;
+        drop(helper);
+
+        // Hand this attempt's channels to the retry: whatever it concludes
+        // with is the final the application sees.
+        let final_tx = self.final_tx.lock().await.take();
+        let term_tx = self.term_tx.lock().await.take();
+
+        let tu = Arc::new(InviteTransactionUser {
+            prov_tx: self.prov_tx.clone(),
+            final_tx: Mutex::new(final_tx),
+            term_tx: Mutex::new(term_tx),
+            dialog_manager: self.dialog_manager.clone(),
+            helper: self.helper.clone(),
+            request: auth_request.clone(),
+            config: self.config.clone(),
+            ctx: self.ctx.clone(),
+            auto_retry_auth: self.auto_retry_auth,
+            auth_attempt: self.auth_attempt + 1,
+            live_request: self.live_request.clone(),
+            transaction_manager: self.transaction_manager.clone(),
+            dispatcher: self.dispatcher.clone(),
+            early_dialogs: self.early_dialogs.clone(),
+            dialog: self.dialog.clone(),
+            local_addr: self.local_addr,
+            public_addr: self.public_addr,
+        });
+
+        match self
+            .transaction_manager
+            .start_client_transaction(auth_request.clone(), self.ctx.clone(), tu.clone())
+            .await
+        {
+            Ok(key) => {
+                // CANCEL must target the live attempt's Via branch.
+                *self.live_request.write().await = Arc::new(auth_request);
+                info!(
+                    "Started authenticated INVITE transaction {} (attempt {})",
+                    key.branch(),
+                    self.auth_attempt + 1
+                );
+                Ok(())
+            }
+            Err(e) => {
+                // The retry never launched: reclaim the channels so the
+                // challenge is surfaced as this attempt's final.
+                *self.final_tx.lock().await = tu.final_tx.lock().await.take();
+                *self.term_tx.lock().await = tu.term_tx.lock().await.take();
+                Err(e)
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -3585,6 +3989,30 @@ impl ClientTransactionUser for InviteTransactionUser {
 
     async fn on_final(&self, _key: &TransactionKey, response: &Response) {
         info!("Received final response: {}", response.code());
+
+        // 401/407: start an authenticated retry instead of surfacing the
+        // challenge (the transaction layer has already ACK'd this final).
+        // Mirrors the non-INVITE retry semantics: bounded by
+        // `max_auth_retries`, with the last challenge forwarded when the
+        // budget is exhausted or no retry can be built (issue #83).
+        if (response.code() == 401 || response.code() == 407) && self.auto_retry_auth {
+            if self.auth_attempt < self.config.max_auth_retries {
+                match self.retry_invite_with_auth(response).await {
+                    Ok(()) => return,
+                    Err(e) => warn!(
+                        code = response.code(),
+                        "INVITE auth retry not started ({}); surfacing challenge to caller", e
+                    ),
+                }
+            } else {
+                warn!(
+                    code = response.code(),
+                    attempts = self.auth_attempt,
+                    max = self.config.max_auth_retries,
+                    "auth retry limit reached; returning last challenge to caller"
+                );
+            }
+        }
 
         // Create or confirm dialog from 2xx and update CallHandle's dialog
         if response.code() >= 200 && response.code() < 300 {
