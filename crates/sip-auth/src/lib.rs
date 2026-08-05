@@ -150,6 +150,24 @@ pub trait Authenticator: Send + Sync {
         false
     }
 
+    /// Returns `true` if the request's Authorization header references a
+    /// nonce that this authenticator issued and that is still within its
+    /// TTL, but whose reuse window has lapsed — more than the configured
+    /// max request age has passed since that nonce's last successful
+    /// authentication. Verification rejects such a request *before* the
+    /// digest is compared, so without this signal a caller cannot tell
+    /// "nonce too old to reuse" apart from "bad credentials" — and would
+    /// mis-score an honest pre-emptively-authenticating peer (PJSIP-style
+    /// credential caching) as a credential attack.
+    ///
+    /// Like [`Self::nonce_is_stale`], the right client-facing answer is
+    /// [`Self::challenge_stale`] (RFC 7616 §3.5 — the nonce is
+    /// unacceptable, the credentials are not implicated). Default returns
+    /// `false`; implementations that track nonce usage should override.
+    fn nonce_reuse_expired(&self, _request: &Request) -> bool {
+        false
+    }
+
     /// Issues a `stale=true` challenge for an expired-nonce failure.
     /// Default delegates to [`Self::challenge`]; override to emit the
     /// `stale` parameter so the client can re-authenticate silently.
@@ -629,6 +647,25 @@ impl NonceManager {
         }
     }
 
+    /// Returns true if the nonce is known and within its TTL but past the
+    /// reuse window: more than `max_request_age` has elapsed since its last
+    /// successful authentication. `validate_nc_with_request` rejects such a
+    /// request *before* any digest comparison, so this query is the only
+    /// signal that separates that rejection from a credential failure.
+    ///
+    /// A nonce that has never authenticated (`last_nc == 0`) is never
+    /// reported — the age gate does not apply to first use. Disjoint from
+    /// [`Self::is_stale`] by construction (`is_valid()` is required here).
+    pub fn reuse_window_exceeded(&self, value: &str) -> bool {
+        if let Some(entry) = self.nonces.get(value) {
+            entry.is_valid()
+                && entry.last_nc() > 0
+                && entry.last_used().elapsed() > self.max_request_age
+        } else {
+            false
+        }
+    }
+
     /// Removes expired nonces from the map.
     pub fn cleanup(&self) {
         self.nonces.retain(|_, nonce| nonce.is_valid());
@@ -1057,6 +1094,30 @@ impl<S> DigestAuthenticator<S> {
         self.nonce_manager.is_stale(nonce)
     }
 
+    /// Returns true if the given nonce is known and unexpired but past its
+    /// reuse window (see [`NonceManager::reuse_window_exceeded`]). Useful
+    /// for scoring the rejection as a stale-nonce condition rather than a
+    /// credential failure.
+    pub fn is_nonce_reuse_expired(&self, nonce: &str) -> bool {
+        self.nonce_manager.reuse_window_exceeded(nonce)
+    }
+
+    /// The nonce referenced by the request's `Authorization` /
+    /// `Proxy-Authorization` Digest header, if one is present and parses.
+    fn presented_nonce(&self, request: &Request) -> Option<SmolStr> {
+        let header_name = if self.proxy_auth {
+            "Proxy-Authorization"
+        } else {
+            "Authorization"
+        };
+        let raw = request.headers().get_smol(header_name)?;
+        let parsed = parse_authorization_header(raw)?;
+        if !parsed.scheme().eq_ignore_ascii_case("Digest") {
+            return None;
+        }
+        parsed.param("nonce").cloned()
+    }
+
     /// Issues a challenge response with stale=true (RFC 7616 §3.5).
     /// The client can re-authenticate with a new nonce without re-prompting the user.
     pub fn challenge_stale(&self, request: &Request) -> Result<Response> {
@@ -1316,24 +1377,19 @@ impl<S: CredentialStore> Authenticator for DigestAuthenticator<S> {
         // for 407) and check whether its nonce is one we issued but has
         // since expired. This is the signal that the next response should
         // be `401 + stale=true` instead of a fresh challenge.
-        let header_name = if self.proxy_auth {
-            "Proxy-Authorization"
-        } else {
-            "Authorization"
-        };
-        let raw = match request.headers().get_smol(header_name) {
-            Some(v) => v,
-            None => return false,
-        };
-        let parsed = match parse_authorization_header(raw) {
-            Some(p) => p,
-            None => return false,
-        };
-        if !parsed.scheme().eq_ignore_ascii_case("Digest") {
-            return false;
-        }
-        match parsed.param("nonce") {
+        match self.presented_nonce(request) {
             Some(nonce) => self.is_nonce_stale(nonce.as_str()),
+            None => false,
+        }
+    }
+
+    fn nonce_reuse_expired(&self, request: &Request) -> bool {
+        // Same header walk as `nonce_is_stale`, but asking the other
+        // freshness question: known and unexpired, yet too long since its
+        // last successful use to be reused (`max_request_age`). Disjoint
+        // from stale by construction.
+        match self.presented_nonce(request) {
+            Some(nonce) => self.is_nonce_reuse_expired(nonce.as_str()),
             None => false,
         }
     }
@@ -2477,6 +2533,110 @@ mod tests {
         assert!(
             !auth_dyn.nonce_is_stale(&request),
             "nonces we never issued must not be reported as stale"
+        );
+    }
+
+    fn invite_reusing(nonce_value: &str) -> Request {
+        let mut headers = Headers::new();
+        headers
+            .push(
+                "Authorization",
+                format!(
+                    "Digest username=\"alice\", realm=\"example.com\", nonce=\"{nonce_value}\", uri=\"sip:example.com\", response=\"deadbeef\""
+                ),
+            )
+            .unwrap();
+        Request::new(
+            RequestLine::new(Method::Invite, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid request")
+    }
+
+    #[test]
+    fn nonce_reuse_expired_discriminates_request_age_rejection() {
+        // A 1 ms reuse window so the age gate trips deterministically,
+        // with the default (generous) TTL so the nonce is NOT stale —
+        // this is the "correct credential, known valid nonce, too long
+        // since last use" case that must not read as a credential
+        // failure.
+        let store = MemoryCredentialStore::new();
+        let auth = DigestAuthenticator::new("example.com", store)
+            .with_max_request_age(Duration::from_millis(1));
+
+        let nonce = auth.nonce_manager().generate();
+        // First successful use arms the age gate (last_nc = 1).
+        assert!(auth.nonce_manager().verify_with_nc(
+            nonce.value(),
+            1,
+            &Method::Invite,
+            "sip:example.com",
+            b""
+        ));
+        std::thread::sleep(Duration::from_millis(10));
+
+        // The reuse attempt is rejected by the nonce layer (this is the
+        // path `prepare_digest` hits before any digest comparison)...
+        assert!(!auth.nonce_manager().verify_with_nc(
+            nonce.value(),
+            2,
+            &Method::Invite,
+            "sip:example.com",
+            b""
+        ));
+
+        // ...and the discriminator names the reason: reuse-expired,
+        // not stale.
+        let request = invite_reusing(nonce.value());
+        let auth_dyn: &dyn Authenticator = &auth;
+        assert!(
+            auth_dyn.nonce_reuse_expired(&request),
+            "age-gate rejection should be discriminated"
+        );
+        assert!(
+            !auth_dyn.nonce_is_stale(&request),
+            "the nonce is within TTL — it must not read as stale"
+        );
+    }
+
+    #[test]
+    fn nonce_reuse_expired_false_for_first_use_stale_and_unknown() {
+        let store = MemoryCredentialStore::new();
+        let auth = DigestAuthenticator::new("example.com", store)
+            .with_max_request_age(Duration::from_millis(1));
+
+        // Never-authenticated nonce: the age gate does not apply to
+        // first use, however old the nonce is.
+        let fresh = auth.nonce_manager().generate();
+        std::thread::sleep(Duration::from_millis(10));
+        let auth_dyn: &dyn Authenticator = &auth;
+        assert!(!auth_dyn.nonce_reuse_expired(&invite_reusing(fresh.value())));
+
+        // Unknown nonce: neither signal.
+        assert!(!auth_dyn.nonce_reuse_expired(&invite_reusing("never-issued")));
+
+        // TTL-expired nonce: that is `nonce_is_stale`'s territory, and
+        // the two signals stay disjoint.
+        let store2 = MemoryCredentialStore::new();
+        let auth2 = DigestAuthenticator::new("example.com", store2)
+            .with_nonce_ttl(Duration::from_millis(10))
+            .with_max_request_age(Duration::from_millis(1));
+        let expiring = auth2.nonce_manager().generate();
+        assert!(auth2.nonce_manager().verify_with_nc(
+            expiring.value(),
+            1,
+            &Method::Invite,
+            "sip:example.com",
+            b""
+        ));
+        std::thread::sleep(Duration::from_millis(20));
+        let auth2_dyn: &dyn Authenticator = &auth2;
+        let request = invite_reusing(expiring.value());
+        assert!(auth2_dyn.nonce_is_stale(&request));
+        assert!(
+            !auth2_dyn.nonce_reuse_expired(&request),
+            "TTL-expired must report stale, not reuse-expired"
         );
     }
 
