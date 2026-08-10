@@ -81,6 +81,22 @@ struct Args {
     #[arg(long)]
     wss_bind: Option<String>,
 
+    /// Per-source UDP ingress rate limit in packets/sec (0 disables).
+    ///
+    /// Applied at the transport layer before any SIP processing, per
+    /// source IP, with an equal burst allowance. Sits below the auth
+    /// rate limiter and any application-level admission control.
+    #[arg(long, default_value = "200")]
+    udp_rate_limit: u32,
+
+    /// Per-source stream (TCP/TLS/WS) ingress rate limit in SIP
+    /// frames/sec (0 disables).
+    ///
+    /// Counted after framing, shared across all connections from the
+    /// same source IP, with an equal burst allowance.
+    #[arg(long, default_value = "200")]
+    stream_rate_limit: u32,
+
     /// Local SIP URI (used in From/Contact headers)
     #[arg(long, default_value = "sip:siphond@localhost")]
     local_uri: String,
@@ -219,6 +235,27 @@ async fn main() -> Result<()> {
     }
 
     let args = Args::parse();
+
+    // Transport-level per-source ingress rate limits. These are settable
+    // only once, so configure them now — before any transport starts.
+    let udp_rate = if args.udp_rate_limit == 0 {
+        sip_transport::RateLimitConfig::disabled()
+    } else {
+        sip_transport::RateLimitConfig::new(args.udp_rate_limit, 1)
+            .map_err(|e| anyhow::anyhow!("invalid --udp-rate-limit: {e}"))?
+    };
+    if !sip_transport::set_udp_rate_limit(udp_rate) {
+        tracing::warn!("UDP ingress rate limit already configured");
+    }
+    let stream_rate = if args.stream_rate_limit == 0 {
+        sip_transport::RateLimitConfig::disabled()
+    } else {
+        sip_transport::RateLimitConfig::new(args.stream_rate_limit, 1)
+            .map_err(|e| anyhow::anyhow!("invalid --stream-rate-limit: {e}"))?
+    };
+    if !sip_transport::set_stream_rate_limit(stream_rate) {
+        tracing::warn!("stream ingress rate limit already configured");
+    }
 
     // Build daemon configuration
     let config = DaemonConfig {

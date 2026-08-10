@@ -507,6 +507,14 @@ Transport is abstracted through traits:
 
 The transport layer integrates with the transaction layer via `TransportDispatcher` trait.
 
+**Ingress rate limiting:** every receive path applies a per-source-IP token-bucket
+limit built on `sip-ratelimit` (default 200 packets or frames/sec with equal burst).
+Configure or disable at startup with `sip_transport::set_udp_rate_limit()` /
+`set_stream_rate_limit()` (once each, before traffic arrives). Every dropped packet
+is counted via `TransportMetrics::on_rate_limited` (sip-observe) and a throttled
+warning logs the cumulative drop count. siphond exposes this as `--udp-rate-limit` /
+`--stream-rate-limit` (0 disables).
+
 ## Development Guidelines
 
 ### Parser Development
@@ -603,6 +611,10 @@ The `siphond` daemon accepts extensive command-line arguments for configuration:
 - `--reg-default-expiry` - Default registration expiry in seconds (default: 3600)
 - `--reg-min-expiry` - Minimum registration expiry (default: 60)
 - `--reg-max-expiry` - Maximum registration expiry (default: 86400)
+
+**Transport Rate Limiting:**
+- `--udp-rate-limit` - Per-source UDP ingress packets/sec, 0 disables (default: 200)
+- `--stream-rate-limit` - Per-source TCP/TLS/WS ingress frames/sec, 0 disables (default: 200)
 
 **SDP Configuration:**
 - `--sdp-profile` - SDP profile: none, audio-only (default), audio-video, or path to custom SDP file
