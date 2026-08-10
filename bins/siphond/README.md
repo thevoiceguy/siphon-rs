@@ -310,6 +310,30 @@ siphond --mode b2bua \
 | `--reg-min-expiry <SECS>` | Minimum registration expiry | 60 |
 | `--reg-max-expiry <SECS>` | Maximum registration expiry | 86400 |
 
+### Transport Rate Limiting
+
+The transport layer applies a per-source-IP token-bucket rate limit to all
+inbound traffic **before any SIP processing** — UDP datagrams as they
+arrive, and TCP/TLS/WS messages after framing. This sits *below* the
+authentication rate limiter and any application-level admission control:
+disabling those does not disable this. Dropped packets are counted via
+the `on_rate_limited` transport metric and reported by a throttled
+warning log that carries the cumulative drop count.
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--udp-rate-limit <PPS>` | Per-source UDP packets/sec, equal burst; 0 disables | 200 |
+| `--stream-rate-limit <FPS>` | Per-source TCP/TLS/WS SIP frames/sec, shared across a source's connections; 0 disables | 200 |
+
+The default of 200 packets/sec per source begins to bite around 50–65
+calls/sec arriving from a single IP (roughly four SIP packets per call) —
+ordinary load for a busy trunk from one carrier SBC. Raise the limit for
+high-volume single-source peers:
+
+```bash
+siphond --mode proxy --udp-rate-limit 2000 --stream-rate-limit 2000
+```
+
 ---
 
 ## Usage Examples

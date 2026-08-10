@@ -21,6 +21,7 @@ rustls-pki-types = { version = "1.2", optional = true }
 arc-swap = { version = "1.7", optional = true }
 sip-observe = { path = "../sip-observe" }
 sip-hep = { path = "../sip-hep" }
+sip-ratelimit = { path = "../sip-ratelimit" }
 memchr = "2.7"
 dashmap = { workspace = true }
 tokio-tungstenite = { version = "0.21", optional = true }

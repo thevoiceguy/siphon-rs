@@ -7,6 +7,29 @@
 //! Provides connection pooling, message framing, and automatic protocol handling
 //! with observability integration.
 //!
+//! # Ingress rate limiting
+//!
+//! Every receive path applies a per-source-IP token-bucket rate limit
+//! (via `sip-ratelimit`): inbound UDP datagrams and, after framing,
+//! inbound TCP/TLS/WebSocket SIP messages. Both limiters default to
+//! 200 packets (frames) per second per source IP with an equal burst.
+//! This sits *below* any application-level admission control and
+//! applies even when no application limiter is configured.
+//!
+//! Configure or disable the limits at startup with [`set_udp_rate_limit`]
+//! and [`set_stream_rate_limit`] (once each, before traffic arrives):
+//!
+//! ```
+//! use sip_transport::{set_udp_rate_limit, RateLimitConfig};
+//! // Allow 1000 packets/sec per source, e.g. for a busy carrier SBC.
+//! set_udp_rate_limit(RateLimitConfig::new(1000, 1).unwrap());
+//! // ...or turn the UDP limiter off: RateLimitConfig::disabled()
+//! ```
+//!
+//! Dropped packets are observable: each drop invokes
+//! `TransportMetrics::on_rate_limited`, and a throttled warning (at most
+//! one per second) logs the cumulative drop count.
+//!
 //! # Example
 //! ```no_run
 //! use sip_transport::{run_udp, InboundPacket};
@@ -27,6 +50,10 @@
 use anyhow::{anyhow, Result};
 use bytes::{Buf, Bytes, BytesMut};
 use sip_observe::{span_with_transport, transport_metrics, OpLabel, StageLabel, TransportLabel};
+use sip_ratelimit::RateLimiter;
+// Re-exported so callers can build configs for `set_udp_rate_limit` /
+// `set_stream_rate_limit` without depending on sip-ratelimit directly.
+pub use sip_ratelimit::{RateLimitConfig, RateLimitError};
 pub mod pool;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -405,83 +432,109 @@ impl InboundPacket {
     }
 }
 
-/// Maximum UDP packets per source IP per second before rate limiting kicks in.
-const UDP_RATE_LIMIT_PPS: u64 = 200;
+/// Default maximum UDP packets per source IP per second before rate
+/// limiting kicks in. Override with [`set_udp_rate_limit`].
+const DEFAULT_UDP_RATE_LIMIT_PPS: u32 = 200;
 
-/// Opportunistically prune the per-source UDP rate map every N packets.
-/// Matches the cadence used by the stream rate limiter so the behaviour
-/// is predictable across transports.
-const UDP_RATE_CLEANUP_EVERY: u64 = 1024;
-
-/// Drop UDP rate-map entries whose 1-second window started longer ago
-/// than this. 60s mirrors the stream rate map TTL.
-const UDP_RATE_IDLE_TTL: std::time::Duration = std::time::Duration::from_secs(60);
-
-/// Maximum SIP frames per source IP per second across TCP/TLS/WS streams.
+/// Default maximum SIP frames per source IP per second across TCP/TLS/WS
+/// streams. Override with [`set_stream_rate_limit`].
 ///
 /// UDP is already rate-limited at the datagram level; without an equivalent
 /// for stream transports a peer that opens a TCP/TLS connection can pump
 /// arbitrary frames-per-second because we only cap concurrent connections,
 /// not message rate. This applies the same per-IP cap as UDP, evaluated
 /// after framing so each completed SIP message counts as one frame.
-const STREAM_RATE_LIMIT_FPS: u64 = 200;
+const DEFAULT_STREAM_RATE_LIMIT_FPS: u32 = 200;
 
-/// Cleanup IPs from the rate map every N checks to bound memory.
-const STREAM_RATE_CLEANUP_EVERY: u64 = 1024;
+/// Drop per-source limiter state idle for longer than this. 60s mirrors
+/// the TTL of the hand-rolled rate maps this limiter replaced.
+const INGRESS_RATE_IDLE_TTL_SECS: u64 = 60;
 
-/// Drop rate-map entries older than this when cleaning up.
-const STREAM_RATE_IDLE_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+/// Default token-bucket config for an ingress limiter: `per_sec` packets
+/// (or frames) per second with an equal burst, idle state pruned after
+/// [`INGRESS_RATE_IDLE_TTL_SECS`]. The limiter cleans itself up
+/// opportunistically, so source-IP churn — trivial to generate on UDP
+/// where the source is spoofable — can't grow its map indefinitely.
+fn default_ingress_rate_config(per_sec: u32) -> RateLimitConfig {
+    RateLimitConfig::new(per_sec, 1)
+        .expect("default ingress rate config is valid")
+        .with_idle_timeout(INGRESS_RATE_IDLE_TTL_SECS)
+}
 
-/// Per-source frame counter shared across all stream sessions. Lives for the
-/// process lifetime; opportunistically cleaned in `check_stream_rate`.
-fn stream_rate_map() -> &'static dashmap::DashMap<std::net::IpAddr, (u64, Instant)> {
-    static MAP: std::sync::OnceLock<dashmap::DashMap<std::net::IpAddr, (u64, Instant)>> =
-        std::sync::OnceLock::new();
-    MAP.get_or_init(dashmap::DashMap::new)
+static UDP_RATE_LIMITER: std::sync::OnceLock<RateLimiter> = std::sync::OnceLock::new();
+static STREAM_RATE_LIMITER: std::sync::OnceLock<RateLimiter> = std::sync::OnceLock::new();
+
+/// Configures the per-source UDP ingress rate limit (default: 200
+/// packets/sec with an equal burst). Use `RateLimitConfig::disabled()`
+/// to turn the limiter off entirely.
+///
+/// Must be called before the first UDP packet is received; returns
+/// `false` (and changes nothing) if the limiter is already in use.
+pub fn set_udp_rate_limit(config: RateLimitConfig) -> bool {
+    UDP_RATE_LIMITER.set(RateLimiter::new(config)).is_ok()
+}
+
+/// Configures the per-source stream (TCP/TLS/WS) frame rate limit
+/// (default: 200 frames/sec with an equal burst). Use
+/// `RateLimitConfig::disabled()` to turn the limiter off entirely.
+///
+/// Must be called before the first stream frame is received; returns
+/// `false` (and changes nothing) if the limiter is already in use.
+pub fn set_stream_rate_limit(config: RateLimitConfig) -> bool {
+    STREAM_RATE_LIMITER.set(RateLimiter::new(config)).is_ok()
+}
+
+fn udp_rate_limiter() -> &'static RateLimiter {
+    UDP_RATE_LIMITER.get_or_init(|| {
+        RateLimiter::new(default_ingress_rate_config(DEFAULT_UDP_RATE_LIMIT_PPS))
+    })
+}
+
+fn stream_rate_limiter() -> &'static RateLimiter {
+    STREAM_RATE_LIMITER.get_or_init(|| {
+        RateLimiter::new(default_ingress_rate_config(DEFAULT_STREAM_RATE_LIMIT_FPS))
+    })
+}
+
+/// Records a rate-limited drop: every drop is counted via
+/// [`TransportMetrics::on_rate_limited`], and a warning is logged at most
+/// once per second carrying the limiter's cumulative drop count so the
+/// total is recoverable from logs alone.
+fn note_rate_limited(peer: SocketAddr, label: TransportLabel, limiter: &RateLimiter) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static LAST_WARN_SECS: AtomicU64 = AtomicU64::new(0);
+
+    transport_metrics().on_rate_limited(label);
+
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let last = LAST_WARN_SECS.load(Ordering::Relaxed);
+    if now_secs != last
+        && LAST_WARN_SECS
+            .compare_exchange(last, now_secs, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+    {
+        warn!(
+            %peer,
+            transport = %label,
+            dropped_total = limiter.metrics().blocked_requests(),
+            "per-source ingress rate limit exceeded, dropping"
+        );
+    }
 }
 
 /// Returns `true` if the frame from `peer` should be processed; `false` if
-/// the per-IP rate limit has been exceeded for the current 1-second window.
-///
-/// On rate-limit transition (first frame past the cap) a warning is emitted
-/// once per window so logs aren't spammed. The returned boolean is the
-/// hot-path signal; callers should drop the frame on `false`.
-pub(crate) fn check_stream_rate(peer: SocketAddr) -> bool {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static CHECKS: AtomicU64 = AtomicU64::new(0);
-
-    let map = stream_rate_map();
-    let ip = peer.ip();
-    let now = Instant::now();
-
-    let allowed = {
-        let mut entry = map.entry(ip).or_insert((0, now));
-        if now.duration_since(entry.1) >= std::time::Duration::from_secs(1) {
-            entry.0 = 0;
-            entry.1 = now;
-        }
-        entry.0 += 1;
-        if entry.0 > STREAM_RATE_LIMIT_FPS {
-            if entry.0 == STREAM_RATE_LIMIT_FPS + 1 {
-                warn!(
-                    %peer,
-                    fps = entry.0,
-                    "stream per-source frame rate limit exceeded, dropping frames"
-                );
-            }
-            false
-        } else {
-            true
-        }
-    };
-
-    // Opportunistic cleanup so the map stays bounded under churn.
-    let n = CHECKS.fetch_add(1, Ordering::Relaxed);
-    if n.is_multiple_of(STREAM_RATE_CLEANUP_EVERY) {
-        map.retain(|_, (_, last)| now.duration_since(*last) < STREAM_RATE_IDLE_TTL);
+/// the per-IP rate limit is exceeded. Callers should drop the frame on
+/// `false` — the drop has already been counted against `label`.
+pub(crate) fn check_stream_rate(peer: SocketAddr, label: TransportLabel) -> bool {
+    let limiter = stream_rate_limiter();
+    if limiter.check_by_ip(peer.ip()) {
+        return true;
     }
-
-    allowed
+    note_rate_limited(peer, label, limiter);
+    false
 }
 
 /// Runs a UDP receive loop and forwards packets to the provided channel.
@@ -493,43 +546,15 @@ pub async fn run_udp(socket: Arc<UdpSocket>, tx: mpsc::Sender<InboundPacket>) ->
     info!(%bind, "listening (udp)");
     transport_metrics().on_accept(TransportLabel::Udp);
     let mut buf = vec![0u8; 65_535];
-    // Per-source rate limiting: (packet_count, window_start).
-    // Opportunistically cleaned up (see UDP_RATE_CLEANUP_EVERY / TTL below)
-    // so source-IP churn — trivial to generate on UDP where the source is
-    // spoofable — can't grow the map indefinitely.
-    let rate_map: dashmap::DashMap<std::net::IpAddr, (u64, std::time::Instant)> =
-        dashmap::DashMap::new();
-    let mut packets_since_cleanup: u64 = 0;
     loop {
         match socket.recv_from(&mut buf).await {
             Ok((n, peer)) => {
-                // Per-source rate limiting
-                let ip = peer.ip();
-                let now = std::time::Instant::now();
-                {
-                    let mut entry = rate_map.entry(ip).or_insert((0, now));
-                    // Reset counter if window has elapsed (1 second window)
-                    if now.duration_since(entry.1) >= std::time::Duration::from_secs(1) {
-                        entry.0 = 0;
-                        entry.1 = now;
-                    }
-                    entry.0 += 1;
-                    if entry.0 > UDP_RATE_LIMIT_PPS {
-                        if entry.0 == UDP_RATE_LIMIT_PPS + 1 {
-                            warn!(%peer, pps = entry.0, "UDP per-source rate limit exceeded, dropping packets");
-                        }
-                        continue;
-                    }
-                }
-                // Opportunistic cleanup: every N packets, drop entries
-                // whose window is well past. Bounds memory under churn
-                // from spoofed source addresses.
-                packets_since_cleanup += 1;
-                if packets_since_cleanup >= UDP_RATE_CLEANUP_EVERY {
-                    packets_since_cleanup = 0;
-                    rate_map.retain(|_, (_, window_start)| {
-                        now.duration_since(*window_start) < UDP_RATE_IDLE_TTL
-                    });
+                // Per-source rate limiting. Dropped packets are counted
+                // via TransportMetrics::on_rate_limited before we bail.
+                let limiter = udp_rate_limiter();
+                if !limiter.check_by_ip(peer.ip()) {
+                    note_rate_limited(peer, TransportLabel::Udp, limiter);
+                    continue;
                 }
 
                 transport_metrics().on_latency(TransportLabel::Udp, OpLabel::Recv, 0);
@@ -969,7 +994,7 @@ where
                             warn!(%peer, len = data.len(), max = MAX_BODY_SIZE, "websocket binary message too large, dropping");
                             break;
                         }
-                        if !check_stream_rate(peer) {
+                        if !check_stream_rate(peer, transport.into()) {
                             continue;
                         }
                         transport_metrics().on_packet_received(transport.into());
@@ -1002,7 +1027,7 @@ where
                             warn!(%peer, len = text.len(), max = MAX_BODY_SIZE, "websocket text message too large, dropping");
                             break;
                         }
-                        if !check_stream_rate(peer) {
+                        if !check_stream_rate(peer, transport.into()) {
                             continue;
                         }
                         transport_metrics().on_packet_received(transport.into());
@@ -1582,7 +1607,7 @@ async fn spawn_tls_session(
                         for payload in frames {
                             // Per-IP frame rate limit shared with the
                             // plain-TCP and WS paths.
-                            if !check_stream_rate(peer) {
+                            if !check_stream_rate(peer, TransportLabel::Tls) {
                                 continue;
                             }
                             // HEP3 inbound capture. Skipped when no
@@ -1794,7 +1819,7 @@ async fn spawn_stream_session<S>(
                             // concurrent connections, so without this
                             // they could pump arbitrary frames-per-second
                             // and exhaust CPU at the parser/dispatcher.
-                            if !check_stream_rate(peer) {
+                            if !check_stream_rate(peer, transport.into()) {
                                 continue;
                             }
                             // HEP3 inbound capture per framed SIP
@@ -2354,18 +2379,25 @@ mod tests {
     #[test]
     fn stream_rate_limit_drops_after_threshold() {
         // Use an IP that no other test will hit so we don't see cross-test
-        // pollution from the global stream_rate_map.
+        // pollution from the global stream rate limiter.
         let peer: SocketAddr = "203.0.113.77:5060".parse().unwrap();
+        let cap = u64::from(DEFAULT_STREAM_RATE_LIMIT_FPS);
         let mut allowed = 0u64;
-        // Fire enough frames in one window to overrun the cap.
-        for _ in 0..(STREAM_RATE_LIMIT_FPS + 50) {
-            if check_stream_rate(peer) {
+        let mut dropped = 0u64;
+        // Fire enough frames in a tight burst to overrun the cap. The token
+        // bucket refills while the loop runs, so allow a little slack above
+        // the burst capacity instead of asserting an exact count.
+        for _ in 0..(cap + 50) {
+            if check_stream_rate(peer, TransportLabel::Tcp) {
                 allowed += 1;
+            } else {
+                dropped += 1;
             }
         }
-        assert_eq!(
-            allowed, STREAM_RATE_LIMIT_FPS,
-            "expected exactly cap allowed in one window, got {allowed}"
+        assert!(dropped > 0, "cap should have engaged");
+        assert!(
+            allowed >= cap,
+            "full burst capacity should be granted, got {allowed}"
         );
     }
 
@@ -2401,16 +2433,84 @@ mod tests {
     }
 
     #[test]
-    fn stream_rate_limit_resets_after_window() {
+    fn stream_rate_limit_recovers_after_idle() {
         let peer: SocketAddr = "203.0.113.78:5060".parse().unwrap();
-        // Saturate
-        for _ in 0..STREAM_RATE_LIMIT_FPS {
-            assert!(check_stream_rate(peer));
+        // Saturate: consumption far outpaces the token refill rate, so the
+        // limiter must start refusing within (roughly) the burst capacity.
+        let mut consumed = 0u64;
+        while check_stream_rate(peer, TransportLabel::Tcp) {
+            consumed += 1;
+            assert!(
+                consumed < 10 * u64::from(DEFAULT_STREAM_RATE_LIMIT_FPS),
+                "limiter never engaged"
+            );
         }
-        assert!(!check_stream_rate(peer), "should be over cap");
-        // Wait past the 1-second window and try again.
+        // Wait for the bucket to refill and try again.
         std::thread::sleep(std::time::Duration::from_millis(1100));
-        assert!(check_stream_rate(peer), "window should have reset");
+        assert!(
+            check_stream_rate(peer, TransportLabel::Tcp),
+            "tokens should refill after idle"
+        );
+    }
+
+    #[test]
+    fn ingress_rate_limit_setters_are_once_only() {
+        // The first call may race with default initialization elsewhere in
+        // the test binary, so only the second call's outcome is asserted:
+        // once a limiter exists, reconfiguration must be refused.
+        let _ = set_udp_rate_limit(default_ingress_rate_config(DEFAULT_UDP_RATE_LIMIT_PPS));
+        assert!(!set_udp_rate_limit(default_ingress_rate_config(
+            DEFAULT_UDP_RATE_LIMIT_PPS
+        )));
+
+        let _ = set_stream_rate_limit(default_ingress_rate_config(DEFAULT_STREAM_RATE_LIMIT_FPS));
+        assert!(!set_stream_rate_limit(default_ingress_rate_config(
+            DEFAULT_STREAM_RATE_LIMIT_FPS
+        )));
+    }
+
+    #[test]
+    fn rate_limited_drops_are_counted() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        #[derive(Debug, Default)]
+        struct CountingMetrics {
+            rate_limited: AtomicU64,
+        }
+
+        impl sip_observe::TransportMetrics for CountingMetrics {
+            fn on_packet_received(&self, _transport: TransportLabel) {}
+            fn on_packet_sent(&self, _transport: TransportLabel) {}
+            fn on_error(&self, _transport: TransportLabel, _stage: StageLabel) {}
+            fn on_accept(&self, _transport: TransportLabel) {}
+            fn on_connect(&self, _transport: TransportLabel) {}
+            fn on_latency(&self, _transport: TransportLabel, _op: OpLabel, _nanos: u64) {}
+            fn on_rate_limited(&self, _transport: TransportLabel) {
+                self.rate_limited.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        let metrics = std::sync::Arc::new(CountingMetrics::default());
+        if !sip_observe::set_transport_metrics(metrics.clone()) {
+            // Another test already installed a sink; the global can only be
+            // set once per process, so this scenario can't be exercised here.
+            return;
+        }
+
+        // Unique IP so the bucket starts full; overrun it and check that
+        // every drop was counted.
+        let peer: SocketAddr = "203.0.113.79:5060".parse().unwrap();
+        let mut dropped = 0u64;
+        for _ in 0..(u64::from(DEFAULT_STREAM_RATE_LIMIT_FPS) + 50) {
+            if !check_stream_rate(peer, TransportLabel::Tcp) {
+                dropped += 1;
+            }
+        }
+        assert!(dropped > 0, "cap should have engaged");
+        assert!(
+            metrics.rate_limited.load(Ordering::Relaxed) >= dropped,
+            "every drop must be reported via on_rate_limited"
+        );
     }
 
     #[cfg(all(unix, feature = "tls"))]

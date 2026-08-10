@@ -41,6 +41,12 @@ pub trait TransportMetrics: Send + Sync + 'static {
     fn on_accept(&self, transport: TransportLabel);
     fn on_connect(&self, transport: TransportLabel);
     fn on_latency(&self, transport: TransportLabel, op: OpLabel, nanos: u64);
+
+    /// Called once for every inbound packet or frame dropped by a
+    /// per-source ingress rate limit, before the packet is counted as
+    /// received. Defaulted to a no-op so existing implementors keep
+    /// compiling.
+    fn on_rate_limited(&self, _transport: TransportLabel) {}
 }
 
 #[derive(Debug, Default)]
@@ -53,6 +59,7 @@ impl TransportMetrics for NoopTransportMetrics {
     fn on_accept(&self, _transport: TransportLabel) {}
     fn on_connect(&self, _transport: TransportLabel) {}
     fn on_latency(&self, _transport: TransportLabel, _op: OpLabel, _nanos: u64) {}
+    fn on_rate_limited(&self, _transport: TransportLabel) {}
 }
 
 static TRANSPORT_METRICS: OnceCell<Arc<dyn TransportMetrics>> = OnceCell::new();
@@ -115,6 +122,10 @@ impl TransportMetrics for TracingTransportMetrics {
 
     fn on_latency(&self, transport: TransportLabel, op: OpLabel, nanos: u64) {
         tracing::debug!(transport = %transport, op = %op, nanos, "latency");
+    }
+
+    fn on_rate_limited(&self, transport: TransportLabel) {
+        tracing::warn!(transport = %transport, "inbound packet dropped by ingress rate limit");
     }
 }
 
@@ -225,6 +236,12 @@ impl TransportMetrics for RateLimitedTracingTransportMetrics {
     fn on_latency(&self, transport: TransportLabel, op: OpLabel, nanos: u64) {
         if self.should_emit() {
             tracing::debug!(transport = %transport, op = %op, nanos, "latency");
+        }
+    }
+
+    fn on_rate_limited(&self, transport: TransportLabel) {
+        if self.should_emit() {
+            tracing::warn!(transport = %transport, "inbound packet dropped by ingress rate limit");
         }
     }
 }
@@ -418,4 +435,28 @@ fn now_unix_ns() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // `on_rate_limited` is defaulted so that implementors written before it
+    // existed keep compiling; this impl deliberately omits it.
+    struct LegacyMetrics;
+
+    impl TransportMetrics for LegacyMetrics {
+        fn on_packet_received(&self, _transport: TransportLabel) {}
+        fn on_packet_sent(&self, _transport: TransportLabel) {}
+        fn on_error(&self, _transport: TransportLabel, _stage: StageLabel) {}
+        fn on_accept(&self, _transport: TransportLabel) {}
+        fn on_connect(&self, _transport: TransportLabel) {}
+        fn on_latency(&self, _transport: TransportLabel, _op: OpLabel, _nanos: u64) {}
+    }
+
+    #[test]
+    fn on_rate_limited_is_defaulted_for_legacy_implementors() {
+        let metrics: &dyn TransportMetrics = &LegacyMetrics;
+        metrics.on_rate_limited(TransportLabel::Udp);
+    }
 }
