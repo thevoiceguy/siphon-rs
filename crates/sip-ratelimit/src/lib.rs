@@ -326,6 +326,11 @@ struct TokenBucket {
     last_refill: Instant,
     /// Last access time (for cleanup)
     last_access: Instant,
+    /// Requests blocked for this key
+    blocked: u64,
+    /// Last time a caller logged about this key being blocked
+    /// (see [`RateLimiter::should_log_blocked`])
+    last_warn: Option<Instant>,
 }
 
 impl TokenBucket {
@@ -335,6 +340,8 @@ impl TokenBucket {
             tokens: initial_tokens,
             last_refill: now,
             last_access: now,
+            blocked: 0,
+            last_warn: None,
         }
     }
 
@@ -347,6 +354,7 @@ impl TokenBucket {
             self.tokens -= 1.0;
             true
         } else {
+            self.blocked += 1;
             false
         }
     }
@@ -476,6 +484,9 @@ pub struct RateLimiter {
     config: Arc<RateLimitConfig>,
     buckets: Arc<DashMap<String, RwLock<TokenBucket>>>,
     metrics: Arc<RateLimitMetrics>,
+    /// Throttle for [`Self::should_log_blocked`] on keys that have no
+    /// bucket (rejected at max capacity or invalid), unix seconds.
+    untracked_warn_secs: Arc<AtomicU64>,
 }
 
 impl RateLimiter {
@@ -485,6 +496,7 @@ impl RateLimiter {
             config: Arc::new(config),
             buckets: Arc::new(DashMap::new()),
             metrics: Arc::new(RateLimitMetrics::new()),
+            untracked_warn_secs: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -571,6 +583,53 @@ impl RateLimiter {
     /// Check rate limit by IP address
     pub fn check_by_ip(&self, ip: IpAddr) -> bool {
         self.check_rate_limit(&ip.to_string())
+    }
+
+    /// Per-key throttle for "rate limit exceeded" log lines.
+    ///
+    /// Call after [`check_rate_limit`](Self::check_rate_limit) returns
+    /// `false`. Returns `Some(blocked)` — the number of requests blocked
+    /// for this key so far — if the caller should log about `key` now,
+    /// or `None` if it already logged for this key within `min_interval`.
+    ///
+    /// The throttle state lives alongside the key's token bucket, so it is
+    /// per key (a flood from one source cannot silence warnings about
+    /// another) and is cleaned up with the bucket when the key goes idle.
+    /// Keys without a bucket (rejected at max tracked-key capacity, or
+    /// invalid) fall back to a limiter-wide throttle and report a blocked
+    /// count of 0.
+    pub fn should_log_blocked(&self, key: &str, min_interval: Duration) -> Option<u64> {
+        if let Some(bucket) = self.buckets.get(key) {
+            let mut bucket = bucket.write();
+            let due = bucket
+                .last_warn
+                .is_none_or(|last| last.elapsed() >= min_interval);
+            if due {
+                bucket.last_warn = Some(Instant::now());
+                Some(bucket.blocked)
+            } else {
+                None
+            }
+        } else {
+            // No bucket to hang per-key state on; throttle limiter-wide so
+            // a capacity-rejection flood cannot spam the log.
+            let now_secs = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let interval_secs = min_interval.as_secs().max(1);
+            let last = self.untracked_warn_secs.load(Ordering::Relaxed);
+            if now_secs.saturating_sub(last) >= interval_secs
+                && self
+                    .untracked_warn_secs
+                    .compare_exchange(last, now_secs, Ordering::Relaxed, Ordering::Relaxed)
+                    .is_ok()
+            {
+                Some(0)
+            } else {
+                None
+            }
+        }
     }
 
     /// Clean up idle rate limiters
@@ -1015,6 +1074,81 @@ mod tests {
 
         // Should work again
         assert!(limiter.check_rate_limit("test-key"));
+    }
+
+    // ===========================================
+    // Per-key blocked-warning throttle
+    // ===========================================
+
+    #[test]
+    fn should_log_blocked_is_per_key() {
+        let config = RateLimitConfig::new(1, 60).unwrap();
+        let limiter = RateLimiter::new(config);
+        let interval = Duration::from_secs(60);
+
+        // Exhaust both keys.
+        assert!(limiter.check_rate_limit("10.0.0.1"));
+        assert!(!limiter.check_rate_limit("10.0.0.1"));
+        assert!(limiter.check_rate_limit("10.0.0.2"));
+        assert!(!limiter.check_rate_limit("10.0.0.2"));
+
+        // First warn for a key fires immediately; repeat within the
+        // interval is throttled.
+        assert_eq!(limiter.should_log_blocked("10.0.0.1", interval), Some(1));
+        assert_eq!(limiter.should_log_blocked("10.0.0.1", interval), None);
+
+        // A different key has its own throttle — one peer's warning does
+        // not silence another's.
+        assert_eq!(limiter.should_log_blocked("10.0.0.2", interval), Some(1));
+    }
+
+    #[test]
+    fn should_log_blocked_reports_per_key_drop_count() {
+        let config = RateLimitConfig::new(2, 60).unwrap();
+        let limiter = RateLimiter::new(config);
+
+        limiter.check_rate_limit("key1");
+        limiter.check_rate_limit("key1");
+        for _ in 0..5 {
+            assert!(!limiter.check_rate_limit("key1"));
+        }
+
+        assert_eq!(
+            limiter.should_log_blocked("key1", Duration::from_secs(60)),
+            Some(5)
+        );
+    }
+
+    #[test]
+    fn should_log_blocked_untracked_key_uses_limiter_wide_throttle() {
+        let config = RateLimitConfig::new(1, 60).unwrap();
+        let limiter = RateLimiter::new(config);
+        let interval = Duration::from_secs(60);
+
+        // No bucket exists for this key (as after a max-capacity
+        // rejection): fall back to a limiter-wide throttle with no
+        // per-key count.
+        assert_eq!(limiter.should_log_blocked("untracked", interval), Some(0));
+        assert_eq!(limiter.should_log_blocked("untracked", interval), None);
+        assert_eq!(
+            limiter.should_log_blocked("other-untracked", interval),
+            None
+        );
+    }
+
+    #[test]
+    fn should_log_blocked_fires_again_after_interval() {
+        let config = RateLimitConfig::new(1, 60).unwrap();
+        let limiter = RateLimiter::new(config);
+
+        limiter.check_rate_limit("key1");
+        assert!(!limiter.check_rate_limit("key1"));
+
+        let interval = Duration::from_millis(50);
+        assert!(limiter.should_log_blocked("key1", interval).is_some());
+        assert!(limiter.should_log_blocked("key1", interval).is_none());
+        thread::sleep(Duration::from_millis(80));
+        assert!(limiter.should_log_blocked("key1", interval).is_some());
     }
 
     // ===========================================

@@ -512,7 +512,8 @@ limit built on `sip-ratelimit` (default 200 packets or frames/sec with equal bur
 Configure or disable at startup with `sip_transport::set_udp_rate_limit()` /
 `set_stream_rate_limit()` (once each, before traffic arrives). Every dropped packet
 is counted via `TransportMetrics::on_rate_limited` (sip-observe) and a throttled
-warning logs the cumulative drop count. siphond exposes this as `--udp-rate-limit` /
+warning (at most one per second per source IP, independently per limiter) logs
+the peer's drop count and the cumulative drop count. siphond exposes this as `--udp-rate-limit` /
 `--stream-rate-limit` (0 disables).
 
 ## Development Guidelines
