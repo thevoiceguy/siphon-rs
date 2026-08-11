@@ -28,7 +28,8 @@
 //!
 //! Dropped packets are observable: each drop invokes
 //! `TransportMetrics::on_rate_limited`, and a throttled warning (at most
-//! one per second) logs the cumulative drop count.
+//! one per second per source IP, independently for each limiter) logs
+//! that peer's drop count alongside the cumulative drop count.
 //!
 //! # Example
 //! ```no_run
@@ -496,29 +497,27 @@ fn stream_rate_limiter() -> &'static RateLimiter {
     })
 }
 
+/// How often, per source IP, a rate-limit warning may be logged.
+const RATE_LIMIT_WARN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// Records a rate-limited drop: every drop is counted via
 /// [`TransportMetrics::on_rate_limited`], and a warning is logged at most
-/// once per second carrying the limiter's cumulative drop count so the
-/// total is recoverable from logs alone.
+/// once per second *per source IP* carrying that peer's drop count and the
+/// limiter's cumulative drop count, so both the per-peer attribution
+/// ("which sources are flooding me") and the total are recoverable from
+/// logs alone. The throttle state lives in the limiter's per-IP map, so
+/// one flooding peer cannot silence warnings about another, and the UDP
+/// and stream limiters throttle independently.
 fn note_rate_limited(peer: SocketAddr, label: TransportLabel, limiter: &RateLimiter) {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static LAST_WARN_SECS: AtomicU64 = AtomicU64::new(0);
-
     transport_metrics().on_rate_limited(label);
 
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let last = LAST_WARN_SECS.load(Ordering::Relaxed);
-    if now_secs != last
-        && LAST_WARN_SECS
-            .compare_exchange(last, now_secs, Ordering::Relaxed, Ordering::Relaxed)
-            .is_ok()
+    if let Some(dropped_from_peer) =
+        limiter.should_log_blocked(&peer.ip().to_string(), RATE_LIMIT_WARN_INTERVAL)
     {
         warn!(
             %peer,
             transport = %label,
+            dropped_from_peer,
             dropped_total = limiter.metrics().blocked_requests(),
             "per-source ingress rate limit exceeded, dropping"
         );
