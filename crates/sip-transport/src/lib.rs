@@ -486,9 +486,8 @@ pub fn set_stream_rate_limit(config: RateLimitConfig) -> bool {
 }
 
 fn udp_rate_limiter() -> &'static RateLimiter {
-    UDP_RATE_LIMITER.get_or_init(|| {
-        RateLimiter::new(default_ingress_rate_config(DEFAULT_UDP_RATE_LIMIT_PPS))
-    })
+    UDP_RATE_LIMITER
+        .get_or_init(|| RateLimiter::new(default_ingress_rate_config(DEFAULT_UDP_RATE_LIMIT_PPS)))
 }
 
 fn stream_rate_limiter() -> &'static RateLimiter {

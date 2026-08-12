@@ -422,14 +422,12 @@ impl ReferredByHeader {
 
                     // Require len >= 2 so a lone '"' (which satisfies both
                     // starts_with and ends_with) does not slice [1..0] and panic.
-                    let value = if value.len() >= 2
-                        && value.starts_with('"')
-                        && value.ends_with('"')
-                    {
-                        &value[1..value.len() - 1]
-                    } else {
-                        value
-                    };
+                    let value =
+                        if value.len() >= 2 && value.starts_with('"') && value.ends_with('"') {
+                            &value[1..value.len() - 1]
+                        } else {
+                            value
+                        };
 
                     if key.eq_ignore_ascii_case("cid") {
                         validate_cid(value)?;
