@@ -729,10 +729,11 @@ impl CallHandle {
 
         let handle = tokio::spawn(async move {
             let mut dialog = dialog;
-            // Per RFC 4028, refresh at Session-Expires/2
-            let refresh_interval = std::cmp::max(90, (session_expires / 2) as i32) as u64;
-            let mut ticker =
-                tokio::time::interval(std::time::Duration::from_secs(refresh_interval));
+            let period = session_refresh_period(session_expires);
+            // The first tick must land one period out, not immediately:
+            // a plain `interval` completes its first tick at once, which
+            // would send a gratuitous refresh the moment the call answers.
+            let mut ticker = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
             loop {
                 ticker.tick().await;
                 if let Err(e) = uac
@@ -2808,6 +2809,20 @@ impl IntegratedUAC {
     }
 }
 
+/// Refresh period for a session timer: half the Session-Expires interval
+/// per RFC 4028 §10, so the refresh always lands well before expiry.
+///
+/// `session_expires` values that reached a dialog are already ≥ 90
+/// (`SessionExpires::new` enforces the RFC 4028 minimum), so the half
+/// interval is ≥ 45 s; the 1 s floor only guards a raw out-of-range value
+/// from spinning the refresh loop. No larger floor is applied — clamping
+/// upward (as the old `max(90, se/2)` did) pushed the refresh *past* the
+/// halfway point for any interval under 180 s, and exactly onto the expiry
+/// deadline at the RFC minimum of 90 s.
+fn session_refresh_period(session_expires: u32) -> std::time::Duration {
+    std::time::Duration::from_secs(u64::from(std::cmp::max(1, session_expires / 2)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3775,6 +3790,29 @@ mod tests {
             .await
             .iter()
             .all(|r| r.headers().get("Proxy-Authorization").is_none()));
+    }
+
+    /// Issue #92: the refresh period must be Session-Expires/2 with no
+    /// 90 s floor. The old `max(90, se/2)` scheduled the refresh for a
+    /// 90 s session (the RFC 4028 minimum) exactly on the expiry
+    /// deadline, leaving zero margin.
+    #[test]
+    fn session_refresh_period_is_half_session_expires() {
+        assert_eq!(session_refresh_period(90), Duration::from_secs(45));
+        assert_eq!(session_refresh_period(100), Duration::from_secs(50));
+        assert_eq!(session_refresh_period(120), Duration::from_secs(60));
+        assert_eq!(session_refresh_period(180), Duration::from_secs(90));
+        assert_eq!(session_refresh_period(1800), Duration::from_secs(900));
+    }
+
+    /// Out-of-range values (below the RFC 4028 minimum of 90, which
+    /// `SessionExpires::new` would have rejected) must not spin the
+    /// refresh loop with a zero period.
+    #[test]
+    fn session_refresh_period_floors_at_one_second() {
+        assert_eq!(session_refresh_period(0), Duration::from_secs(1));
+        assert_eq!(session_refresh_period(1), Duration::from_secs(1));
+        assert_eq!(session_refresh_period(2), Duration::from_secs(1));
     }
 }
 
