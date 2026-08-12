@@ -59,7 +59,7 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
 use sip_core::{Headers, Method, Request, RequestLine, Response, SipUri};
-use sip_dialog::{Dialog, DialogManager, Subscription, SubscriptionManager};
+use sip_dialog::{Dialog, DialogManager, DialogStateType, Subscription, SubscriptionManager};
 use sip_dns::{DnsTarget, Resolver, SipResolver};
 use sip_parse::serialize_request;
 use sip_sdp::{profiles, SessionDescription};
@@ -70,7 +70,7 @@ use sip_transaction::{
 use smol_str::SmolStr;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
+use tokio::sync::{mpsc, oneshot, watch, Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
 use crate::{auth_utils::extract_realm, UserAgentClient};
@@ -109,6 +109,15 @@ pub struct UACConfig {
 
     /// Maximum number of authentication retries (default: 2)
     pub max_auth_retries: u32,
+
+    /// Consecutive RFC 4028 session refresh failures before the timer task
+    /// gives up and reports [`SessionTimerStop::Exhausted`] (default: 3).
+    ///
+    /// A `408`/`481` is terminal on the first occurrence regardless of this
+    /// value — the peer has said the dialog is gone. This counts the failures
+    /// that might still be transient: timeouts, transport errors, and non-2xx
+    /// rejections. `0` is treated as 1.
+    pub max_session_refresh_failures: u32,
 
     /// Default REGISTER expires value in seconds (default: 3600)
     pub default_register_expires: u32,
@@ -200,6 +209,7 @@ impl Default for UACConfig {
         Self {
             auto_retry_auth: true,
             max_auth_retries: 2,
+            max_session_refresh_failures: 3,
             default_register_expires: 3600,
             default_subscribe_expires: 3600,
             user_agent: "siphon-rs/0.1.0".to_string(),
@@ -561,6 +571,50 @@ impl From<&str> for RequestTarget {
     }
 }
 
+/// What the RFC 4028 session-timer task is doing for a call.
+///
+/// Published on the [`watch`] channel returned by
+/// [`CallHandle::session_timer_state`]. A timer that has stopped is the one
+/// state a consumer must not miss: nothing is keeping the session alive after
+/// it, and the peer will expire the call at its `Session-Expires` deadline
+/// (issue #93).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionTimerState {
+    /// No timer has been armed on this call.
+    Idle,
+    /// The most recent refresh was answered 2xx.
+    Healthy {
+        /// When that refresh completed.
+        last_refresh: std::time::Instant,
+    },
+    /// Refreshes are failing but the task is still retrying.
+    Failing {
+        /// Failures since the last success.
+        consecutive: u32,
+    },
+    /// The task has exited. Nothing is refreshing the session any more.
+    Stopped {
+        /// Why it exited.
+        reason: SessionTimerStop,
+    },
+}
+
+/// Why a session-timer task stopped refreshing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionTimerStop {
+    /// The peer answered `408`/`481`: the dialog no longer exists, and
+    /// retrying cannot bring it back (RFC 3261 §12.2.1.2). Terminal on the
+    /// first occurrence rather than after `max_session_refresh_failures`.
+    DialogGone,
+    /// `max_session_refresh_failures` consecutive refreshes failed.
+    Exhausted {
+        /// How many in a row.
+        consecutive: u32,
+    },
+    /// [`CallHandle::stop_session_timer`] was called, or the call ended.
+    Cancelled,
+}
+
 /// Handle for an outgoing call with dialog state and response channels.
 pub struct CallHandle {
     /// The dialog for this call (updated to winning dialog when final response arrives)
@@ -602,6 +656,11 @@ pub struct CallHandle {
 
     /// Session timer refresh task cancellation
     session_timer_cancel: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+
+    /// Live state of the session timer refresh task (issue #93). Held as a
+    /// sender so the task can publish without the handle being borrowed;
+    /// consumers subscribe through [`Self::session_timer_state`].
+    session_timer_state: Arc<watch::Sender<SessionTimerState>>,
 }
 
 impl CallHandle {
@@ -631,7 +690,37 @@ impl CallHandle {
     pub async fn stop_session_timer(&self) {
         if let Some(handle) = self.session_timer_cancel.lock().await.take() {
             handle.abort();
+            let _ = self.session_timer_state.send(SessionTimerState::Stopped {
+                reason: SessionTimerStop::Cancelled,
+            });
         }
+    }
+
+    /// Watch what the session-timer task is doing (issue #93).
+    ///
+    /// The timer's whole purpose is the promise that something is keeping the
+    /// session alive. When that stops being true — the peer is gone, or
+    /// refreshes have failed `max_session_refresh_failures` times in a row —
+    /// the owner has to learn about it, or it will treat a dead session as
+    /// healthy until the peer expires the call at its deadline.
+    ///
+    /// Deliberately a signal, not an action: RFC 4028 §10 suggests the
+    /// refresher BYE a session it can no longer refresh, but tearing down a
+    /// call is the application's decision, and it may well prefer to keep the
+    /// media flowing and alert an operator. React to
+    /// [`SessionTimerState::Stopped`] however suits the deployment.
+    ///
+    /// ```ignore
+    /// let mut state = call.session_timer_state();
+    /// while state.changed().await.is_ok() {
+    ///     if let SessionTimerState::Stopped { reason } = *state.borrow() {
+    ///         warn!(?reason, "session is no longer being refreshed");
+    ///         break;
+    ///     }
+    /// }
+    /// ```
+    pub fn session_timer_state(&self) -> watch::Receiver<SessionTimerState> {
+        self.session_timer_state.subscribe()
     }
 
     /// Starts periodic keepalives (CRLF or OPTIONS) based on policy.
@@ -728,6 +817,11 @@ impl CallHandle {
     /// round trip — up to Timer B/F, ~32 s — which would stall the very BYE
     /// this fix is meant to keep working. The commit below refuses to *regress*
     /// the CSeq, which keeps the damage to that one collision.
+    ///
+    /// The task gives up after `max_session_refresh_failures` consecutive
+    /// failures, or immediately on a `408`/`481`, and publishes why on
+    /// [`Self::session_timer_state`] (issue #93). It does **not** BYE the call:
+    /// that decision belongs to the owner.
     pub async fn start_session_timer(
         &self,
         session_expires: u32,
@@ -748,22 +842,15 @@ impl CallHandle {
         };
 
         let dialog = self.dialog.clone();
-        let handle = tokio::spawn(async move {
-            let period = session_refresh_period(session_expires);
-            // The first tick must land one period out, not immediately:
-            // a plain `interval` completes its first tick at once, which
-            // would send a gratuitous refresh the moment the call answers.
-            let mut ticker = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
-            loop {
-                ticker.tick().await;
-                if let Err(e) =
-                    refresh_shared_session(&uac, &dialog, session_expires, refresher, use_update)
-                        .await
-                {
-                    warn!("Session refresh failed: {}", e);
-                }
-            }
-        });
+        let state = self.session_timer_state.clone();
+        let handle = tokio::spawn(run_session_timer(
+            uac,
+            dialog,
+            state,
+            session_expires,
+            refresher,
+            use_update,
+        ));
 
         *self.session_timer_cancel.lock().await = Some(handle);
     }
@@ -1618,6 +1705,7 @@ impl IntegratedUAC {
             early_dialogs,
             keepalive_cancel: Arc::new(Mutex::new(None)),
             session_timer_cancel: Arc::new(Mutex::new(None)),
+            session_timer_state: Arc::new(watch::Sender::new(SessionTimerState::Idle)),
         })
     }
 
@@ -1723,6 +1811,7 @@ impl IntegratedUAC {
             early_dialogs,
             keepalive_cancel: Arc::new(Mutex::new(None)),
             session_timer_cancel: Arc::new(Mutex::new(None)),
+            session_timer_state: Arc::new(watch::Sender::new(SessionTimerState::Idle)),
         })
     }
 
@@ -1855,6 +1944,7 @@ impl IntegratedUAC {
             early_dialogs,
             keepalive_cancel: Arc::new(Mutex::new(None)),
             session_timer_cancel: Arc::new(Mutex::new(None)),
+            session_timer_state: Arc::new(watch::Sender::new(SessionTimerState::Idle)),
         })
     }
 
@@ -1972,6 +2062,7 @@ impl IntegratedUAC {
             early_dialogs,
             keepalive_cancel: Arc::new(Mutex::new(None)),
             session_timer_cancel: Arc::new(Mutex::new(None)),
+            session_timer_state: Arc::new(watch::Sender::new(SessionTimerState::Idle)),
         })
     }
 
@@ -2730,6 +2821,7 @@ impl IntegratedUAC {
             early_dialogs,
             keepalive_cancel: Arc::new(Mutex::new(None)),
             session_timer_cancel: Arc::new(Mutex::new(None)),
+            session_timer_state: Arc::new(watch::Sender::new(SessionTimerState::Idle)),
         })
     }
 
@@ -2812,6 +2904,7 @@ impl IntegratedUAC {
             early_dialogs,
             keepalive_cancel: Arc::new(Mutex::new(None)),
             session_timer_cancel: Arc::new(Mutex::new(None)),
+            session_timer_state: Arc::new(watch::Sender::new(SessionTimerState::Idle)),
         })
     }
 
@@ -2841,6 +2934,90 @@ impl IntegratedUAC {
 /// deadline at the RFC minimum of 90 s.
 fn session_refresh_period(session_expires: u32) -> std::time::Duration {
     std::time::Duration::from_secs(u64::from(std::cmp::max(1, session_expires / 2)))
+}
+
+/// The RFC 4028 refresh loop behind [`CallHandle::start_session_timer`],
+/// split out so its failure policy can be tested without standing up a whole
+/// [`CallHandle`].
+///
+/// Refreshes at half the interval and reports what it is doing on `state`. It
+/// returns — stops refreshing altogether — when the peer says the dialog is
+/// gone, or after `max_session_refresh_failures` consecutive failures. It
+/// never sends a BYE: RFC 4028 §10 suggests the refresher tear the session
+/// down, but that is the owner's decision to make from
+/// [`SessionTimerState::Stopped`] (issue #93).
+async fn run_session_timer(
+    uac: Arc<IntegratedUAC>,
+    dialog: Arc<RwLock<Dialog>>,
+    state: Arc<watch::Sender<SessionTimerState>>,
+    session_expires: u32,
+    refresher: &'static str,
+    use_update: bool,
+) {
+    let max_failures = std::cmp::max(1, uac.config.max_session_refresh_failures);
+    let period = session_refresh_period(session_expires);
+    // The first tick must land one period out, not immediately:
+    // a plain `interval` completes its first tick at once, which
+    // would send a gratuitous refresh the moment the call answers.
+    let mut ticker = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+    let mut consecutive: u32 = 0;
+
+    loop {
+        ticker.tick().await;
+
+        let outcome =
+            refresh_shared_session(&uac, &dialog, session_expires, refresher, use_update).await;
+
+        // Only a 2xx means the session was actually refreshed.
+        // `apply_in_dialog_response` maps 408/481 to `Err` but returns `Ok`
+        // for every other non-2xx, so a 422 or 503 that rejected the refresh
+        // would otherwise count as a success — leaving the session to expire
+        // while the timer reported health.
+        match &outcome {
+            Ok(response) if (200..300).contains(&response.code()) => {
+                consecutive = 0;
+                let _ = state.send(SessionTimerState::Healthy {
+                    last_refresh: std::time::Instant::now(),
+                });
+                continue;
+            }
+            Ok(response) => warn!(
+                "Session refresh rejected with {} {}",
+                response.code(),
+                response.reason()
+            ),
+            Err(e) => warn!("Session refresh failed: {}", e),
+        }
+
+        consecutive = consecutive.saturating_add(1);
+
+        // A 408/481 terminated the dialog on its way through
+        // `apply_in_dialog_response`: the peer says it no longer exists, and
+        // no number of retries will bring it back (RFC 3261 §12.2.1.2).
+        // Reading the dialog's state rather than matching on the error text
+        // also catches an owner that tore the call down mid-refresh.
+        if dialog.read().await.state() == DialogStateType::Terminated {
+            warn!("Session refresh stopping: the dialog is gone");
+            let _ = state.send(SessionTimerState::Stopped {
+                reason: SessionTimerStop::DialogGone,
+            });
+            return;
+        }
+
+        if consecutive >= max_failures {
+            error!(
+                "Session refresh stopping after {} consecutive failures; \
+                 nothing is keeping this session alive",
+                consecutive
+            );
+            let _ = state.send(SessionTimerState::Stopped {
+                reason: SessionTimerStop::Exhausted { consecutive },
+            });
+            return;
+        }
+
+        let _ = state.send(SessionTimerState::Failing { consecutive });
+    }
 }
 
 /// Send one RFC 4028 refresh against a **shared** dialog, publishing the
@@ -4037,6 +4214,161 @@ mod tests {
             DialogStateType::Terminated,
             "481 terminates the dialog, and that must reach the owner too"
         );
+    }
+
+    // ── issue #93: a timer that has given up must say so ──
+
+    fn refresh_uac_with_max_failures(
+        dispatcher: Arc<CapturingDispatcher>,
+        manager: Arc<TransactionManager>,
+        max_session_refresh_failures: u32,
+    ) -> Arc<IntegratedUAC> {
+        Arc::new(
+            IntegratedUAC::builder()
+                .local_uri("sip:siphon@127.0.0.1")
+                .local_addr("127.0.0.1:5080")
+                .unwrap()
+                .transaction_manager(manager)
+                .resolver(Arc::new(SipResolver::from_system().unwrap()))
+                .dispatcher(dispatcher)
+                .config(UACConfig {
+                    max_session_refresh_failures,
+                    ..UACConfig::default()
+                })
+                .build()
+                .unwrap(),
+        )
+    }
+
+    /// Wait for the watch channel to publish a state the predicate accepts.
+    /// Bounded: the defect being fixed is a loop that reports *nothing*, so an
+    /// unbounded wait would hang rather than fail.
+    async fn await_state<F>(rx: &mut watch::Receiver<SessionTimerState>, pred: F)
+    where
+        F: Fn(&SessionTimerState) -> bool,
+    {
+        let observed = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if pred(&rx.borrow_and_update()) {
+                    return;
+                }
+                if rx.changed().await.is_err() {
+                    panic!("session timer state channel closed");
+                }
+            }
+        })
+        .await;
+        assert!(
+            observed.is_ok(),
+            "timed out waiting for the expected session timer state; last was {:?}",
+            *rx.borrow()
+        );
+    }
+
+    /// The peer answering `481` means the dialog is gone: no number of
+    /// retries brings it back, so the loop must stop on the first one and
+    /// name the reason rather than retry until the task is dropped.
+    #[tokio::test]
+    async fn session_timer_stops_immediately_when_the_peer_says_the_dialog_is_gone() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        // A high threshold: 481 must be terminal regardless of it.
+        let uac = refresh_uac_with_max_failures(dispatcher.clone(), manager.clone(), 99);
+        let dialog = Arc::new(RwLock::new(refresh_dialog()));
+        let state = Arc::new(watch::Sender::new(SessionTimerState::Idle));
+        let mut rx = state.subscribe();
+
+        // session_expires 2 → a refresh every second.
+        let task = tokio::spawn(run_session_timer(
+            uac,
+            dialog.clone(),
+            state,
+            2,
+            "uac",
+            false,
+        ));
+
+        let first = await_cseq(&dispatcher, "2 INVITE").await;
+        manager
+            .receive_response(in_dialog_response(&first, 200, "OK"))
+            .await;
+        await_state(&mut rx, |s| matches!(s, SessionTimerState::Healthy { .. })).await;
+
+        let second = await_cseq(&dispatcher, "3 INVITE").await;
+        manager
+            .receive_response(in_dialog_response(
+                &second,
+                481,
+                "Call/Transaction Does Not Exist",
+            ))
+            .await;
+
+        await_state(&mut rx, |s| {
+            *s == SessionTimerState::Stopped {
+                reason: SessionTimerStop::DialogGone,
+            }
+        })
+        .await;
+
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("the loop must exit, not keep ticking")
+            .expect("task did not panic");
+    }
+
+    /// A non-2xx rejection is a failed refresh even though
+    /// `apply_in_dialog_response` returns `Ok` for it. Two of them, with the
+    /// threshold set to two, must stop the loop and report `Exhausted` —
+    /// previously this retried forever while the owner saw nothing at all.
+    #[tokio::test]
+    async fn session_timer_gives_up_after_the_configured_consecutive_failures() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = refresh_uac_with_max_failures(dispatcher.clone(), manager.clone(), 2);
+        let dialog = Arc::new(RwLock::new(refresh_dialog()));
+        let state = Arc::new(watch::Sender::new(SessionTimerState::Idle));
+        let mut rx = state.subscribe();
+
+        let task = tokio::spawn(run_session_timer(
+            uac,
+            dialog.clone(),
+            state,
+            2,
+            "uac",
+            false,
+        ));
+
+        // 503 leaves the dialog alive, so this is the retryable kind.
+        let first = await_cseq(&dispatcher, "2 INVITE").await;
+        manager
+            .receive_response(in_dialog_response(&first, 503, "Service Unavailable"))
+            .await;
+        await_state(&mut rx, |s| {
+            *s == SessionTimerState::Failing { consecutive: 1 }
+        })
+        .await;
+
+        let second = await_cseq(&dispatcher, "3 INVITE").await;
+        manager
+            .receive_response(in_dialog_response(&second, 503, "Service Unavailable"))
+            .await;
+
+        await_state(&mut rx, |s| {
+            *s == SessionTimerState::Stopped {
+                reason: SessionTimerStop::Exhausted { consecutive: 2 },
+            }
+        })
+        .await;
+
+        assert_eq!(
+            dialog.read().await.state(),
+            DialogStateType::Confirmed,
+            "giving up must not terminate the dialog — the BYE is the owner's call"
+        );
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("the loop must exit, not keep ticking")
+            .expect("task did not panic");
     }
 
     /// The residual race, bounded: if the owner sent and committed its own
