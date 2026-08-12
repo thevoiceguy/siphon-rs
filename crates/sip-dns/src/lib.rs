@@ -366,10 +366,9 @@ impl SipResolver {
         // `TokioConnectionProvider` moved to `net::runtime::TokioRuntimeProvider`
         // when hickory split into separate crates for the 0.26 release.
         use hickory_resolver::net::runtime::TokioRuntimeProvider;
-        let resolver =
-            TokioResolver::builder_with_config(config, TokioRuntimeProvider::default())
-                .with_options(opts)
-                .build()?;
+        let resolver = TokioResolver::builder_with_config(config, TokioRuntimeProvider::default())
+            .with_options(opts)
+            .build()?;
         Ok(Self {
             resolver,
             enable_naptr: true,

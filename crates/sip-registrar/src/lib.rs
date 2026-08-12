@@ -2616,7 +2616,11 @@ mod tests {
                 "c-host",
             ))
             .expect("response");
-        assert_eq!(host_only.code(), 403, "host-only AOR hijack must be rejected");
+        assert_eq!(
+            host_only.code(),
+            403,
+            "host-only AOR hijack must be rejected"
+        );
 
         // tel: AOR that DOES match the authenticated identity -> authorized.
         let tel_ok = registrar

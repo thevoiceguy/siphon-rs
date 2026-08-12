@@ -1807,8 +1807,7 @@ mod tests {
                 .with_root_certificates(tokio_rustls::rustls::RootCertStore::empty())
                 .with_no_client_auth(),
         );
-        let payload =
-            Bytes::from_static(b"BYE sip:+15551234567@10.0.0.1:5060 SIP/2.0\r\n\r\n");
+        let payload = Bytes::from_static(b"BYE sip:+15551234567@10.0.0.1:5060 SIP/2.0\r\n\r\n");
 
         // The in-dialog request derives an IP-literal SNI that misses the
         // exact (addr, sni) key but matches the peer addr.

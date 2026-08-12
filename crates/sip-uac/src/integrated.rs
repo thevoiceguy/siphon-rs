@@ -706,10 +706,30 @@ impl CallHandle {
         *self.keepalive_cancel.lock().await = Some(handle);
     }
 
-    /// Starts session timer refreshes (RFC 4028) at roughly half the Session-Expires interval.
+    /// Starts session timer refreshes (RFC 4028) at half the Session-Expires
+    /// interval, refreshing **this handle's dialog**.
+    ///
+    /// Each refresh consumes a local CSeq, and that advance is committed back
+    /// to [`Self::dialog`] so the owner's next in-dialog request — the
+    /// teardown BYE, a hold/resume re-INVITE, a REFER — continues the sequence
+    /// instead of reusing a CSeq the peer has already seen. A record-routing
+    /// proxy treats a duplicate CSeq as a retransmission and answers `408`, so
+    /// a timer that kept the advance to itself broke teardown on exactly the
+    /// deployments session timers exist for (issue #95).
+    ///
+    /// The dialog is re-read at every tick rather than snapshotted when the
+    /// timer is armed, so refreshes also pick up CSeq advances made by the
+    /// owner in between.
+    ///
+    /// One race remains and cannot be closed at this layer: an owner that
+    /// resolves the dialog, sends its own request and commits while a refresh
+    /// is in flight consumes the same CSeq the refresh already did. Serialising
+    /// the two would mean holding the dialog's write lock across a network
+    /// round trip — up to Timer B/F, ~32 s — which would stall the very BYE
+    /// this fix is meant to keep working. The commit below refuses to *regress*
+    /// the CSeq, which keeps the damage to that one collision.
     pub async fn start_session_timer(
         &self,
-        dialog: Dialog,
         session_expires: u32,
         refresher: &'static str,
         use_update: bool,
@@ -727,8 +747,8 @@ impl CallHandle {
             "uac"
         };
 
+        let dialog = self.dialog.clone();
         let handle = tokio::spawn(async move {
-            let mut dialog = dialog;
             let period = session_refresh_period(session_expires);
             // The first tick must land one period out, not immediately:
             // a plain `interval` completes its first tick at once, which
@@ -736,9 +756,9 @@ impl CallHandle {
             let mut ticker = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
             loop {
                 ticker.tick().await;
-                if let Err(e) = uac
-                    .refresh_session(&mut dialog, session_expires, refresher, use_update, None)
-                    .await
+                if let Err(e) =
+                    refresh_shared_session(&uac, &dialog, session_expires, refresher, use_update)
+                        .await
                 {
                     warn!("Session refresh failed: {}", e);
                 }
@@ -2823,6 +2843,53 @@ fn session_refresh_period(session_expires: u32) -> std::time::Duration {
     std::time::Duration::from_secs(u64::from(std::cmp::max(1, session_expires / 2)))
 }
 
+/// Send one RFC 4028 refresh against a **shared** dialog, publishing the
+/// CSeq it consumes back to that dialog (issue #95).
+///
+/// The dialog is cloned for the send because the request cannot be built
+/// while holding a lock across the network round trip; the clone is committed
+/// afterwards by [`commit_advanced_dialog`].
+///
+/// The commit happens on failure too, deliberately: `prepare_in_dialog_request`
+/// consumes the CSeq when it *builds* the request, so a refresh that times out
+/// or draws an error has still put that number on the wire. Dropping the
+/// advance because the response disappointed us would hand the owner a CSeq
+/// the peer has already seen — the exact reuse this fix exists to prevent.
+async fn refresh_shared_session(
+    uac: &IntegratedUAC,
+    shared: &Arc<RwLock<Dialog>>,
+    session_expires: u32,
+    refresher: &str,
+    use_update: bool,
+) -> Result<Response> {
+    let mut dialog = shared.read().await.clone();
+    let result = uac
+        .refresh_session(&mut dialog, session_expires, refresher, use_update, None)
+        .await;
+    commit_advanced_dialog(shared, dialog).await;
+    result
+}
+
+/// Publish a dialog whose local CSeq an in-dialog request just consumed.
+///
+/// Refuses to move the CSeq backwards. A lower value means the owner sent —
+/// and committed — its own in-dialog request while this refresh was in flight,
+/// so its state is the newer of the two and adopting ours wholesale would undo
+/// it. The two requests have already collided on the same CSeq by then; this
+/// only keeps the dialog from also losing the owner's other updates.
+async fn commit_advanced_dialog(shared: &Arc<RwLock<Dialog>>, advanced: Dialog) {
+    let mut guard = shared.write().await;
+    if advanced.local_cseq() >= guard.local_cseq() {
+        *guard = advanced;
+    } else {
+        debug!(
+            "Session refresh commit skipped: dialog CSeq moved to {} while the refresh at {} was in flight",
+            guard.local_cseq(),
+            advanced.local_cseq()
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3813,6 +3880,190 @@ mod tests {
         assert_eq!(session_refresh_period(0), Duration::from_secs(1));
         assert_eq!(session_refresh_period(1), Duration::from_secs(1));
         assert_eq!(session_refresh_period(2), Duration::from_secs(1));
+    }
+
+    // ── issue #95: the refresh CSeq must reach the dialog's owner ──
+
+    /// Confirmed dialog whose peer is an IP literal, so the in-dialog send
+    /// resolves without touching DNS.
+    fn refresh_dialog() -> Dialog {
+        Dialog::unchecked_new(
+            DialogId::unchecked_new("refresh-call", "local-tag", "remote-tag"),
+            DialogStateType::Confirmed,
+            SipUri::parse("sip:siphon@127.0.0.1").unwrap(),
+            SipUri::parse("sip:callee@192.0.2.10").unwrap(),
+            SipUri::parse("sip:callee@192.0.2.10:5060").unwrap(),
+            1,      // local_cseq — the answered INVITE consumed it
+            1,      // remote_cseq
+            None,   // last_ack_cseq
+            vec![], // route_set
+            false,  // secure
+            Some(Duration::from_secs(90)),
+            None, // refresher
+            true, // is_uac
+        )
+    }
+
+    fn refresh_uac(
+        dispatcher: Arc<CapturingDispatcher>,
+        manager: Arc<TransactionManager>,
+    ) -> Arc<IntegratedUAC> {
+        Arc::new(
+            IntegratedUAC::builder()
+                .local_uri("sip:siphon@127.0.0.1")
+                .local_addr("127.0.0.1:5080")
+                .unwrap()
+                .transaction_manager(manager)
+                .resolver(Arc::new(SipResolver::from_system().unwrap()))
+                .dispatcher(dispatcher)
+                .build()
+                .unwrap(),
+        )
+    }
+
+    /// Bounded [`wait_for_request`]. Regressing this fix does not produce a
+    /// wrong request — it produces no second request at all, because the
+    /// refresh reuses the CSeq it already sent. Without the timeout that is
+    /// an infinite wait; with it, the test fails in five seconds.
+    async fn await_cseq(dispatcher: &CapturingDispatcher, cseq: &'static str) -> Request {
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            wait_for_request(dispatcher, move |r| r.headers().get("CSeq") == Some(cseq)),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("no request with CSeq {cseq} reached the wire"))
+    }
+
+    /// Mirror the request's dialog identifiers straight back. Unlike
+    /// [`ok_response`] this adds no `To` tag: an in-dialog request already
+    /// carries one, and a second would land the response outside the dialog.
+    fn in_dialog_response(request: &Request, code: u16, reason: &str) -> Response {
+        let mut headers = Headers::new();
+        for name in ["Via", "From", "To", "Call-ID", "CSeq"] {
+            headers
+                .push(
+                    SmolStr::new(name),
+                    request.headers().get_smol(name).unwrap().clone(),
+                )
+                .unwrap();
+        }
+        Response::new(
+            StatusLine::new(code, SmolStr::new(reason)).expect("valid status line"),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid response")
+    }
+
+    /// The defect: refreshes advanced a CSeq only the timer task could see,
+    /// so the owner's next BYE/re-INVITE/REFER reused a consumed number and
+    /// a record-routing peer answered `408`. Two consecutive refreshes must
+    /// leave the *shared* dialog at 3, not frozen at the arming value.
+    #[tokio::test]
+    async fn session_refresh_commits_the_advanced_cseq_to_the_shared_dialog() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = refresh_uac(dispatcher.clone(), manager.clone());
+        let shared = Arc::new(RwLock::new(refresh_dialog()));
+
+        for expected_cseq in ["2 INVITE", "3 INVITE"] {
+            let task = {
+                let (uac, shared) = (uac.clone(), shared.clone());
+                tokio::spawn(async move {
+                    refresh_shared_session(&uac, &shared, 90, "uac", false).await
+                })
+            };
+
+            // Match on CSeq rather than send order: the auto-ACK for the
+            // first refresh is dispatched between the two iterations.
+            let request = await_cseq(&dispatcher, expected_cseq).await;
+            assert_eq!(request.method(), &Method::Invite);
+            assert!(
+                request.headers().get("Session-Expires").is_some(),
+                "a refresh must carry Session-Expires"
+            );
+            manager
+                .receive_response(in_dialog_response(&request, 200, "OK"))
+                .await;
+
+            let response = task.await.unwrap().expect("refresh succeeded");
+            assert_eq!(response.code(), 200);
+        }
+
+        assert_eq!(
+            shared.read().await.local_cseq(),
+            3,
+            "both refreshes must be visible to the dialog's owner"
+        );
+    }
+
+    /// A refresh that fails still consumed its CSeq: `prepare_in_dialog_request`
+    /// burns the number when it builds the request, long before the response
+    /// decides anything. Dropping the advance would hand the owner a CSeq the
+    /// peer has already seen — the very reuse this fix prevents.
+    #[tokio::test]
+    async fn session_refresh_commits_the_cseq_even_when_the_refresh_fails() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = refresh_uac(dispatcher.clone(), manager.clone());
+        let shared = Arc::new(RwLock::new(refresh_dialog()));
+
+        let task = {
+            let (uac, shared) = (uac.clone(), shared.clone());
+            tokio::spawn(
+                async move { refresh_shared_session(&uac, &shared, 90, "uac", false).await },
+            )
+        };
+
+        let request = await_cseq(&dispatcher, "2 INVITE").await;
+        manager
+            .receive_response(in_dialog_response(
+                &request,
+                481,
+                "Call/Transaction Does Not Exist",
+            ))
+            .await;
+
+        let result = task.await.unwrap();
+        assert!(result.is_err(), "481 on an in-dialog request is an error");
+        let dialog = shared.read().await;
+        assert_eq!(
+            dialog.local_cseq(),
+            2,
+            "the consumed CSeq must be committed"
+        );
+        assert_eq!(
+            dialog.state(),
+            DialogStateType::Terminated,
+            "481 terminates the dialog, and that must reach the owner too"
+        );
+    }
+
+    /// The residual race, bounded: if the owner sent and committed its own
+    /// in-dialog request while a refresh was in flight, the refresh's older
+    /// dialog must not overwrite it and walk the CSeq backwards.
+    #[tokio::test]
+    async fn session_refresh_commit_never_regresses_the_owners_cseq() {
+        let shared = Arc::new(RwLock::new(refresh_dialog()));
+
+        // A refresh resolves the dialog and consumes CSeq 2...
+        let mut in_flight = shared.read().await.clone();
+        in_flight.next_local_cseq();
+
+        // ...while the owner sends a hold re-INVITE and a REFER of its own.
+        {
+            let mut owner = shared.write().await;
+            owner.next_local_cseq();
+            owner.next_local_cseq();
+        }
+
+        commit_advanced_dialog(&shared, in_flight).await;
+
+        assert_eq!(
+            shared.read().await.local_cseq(),
+            3,
+            "the owner's newer CSeq must survive the late commit"
+        );
     }
 }
 
