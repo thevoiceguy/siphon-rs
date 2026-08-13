@@ -810,13 +810,15 @@ impl CallHandle {
     /// timer is armed, so refreshes also pick up CSeq advances made by the
     /// owner in between.
     ///
-    /// One race remains and cannot be closed at this layer: an owner that
-    /// resolves the dialog, sends its own request and commits while a refresh
-    /// is in flight consumes the same CSeq the refresh already did. Serialising
-    /// the two would mean holding the dialog's write lock across a network
-    /// round trip — up to Timer B/F, ~32 s — which would stall the very BYE
-    /// this fix is meant to keep working. The commit below refuses to *regress*
-    /// the CSeq, which keeps the damage to that one collision.
+    /// An owner that resolves the dialog and sends its own request while a
+    /// refresh is in flight no longer collides with it (issue #99): the
+    /// refresh *reserves* the CSeq it will consume before the request leaves,
+    /// so the owner reads the reserved number and continues from it. This was
+    /// once documented here as unclosable, on the reasoning that the
+    /// alternative was serialising the two behind the dialog's write lock
+    /// across a network round trip — up to Timer B/F, ~32 s — which would
+    /// stall the very BYE this is meant to keep working. That is still true of
+    /// serialising; reserving holds the lock for two clones and an increment.
     ///
     /// The task gives up after `max_session_refresh_failures` consecutive
     /// failures, or immediately on a `408`/`481`, and publishes why on
@@ -3023,9 +3025,25 @@ async fn run_session_timer(
 /// Send one RFC 4028 refresh against a **shared** dialog, publishing the
 /// CSeq it consumes back to that dialog (issue #95).
 ///
-/// The dialog is cloned for the send because the request cannot be built
-/// while holding a lock across the network round trip; the clone is committed
-/// afterwards by [`commit_advanced_dialog`].
+/// The number is **reserved before the send, not committed after the
+/// response** (issue #99). Committing afterwards left the shared dialog
+/// reading the pre-request CSeq for the whole round trip, so an owner that
+/// resolved it in that window — to send a teardown BYE, a hold re-INVITE, a
+/// REFER — built its request on the number the refresh was already using.
+/// Two requests, one sequence number, which RFC 3261 §12.2.1.1 forbids, and
+/// a peer is entitled to reject the second as a retransmission: #95's
+/// stranded-far-leg failure arriving by a different route.
+///
+/// Serialising the two would close it too, but at the cost of holding the
+/// write lock across a network round trip (up to Timer B/F, ~32 s), stalling
+/// the very BYE this is meant to keep working. Reserving holds it for two
+/// clones and an increment instead. An owner racing the refresh now reads the
+/// reserved number and takes the next one.
+///
+/// The dialog is still cloned for the send — the request cannot be built
+/// under a lock — and still committed afterwards by
+/// [`commit_advanced_dialog`], which is what carries the response's target
+/// refresh (RFC 5057) rather than the CSeq alone.
 ///
 /// The commit happens on failure too, deliberately: `prepare_in_dialog_request`
 /// consumes the CSeq when it *builds* the request, so a refresh that times out
@@ -3039,7 +3057,15 @@ async fn refresh_shared_session(
     refresher: &str,
     use_update: bool,
 ) -> Result<Response> {
-    let mut dialog = shared.read().await.clone();
+    // Reserve the CSeq this refresh will consume before it can be observed
+    // by anyone else. `refresh_session` advances the clone by one, so the
+    // clone is taken *before* the shared advance and the two agree.
+    let mut dialog = {
+        let mut shared = shared.write().await;
+        let pre_advance = shared.clone();
+        shared.next_local_cseq();
+        pre_advance
+    };
     let result = uac
         .refresh_session(&mut dialog, session_expires, refresher, use_update, None)
         .await;
@@ -3052,8 +3078,9 @@ async fn refresh_shared_session(
 /// Refuses to move the CSeq backwards. A lower value means the owner sent —
 /// and committed — its own in-dialog request while this refresh was in flight,
 /// so its state is the newer of the two and adopting ours wholesale would undo
-/// it. The two requests have already collided on the same CSeq by then; this
-/// only keeps the dialog from also losing the owner's other updates.
+/// it. Since #99 the two no longer collide on a CSeq when that happens (the
+/// refresh reserved its number before sending, so the owner's request took a
+/// later one); this keeps the dialog from losing the owner's other updates.
 async fn commit_advanced_dialog(shared: &Arc<RwLock<Dialog>>, advanced: Dialog) {
     let mut guard = shared.write().await;
     if advanced.local_cseq() >= guard.local_cseq() {
@@ -4213,6 +4240,56 @@ mod tests {
             dialog.state(),
             DialogStateType::Terminated,
             "481 terminates the dialog, and that must reach the owner too"
+        );
+    }
+
+    /// Issue #99: the CSeq a refresh will consume must be visible to the
+    /// dialog's owner *while the refresh is still in flight*, not only once
+    /// it has been answered.
+    ///
+    /// Committing after the response left the shared dialog reading the
+    /// pre-request number for a whole round trip, so an owner that resolved
+    /// it in that window — to send a teardown BYE — built its request on the
+    /// number the refresh was already using. Measured on a downstream owner:
+    /// a refresh re-INVITE and a BYE 564 us apart, both `CSeq: 3`.
+    #[tokio::test]
+    async fn session_refresh_reserves_its_cseq_before_the_request_leaves() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = refresh_uac(dispatcher.clone(), manager.clone());
+        let shared = Arc::new(RwLock::new(refresh_dialog()));
+
+        let task = {
+            let (uac, shared) = (uac.clone(), shared.clone());
+            tokio::spawn(
+                async move { refresh_shared_session(&uac, &shared, 90, "uac", false).await },
+            )
+        };
+
+        // The refresh is on the wire and unanswered — the window in which the
+        // owner's own request used to collide with it.
+        let request = await_cseq(&dispatcher, "2 INVITE").await;
+
+        let mut owner = shared.read().await.clone();
+        assert_eq!(
+            owner.local_cseq(),
+            2,
+            "the in-flight refresh's CSeq must already be published"
+        );
+        assert_eq!(
+            owner.next_local_cseq(),
+            3,
+            "an owner request racing the refresh must continue the sequence, not reuse it"
+        );
+
+        manager
+            .receive_response(in_dialog_response(&request, 200, "OK"))
+            .await;
+        task.await.unwrap().expect("refresh succeeded");
+        assert_eq!(
+            shared.read().await.local_cseq(),
+            2,
+            "committing the answered refresh must not advance past the reservation"
         );
     }
 
