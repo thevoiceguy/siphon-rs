@@ -664,10 +664,19 @@ async fn handle_packet(
                 }
             }
 
-            // Always notify transaction manager about ACK
+            // Always notify transaction manager about ACK.
+            //
+            // The return is unconditional on purpose, and stays that way
+            // even though `ack_received` now reports whether it absorbed
+            // the ACK. siphond does everything it needs with an ACK above —
+            // proxy forwarding and the B2BUA bridge — and routes requests
+            // through its own dispatcher, which has no ACK handler and
+            // answers `501` to any method it does not know. An ACK must
+            // never draw a response (RFC 3261 §17.1.1.3), so falling
+            // through would be a protocol violation, not a fix.
             if let Some(branch) = request_branch_id(&req) {
                 let key = TransactionKey::new(branch, Method::Invite, true);
-                transaction_mgr.ack_received(&key).await;
+                let _absorbed = transaction_mgr.ack_received(&key).await;
             }
             return;
         }

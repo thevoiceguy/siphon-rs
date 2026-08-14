@@ -1521,17 +1521,33 @@ impl TransactionManager {
         }
     }
 
-    pub async fn ack_received(&self, key: &TransactionKey) {
-        if let Some(mut entry) = self.inner.server.get_mut(key) {
-            let actions = match &mut entry.kind {
-                ServerKind::Invite(fsm) => fsm.on_event(ServerInviteEvent::ReceiveAck),
-                ServerKind::NonInvite(fsm) => {
-                    map_server_actions(fsm.on_event(ServerNonInviteEvent::AckReceived))
-                }
-            };
-            drop(entry);
-            self.apply_server_actions(key, actions).await;
-        }
+    /// Feed an ACK to the matching server transaction.
+    ///
+    /// Returns `true` when the ACK **was absorbed** by a completed INVITE
+    /// server transaction. Such an ACK acknowledges a non-2xx final, is
+    /// hop-by-hop, and RFC 3261 §17.2.1 gives it to the transaction alone —
+    /// the caller must **not** pass it to the transaction user.
+    ///
+    /// Returns `false` when nothing matched, which is the caller's cue to
+    /// dispatch it. The common case is an ACK to a **2xx**: `send_final`
+    /// terminates the server transaction the moment it sends one, so no
+    /// entry survives to absorb the ACK, and the TU is the only layer that
+    /// can handle it (it carries the answer to a delayed offer, among other
+    /// things). A stray or spoofed ACK matching nothing also lands here, so
+    /// dispatch remains the caller's decision rather than this layer's.
+    pub async fn ack_received(&self, key: &TransactionKey) -> bool {
+        let Some(mut entry) = self.inner.server.get_mut(key) else {
+            return false;
+        };
+        let actions = match &mut entry.kind {
+            ServerKind::Invite(fsm) => fsm.on_event(ServerInviteEvent::ReceiveAck),
+            ServerKind::NonInvite(fsm) => {
+                map_server_actions(fsm.on_event(ServerNonInviteEvent::AckReceived))
+            }
+        };
+        drop(entry);
+        self.apply_server_actions(key, actions).await;
+        true
     }
 
     async fn dispatch_response(&self, key: &TransactionKey, response: Response) {
@@ -1580,8 +1596,10 @@ impl ServerTransactionHandle {
         &self.key
     }
 
-    pub async fn ack_received(&self) {
-        self.manager.ack_received(&self.key).await;
+    /// See [`TransactionManager::ack_received`]: `true` means the ACK was
+    /// absorbed by this transaction and must not reach the transaction user.
+    pub async fn ack_received(&self) -> bool {
+        self.manager.ack_received(&self.key).await
     }
 }
 
@@ -1798,6 +1816,67 @@ mod tests {
         let sent = dispatcher.sent.lock().await;
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].0, TransportKind::Udp);
+    }
+
+    /// An ACK acknowledging a non-2xx final belongs to the transaction
+    /// alone (RFC 3261 §17.2.1). `send_final` leaves the FSM `Completed`
+    /// and the entry in the map, so the ACK matches and is absorbed —
+    /// which the caller must be able to see, because it is the signal
+    /// **not** to hand the ACK to the transaction user.
+    #[tokio::test]
+    async fn ack_for_a_non_2xx_reports_that_it_was_absorbed() {
+        let dispatcher = Arc::new(TestDispatcher::default());
+        let manager = TransactionManager::new(dispatcher.clone());
+        let ctx =
+            TransportContext::new(TransportKind::Udp, "127.0.0.1:5060".parse().unwrap(), None);
+        let handle = manager
+            .receive_request(build_request(Method::Invite), ctx)
+            .await;
+        handle.send_final(build_response(486)).await;
+
+        assert!(
+            handle.ack_received().await,
+            "an ACK to a non-2xx final is absorbed by the server transaction and must be reported as such"
+        );
+    }
+
+    /// The mirror case, and the one the return value exists for. A 2xx
+    /// terminates the server transaction as it is sent, so nothing is
+    /// left to absorb its ACK: that ACK is end-to-end and only the
+    /// transaction user can handle it (it carries the answer to a
+    /// delayed offer, among other things). Reporting `false` is what
+    /// lets a caller dispatch it without also dispatching the absorbed
+    /// population.
+    #[tokio::test]
+    async fn ack_after_a_2xx_reports_that_nothing_absorbed_it() {
+        let dispatcher = Arc::new(TestDispatcher::default());
+        let manager = TransactionManager::new(dispatcher.clone());
+        let ctx =
+            TransportContext::new(TransportKind::Udp, "127.0.0.1:5060".parse().unwrap(), None);
+        let handle = manager
+            .receive_request(build_request(Method::Invite), ctx)
+            .await;
+        handle.send_final(build_response(200)).await;
+
+        assert!(
+            !handle.ack_received().await,
+            "a 2xx terminates the server transaction, so its ACK is the TU's to handle"
+        );
+    }
+
+    /// A stray or spoofed ACK matching no transaction at all reports
+    /// `false` too. It is not absorbed, so the decision of what to do
+    /// with it stays with the caller rather than being silently made here.
+    #[tokio::test]
+    async fn ack_matching_no_transaction_reports_that_nothing_absorbed_it() {
+        let dispatcher = Arc::new(TestDispatcher::default());
+        let manager = TransactionManager::new(dispatcher);
+        let key = TransactionKey::new("z9hG4bK-nosuchbranch", Method::Invite, true);
+
+        assert!(
+            !manager.ack_received(&key).await,
+            "an ACK for an unknown transaction cannot have been absorbed by one"
+        );
     }
 
     #[tokio::test]
