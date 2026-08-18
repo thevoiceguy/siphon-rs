@@ -326,6 +326,13 @@ pub trait Resolver: Send + Sync {
     async fn resolve(&self, uri: &SipUri) -> Result<Vec<DnsTarget>>;
 }
 
+/// Default per-query DNS timeout. Without this a hung or slow nameserver
+/// stalls every caller that hits the resolver until their own (usually
+/// much coarser) transaction timeout fires. 3 seconds matches typical
+/// SIP resolution budgets and sits below the 5s TCP/TLS pool connect
+/// timeout used by the transport layer.
+const DEFAULT_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// DNS resolver implementing RFC 3263 resolution algorithm.
 ///
 /// Resolution follows this priority order:
@@ -334,12 +341,6 @@ pub trait Resolver: Send + Sync {
 /// 3. NAPTR lookup for transport discovery
 /// 4. SRV lookup with priority/weight handling
 /// 5. Fallback to A/AAAA with default port
-/// Default per-query DNS timeout. Without this a hung or slow nameserver
-/// stalls every caller that hits the resolver until their own (usually
-/// much coarser) transaction timeout fires. 3 seconds matches typical
-/// SIP resolution budgets and sits below the 5s TCP/TLS pool connect
-/// timeout used by the transport layer.
-const DEFAULT_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 #[derive(Clone)]
 pub struct SipResolver {

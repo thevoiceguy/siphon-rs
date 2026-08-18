@@ -652,11 +652,8 @@ mod tests {
         if values.is_empty() {
             None
         } else if values.len() == 1 {
-            // Single Content-Length header
-            match parse_content_length_detailed(values[0]) {
-                Ok(len) => Some(len),
-                Err(_) => None, // Reject invalid or oversized
-            }
+            // Single Content-Length header; invalid or oversized is rejected
+            parse_content_length_detailed(values[0]).ok()
         } else {
             // Multiple Content-Length headers - validate all valid ones match
             let mut first_valid: Option<usize> = None;

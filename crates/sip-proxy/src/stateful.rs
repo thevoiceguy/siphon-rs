@@ -785,9 +785,7 @@ impl ProxyContext {
         // and the transport error is now irrelevant.
         {
             let branches = self.branches.read().await;
-            let Some(branch) = branches.get(branch_id) else {
-                return None;
-            };
+            let branch = branches.get(branch_id)?;
             if matches!(
                 branch.state,
                 BranchState::Completed | BranchState::Cancelled

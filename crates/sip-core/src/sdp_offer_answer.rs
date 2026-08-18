@@ -1217,8 +1217,10 @@ mod tests {
         let offer = SdpSession::parse(offer_sdp).unwrap();
         let engine = OfferAnswerEngine::new();
 
-        let mut options = AnswerOptions::default();
-        options.qos_local_status = Some(PreconditionDirection::SendRecv);
+        let options = AnswerOptions {
+            qos_local_status: Some(PreconditionDirection::SendRecv),
+            ..Default::default()
+        };
 
         let answer = engine.generate_answer(&offer, options).unwrap();
 

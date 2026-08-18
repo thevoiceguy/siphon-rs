@@ -151,8 +151,10 @@ mod tests {
 
     #[test]
     fn extracts_local_identity() {
-        let mut config = DaemonConfig::default();
-        config.local_uri = "sip:test@192.168.1.100".to_string();
+        let config = DaemonConfig {
+            local_uri: "sip:test@192.168.1.100".to_string(),
+            ..Default::default()
+        };
         let (username, host) = local_identity(&config);
         assert_eq!(username, "test");
         assert_eq!(host, "192.168.1.100");

@@ -1604,6 +1604,9 @@ impl Subscription {
     ///
     /// **Warning**: This bypasses validation and should only be used when values are already trusted
     /// (e.g., from parsed SIP messages or internal construction).
+    // Mirrors Dialog::unchecked_new: the argument list is the struct's fields,
+    // and collapsing it into a builder would change a public constructor.
+    #[allow(clippy::too_many_arguments)]
     pub fn unchecked_new(
         id: SubscriptionId,
         state: SubscriptionState,
