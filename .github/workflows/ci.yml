@@ -22,6 +22,30 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Formatting and lints, on a DELIBERATELY PINNED toolchain.
+  #
+  # clippy gains lints in every Rust release, so an unpinned lint gate turns
+  # somebody else's release into a red CI on unrelated PRs — the failure lands
+  # on whoever opens the next pull request rather than on whoever changed
+  # anything. Pinning makes the gate deterministic: it changes only when the
+  # version below is bumped on purpose, and that bump is the commit where any
+  # newly-introduced lints get dealt with.
+  #
+  # `build` deliberately stays on @stable: the library must keep compiling and
+  # passing its tests against current Rust, and that is a signal worth having
+  # break the build. Lints are a style contract; compilation is not.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: clippy, rustfmt
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
   build:
     runs-on: ubuntu-latest
     steps:
