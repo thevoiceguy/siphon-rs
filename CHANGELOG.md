@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Change: `IntegratedUAC`'s per-transaction chatter drops to `debug!`** (sip-uac) — closes #108 (at `info` the log volume tracked request rate rather than anything an operator chose):
+  * Four sites fired once per client transaction: the transaction start, the authenticated-retry start, and `on_final` in **both** `InviteTransactionUser` and `SimpleTransactionUser`. The precedent was already in the file — `on_provisional`, the sibling method handling the same class of event, has always been `debug!`. A 180 was debug and a 200 was info for the same "a response arrived on the transaction I started" mechanic.
+  * Measured downstream at `RUST_LOG=info`: **~13,100 client transactions produced 52,568 lines from these four statements alone** — four per REGISTER refresh cycle, ~750 lines/s at a sustained 566 transactions/s, and a 20 MB log in 70 s of driving. The cost lands hardest on someone who turns `info` on to investigate a live problem, which is when per-request logging is least affordable.
+  * A per-transaction signal at `info` is not lost: `TransactionMetrics` already records starts, completions, outcomes and durations, which is the right home for something that scales with traffic.
+  * All four gain structured fields (`branch`, `method`, `attempt`, `code`) in place of positional format strings; `on_provisional`'s message is restyled to match the `on_final` beside it. Levels and formatting only — no behaviour change.
+
 - **Change: the expected first digest challenge logs at `debug!`, not `warn!`** (sip-uac) — closes #107 (a registered node emitted one WARN per registration refresh forever):
   * `IntegratedUAC` warned whenever a `401`/`407` arrived and `auto_retry_auth` was set. That is the first leg of RFC 3261 §22 working exactly as specified — the registrar is *supposed* to challenge, the stack answers immediately, and the request succeeds. Nothing happened that an operator can act on.
   * Measured downstream on a node registering with a 120 s granted expiry (refresh once a minute): **~1,440 WARNs/day on an idle, healthy box**, 361 of them in a 6-hour window. A permanent non-zero baseline is what makes warn-level alerting useless.
