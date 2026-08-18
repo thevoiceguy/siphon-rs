@@ -767,10 +767,7 @@ mod tests {
     fn reject_too_many_params() {
         let mut params = BTreeMap::new();
         for i in 0..=MAX_PARAMS {
-            params.insert(
-                SmolStr::new(&format!("p{}", i)),
-                Some(SmolStr::new("value")),
-            );
+            params.insert(SmolStr::new(format!("p{}", i)), Some(SmolStr::new("value")));
         }
         let result = ReasonHeader::new("SIP", params);
         assert!(result.is_err());

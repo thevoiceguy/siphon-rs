@@ -1336,7 +1336,7 @@ mod tests {
 
         // Give the supervisor a moment to run.
         for _ in 0..20 {
-            if pool.len() == 0 {
+            if pool.is_empty() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
@@ -1368,7 +1368,7 @@ mod tests {
         );
 
         for _ in 0..20 {
-            if pool.len() == 0 {
+            if pool.is_empty() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(5)).await;

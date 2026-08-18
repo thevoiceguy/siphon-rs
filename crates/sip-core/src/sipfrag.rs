@@ -412,7 +412,7 @@ mod tests {
 
     #[test]
     fn sipfrag_status_only() {
-        let frag = SipFrag::status_only(200, SmolStr::new("OK".to_owned())).unwrap();
+        let frag = SipFrag::status_only(200, SmolStr::new("OK")).unwrap();
         assert!(frag.is_response());
         assert_eq!(frag.status_code(), Some(200));
         assert_eq!(frag.to_string(), "SIP/2.0 200 OK\r\n");
@@ -420,7 +420,7 @@ mod tests {
 
     #[test]
     fn sipfrag_status_with_headers() {
-        let frag = SipFrag::status_only(486, SmolStr::new("Busy Here".to_owned()))
+        let frag = SipFrag::status_only(486, SmolStr::new("Busy Here"))
             .unwrap()
             .with_header("Retry-After", "60")
             .unwrap();
@@ -463,7 +463,7 @@ mod tests {
 
     #[test]
     fn sipfrag_with_body() {
-        let frag = SipFrag::status_only(200, SmolStr::new("OK".to_owned()))
+        let frag = SipFrag::status_only(200, SmolStr::new("OK"))
             .unwrap()
             .with_header("Content-Type", "text/plain")
             .unwrap()
@@ -482,7 +482,7 @@ mod tests {
     #[test]
     fn sipfrag_rejects_oversized_body() {
         let large_body = vec![b'x'; MAX_SIPFRAG_BODY_SIZE + 1];
-        let result = SipFrag::status_only(200, SmolStr::new("OK".to_owned()))
+        let result = SipFrag::status_only(200, SmolStr::new("OK"))
             .unwrap()
             .with_body(Bytes::from(large_body));
 
@@ -492,7 +492,7 @@ mod tests {
     #[test]
     fn sipfrag_accepts_max_sized_body() {
         let max_body = vec![b'x'; MAX_SIPFRAG_BODY_SIZE];
-        let result = SipFrag::status_only(200, SmolStr::new("OK".to_owned()))
+        let result = SipFrag::status_only(200, SmolStr::new("OK"))
             .unwrap()
             .with_header("Content-Type", "application/octet-stream")
             .unwrap()
@@ -513,7 +513,7 @@ mod tests {
 
     #[test]
     fn sipfrag_status_code_extraction() {
-        let frag1 = SipFrag::status_only(404, SmolStr::new("Not Found".to_owned())).unwrap();
+        let frag1 = SipFrag::status_only(404, SmolStr::new("Not Found")).unwrap();
         assert_eq!(frag1.status_code(), Some(404));
 
         let frag2 = SipFrag::empty();
@@ -523,7 +523,7 @@ mod tests {
     #[test]
     fn sipfrag_from_response() {
         let response = Response::new(
-            StatusLine::new(603, SmolStr::new("Declined".to_owned())).unwrap(),
+            StatusLine::new(603, SmolStr::new("Declined")).unwrap(),
             Headers::new(),
             Bytes::new(),
         )
@@ -538,7 +538,7 @@ mod tests {
     fn sipfrag_from_response_validates_body_size() {
         let large_body = vec![b'x'; MAX_SIPFRAG_BODY_SIZE + 1];
         let response = Response::new(
-            StatusLine::new(200, SmolStr::new("OK".to_owned())).unwrap(),
+            StatusLine::new(200, SmolStr::new("OK")).unwrap(),
             Headers::new(),
             Bytes::from(large_body),
         )
@@ -574,7 +574,7 @@ mod tests {
 
     #[test]
     fn sipfrag_getters_work() {
-        let frag = SipFrag::status_only(200, SmolStr::new("OK".to_owned())).unwrap();
+        let frag = SipFrag::status_only(200, SmolStr::new("OK")).unwrap();
 
         assert!(frag.start_line().is_some());
         assert!(frag.headers().is_empty());
@@ -583,7 +583,7 @@ mod tests {
 
     #[test]
     fn sipfrag_builder_pattern_with_results() {
-        let result = SipFrag::status_only(200, SmolStr::new("OK".to_owned()))
+        let result = SipFrag::status_only(200, SmolStr::new("OK"))
             .and_then(|f| f.with_header("Content-Type", "text/plain"))
             .and_then(|f| f.with_header("Content-Length", "4"))
             .and_then(|f| f.with_body("test"));

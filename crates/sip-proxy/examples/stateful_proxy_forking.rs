@@ -301,7 +301,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Demonstrating RFC 3261 response selection rules:\n");
 
-    let scenarios = vec![
+    let scenarios = [
         (
             "Current: 486 Busy",
             "New: 200 OK",

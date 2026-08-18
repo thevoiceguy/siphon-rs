@@ -3680,10 +3680,10 @@ mod tests {
         let mut headers = Headers::new();
         headers.push("Call-ID", call_id).unwrap();
         headers
-            .push("From", &format!("<sip:remote@example.com>;tag={their_tag}"))
+            .push("From", format!("<sip:remote@example.com>;tag={their_tag}"))
             .unwrap();
         headers
-            .push("To", &format!("<sip:local@example.com>;tag={our_tag}"))
+            .push("To", format!("<sip:local@example.com>;tag={our_tag}"))
             .unwrap();
         Request::new(
             RequestLine::new(Method::Bye, SipUri::parse("sip:local@example.com").unwrap()),

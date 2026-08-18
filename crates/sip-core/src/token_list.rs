@@ -404,7 +404,7 @@ mod tests {
 
         // Should reject too many
         let many: Vec<&str> = (0..=MAX_TOKENS).map(|_| "token").collect();
-        let slice: Vec<&str> = many.iter().copied().collect();
+        let slice: Vec<&str> = many.to_vec();
         assert!(TokenList::from_slice(&slice).is_err());
     }
 

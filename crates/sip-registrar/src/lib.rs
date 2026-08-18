@@ -2358,7 +2358,7 @@ mod tests {
         assert_eq!(store.lookup("sip:alice@example.com").unwrap().len(), 1);
 
         store
-            .remove("sip:alice@example.com".into(), "sip:ua.example.com")
+            .remove("sip:alice@example.com", "sip:ua.example.com")
             .unwrap();
 
         assert!(store.lookup("sip:alice@example.com").unwrap().is_empty());
@@ -2561,7 +2561,7 @@ mod tests {
         headers
             .push(
                 "Authorization",
-                &format!(
+                format!(
                     "Digest username=\"{}\", realm=\"example.com\", \
                      nonce=\"x\", uri=\"sip:example.com\", response=\"y\"",
                     username
@@ -4426,7 +4426,7 @@ mod tests {
         for i in 0..MAX_BINDINGS_PER_AOR {
             let binding = Binding::new(
                 SmolStr::new(aor),
-                SmolStr::new(&format!("sip:contact{}@example.com", i)),
+                SmolStr::new(format!("sip:contact{}@example.com", i)),
                 Duration::from_secs(3600),
             )
             .unwrap();
@@ -4464,7 +4464,7 @@ mod tests {
         // and verifying the error type
         for i in 0..100 {
             let binding = Binding::new(
-                SmolStr::new(&format!("sip:user{}@example.com", i)),
+                SmolStr::new(format!("sip:user{}@example.com", i)),
                 SmolStr::new("sip:contact@example.com"),
                 Duration::from_secs(3600),
             )

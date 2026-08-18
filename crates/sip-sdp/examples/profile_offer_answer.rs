@@ -15,6 +15,6 @@ fn main() {
     // Negotiate an answer that intersects codecs.
     let answer = negotiate_answer(&offer, &local_profile, "bob", "198.51.100.10", 7000, None);
 
-    println!("Offer:\n{}", offer.to_string());
-    println!("Answer:\n{}", answer.to_string());
+    println!("Offer:\n{}", offer);
+    println!("Answer:\n{}", answer);
 }

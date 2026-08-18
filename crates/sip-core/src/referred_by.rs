@@ -837,7 +837,7 @@ mod tests {
         let mut referred_by = ReferredByHeader::new("sip:alice@example.com").unwrap();
 
         for i in 0..MAX_PARAMS {
-            referred_by.add_param(&format!("p{}", i), "value").unwrap();
+            referred_by.add_param(format!("p{}", i), "value").unwrap();
         }
 
         let result = referred_by.add_param("overflow", "value");

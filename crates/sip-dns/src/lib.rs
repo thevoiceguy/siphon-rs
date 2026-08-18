@@ -1441,8 +1441,8 @@ mod tests {
     #[test]
     fn weight_selection_handles_zero_weights() {
         let records = vec![
-            (0, SmolStr::new("host1".to_owned()), 5060),
-            (0, SmolStr::new("host2".to_owned()), 5060),
+            (0, SmolStr::new("host1"), 5060),
+            (0, SmolStr::new("host2"), 5060),
         ];
         let result = select_by_weight(records);
         assert_eq!(result.len(), 2);
@@ -1454,43 +1454,39 @@ mod tests {
         let mut selections = std::collections::HashMap::new();
         for _ in 0..1000 {
             let records = vec![
-                (100, SmolStr::new("high".to_owned()), 5060),
-                (1, SmolStr::new("low".to_owned()), 5060),
+                (100, SmolStr::new("high"), 5060),
+                (1, SmolStr::new("low"), 5060),
             ];
             let result = select_by_weight(records);
             *selections.entry(result[0].0.clone()).or_insert(0) += 1;
         }
 
         // "high" should be selected much more often than "low"
-        let high_count = selections
-            .get(&SmolStr::new("high".to_owned()))
-            .unwrap_or(&0);
-        let low_count = selections
-            .get(&SmolStr::new("low".to_owned()))
-            .unwrap_or(&0);
+        let high_count = selections.get(&SmolStr::new("high")).unwrap_or(&0);
+        let low_count = selections.get(&SmolStr::new("low")).unwrap_or(&0);
         assert!(*high_count > *low_count * 50); // Should be ~100x more
     }
 
     #[test]
     fn naptr_record_ordering() {
-        let mut records = vec![
+        let mut records = [
             NaptrRecord {
                 order: 10,
                 preference: 20,
                 transport: Transport::Tcp,
-                replacement: Some(SmolStr::new("tcp.example.com".to_owned())),
+                replacement: Some(SmolStr::new("tcp.example.com")),
             },
             NaptrRecord {
                 order: 10,
                 preference: 10,
                 transport: Transport::Udp,
-                replacement: Some(SmolStr::new("udp.example.com".to_owned())),
+                replacement: Some(SmolStr::new("udp.example.com")),
             },
             NaptrRecord {
                 order: 5,
                 preference: 50,
                 transport: Transport::Tls,
-                replacement: Some(SmolStr::new("tls.example.com".to_owned())),
+                replacement: Some(SmolStr::new("tls.example.com")),
             },
         ];
 
@@ -1590,7 +1586,7 @@ mod tests {
     #[test]
     fn static_dhcp_provider_with_tftp_name() {
         let provider = StaticDhcpProvider::empty()
-            .with_tftp_name(TftpServerName(SmolStr::new("tftp.example.com".to_owned())));
+            .with_tftp_name(TftpServerName(SmolStr::new("tftp.example.com")));
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         let tftp_name = rt.block_on(provider.query_tftp_server_name()).unwrap();
@@ -1618,7 +1614,7 @@ mod tests {
     fn static_dhcp_provider_with_all_options() {
         let provider =
             StaticDhcpProvider::new(vec![DhcpSipServer::Ipv4("192.168.1.100".parse().unwrap())])
-                .with_tftp_name(TftpServerName(SmolStr::new("tftp.example.com".to_owned())))
+                .with_tftp_name(TftpServerName(SmolStr::new("tftp.example.com")))
                 .with_tftp_addresses(vec!["10.0.0.1".parse().unwrap()]);
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -1726,7 +1722,7 @@ mod tests {
     #[test]
     fn parse_dhcp_option_120_domain_label_too_long() {
         let mut data = vec![0, 64];
-        data.extend(std::iter::repeat(b'a').take(64));
+        data.extend(std::iter::repeat_n(b'a', 64));
         data.push(0);
         let result = parse_dhcp_option_120(&data);
         assert!(result.is_err());
@@ -1749,7 +1745,7 @@ mod tests {
     #[test]
     fn static_dhcp_provider_returns_servers() {
         let servers = vec![
-            DhcpSipServer::Domain(SmolStr::new("sip.example.com".to_owned())),
+            DhcpSipServer::Domain(SmolStr::new("sip.example.com")),
             DhcpSipServer::Ipv4("192.168.1.1".parse().unwrap()),
         ];
         let provider = StaticDhcpProvider::new(servers.clone());
@@ -1791,7 +1787,7 @@ mod tests {
     #[test]
     fn dhcp_resolver_with_domain() {
         let dhcp = StaticDhcpProvider::new(vec![DhcpSipServer::Domain(SmolStr::new(
-            "dhcp-sip.example.com".to_owned(),
+            "dhcp-sip.example.com",
         ))]);
         let dns = StaticResolver::single("dhcp-sip.example.com", 5060, Transport::Tcp);
         let resolver = DhcpResolver::new(dhcp, dns);
@@ -1854,7 +1850,7 @@ mod tests {
     fn hybrid_resolver_prefers_dhcp_over_dns() {
         let dhcp = StaticDhcpProvider::new(vec![
             DhcpSipServer::Ipv4("192.168.1.100".parse().unwrap()),
-            DhcpSipServer::Domain(SmolStr::new("dhcp.example.com".to_owned())),
+            DhcpSipServer::Domain(SmolStr::new("dhcp.example.com")),
         ]);
         // StaticResolver returns all configured targets, so this simulates
         // DNS resolution returning both the DHCP domain and fallback
@@ -1883,7 +1879,7 @@ mod tests {
 
     #[test]
     fn dhcp_sip_server_as_str() {
-        let domain = DhcpSipServer::Domain(SmolStr::new("example.com".to_owned()));
+        let domain = DhcpSipServer::Domain(SmolStr::new("example.com"));
         assert_eq!(domain.as_str(), "example.com");
 
         let ipv4 = DhcpSipServer::Ipv4("192.168.1.1".parse().unwrap());

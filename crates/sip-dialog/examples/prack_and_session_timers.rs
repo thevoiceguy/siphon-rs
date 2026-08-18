@@ -81,13 +81,10 @@ async fn demonstrate_prack_flow() {
     // Create PRACK request
     let mut prack_headers = Headers::new();
     prack_headers
-        .push(
-            SmolStr::new("Call-ID"),
-            SmolStr::new("call-abc123".to_owned()),
-        )
+        .push(SmolStr::new("Call-ID"), SmolStr::new("call-abc123"))
         .unwrap();
     prack_headers
-        .push(SmolStr::new("CSeq"), SmolStr::new("101 PRACK".to_owned()))
+        .push(SmolStr::new("CSeq"), SmolStr::new("101 PRACK"))
         .unwrap();
     prack_headers
         .push(SmolStr::new("RAck"), SmolStr::new(rack.to_string()))
@@ -156,7 +153,7 @@ async fn demonstrate_prack_flow() {
     println!("┌─ Helper: is_reliable_provisional() ──────────────────────┐");
     let mut reliable_headers = Headers::new();
     reliable_headers
-        .push(SmolStr::new("RSeq"), SmolStr::new("1".to_owned()))
+        .push(SmolStr::new("RSeq"), SmolStr::new("1"))
         .unwrap();
     let response_180 = Response::new(
         StatusLine::new(180, SmolStr::new("Ringing")).expect("valid status line"),

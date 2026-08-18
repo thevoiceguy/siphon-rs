@@ -2784,9 +2784,9 @@ impl UserAgentClient {
         // Build Replaces parameter: call-id;to-tag=X;from-tag=Y
         let replaces = format!(
             "{};to-tag={};from-tag={}",
-            urlencoding::encode(&target_dialog.id().call_id()),
-            urlencoding::encode(&target_dialog.id().remote_tag()),
-            urlencoding::encode(&target_dialog.id().local_tag())
+            urlencoding::encode(target_dialog.id().call_id()),
+            urlencoding::encode(target_dialog.id().remote_tag()),
+            urlencoding::encode(target_dialog.id().local_tag())
         );
 
         // Create Refer-To with Replaces parameter
@@ -3375,10 +3375,9 @@ fn extract_to_uri(response: &Response) -> Option<SipUri> {
     let to_header = header(response.headers(), "To")?;
     // Simple extraction - look for URI between < >
     let uri_str = if let Some(start) = to_header.find('<') {
-        if let Some(end) = to_header[start + 1..].find('>') {
+        {
+            let end = to_header[start + 1..].find('>')?;
             &to_header[start + 1..start + 1 + end]
-        } else {
-            return None;
         }
     } else {
         // No brackets, take until semicolon or end

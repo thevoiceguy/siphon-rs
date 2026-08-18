@@ -361,7 +361,7 @@ impl InviteHandler {
         }
 
         // Parse callee's contact URI
-        let callee_contact_str = bindings[0].contact().as_ref();
+        let callee_contact_str = bindings[0].contact();
         let callee_contact = sip_core::SipUri::parse(callee_contact_str)
             .map_err(|_| anyhow!("Invalid contact URI: {}", callee_contact_str))?;
 
@@ -966,7 +966,7 @@ impl InviteHandler {
         }
 
         // Use first (highest priority) binding
-        let contact_str = bindings[0].contact().as_ref();
+        let contact_str = bindings[0].contact();
         info!(call_id, contact = %contact_str, "Found registered contact, forwarding");
 
         // Parse contact URI
@@ -1376,8 +1376,8 @@ impl RequestHandler for InviteHandler {
                 {
                     let _ = services.dialog_mgr.insert(early_dialog.clone());
 
-                    let rseq = services.rseq_mgr.next_rseq(&early_dialog.id());
-                    reliable_info = Some((Self::dialog_id_key(&early_dialog.id()), rseq));
+                    let rseq = services.rseq_mgr.next_rseq(early_dialog.id());
+                    reliable_info = Some((Self::dialog_id_key(early_dialog.id()), rseq));
                     let _ = ringing.headers_mut().push("RSeq", rseq.to_string());
                     let _ = ringing.headers_mut().push("Require", "100rel");
                     let _ = ringing
@@ -1389,7 +1389,7 @@ impl RequestHandler for InviteHandler {
                         .and_then(|value| value.parse::<u32>().ok())
                     {
                         services.prack_validator.register_reliable_provisional(
-                            &Self::dialog_id_key(&early_dialog.id()),
+                            &Self::dialog_id_key(early_dialog.id()),
                             rseq,
                             cseq,
                             request.method().clone(),

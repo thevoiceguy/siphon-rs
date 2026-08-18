@@ -468,7 +468,7 @@ mod tests {
         )
         .expect("valid request");
 
-        let branch = ProxyHelpers::add_via(&mut req, "proxy.example.com", "UDP".into());
+        let branch = ProxyHelpers::add_via(&mut req, "proxy.example.com", "UDP");
 
         // Via should be prepended
         let vias: Vec<_> = req.headers().iter().filter(|h| h.name() == "Via").collect();

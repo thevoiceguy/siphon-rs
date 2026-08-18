@@ -351,9 +351,9 @@ pub fn negotiate_answer(
                     }
                 }
             }
-            MediaType::Video => {
+            MediaType::Video
                 // Only enable video if the profile supports it
-                if profile.enable_video || !profile.video_codecs.is_empty() {
+                if (profile.enable_video || !profile.video_codecs.is_empty()) => {
                     builder.enable_video = true;
                     for fmt in &m.formats {
                         let pt = match parse_payload_type(fmt) {
@@ -371,7 +371,6 @@ pub fn negotiate_answer(
                         }
                     }
                 }
-            }
             _ => {}
         }
     }

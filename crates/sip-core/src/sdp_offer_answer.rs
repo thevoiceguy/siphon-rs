@@ -316,14 +316,14 @@ impl CodecInfo {
 
     /// Check if this codec matches an RtpMap
     pub fn matches(&self, rtpmap: &RtpMap) -> bool {
-        if !self.name.eq_ignore_ascii_case(&rtpmap.encoding_name()) {
+        if !self.name.eq_ignore_ascii_case(rtpmap.encoding_name()) {
             return false;
         }
         if self.clock_rate() != rtpmap.clock_rate() {
             return false;
         }
 
-        match (self.channels, rtpmap.encoding_params().as_deref()) {
+        match (self.channels, rtpmap.encoding_params()) {
             (Some(codec_channels), Some(params)) => {
                 params.parse::<u16>().ok() == Some(codec_channels)
             }
@@ -1131,7 +1131,7 @@ mod tests {
     fn reject_too_many_audio_codecs() {
         let mut codecs = Vec::new();
         for i in 0..=MAX_CODECS_PER_TYPE {
-            codecs.push(CodecInfo::new(&format!("codec{}", i), 8000, Some(1)).unwrap());
+            codecs.push(CodecInfo::new(format!("codec{}", i), 8000, Some(1)).unwrap());
         }
 
         let result = AnswerOptions::default().with_audio_codecs(codecs);

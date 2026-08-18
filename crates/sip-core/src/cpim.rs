@@ -762,10 +762,9 @@ fn unescape_header_value(value: &str) -> Option<String> {
                     let hex: String = chars.by_ref().take(4).collect();
                     if hex.len() == 4 {
                         if let Ok(code) = u32::from_str_radix(&hex, 16) {
-                            if let Some(unicode_char) = char::from_u32(code) {
+                            {
+                                let unicode_char = char::from_u32(code)?;
                                 result.push(unicode_char);
-                            } else {
-                                return None;
                             }
                         } else {
                             return None;

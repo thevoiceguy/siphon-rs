@@ -662,7 +662,7 @@ mod tests {
         let mut headers = Headers::new();
 
         for i in 0..MAX_HEADERS {
-            headers.push(&format!("X-Header-{}", i), "value").unwrap();
+            headers.push(format!("X-Header-{}", i), "value").unwrap();
         }
 
         // Should fail

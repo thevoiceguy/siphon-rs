@@ -2404,7 +2404,7 @@ mod tests {
             .headers_mut()
             .push(
                 SmolStr::new("Via"),
-                SmolStr::new("SIP/2.0/UDP host;branch=z9hG4bKretrans".to_owned()),
+                SmolStr::new("SIP/2.0/UDP host;branch=z9hG4bKretrans"),
             )
             .unwrap();
         let handle = manager.receive_request(request.clone(), ctx.clone()).await;
@@ -2458,7 +2458,7 @@ mod tests {
             .headers_mut()
             .push(
                 SmolStr::new("Via"),
-                SmolStr::new("SIP/2.0/UDP host;branch=z9hG4bKtest_overflow".to_owned()),
+                SmolStr::new("SIP/2.0/UDP host;branch=z9hG4bKtest_overflow"),
             )
             .unwrap();
         manager.receive_request(request, ctx).await;
@@ -2507,7 +2507,7 @@ mod tests {
             .headers_mut()
             .push(
                 SmolStr::new("Via"),
-                SmolStr::new("SIP/2.0/UDP host;branch=z9hG4bKclient_overflow".to_owned()),
+                SmolStr::new("SIP/2.0/UDP host;branch=z9hG4bKclient_overflow"),
             )
             .unwrap();
         let _ = manager
@@ -2560,7 +2560,7 @@ mod tests {
             .headers_mut()
             .push(
                 SmolStr::new("Via"),
-                SmolStr::new("SIP/2.0/UDP host;branch=z9hG4bKorder3".to_owned()),
+                SmolStr::new("SIP/2.0/UDP host;branch=z9hG4bKorder3"),
             )
             .unwrap();
         manager.receive_request(request, ctx).await;

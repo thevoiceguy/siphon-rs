@@ -1513,13 +1513,11 @@ impl SdpSession {
         for attr in self.attributes.drain(..) {
             if attr.name == "group" {
                 if let Some(value) = &attr.value {
-                    match MediaGroup::parse(value) {
-                        Ok(group) => {
-                            self.groups.push(group);
-                            // Security: Check groups collection size
-                            validate_collection_size(&self.groups, "a=group", MAX_GROUPS)?;
-                        }
-                        Err(e) => return Err(e),
+                    {
+                        let group = MediaGroup::parse(value)?;
+                        self.groups.push(group);
+                        // Security: Check groups collection size
+                        validate_collection_size(&self.groups, "a=group", MAX_GROUPS)?;
                     }
                 } else {
                     return Err(SdpError::InvalidFormat("a=group requires value"));

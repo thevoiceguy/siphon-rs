@@ -650,7 +650,7 @@ mod tests {
         let values: Vec<_> = headers.get_all_smol("Content-Length").collect();
 
         if values.is_empty() {
-            return None;
+            None
         } else if values.len() == 1 {
             // Single Content-Length header
             match parse_content_length_detailed(values[0]) {
@@ -1098,7 +1098,7 @@ Content-Length: 0\r\n\r\n",
 
     #[test]
     fn parse_call_info_accepts_absolute_uri() {
-        let call_info = SmolStr::new("<https://example.com/info>".to_owned());
+        let call_info = SmolStr::new("<https://example.com/info>");
         let parsed = parse_call_info_header(&call_info).expect("call-info");
         assert!(parsed.inner().uri().is_absolute());
         assert_eq!(
@@ -1182,7 +1182,7 @@ l: 0\r\n\r\n",
         assert_eq!(contact.uri().as_str(), "sip:alice@example.com");
         assert_eq!(
             contact.inner().params_map().get("expires"),
-            Some(&Some(SmolStr::new("60".to_owned())))
+            Some(&Some(SmolStr::new("60")))
         );
 
         let routes = parse_route_headers(resp.headers(), "Record-Route");
@@ -1289,7 +1289,7 @@ l: 0\r\n\r\n",
 
     #[test]
     fn name_addr_parses_quoted_display_with_angle_brackets() {
-        let value = SmolStr::new("\"Alice <Admin>\" <sip:alice@example.com>".to_owned());
+        let value = SmolStr::new("\"Alice <Admin>\" <sip:alice@example.com>");
         let contact = parse_contact_header(&value).expect("contact");
         assert_eq!(
             contact.inner().display_name().map(|s| s.as_str()),
@@ -1301,7 +1301,7 @@ l: 0\r\n\r\n",
         headers
             .push(
                 SmolStr::new("P-Asserted-Identity"),
-                SmolStr::new("\"Bob <Ops>\" <sip:bob@example.com>".to_owned()),
+                SmolStr::new("\"Bob <Ops>\" <sip:bob@example.com>"),
             )
             .unwrap();
         let asserted = parse_p_asserted_identity(&headers)
@@ -1315,7 +1315,7 @@ l: 0\r\n\r\n",
 
     #[test]
     fn authorization_handles_escaped_quotes_and_commas() {
-        let auth_value = SmolStr::new(r#"Digest realm="a\"b, c", nonce="n""#.to_owned());
+        let auth_value = SmolStr::new(r#"Digest realm="a\"b, c", nonce="n""#);
         let auth = parse_authorization_header(&auth_value).expect("auth");
         assert_eq!(auth.param("realm").map(|v| v.as_str()), Some(r#"a\"b, c"#));
         assert_eq!(auth.param("nonce").map(|v| v.as_str()), Some("n"));
@@ -1349,7 +1349,7 @@ Content-Length: 0\r\n\r\n",
     #[test]
     fn parses_authorization_priority_date_subject() {
         let auth_value = SmolStr::new(
-            "Digest username=\"alice\", realm=\"example.com\", uri=\"sip:example.com\"".to_owned(),
+            "Digest username=\"alice\", realm=\"example.com\", uri=\"sip:example.com\"",
         );
         let auth = parse_authorization_header(&auth_value).expect("auth");
         assert_eq!(auth.scheme(), "Digest");
@@ -1360,14 +1360,14 @@ Content-Length: 0\r\n\r\n",
             Some("example.com")
         );
 
-        let priority = parse_priority_header(&SmolStr::new("urgent".to_owned()));
+        let priority = parse_priority_header(&SmolStr::new("urgent"));
         assert!(matches!(priority, PriorityValue::Urgent));
 
-        let date_value = SmolStr::new("Fri, 21 Feb 2025 10:00:00 GMT".to_owned());
+        let date_value = SmolStr::new("Fri, 21 Feb 2025 10:00:00 GMT");
         let date = parse_date_header(&date_value);
         assert!(date.timestamp().is_some());
 
-        let subject = parse_subject_header(&SmolStr::new("Test Call".to_owned())).expect("subject");
+        let subject = parse_subject_header(&SmolStr::new("Test Call")).expect("subject");
         assert_eq!(subject.value(), "Test Call");
     }
 
@@ -1467,10 +1467,7 @@ Content-Length: 0\r\n\r\n",
         let uri = SipUri::parse("sip:example.com").unwrap();
         let mut headers = Headers::new();
         headers
-            .push(
-                SmolStr::new("Via"),
-                SmolStr::new("SIP/2.0/UDP host".to_owned()),
-            )
+            .push(SmolStr::new("Via"), SmolStr::new("SIP/2.0/UDP host"))
             .unwrap();
 
         let req = Request::new(
@@ -1629,8 +1626,8 @@ body",
             let method = methods[method_idx % methods.len()];
             let uri = SipUri::parse(&format!("sip:{host}.example.com")).unwrap();
             let mut headers = Headers::new();
-            headers.push(SmolStr::new("Via"), SmolStr::new("SIP/2.0/UDP host".to_owned())).unwrap();
-            headers.push(SmolStr::new("Call-ID"), SmolStr::new("abc@host".to_owned())).unwrap();
+            headers.push(SmolStr::new("Via"), SmolStr::new("SIP/2.0/UDP host")).unwrap();
+            headers.push(SmolStr::new("Call-ID"), SmolStr::new("abc@host")).unwrap();
             headers.push(SmolStr::new("CSeq"), SmolStr::new(format!("1 {method}"))).unwrap();
 
             let req = Request::new(

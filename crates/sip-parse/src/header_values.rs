@@ -227,7 +227,7 @@ pub fn parse_subscription_state(value: &SmolStr) -> Option<SubscriptionStateHead
 pub fn parse_history_info(headers: &Headers) -> Result<HistoryInfoHeader, HistoryInfoError> {
     let mut entries = Vec::new();
     for value in headers.get_all_smol("History-Info") {
-        let parts = split_quoted_commas(value.as_str(), MAX_HISTORY_ENTRIES).ok_or_else(|| {
+        let parts = split_quoted_commas(value.as_str(), MAX_HISTORY_ENTRIES).ok_or({
             HistoryInfoError::TooManyEntries {
                 max: MAX_HISTORY_ENTRIES,
                 actual: MAX_HISTORY_ENTRIES + 1,
@@ -263,7 +263,7 @@ pub fn parse_sip_etag(value: &SmolStr) -> Option<SipETagHeader> {
 pub fn parse_geolocation_header(headers: &Headers) -> Result<GeolocationHeader, GeolocationError> {
     let mut values = Vec::new();
     for header in headers.get_all_smol("Geolocation") {
-        let parts = split_quoted_commas(header.as_str(), MAX_GEO_VALUES).ok_or_else(|| {
+        let parts = split_quoted_commas(header.as_str(), MAX_GEO_VALUES).ok_or({
             GeolocationError::TooManyValues {
                 max: MAX_GEO_VALUES,
                 actual: MAX_GEO_VALUES + 1,
@@ -324,7 +324,7 @@ pub fn parse_geolocation_routing(
     value: &SmolStr,
 ) -> Result<GeolocationRoutingHeader, GeolocationError> {
     let mut header = GeolocationRoutingHeader::new();
-    let params = parse_params(value.as_str()).ok_or_else(|| GeolocationError::TooManyParams {
+    let params = parse_params(value.as_str()).ok_or(GeolocationError::TooManyParams {
         max: MAX_PARAMS,
         actual: MAX_PARAMS + 1,
     })?;
