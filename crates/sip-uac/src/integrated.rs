@@ -3094,6 +3094,1040 @@ async fn commit_advanced_dialog(shared: &Arc<RwLock<Dialog>>, advanced: Dialog) 
     }
 }
 
+/// Handle returned from INVITE/re-INVITE with CANCEL capability.
+impl CallHandle {
+    /// Sends a CANCEL request to cancel the pending INVITE transaction.
+    ///
+    /// # Returns
+    /// Result indicating if CANCEL was sent successfully
+    ///
+    /// # RFC 3261 §9.1 CANCEL Behavior
+    /// - CANCEL can only be sent for pending INVITE (not yet received final response)
+    /// - CANCEL uses same Call-ID, From tag, To tag, but new branch
+    /// - If 200 OK arrives before CANCEL, must still send ACK and then BYE
+    ///
+    /// # Example
+    /// ```ignore
+    /// let mut call = uac.invite("sip:bob@example.com", Some(sdp)).await?;
+    ///
+    /// // Wait for ringing
+    /// if let Some(response) = call.await_provisional().await {
+    ///     if response.code() == 180 {
+    ///         println!("Ringing...");
+    ///     }
+    /// }
+    ///
+    /// // User cancels the call
+    /// call.cancel().await?;
+    /// ```
+    pub async fn cancel(&self) -> Result<Response> {
+        use sip_core::{Method, RequestLine};
+
+        info!(
+            "Sending CANCEL for transaction {}",
+            self.transaction_key.branch()
+        );
+
+        // Create CANCEL request per RFC 3261 §9.1
+        // CANCEL uses same Call-ID, From, To, CSeq number as INVITE
+        // But uses new branch parameter in Via
+
+        let mut cancel_headers = sip_core::Headers::new();
+
+        // Snapshot the live attempt's INVITE: after an auth retry the
+        // original transaction is already complete, so the CANCEL must
+        // match the current attempt's Via branch and CSeq.
+        let invite_request = self.invite_request.read().await.clone();
+
+        // Copy essential headers from INVITE
+        for header in invite_request.headers().iter() {
+            match header.name() {
+                "Via" => {
+                    // RFC 3261 §9.1: CANCEL MUST have the same Via branch as the INVITE
+                    // "A CANCEL constructed by a client MUST have only a single Via header
+                    // field value matching the top Via value in the request being cancelled"
+                    cancel_headers
+                        .push(header.name_smol().clone(), header.value_smol().clone())
+                        .unwrap();
+                }
+                "From" | "To" | "Call-ID" => {
+                    // Copy unchanged
+                    cancel_headers
+                        .push(header.name_smol().clone(), header.value_smol().clone())
+                        .unwrap();
+                }
+                "CSeq" => {
+                    // Same number, but CANCEL method
+                    if let Some((num, _)) = header.value().split_once(' ') {
+                        cancel_headers
+                            .push(
+                                SmolStr::new("CSeq"),
+                                SmolStr::new(format!("{} CANCEL", num)),
+                            )
+                            .unwrap();
+                    }
+                }
+                "Route" => {
+                    // Copy Route headers
+                    cancel_headers
+                        .push(header.name_smol().clone(), header.value_smol().clone())
+                        .unwrap();
+                }
+                _ => {
+                    // Skip other headers
+                }
+            }
+        }
+
+        // Add Max-Forwards
+        cancel_headers
+            .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
+            .unwrap();
+
+        // Add Content-Length
+        cancel_headers
+            .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
+            .unwrap();
+
+        // Create CANCEL request
+        let cancel_request = Request::new(
+            RequestLine::new(Method::Cancel, invite_request.uri().clone()),
+            cancel_headers,
+            Bytes::new(),
+        )
+        .expect("valid CANCEL request");
+
+        // Debug: log the CANCEL request details
+        debug!(
+            "CANCEL request - Request-URI: {}, Call-ID: {:?}, CSeq: {:?}",
+            cancel_request.uri(),
+            cancel_request.headers().get("Call-ID"),
+            cancel_request.headers().get("CSeq")
+        );
+
+        // Send CANCEL as a new non-INVITE transaction
+        let (final_tx, final_rx) = oneshot::channel();
+        let (term_tx, term_rx) = oneshot::channel();
+
+        let tu = Arc::new(SimpleTransactionUser {
+            final_tx: Mutex::new(Some(final_tx)),
+            term_tx: Mutex::new(Some(term_tx)),
+        });
+
+        let key = self
+            .transaction_manager
+            .start_client_transaction(cancel_request, (*self.transport_ctx).clone(), tu)
+            .await?;
+
+        info!("Started CANCEL transaction {}", key.branch());
+
+        // Wait for response to CANCEL
+        tokio::select! {
+            Ok(response) = final_rx => Ok(response),
+            Ok(reason) = term_rx => Err(anyhow!("CANCEL transaction terminated: {}", reason)),
+            else => Err(anyhow!("CANCEL response channels closed")),
+        }
+    }
+}
+
+/// Transaction user for INVITE requests - handles ACK, PRACK, dialog creation, forking.
+struct InviteTransactionUser {
+    prov_tx: mpsc::Sender<Response>,
+    final_tx: Mutex<Option<oneshot::Sender<Response>>>,
+    term_tx: Mutex<Option<oneshot::Sender<String>>>,
+    #[allow(dead_code)]
+    dialog_manager: Arc<DialogManager>,
+    helper: Arc<Mutex<UserAgentClient>>,
+    request: Request,
+    config: UACConfig,
+    ctx: TransportContext,
+    auto_retry_auth: bool,
+    /// Which auth attempt this transaction represents (0 = original
+    /// INVITE, incremented per authenticated retry).
+    auth_attempt: u32,
+    /// The live attempt's request, shared with the CallHandle so CANCEL
+    /// targets the current transaction after an auth retry.
+    live_request: Arc<RwLock<Arc<Request>>>,
+    transaction_manager: Arc<TransactionManager>,
+    dispatcher: Arc<dyn TransportDispatcher>,
+    /// Track early dialogs for forking support (shared with CallHandle)
+    early_dialogs: Arc<Mutex<std::collections::HashMap<SmolStr, Dialog>>>,
+    /// Dialog reference (shared with CallHandle) - updated when 200 OK arrives
+    dialog: Arc<RwLock<Dialog>>,
+    local_addr: SocketAddr,
+    public_addr: Option<SocketAddr>,
+}
+
+impl InviteTransactionUser {
+    /// Starts an authenticated re-INVITE after a 401/407 challenge
+    /// (issue #83).
+    ///
+    /// The transaction layer has already ACK'd the challenge, so the
+    /// authenticated request — same Call-ID and From tag, CSeq+1, fresh
+    /// branch, original body, built by `create_authenticated_request_with`
+    /// — goes out as a new client transaction. Its transaction user
+    /// inherits this attempt's response channels and shared dialog state,
+    /// so the caller's `CallHandle` transparently observes the retry.
+    async fn retry_invite_with_auth(&self, challenge: &Response) -> Result<()> {
+        let realm = extract_realm(challenge);
+        let creds = match (&self.config.credential_provider, realm.as_deref()) {
+            (Some(provider), Some(realm)) => provider.credentials(realm).await,
+            _ => None,
+        };
+
+        let mut helper = self.helper.lock().await;
+        let auth_request =
+            helper.create_authenticated_request_with(&self.request, challenge, creds)?;
+        drop(helper);
+
+        // Hand this attempt's channels to the retry: whatever it concludes
+        // with is the final the application sees.
+        let final_tx = self.final_tx.lock().await.take();
+        let term_tx = self.term_tx.lock().await.take();
+
+        let tu = Arc::new(InviteTransactionUser {
+            prov_tx: self.prov_tx.clone(),
+            final_tx: Mutex::new(final_tx),
+            term_tx: Mutex::new(term_tx),
+            dialog_manager: self.dialog_manager.clone(),
+            helper: self.helper.clone(),
+            request: auth_request.clone(),
+            config: self.config.clone(),
+            ctx: self.ctx.clone(),
+            auto_retry_auth: self.auto_retry_auth,
+            auth_attempt: self.auth_attempt + 1,
+            live_request: self.live_request.clone(),
+            transaction_manager: self.transaction_manager.clone(),
+            dispatcher: self.dispatcher.clone(),
+            early_dialogs: self.early_dialogs.clone(),
+            dialog: self.dialog.clone(),
+            local_addr: self.local_addr,
+            public_addr: self.public_addr,
+        });
+
+        match self
+            .transaction_manager
+            .start_client_transaction(auth_request.clone(), self.ctx.clone(), tu.clone())
+            .await
+        {
+            Ok(key) => {
+                // CANCEL must target the live attempt's Via branch.
+                *self.live_request.write().await = Arc::new(auth_request);
+                info!(
+                    "Started authenticated INVITE transaction {} (attempt {})",
+                    key.branch(),
+                    self.auth_attempt + 1
+                );
+                Ok(())
+            }
+            Err(e) => {
+                // The retry never launched: reclaim the channels so the
+                // challenge is surfaced as this attempt's final.
+                *self.final_tx.lock().await = tu.final_tx.lock().await.take();
+                *self.term_tx.lock().await = tu.term_tx.lock().await.take();
+                Err(e)
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl ClientTransactionUser for InviteTransactionUser {
+    async fn on_provisional(&self, _key: &TransactionKey, response: &Response) {
+        info!("Received provisional response: {}", response.code());
+
+        // Create or update dialog from provisional (if it has To-tag)
+        // RFC 3261 §13.2.2.1: Provisional responses with To-tags create early dialogs
+        if response.code() > 100 {
+            let helper = self.helper.lock().await;
+            if let Some(dialog) = helper.process_invite_response(&self.request, response) {
+                let to_tag = SmolStr::new(dialog.id().remote_tag());
+
+                // Track early dialog for forking support
+                let mut early_dialogs = self.early_dialogs.lock().await;
+
+                if early_dialogs.contains_key(&to_tag) {
+                    // Update existing early dialog (no bounds check needed)
+                    debug!(
+                        "Updated existing early dialog from {}: to-tag={}",
+                        response.code(),
+                        to_tag
+                    );
+                    early_dialogs.insert(to_tag, dialog);
+                } else {
+                    // New early dialog - enforce forking limit
+                    if early_dialogs.len() >= crate::MAX_EARLY_DIALOGS {
+                        warn!(
+                            "Max early dialogs limit reached ({}), ignoring new early dialog: to-tag={}",
+                            crate::MAX_EARLY_DIALOGS,
+                            to_tag
+                        );
+                    } else {
+                        debug!(
+                            "Created new early dialog from {}: to-tag={} (forking detected: {} endpoints)",
+                            response.code(),
+                            to_tag,
+                            early_dialogs.len() + 1
+                        );
+                        early_dialogs.insert(to_tag, dialog);
+                    }
+                }
+            }
+        }
+
+        // Forward to application
+        let _ = self.prov_tx.send(response.clone()).await;
+    }
+
+    async fn on_final(&self, _key: &TransactionKey, response: &Response) {
+        info!("Received final response: {}", response.code());
+
+        // 401/407: start an authenticated retry instead of surfacing the
+        // challenge (the transaction layer has already ACK'd this final).
+        // Mirrors the non-INVITE retry semantics: bounded by
+        // `max_auth_retries`, with the last challenge forwarded when the
+        // budget is exhausted or no retry can be built (issue #83).
+        if (response.code() == 401 || response.code() == 407) && self.auto_retry_auth {
+            if self.auth_attempt < self.config.max_auth_retries {
+                match self.retry_invite_with_auth(response).await {
+                    Ok(()) => return,
+                    Err(e) => warn!(
+                        code = response.code(),
+                        "INVITE auth retry not started ({}); surfacing challenge to caller", e
+                    ),
+                }
+            } else {
+                warn!(
+                    code = response.code(),
+                    attempts = self.auth_attempt,
+                    max = self.config.max_auth_retries,
+                    "auth retry limit reached; returning last challenge to caller"
+                );
+            }
+        }
+
+        // Create or confirm dialog from 2xx and update CallHandle's dialog
+        if response.code() >= 200 && response.code() < 300 {
+            let helper = self.helper.lock().await;
+            if let Some(confirmed_dialog) = helper.process_invite_response(&self.request, response)
+            {
+                info!(
+                    "Confirmed dialog from {}: {} (to-tag={})",
+                    response.code(),
+                    confirmed_dialog.id().call_id(),
+                    confirmed_dialog.id().remote_tag()
+                );
+
+                // Update the shared dialog (fixes the "pending" tag issue)
+                *self.dialog.write().await = confirmed_dialog;
+            }
+        }
+
+        // Forward to application
+        let mut tx = self.final_tx.lock().await;
+        if let Some(tx) = tx.take() {
+            let _ = tx.send(response.clone());
+        }
+    }
+
+    async fn on_terminated(&self, _key: &TransactionKey, reason: &str) {
+        warn!("INVITE transaction terminated: {}", reason);
+
+        let mut tx = self.term_tx.lock().await;
+        if let Some(tx) = tx.take() {
+            let _ = tx.send(reason.to_string());
+        }
+    }
+
+    async fn send_ack(
+        &self,
+        _key: &TransactionKey,
+        response: Response,
+        ctx: &TransportContext,
+        is_2xx: bool,
+    ) {
+        info!(
+            "Sending ACK for {} response (is_2xx={})",
+            response.code(),
+            is_2xx
+        );
+
+        let original_via = self.request.headers().get("Via").map(|via| via.to_string());
+
+        let helper = self.helper.lock().await;
+        let dialog = if is_2xx {
+            helper.process_invite_response(&self.request, &response)
+        } else {
+            None
+        };
+
+        if is_2xx && dialog.is_none() {
+            error!("Failed to create dialog for 2xx ACK");
+            return;
+        }
+
+        // Determine if this is late offer (200 OK has SDP, INVITE didn't)
+        let invite_has_sdp = !self.request.body().is_empty();
+        let response_has_sdp = !response.body().is_empty();
+        let late_offer = is_2xx && !invite_has_sdp && response_has_sdp;
+
+        // For late offer, generate SDP answer using configured generator
+        let sdp_body = if late_offer {
+            if let Some(dialog) = dialog.as_ref() {
+                if let Some(generator) = &self.config.sdp_answer_generator {
+                    debug!("Late offer detected - generating SDP answer via RFC 3264 negotiation");
+
+                    // Extract and parse SDP offer from response body
+                    match std::str::from_utf8(response.body()) {
+                        Ok(sdp_offer_str) => {
+                            // Parse SDP offer
+                            match SessionDescription::parse(sdp_offer_str) {
+                                Ok(sdp_offer) => {
+                                    // Generate SDP answer using RFC 3264 negotiation
+                                    match generator.generate_answer(&sdp_offer, dialog).await {
+                                        Ok(sdp_answer) => {
+                                            // Serialize SDP answer
+                                            let sdp_answer_str = sdp_answer.to_string();
+                                            info!(
+                                                "Generated SDP answer for late offer ({} bytes)",
+                                                sdp_answer_str.len()
+                                            );
+                                            Some(sdp_answer_str)
+                                        }
+                                        Err(e) => {
+                                            error!("Failed to generate SDP answer: {}", e);
+                                            None
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Failed to parse SDP offer: {}", e);
+                                    None
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to decode SDP offer as UTF-8: {}", e);
+                            None
+                        }
+                    }
+                } else if let Some(builder) = &self.config.sdp_profile_builder {
+                    debug!("Late offer detected - generating SDP answer via profile negotiation");
+                    if let Ok(sdp_offer) = SessionDescription::parse(
+                        std::str::from_utf8(response.body()).unwrap_or_default(),
+                    ) {
+                        let addr = self.public_addr.unwrap_or(self.local_addr);
+                        let sdp_answer = profiles::negotiate_answer(
+                            &sdp_offer,
+                            builder,
+                            &self.config.user_agent,
+                            &addr.to_string(),
+                            self.config.local_audio_port,
+                            Some(self.config.local_video_port),
+                        );
+                        let sdp_answer_str = sdp_answer.to_string();
+                        Some(sdp_answer_str)
+                    } else {
+                        None
+                    }
+                } else {
+                    warn!("Late offer scenario detected but no SDP answer generator configured");
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let mut ack = helper.create_ack(&self.request, &response, sdp_body.as_deref());
+        drop(helper);
+
+        if is_2xx {
+            if let Some(dialog) = dialog.as_ref() {
+                apply_route_set_to_request(dialog, &mut ack);
+            }
+        } else {
+            ack.headers_mut().remove("Route");
+            for route in self.request.headers().get_all_smol("Route") {
+                ack.headers_mut()
+                    .push(SmolStr::new("Route"), route.clone())
+                    .unwrap();
+            }
+        }
+
+        let via_value = if let Some(via) = original_via.as_deref() {
+            if is_2xx {
+                crate::replace_via_branch(via, &crate::generate_branch())
+            } else {
+                via.to_string()
+            }
+        } else if let Some(via) = ack.headers().get("Via") {
+            if is_2xx {
+                crate::replace_via_branch(via, &crate::generate_branch())
+            } else {
+                via.to_string()
+            }
+        } else {
+            let via_transport = match ctx.transport() {
+                sip_transaction::TransportKind::Udp => "UDP",
+                sip_transaction::TransportKind::Tcp => "TCP",
+                sip_transaction::TransportKind::Tls => "TLS",
+                sip_transaction::TransportKind::Ws => "WS",
+                sip_transaction::TransportKind::Wss => "WSS",
+                sip_transaction::TransportKind::Sctp => "SCTP",
+                sip_transaction::TransportKind::TlsSctp => "TLS-SCTP",
+            };
+            format!(
+                "SIP/2.0/{} {};branch={}",
+                via_transport,
+                self.local_addr,
+                crate::generate_branch()
+            )
+        };
+
+        ack.headers_mut().remove("Via");
+        ack.headers_mut()
+            .push(SmolStr::new("Via"), SmolStr::new(via_value))
+            .unwrap();
+
+        // Serialize ACK
+        let ack_bytes = serialize_request(&ack);
+
+        // Send ACK directly (ACK for 2xx doesn't go through transaction layer)
+        if let Some(stream) = &ctx.stream() {
+            if let Err(e) = stream.send(ack_bytes.clone()).await {
+                // The connection died between the 2xx and the ACK; retry
+                // through the dispatcher's pool with the stream cleared
+                // (issue #73).
+                warn!(
+                    "Failed to send ACK via stream ({}), retrying via dispatcher",
+                    e
+                );
+                let fallback = ctx.clone().with_stream(None);
+                if let Err(e) = self.dispatcher.dispatch(&fallback, ack_bytes).await {
+                    error!("Failed to send ACK via dispatcher fallback: {}", e);
+                }
+            }
+        } else if let Err(e) = self.dispatcher.dispatch(ctx, ack_bytes).await {
+            error!("Failed to send ACK via dispatcher: {}", e);
+        } else {
+            debug!("ACK sent successfully");
+        }
+    }
+
+    async fn send_prack(&self, _key: &TransactionKey, response: Response, ctx: &TransportContext) {
+        info!("Sending PRACK for reliable provisional {}", response.code());
+
+        // Find dialog for this response
+        let helper = self.helper.lock().await;
+        let dialog = helper.process_invite_response(&self.request, &response);
+
+        if let Some(dialog) = dialog {
+            // Create PRACK
+            match helper.create_prack(&self.request, &response, &dialog) {
+                Ok(prack) => {
+                    drop(helper);
+
+                    // PRACK is a non-INVITE client transaction (RFC 3262)
+                    let tu = Arc::new(PrackTransactionUser);
+                    match self
+                        .transaction_manager
+                        .start_client_transaction(prack.clone(), ctx.clone(), tu)
+                        .await
+                    {
+                        Ok(key) => {
+                            debug!("Started PRACK transaction {}", key.branch());
+                        }
+                        Err(e) => {
+                            error!("Failed to start PRACK transaction: {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    drop(helper);
+                    error!("Failed to create PRACK: {}", e);
+                }
+            }
+        } else {
+            error!("Failed to create dialog for PRACK");
+        }
+    }
+
+    async fn on_transport_error(&self, _key: &TransactionKey) {
+        error!("Transport error for INVITE transaction");
+
+        let mut tx = self.term_tx.lock().await;
+        if let Some(tx) = tx.take() {
+            let _ = tx.send("transport error".to_string());
+        }
+    }
+}
+
+/// Lightweight transaction user for PRACK transactions (fire-and-forget).
+struct PrackTransactionUser;
+
+#[async_trait]
+impl ClientTransactionUser for PrackTransactionUser {
+    async fn on_provisional(&self, _key: &TransactionKey, response: &Response) {
+        debug!("PRACK provisional: {}", response.code());
+    }
+
+    async fn on_final(&self, _key: &TransactionKey, response: &Response) {
+        info!("PRACK final response: {}", response.code());
+    }
+
+    async fn on_terminated(&self, _key: &TransactionKey, reason: &str) {
+        warn!("PRACK transaction terminated: {}", reason);
+    }
+
+    async fn send_ack(
+        &self,
+        _key: &TransactionKey,
+        _response: Response,
+        _ctx: &TransportContext,
+        _is_2xx: bool,
+    ) {
+        // No ACK for PRACK final responses
+    }
+
+    async fn send_prack(
+        &self,
+        _key: &TransactionKey,
+        _response: Response,
+        _ctx: &TransportContext,
+    ) {
+        // Nested PRACK not applicable
+    }
+
+    async fn on_transport_error(&self, _key: &TransactionKey) {
+        warn!("PRACK transport error");
+    }
+}
+
+/// Simple transaction user for non-INVITE requests.
+struct SimpleTransactionUser {
+    final_tx: Mutex<Option<oneshot::Sender<Response>>>,
+    term_tx: Mutex<Option<oneshot::Sender<String>>>,
+}
+
+#[async_trait]
+impl ClientTransactionUser for SimpleTransactionUser {
+    async fn on_provisional(&self, _key: &TransactionKey, response: &Response) {
+        debug!("Received provisional response: {}", response.code());
+    }
+
+    async fn on_final(&self, _key: &TransactionKey, response: &Response) {
+        info!("Received final response: {}", response.code());
+
+        let mut tx = self.final_tx.lock().await;
+        if let Some(tx) = tx.take() {
+            let _ = tx.send(response.clone());
+        }
+    }
+
+    async fn on_terminated(&self, _key: &TransactionKey, reason: &str) {
+        warn!("Transaction terminated: {}", reason);
+
+        let mut tx = self.term_tx.lock().await;
+        if let Some(tx) = tx.take() {
+            let _ = tx.send(reason.to_string());
+        }
+    }
+
+    async fn send_ack(
+        &self,
+        _key: &TransactionKey,
+        _response: Response,
+        _ctx: &TransportContext,
+        _is_2xx: bool,
+    ) {
+        // Not used for non-INVITE
+    }
+
+    async fn send_prack(
+        &self,
+        _key: &TransactionKey,
+        _response: Response,
+        _ctx: &TransportContext,
+    ) {
+        // Not used for non-INVITE
+    }
+
+    async fn on_transport_error(&self, _key: &TransactionKey) {
+        error!("Transport error");
+
+        let mut tx = self.term_tx.lock().await;
+        if let Some(tx) = tx.take() {
+            let _ = tx.send("transport error".to_string());
+        }
+    }
+}
+
+/// Builder for IntegratedUAC.
+pub struct IntegratedUACBuilder {
+    local_uri: Option<SipUri>,
+    contact_uri: Option<SipUri>,
+    local_addr: Option<SocketAddr>,
+    public_addr: Option<SocketAddr>,
+    #[allow(dead_code)]
+    via_advertised: Option<SocketAddr>,
+    #[allow(dead_code)]
+    contact_advertised: Option<SocketAddr>,
+    transaction_manager: Option<Arc<TransactionManager>>,
+    resolver: Option<Arc<SipResolver>>,
+    dispatcher: Option<Arc<dyn TransportDispatcher>>,
+    dialog_manager: Option<Arc<DialogManager>>,
+    credentials: Option<(String, String)>,
+    display_name: Option<String>,
+    config: UACConfig,
+}
+
+impl IntegratedUACBuilder {
+    fn new() -> Self {
+        Self {
+            local_uri: None,
+            contact_uri: None,
+            local_addr: None,
+            public_addr: None,
+            via_advertised: None,
+            contact_advertised: None,
+            transaction_manager: None,
+            resolver: None,
+            dispatcher: None,
+            dialog_manager: None,
+            credentials: None,
+            display_name: None,
+            config: UACConfig::default(),
+        }
+    }
+
+    /// Sets the local SIP URI (used in From header).
+    pub fn local_uri(mut self, uri: impl AsRef<str>) -> Self {
+        self.local_uri = SipUri::parse(uri.as_ref()).ok();
+        self
+    }
+
+    /// Sets the contact URI (used in Contact header).
+    pub fn contact_uri(mut self, uri: impl AsRef<str>) -> Self {
+        self.contact_uri = SipUri::parse(uri.as_ref()).ok();
+        self
+    }
+
+    /// Enables RFC 5626 outbound support (adds ;ob and GRUU formation).
+    pub fn enable_outbound(mut self, instance_id: impl AsRef<str>) -> Self {
+        self.config.enable_outbound = true;
+        self.config.instance_id = Some(instance_id.as_ref().to_string());
+        self
+    }
+
+    /// Sets a salt used for flow token/opaque GRUU generation.
+    pub fn flow_token_salt(mut self, salt: impl AsRef<str>) -> Self {
+        self.config.flow_token_salt = Some(salt.as_ref().to_string());
+        self
+    }
+
+    /// Sets reg-id used for outbound flows (default 1).
+    pub fn outbound_reg_id(mut self, reg_id: u32) -> Self {
+        self.config.outbound_reg_id = reg_id.max(1);
+        self
+    }
+
+    /// Overrides the WS/WSS target URI (e.g., ws://edge.example.com/sip).
+    pub fn ws_target_uri(mut self, uri: impl AsRef<str>) -> Self {
+        self.config.ws_target_uri = Some(uri.as_ref().to_string());
+        self
+    }
+
+    /// Sets a WS path suffix to append when building ws://host/path from DNS targets.
+    pub fn ws_path(mut self, path: impl AsRef<str>) -> Self {
+        self.config.ws_path = Some(path.as_ref().to_string());
+        self
+    }
+
+    /// Sets the TLS certificate name (SNI + verification) used when
+    /// dialing an IP-literal target — e.g. the trunk hostname
+    /// (`example.pstn.twilio.com`) for route-set hops that name the
+    /// carrier edge by IP (issue #76).
+    pub fn tls_server_name(mut self, name: impl AsRef<str>) -> Self {
+        self.config.tls_server_name = Some(name.as_ref().to_string());
+        self
+    }
+
+    /// Sets the local transport address for Via/Contact auto-filling.
+    pub fn local_addr(mut self, addr: impl AsRef<str>) -> Result<Self> {
+        self.local_addr = Some(
+            addr.as_ref()
+                .parse()
+                .map_err(|e| anyhow!("Invalid local address: {}", e))?,
+        );
+        Ok(self)
+    }
+
+    /// Sets the public address for NAT scenarios (overrides local_addr in Contact).
+    pub fn public_addr(mut self, addr: impl AsRef<str>) -> Result<Self> {
+        self.public_addr = Some(
+            addr.as_ref()
+                .parse()
+                .map_err(|e| anyhow!("Invalid public address: {}", e))?,
+        );
+        Ok(self)
+    }
+
+    /// Sets the Via advertised address (host:port), used only for Via.
+    pub fn via_advertised_addr(mut self, addr: impl AsRef<str>) -> Result<Self> {
+        self.config.via_advertised = Some(
+            addr.as_ref()
+                .parse()
+                .map_err(|e| anyhow!("Invalid Via advertised address: {}", e))?,
+        );
+        Ok(self)
+    }
+
+    /// Sets the Contact advertised address (host:port), used only for Contact.
+    pub fn contact_advertised_addr(mut self, addr: impl AsRef<str>) -> Result<Self> {
+        self.config.contact_advertised = Some(
+            addr.as_ref()
+                .parse()
+                .map_err(|e| anyhow!("Invalid Contact advertised address: {}", e))?,
+        );
+        Ok(self)
+    }
+
+    /// Sets a dynamic public address resolver (e.g., STUN).
+    pub fn public_addr_resolver(mut self, resolver: Arc<dyn PublicAddrResolver>) -> Self {
+        self.config.public_addr_resolver = Some(resolver);
+        self
+    }
+
+    /// Sets the transaction manager.
+    pub fn transaction_manager(mut self, mgr: Arc<TransactionManager>) -> Self {
+        self.transaction_manager = Some(mgr);
+        self
+    }
+
+    /// Sets the DNS resolver.
+    pub fn resolver(mut self, resolver: Arc<SipResolver>) -> Self {
+        self.resolver = Some(resolver);
+        self
+    }
+
+    /// Sets the transport dispatcher.
+    pub fn dispatcher(mut self, dispatcher: Arc<dyn TransportDispatcher>) -> Self {
+        self.dispatcher = Some(dispatcher);
+        self
+    }
+
+    /// Shares a [`DialogManager`] with the rest of the stack — pass
+    /// [`IntegratedUAS::dialog_manager`] here when the same endpoint both
+    /// originates and receives calls.
+    ///
+    /// Without this, every `IntegratedUAC` owns a private dialog store,
+    /// and dialogs it creates are invisible to UAS dispatch. Dispatch
+    /// resolves an inbound in-dialog request (BYE, re-INVITE, INFO,
+    /// UPDATE) through *its* manager's `find_by_request`, so a peer
+    /// hanging up an outbound call gets `481 Call/Transaction Does Not
+    /// Exist` and the call never tears down. `IntegratedUAS`'s own
+    /// `dialog_manager()` doc already advises sharing the store; this is
+    /// the UAC-side input that makes it actionable.
+    ///
+    /// Optional: when unset the UAC keeps its private manager, so
+    /// existing single-role embedders are unaffected.
+    ///
+    /// A daemon running both roles passes the UAS's store — in practice
+    /// `uas.dialog_manager()` — to every UAC it constructs:
+    ///
+    /// ```no_run
+    /// # use std::sync::Arc;
+    /// # use sip_dialog::DialogManager;
+    /// # use sip_uac::integrated::IntegratedUAC;
+    /// # fn example(shared: Arc<DialogManager>) -> anyhow::Result<()> {
+    /// let uac = IntegratedUAC::builder()
+    ///     .local_uri("sip:agent@example.com")
+    ///     .dialog_manager(shared) // e.g. uas.dialog_manager()
+    ///     // … other required setters …
+    ///     .build()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn dialog_manager(mut self, mgr: Arc<DialogManager>) -> Self {
+        self.dialog_manager = Some(mgr);
+        self
+    }
+
+    /// Sets authentication credentials (username, password).
+    pub fn credentials(mut self, username: impl Into<String>, password: impl Into<String>) -> Self {
+        self.credentials = Some((username.into(), password.into()));
+        self
+    }
+
+    /// Sets a credential provider (per realm).
+    pub fn credential_provider(mut self, provider: Arc<dyn CredentialProvider>) -> Self {
+        self.config.credential_provider = Some(provider);
+        self
+    }
+
+    /// Sets the display name for From headers.
+    pub fn display_name(mut self, name: impl Into<String>) -> Self {
+        self.display_name = Some(name.into());
+        self
+    }
+
+    /// Sets the SDP answer generator for late offer scenarios.
+    ///
+    /// When set, this generator will be invoked to create an SDP answer
+    /// when receiving a 200 OK with SDP offer after sending an INVITE
+    /// without SDP (late offer flow per RFC 3264).
+    ///
+    /// # Example
+    /// ```ignore
+    /// use sip_uac::integrated::{IntegratedUAC, SdpAnswerGenerator};
+    /// use std::sync::Arc;
+    ///
+    /// struct MySdpGenerator;
+    ///
+    /// #[async_trait::async_trait]
+    /// impl SdpAnswerGenerator for MySdpGenerator {
+    ///     async fn generate_answer(
+    ///         &self,
+    ///         offer: &sip_sdp::SessionDescription,
+    ///         dialog: &sip_dialog::Dialog,
+    ///     ) -> anyhow::Result<sip_sdp::SessionDescription> {
+    ///         // Parse offer and generate answer...
+    ///         println!("Got offer for dialog {:?}", dialog.id);
+    ///         Ok(offer.clone())
+    ///     }
+    /// }
+    ///
+    /// let uac = IntegratedUAC::builder()
+    ///     .sdp_answer_generator(Arc::new(MySdpGenerator))
+    ///     // ... other config
+    ///     .build()?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn sdp_answer_generator(mut self, generator: Arc<dyn SdpAnswerGenerator>) -> Self {
+        self.config.sdp_answer_generator = Some(generator);
+        self
+    }
+
+    /// Sets the SDP profile for generating offers.
+    ///
+    /// When set, the UAC can generate SDP offers automatically using
+    /// pre-configured profiles (AudioOnly, AudioVideo).
+    ///
+    /// # Example
+    /// ```no_run
+    /// use sip_uac::integrated::IntegratedUAC;
+    /// use sip_sdp::profiles::SdpProfile;
+    ///
+    /// let uac = IntegratedUAC::builder()
+    ///     .sdp_profile(SdpProfile::AudioOnly)
+    ///     .local_audio_port(8000)
+    ///     // ... other config
+    ///     .build()?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn sdp_profile(mut self, profile: profiles::SdpProfile) -> Self {
+        self.config.sdp_profile = Some(profile);
+        self
+    }
+
+    /// Sets a custom SDP media profile builder for richer offers/answers.
+    pub fn sdp_profile_builder(mut self, builder: profiles::MediaProfileBuilder) -> Self {
+        self.config.sdp_profile_builder = Some(builder);
+        self
+    }
+
+    /// Sets the local RTP audio port for SDP (default: 8000).
+    pub fn local_audio_port(mut self, port: u16) -> Self {
+        self.config.local_audio_port = port;
+        self
+    }
+
+    /// Sets the local RTP video port for SDP (default: 8002).
+    pub fn local_video_port(mut self, port: u16) -> Self {
+        self.config.local_video_port = port;
+        self
+    }
+
+    /// Sets the UAC configuration.
+    pub fn config(mut self, config: UACConfig) -> Self {
+        self.config = config;
+        self
+    }
+
+    /// Builds the IntegratedUAC.
+    pub fn build(self) -> Result<IntegratedUAC> {
+        let local_uri = self
+            .local_uri
+            .ok_or_else(|| anyhow!("local_uri is required"))?;
+        let local_addr = self
+            .local_addr
+            .ok_or_else(|| anyhow!("local_addr is required"))?;
+        let transaction_manager = self
+            .transaction_manager
+            .ok_or_else(|| anyhow!("transaction_manager is required"))?;
+        let resolver = self
+            .resolver
+            .ok_or_else(|| anyhow!("resolver is required"))?;
+        let dispatcher = self
+            .dispatcher
+            .ok_or_else(|| anyhow!("dispatcher is required"))?;
+
+        // Create embedded helper
+        let contact_uri = self.contact_uri.unwrap_or_else(|| {
+            // Default contact: sip:user@advertised_contact
+            let user = local_uri.user().unwrap_or("user");
+            let contact_host = self
+                .config
+                .contact_advertised
+                .or(self.public_addr)
+                .unwrap_or(local_addr);
+            SipUri::parse(&format!("sip:{}@{}", user, contact_host)).unwrap()
+        });
+
+        let mut helper = UserAgentClient::new(local_uri, contact_uri);
+
+        if let Some((username, password)) = self.credentials {
+            helper = helper.with_credentials(&username, &password);
+        }
+
+        if let Some(display_name) = self.display_name {
+            helper = helper.with_display_name(display_name)?;
+        }
+
+        // Point the helper at the shared store *before* cloning the
+        // handle below, so both halves of the UAC agree.
+        //
+        // Redirecting only the `IntegratedUAC` handle would not fix
+        // anything: the confirmed dialog for an outbound call is
+        // registered by `UserAgentClient::process_invite_response`, which
+        // inserts into the *helper's* manager, and that runs on every
+        // INVITE response path here. Leave the helper on its constructor
+        // default and the dialog still lands somewhere UAS dispatch can't
+        // see — the 481 stays exactly as it was.
+        if let Some(shared) = self.dialog_manager {
+            helper.dialog_manager = shared;
+        }
+
+        let dialog_manager = helper.dialog_manager.clone();
+        let subscription_manager = helper.subscription_manager.clone();
+
+        Ok(IntegratedUAC {
+            helper: Arc::new(Mutex::new(helper)),
+            transaction_manager,
+            resolver,
+            transport_dispatcher: dispatcher,
+            local_addr,
+            public_addr: self.public_addr,
+            config: self.config,
+            dialog_manager,
+            subscription_manager,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4473,1039 +5507,5 @@ mod tests {
             3,
             "the owner's newer CSeq must survive the late commit"
         );
-    }
-}
-
-/// Handle returned from INVITE/re-INVITE with CANCEL capability.
-impl CallHandle {
-    /// Sends a CANCEL request to cancel the pending INVITE transaction.
-    ///
-    /// # Returns
-    /// Result indicating if CANCEL was sent successfully
-    ///
-    /// # RFC 3261 §9.1 CANCEL Behavior
-    /// - CANCEL can only be sent for pending INVITE (not yet received final response)
-    /// - CANCEL uses same Call-ID, From tag, To tag, but new branch
-    /// - If 200 OK arrives before CANCEL, must still send ACK and then BYE
-    ///
-    /// # Example
-    /// ```ignore
-    /// let mut call = uac.invite("sip:bob@example.com", Some(sdp)).await?;
-    ///
-    /// // Wait for ringing
-    /// if let Some(response) = call.await_provisional().await {
-    ///     if response.code() == 180 {
-    ///         println!("Ringing...");
-    ///     }
-    /// }
-    ///
-    /// // User cancels the call
-    /// call.cancel().await?;
-    /// ```
-    pub async fn cancel(&self) -> Result<Response> {
-        use sip_core::{Method, RequestLine};
-
-        info!(
-            "Sending CANCEL for transaction {}",
-            self.transaction_key.branch()
-        );
-
-        // Create CANCEL request per RFC 3261 §9.1
-        // CANCEL uses same Call-ID, From, To, CSeq number as INVITE
-        // But uses new branch parameter in Via
-
-        let mut cancel_headers = sip_core::Headers::new();
-
-        // Snapshot the live attempt's INVITE: after an auth retry the
-        // original transaction is already complete, so the CANCEL must
-        // match the current attempt's Via branch and CSeq.
-        let invite_request = self.invite_request.read().await.clone();
-
-        // Copy essential headers from INVITE
-        for header in invite_request.headers().iter() {
-            match header.name() {
-                "Via" => {
-                    // RFC 3261 §9.1: CANCEL MUST have the same Via branch as the INVITE
-                    // "A CANCEL constructed by a client MUST have only a single Via header
-                    // field value matching the top Via value in the request being cancelled"
-                    cancel_headers
-                        .push(header.name_smol().clone(), header.value_smol().clone())
-                        .unwrap();
-                }
-                "From" | "To" | "Call-ID" => {
-                    // Copy unchanged
-                    cancel_headers
-                        .push(header.name_smol().clone(), header.value_smol().clone())
-                        .unwrap();
-                }
-                "CSeq" => {
-                    // Same number, but CANCEL method
-                    if let Some((num, _)) = header.value().split_once(' ') {
-                        cancel_headers
-                            .push(
-                                SmolStr::new("CSeq"),
-                                SmolStr::new(format!("{} CANCEL", num)),
-                            )
-                            .unwrap();
-                    }
-                }
-                "Route" => {
-                    // Copy Route headers
-                    cancel_headers
-                        .push(header.name_smol().clone(), header.value_smol().clone())
-                        .unwrap();
-                }
-                _ => {
-                    // Skip other headers
-                }
-            }
-        }
-
-        // Add Max-Forwards
-        cancel_headers
-            .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
-            .unwrap();
-
-        // Add Content-Length
-        cancel_headers
-            .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
-            .unwrap();
-
-        // Create CANCEL request
-        let cancel_request = Request::new(
-            RequestLine::new(Method::Cancel, invite_request.uri().clone()),
-            cancel_headers,
-            Bytes::new(),
-        )
-        .expect("valid CANCEL request");
-
-        // Debug: log the CANCEL request details
-        debug!(
-            "CANCEL request - Request-URI: {}, Call-ID: {:?}, CSeq: {:?}",
-            cancel_request.uri(),
-            cancel_request.headers().get("Call-ID"),
-            cancel_request.headers().get("CSeq")
-        );
-
-        // Send CANCEL as a new non-INVITE transaction
-        let (final_tx, final_rx) = oneshot::channel();
-        let (term_tx, term_rx) = oneshot::channel();
-
-        let tu = Arc::new(SimpleTransactionUser {
-            final_tx: Mutex::new(Some(final_tx)),
-            term_tx: Mutex::new(Some(term_tx)),
-        });
-
-        let key = self
-            .transaction_manager
-            .start_client_transaction(cancel_request, (*self.transport_ctx).clone(), tu)
-            .await?;
-
-        info!("Started CANCEL transaction {}", key.branch());
-
-        // Wait for response to CANCEL
-        tokio::select! {
-            Ok(response) = final_rx => Ok(response),
-            Ok(reason) = term_rx => Err(anyhow!("CANCEL transaction terminated: {}", reason)),
-            else => Err(anyhow!("CANCEL response channels closed")),
-        }
-    }
-}
-
-/// Transaction user for INVITE requests - handles ACK, PRACK, dialog creation, forking.
-struct InviteTransactionUser {
-    prov_tx: mpsc::Sender<Response>,
-    final_tx: Mutex<Option<oneshot::Sender<Response>>>,
-    term_tx: Mutex<Option<oneshot::Sender<String>>>,
-    #[allow(dead_code)]
-    dialog_manager: Arc<DialogManager>,
-    helper: Arc<Mutex<UserAgentClient>>,
-    request: Request,
-    config: UACConfig,
-    ctx: TransportContext,
-    auto_retry_auth: bool,
-    /// Which auth attempt this transaction represents (0 = original
-    /// INVITE, incremented per authenticated retry).
-    auth_attempt: u32,
-    /// The live attempt's request, shared with the CallHandle so CANCEL
-    /// targets the current transaction after an auth retry.
-    live_request: Arc<RwLock<Arc<Request>>>,
-    transaction_manager: Arc<TransactionManager>,
-    dispatcher: Arc<dyn TransportDispatcher>,
-    /// Track early dialogs for forking support (shared with CallHandle)
-    early_dialogs: Arc<Mutex<std::collections::HashMap<SmolStr, Dialog>>>,
-    /// Dialog reference (shared with CallHandle) - updated when 200 OK arrives
-    dialog: Arc<RwLock<Dialog>>,
-    local_addr: SocketAddr,
-    public_addr: Option<SocketAddr>,
-}
-
-impl InviteTransactionUser {
-    /// Starts an authenticated re-INVITE after a 401/407 challenge
-    /// (issue #83).
-    ///
-    /// The transaction layer has already ACK'd the challenge, so the
-    /// authenticated request — same Call-ID and From tag, CSeq+1, fresh
-    /// branch, original body, built by `create_authenticated_request_with`
-    /// — goes out as a new client transaction. Its transaction user
-    /// inherits this attempt's response channels and shared dialog state,
-    /// so the caller's `CallHandle` transparently observes the retry.
-    async fn retry_invite_with_auth(&self, challenge: &Response) -> Result<()> {
-        let realm = extract_realm(challenge);
-        let creds = match (&self.config.credential_provider, realm.as_deref()) {
-            (Some(provider), Some(realm)) => provider.credentials(realm).await,
-            _ => None,
-        };
-
-        let mut helper = self.helper.lock().await;
-        let auth_request =
-            helper.create_authenticated_request_with(&self.request, challenge, creds)?;
-        drop(helper);
-
-        // Hand this attempt's channels to the retry: whatever it concludes
-        // with is the final the application sees.
-        let final_tx = self.final_tx.lock().await.take();
-        let term_tx = self.term_tx.lock().await.take();
-
-        let tu = Arc::new(InviteTransactionUser {
-            prov_tx: self.prov_tx.clone(),
-            final_tx: Mutex::new(final_tx),
-            term_tx: Mutex::new(term_tx),
-            dialog_manager: self.dialog_manager.clone(),
-            helper: self.helper.clone(),
-            request: auth_request.clone(),
-            config: self.config.clone(),
-            ctx: self.ctx.clone(),
-            auto_retry_auth: self.auto_retry_auth,
-            auth_attempt: self.auth_attempt + 1,
-            live_request: self.live_request.clone(),
-            transaction_manager: self.transaction_manager.clone(),
-            dispatcher: self.dispatcher.clone(),
-            early_dialogs: self.early_dialogs.clone(),
-            dialog: self.dialog.clone(),
-            local_addr: self.local_addr,
-            public_addr: self.public_addr,
-        });
-
-        match self
-            .transaction_manager
-            .start_client_transaction(auth_request.clone(), self.ctx.clone(), tu.clone())
-            .await
-        {
-            Ok(key) => {
-                // CANCEL must target the live attempt's Via branch.
-                *self.live_request.write().await = Arc::new(auth_request);
-                info!(
-                    "Started authenticated INVITE transaction {} (attempt {})",
-                    key.branch(),
-                    self.auth_attempt + 1
-                );
-                Ok(())
-            }
-            Err(e) => {
-                // The retry never launched: reclaim the channels so the
-                // challenge is surfaced as this attempt's final.
-                *self.final_tx.lock().await = tu.final_tx.lock().await.take();
-                *self.term_tx.lock().await = tu.term_tx.lock().await.take();
-                Err(e)
-            }
-        }
-    }
-}
-
-#[async_trait]
-impl ClientTransactionUser for InviteTransactionUser {
-    async fn on_provisional(&self, _key: &TransactionKey, response: &Response) {
-        info!("Received provisional response: {}", response.code());
-
-        // Create or update dialog from provisional (if it has To-tag)
-        // RFC 3261 §13.2.2.1: Provisional responses with To-tags create early dialogs
-        if response.code() > 100 {
-            let helper = self.helper.lock().await;
-            if let Some(dialog) = helper.process_invite_response(&self.request, response) {
-                let to_tag = SmolStr::new(dialog.id().remote_tag());
-
-                // Track early dialog for forking support
-                let mut early_dialogs = self.early_dialogs.lock().await;
-
-                if early_dialogs.contains_key(&to_tag) {
-                    // Update existing early dialog (no bounds check needed)
-                    debug!(
-                        "Updated existing early dialog from {}: to-tag={}",
-                        response.code(),
-                        to_tag
-                    );
-                    early_dialogs.insert(to_tag, dialog);
-                } else {
-                    // New early dialog - enforce forking limit
-                    if early_dialogs.len() >= crate::MAX_EARLY_DIALOGS {
-                        warn!(
-                            "Max early dialogs limit reached ({}), ignoring new early dialog: to-tag={}",
-                            crate::MAX_EARLY_DIALOGS,
-                            to_tag
-                        );
-                    } else {
-                        debug!(
-                            "Created new early dialog from {}: to-tag={} (forking detected: {} endpoints)",
-                            response.code(),
-                            to_tag,
-                            early_dialogs.len() + 1
-                        );
-                        early_dialogs.insert(to_tag, dialog);
-                    }
-                }
-            }
-        }
-
-        // Forward to application
-        let _ = self.prov_tx.send(response.clone()).await;
-    }
-
-    async fn on_final(&self, _key: &TransactionKey, response: &Response) {
-        info!("Received final response: {}", response.code());
-
-        // 401/407: start an authenticated retry instead of surfacing the
-        // challenge (the transaction layer has already ACK'd this final).
-        // Mirrors the non-INVITE retry semantics: bounded by
-        // `max_auth_retries`, with the last challenge forwarded when the
-        // budget is exhausted or no retry can be built (issue #83).
-        if (response.code() == 401 || response.code() == 407) && self.auto_retry_auth {
-            if self.auth_attempt < self.config.max_auth_retries {
-                match self.retry_invite_with_auth(response).await {
-                    Ok(()) => return,
-                    Err(e) => warn!(
-                        code = response.code(),
-                        "INVITE auth retry not started ({}); surfacing challenge to caller", e
-                    ),
-                }
-            } else {
-                warn!(
-                    code = response.code(),
-                    attempts = self.auth_attempt,
-                    max = self.config.max_auth_retries,
-                    "auth retry limit reached; returning last challenge to caller"
-                );
-            }
-        }
-
-        // Create or confirm dialog from 2xx and update CallHandle's dialog
-        if response.code() >= 200 && response.code() < 300 {
-            let helper = self.helper.lock().await;
-            if let Some(confirmed_dialog) = helper.process_invite_response(&self.request, response)
-            {
-                info!(
-                    "Confirmed dialog from {}: {} (to-tag={})",
-                    response.code(),
-                    confirmed_dialog.id().call_id(),
-                    confirmed_dialog.id().remote_tag()
-                );
-
-                // Update the shared dialog (fixes the "pending" tag issue)
-                *self.dialog.write().await = confirmed_dialog;
-            }
-        }
-
-        // Forward to application
-        let mut tx = self.final_tx.lock().await;
-        if let Some(tx) = tx.take() {
-            let _ = tx.send(response.clone());
-        }
-    }
-
-    async fn on_terminated(&self, _key: &TransactionKey, reason: &str) {
-        warn!("INVITE transaction terminated: {}", reason);
-
-        let mut tx = self.term_tx.lock().await;
-        if let Some(tx) = tx.take() {
-            let _ = tx.send(reason.to_string());
-        }
-    }
-
-    async fn send_ack(
-        &self,
-        _key: &TransactionKey,
-        response: Response,
-        ctx: &TransportContext,
-        is_2xx: bool,
-    ) {
-        info!(
-            "Sending ACK for {} response (is_2xx={})",
-            response.code(),
-            is_2xx
-        );
-
-        let original_via = self.request.headers().get("Via").map(|via| via.to_string());
-
-        let helper = self.helper.lock().await;
-        let dialog = if is_2xx {
-            helper.process_invite_response(&self.request, &response)
-        } else {
-            None
-        };
-
-        if is_2xx && dialog.is_none() {
-            error!("Failed to create dialog for 2xx ACK");
-            return;
-        }
-
-        // Determine if this is late offer (200 OK has SDP, INVITE didn't)
-        let invite_has_sdp = !self.request.body().is_empty();
-        let response_has_sdp = !response.body().is_empty();
-        let late_offer = is_2xx && !invite_has_sdp && response_has_sdp;
-
-        // For late offer, generate SDP answer using configured generator
-        let sdp_body = if late_offer {
-            if let Some(dialog) = dialog.as_ref() {
-                if let Some(generator) = &self.config.sdp_answer_generator {
-                    debug!("Late offer detected - generating SDP answer via RFC 3264 negotiation");
-
-                    // Extract and parse SDP offer from response body
-                    match std::str::from_utf8(response.body()) {
-                        Ok(sdp_offer_str) => {
-                            // Parse SDP offer
-                            match SessionDescription::parse(sdp_offer_str) {
-                                Ok(sdp_offer) => {
-                                    // Generate SDP answer using RFC 3264 negotiation
-                                    match generator.generate_answer(&sdp_offer, dialog).await {
-                                        Ok(sdp_answer) => {
-                                            // Serialize SDP answer
-                                            let sdp_answer_str = sdp_answer.to_string();
-                                            info!(
-                                                "Generated SDP answer for late offer ({} bytes)",
-                                                sdp_answer_str.len()
-                                            );
-                                            Some(sdp_answer_str)
-                                        }
-                                        Err(e) => {
-                                            error!("Failed to generate SDP answer: {}", e);
-                                            None
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    error!("Failed to parse SDP offer: {}", e);
-                                    None
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            error!("Failed to decode SDP offer as UTF-8: {}", e);
-                            None
-                        }
-                    }
-                } else if let Some(builder) = &self.config.sdp_profile_builder {
-                    debug!("Late offer detected - generating SDP answer via profile negotiation");
-                    if let Ok(sdp_offer) = SessionDescription::parse(
-                        std::str::from_utf8(response.body()).unwrap_or_default(),
-                    ) {
-                        let addr = self.public_addr.unwrap_or(self.local_addr);
-                        let sdp_answer = profiles::negotiate_answer(
-                            &sdp_offer,
-                            builder,
-                            &self.config.user_agent,
-                            &addr.to_string(),
-                            self.config.local_audio_port,
-                            Some(self.config.local_video_port),
-                        );
-                        let sdp_answer_str = sdp_answer.to_string();
-                        Some(sdp_answer_str)
-                    } else {
-                        None
-                    }
-                } else {
-                    warn!("Late offer scenario detected but no SDP answer generator configured");
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        let mut ack = helper.create_ack(&self.request, &response, sdp_body.as_deref());
-        drop(helper);
-
-        if is_2xx {
-            if let Some(dialog) = dialog.as_ref() {
-                apply_route_set_to_request(dialog, &mut ack);
-            }
-        } else {
-            ack.headers_mut().remove("Route");
-            for route in self.request.headers().get_all_smol("Route") {
-                ack.headers_mut()
-                    .push(SmolStr::new("Route"), route.clone())
-                    .unwrap();
-            }
-        }
-
-        let via_value = if let Some(via) = original_via.as_deref() {
-            if is_2xx {
-                crate::replace_via_branch(via, &crate::generate_branch())
-            } else {
-                via.to_string()
-            }
-        } else if let Some(via) = ack.headers().get("Via") {
-            if is_2xx {
-                crate::replace_via_branch(via, &crate::generate_branch())
-            } else {
-                via.to_string()
-            }
-        } else {
-            let via_transport = match ctx.transport() {
-                sip_transaction::TransportKind::Udp => "UDP",
-                sip_transaction::TransportKind::Tcp => "TCP",
-                sip_transaction::TransportKind::Tls => "TLS",
-                sip_transaction::TransportKind::Ws => "WS",
-                sip_transaction::TransportKind::Wss => "WSS",
-                sip_transaction::TransportKind::Sctp => "SCTP",
-                sip_transaction::TransportKind::TlsSctp => "TLS-SCTP",
-            };
-            format!(
-                "SIP/2.0/{} {};branch={}",
-                via_transport,
-                self.local_addr,
-                crate::generate_branch()
-            )
-        };
-
-        ack.headers_mut().remove("Via");
-        ack.headers_mut()
-            .push(SmolStr::new("Via"), SmolStr::new(via_value))
-            .unwrap();
-
-        // Serialize ACK
-        let ack_bytes = serialize_request(&ack);
-
-        // Send ACK directly (ACK for 2xx doesn't go through transaction layer)
-        if let Some(stream) = &ctx.stream() {
-            if let Err(e) = stream.send(ack_bytes.clone()).await {
-                // The connection died between the 2xx and the ACK; retry
-                // through the dispatcher's pool with the stream cleared
-                // (issue #73).
-                warn!(
-                    "Failed to send ACK via stream ({}), retrying via dispatcher",
-                    e
-                );
-                let fallback = ctx.clone().with_stream(None);
-                if let Err(e) = self.dispatcher.dispatch(&fallback, ack_bytes).await {
-                    error!("Failed to send ACK via dispatcher fallback: {}", e);
-                }
-            }
-        } else if let Err(e) = self.dispatcher.dispatch(ctx, ack_bytes).await {
-            error!("Failed to send ACK via dispatcher: {}", e);
-        } else {
-            debug!("ACK sent successfully");
-        }
-    }
-
-    async fn send_prack(&self, _key: &TransactionKey, response: Response, ctx: &TransportContext) {
-        info!("Sending PRACK for reliable provisional {}", response.code());
-
-        // Find dialog for this response
-        let helper = self.helper.lock().await;
-        let dialog = helper.process_invite_response(&self.request, &response);
-
-        if let Some(dialog) = dialog {
-            // Create PRACK
-            match helper.create_prack(&self.request, &response, &dialog) {
-                Ok(prack) => {
-                    drop(helper);
-
-                    // PRACK is a non-INVITE client transaction (RFC 3262)
-                    let tu = Arc::new(PrackTransactionUser);
-                    match self
-                        .transaction_manager
-                        .start_client_transaction(prack.clone(), ctx.clone(), tu)
-                        .await
-                    {
-                        Ok(key) => {
-                            debug!("Started PRACK transaction {}", key.branch());
-                        }
-                        Err(e) => {
-                            error!("Failed to start PRACK transaction: {}", e);
-                        }
-                    }
-                }
-                Err(e) => {
-                    drop(helper);
-                    error!("Failed to create PRACK: {}", e);
-                }
-            }
-        } else {
-            error!("Failed to create dialog for PRACK");
-        }
-    }
-
-    async fn on_transport_error(&self, _key: &TransactionKey) {
-        error!("Transport error for INVITE transaction");
-
-        let mut tx = self.term_tx.lock().await;
-        if let Some(tx) = tx.take() {
-            let _ = tx.send("transport error".to_string());
-        }
-    }
-}
-
-/// Lightweight transaction user for PRACK transactions (fire-and-forget).
-struct PrackTransactionUser;
-
-#[async_trait]
-impl ClientTransactionUser for PrackTransactionUser {
-    async fn on_provisional(&self, _key: &TransactionKey, response: &Response) {
-        debug!("PRACK provisional: {}", response.code());
-    }
-
-    async fn on_final(&self, _key: &TransactionKey, response: &Response) {
-        info!("PRACK final response: {}", response.code());
-    }
-
-    async fn on_terminated(&self, _key: &TransactionKey, reason: &str) {
-        warn!("PRACK transaction terminated: {}", reason);
-    }
-
-    async fn send_ack(
-        &self,
-        _key: &TransactionKey,
-        _response: Response,
-        _ctx: &TransportContext,
-        _is_2xx: bool,
-    ) {
-        // No ACK for PRACK final responses
-    }
-
-    async fn send_prack(
-        &self,
-        _key: &TransactionKey,
-        _response: Response,
-        _ctx: &TransportContext,
-    ) {
-        // Nested PRACK not applicable
-    }
-
-    async fn on_transport_error(&self, _key: &TransactionKey) {
-        warn!("PRACK transport error");
-    }
-}
-
-/// Simple transaction user for non-INVITE requests.
-struct SimpleTransactionUser {
-    final_tx: Mutex<Option<oneshot::Sender<Response>>>,
-    term_tx: Mutex<Option<oneshot::Sender<String>>>,
-}
-
-#[async_trait]
-impl ClientTransactionUser for SimpleTransactionUser {
-    async fn on_provisional(&self, _key: &TransactionKey, response: &Response) {
-        debug!("Received provisional response: {}", response.code());
-    }
-
-    async fn on_final(&self, _key: &TransactionKey, response: &Response) {
-        info!("Received final response: {}", response.code());
-
-        let mut tx = self.final_tx.lock().await;
-        if let Some(tx) = tx.take() {
-            let _ = tx.send(response.clone());
-        }
-    }
-
-    async fn on_terminated(&self, _key: &TransactionKey, reason: &str) {
-        warn!("Transaction terminated: {}", reason);
-
-        let mut tx = self.term_tx.lock().await;
-        if let Some(tx) = tx.take() {
-            let _ = tx.send(reason.to_string());
-        }
-    }
-
-    async fn send_ack(
-        &self,
-        _key: &TransactionKey,
-        _response: Response,
-        _ctx: &TransportContext,
-        _is_2xx: bool,
-    ) {
-        // Not used for non-INVITE
-    }
-
-    async fn send_prack(
-        &self,
-        _key: &TransactionKey,
-        _response: Response,
-        _ctx: &TransportContext,
-    ) {
-        // Not used for non-INVITE
-    }
-
-    async fn on_transport_error(&self, _key: &TransactionKey) {
-        error!("Transport error");
-
-        let mut tx = self.term_tx.lock().await;
-        if let Some(tx) = tx.take() {
-            let _ = tx.send("transport error".to_string());
-        }
-    }
-}
-
-/// Builder for IntegratedUAC.
-pub struct IntegratedUACBuilder {
-    local_uri: Option<SipUri>,
-    contact_uri: Option<SipUri>,
-    local_addr: Option<SocketAddr>,
-    public_addr: Option<SocketAddr>,
-    #[allow(dead_code)]
-    via_advertised: Option<SocketAddr>,
-    #[allow(dead_code)]
-    contact_advertised: Option<SocketAddr>,
-    transaction_manager: Option<Arc<TransactionManager>>,
-    resolver: Option<Arc<SipResolver>>,
-    dispatcher: Option<Arc<dyn TransportDispatcher>>,
-    dialog_manager: Option<Arc<DialogManager>>,
-    credentials: Option<(String, String)>,
-    display_name: Option<String>,
-    config: UACConfig,
-}
-
-impl IntegratedUACBuilder {
-    fn new() -> Self {
-        Self {
-            local_uri: None,
-            contact_uri: None,
-            local_addr: None,
-            public_addr: None,
-            via_advertised: None,
-            contact_advertised: None,
-            transaction_manager: None,
-            resolver: None,
-            dispatcher: None,
-            dialog_manager: None,
-            credentials: None,
-            display_name: None,
-            config: UACConfig::default(),
-        }
-    }
-
-    /// Sets the local SIP URI (used in From header).
-    pub fn local_uri(mut self, uri: impl AsRef<str>) -> Self {
-        self.local_uri = SipUri::parse(uri.as_ref()).ok();
-        self
-    }
-
-    /// Sets the contact URI (used in Contact header).
-    pub fn contact_uri(mut self, uri: impl AsRef<str>) -> Self {
-        self.contact_uri = SipUri::parse(uri.as_ref()).ok();
-        self
-    }
-
-    /// Enables RFC 5626 outbound support (adds ;ob and GRUU formation).
-    pub fn enable_outbound(mut self, instance_id: impl AsRef<str>) -> Self {
-        self.config.enable_outbound = true;
-        self.config.instance_id = Some(instance_id.as_ref().to_string());
-        self
-    }
-
-    /// Sets a salt used for flow token/opaque GRUU generation.
-    pub fn flow_token_salt(mut self, salt: impl AsRef<str>) -> Self {
-        self.config.flow_token_salt = Some(salt.as_ref().to_string());
-        self
-    }
-
-    /// Sets reg-id used for outbound flows (default 1).
-    pub fn outbound_reg_id(mut self, reg_id: u32) -> Self {
-        self.config.outbound_reg_id = reg_id.max(1);
-        self
-    }
-
-    /// Overrides the WS/WSS target URI (e.g., ws://edge.example.com/sip).
-    pub fn ws_target_uri(mut self, uri: impl AsRef<str>) -> Self {
-        self.config.ws_target_uri = Some(uri.as_ref().to_string());
-        self
-    }
-
-    /// Sets a WS path suffix to append when building ws://host/path from DNS targets.
-    pub fn ws_path(mut self, path: impl AsRef<str>) -> Self {
-        self.config.ws_path = Some(path.as_ref().to_string());
-        self
-    }
-
-    /// Sets the TLS certificate name (SNI + verification) used when
-    /// dialing an IP-literal target — e.g. the trunk hostname
-    /// (`example.pstn.twilio.com`) for route-set hops that name the
-    /// carrier edge by IP (issue #76).
-    pub fn tls_server_name(mut self, name: impl AsRef<str>) -> Self {
-        self.config.tls_server_name = Some(name.as_ref().to_string());
-        self
-    }
-
-    /// Sets the local transport address for Via/Contact auto-filling.
-    pub fn local_addr(mut self, addr: impl AsRef<str>) -> Result<Self> {
-        self.local_addr = Some(
-            addr.as_ref()
-                .parse()
-                .map_err(|e| anyhow!("Invalid local address: {}", e))?,
-        );
-        Ok(self)
-    }
-
-    /// Sets the public address for NAT scenarios (overrides local_addr in Contact).
-    pub fn public_addr(mut self, addr: impl AsRef<str>) -> Result<Self> {
-        self.public_addr = Some(
-            addr.as_ref()
-                .parse()
-                .map_err(|e| anyhow!("Invalid public address: {}", e))?,
-        );
-        Ok(self)
-    }
-
-    /// Sets the Via advertised address (host:port), used only for Via.
-    pub fn via_advertised_addr(mut self, addr: impl AsRef<str>) -> Result<Self> {
-        self.config.via_advertised = Some(
-            addr.as_ref()
-                .parse()
-                .map_err(|e| anyhow!("Invalid Via advertised address: {}", e))?,
-        );
-        Ok(self)
-    }
-
-    /// Sets the Contact advertised address (host:port), used only for Contact.
-    pub fn contact_advertised_addr(mut self, addr: impl AsRef<str>) -> Result<Self> {
-        self.config.contact_advertised = Some(
-            addr.as_ref()
-                .parse()
-                .map_err(|e| anyhow!("Invalid Contact advertised address: {}", e))?,
-        );
-        Ok(self)
-    }
-
-    /// Sets a dynamic public address resolver (e.g., STUN).
-    pub fn public_addr_resolver(mut self, resolver: Arc<dyn PublicAddrResolver>) -> Self {
-        self.config.public_addr_resolver = Some(resolver);
-        self
-    }
-
-    /// Sets the transaction manager.
-    pub fn transaction_manager(mut self, mgr: Arc<TransactionManager>) -> Self {
-        self.transaction_manager = Some(mgr);
-        self
-    }
-
-    /// Sets the DNS resolver.
-    pub fn resolver(mut self, resolver: Arc<SipResolver>) -> Self {
-        self.resolver = Some(resolver);
-        self
-    }
-
-    /// Sets the transport dispatcher.
-    pub fn dispatcher(mut self, dispatcher: Arc<dyn TransportDispatcher>) -> Self {
-        self.dispatcher = Some(dispatcher);
-        self
-    }
-
-    /// Shares a [`DialogManager`] with the rest of the stack — pass
-    /// [`IntegratedUAS::dialog_manager`] here when the same endpoint both
-    /// originates and receives calls.
-    ///
-    /// Without this, every `IntegratedUAC` owns a private dialog store,
-    /// and dialogs it creates are invisible to UAS dispatch. Dispatch
-    /// resolves an inbound in-dialog request (BYE, re-INVITE, INFO,
-    /// UPDATE) through *its* manager's `find_by_request`, so a peer
-    /// hanging up an outbound call gets `481 Call/Transaction Does Not
-    /// Exist` and the call never tears down. `IntegratedUAS`'s own
-    /// `dialog_manager()` doc already advises sharing the store; this is
-    /// the UAC-side input that makes it actionable.
-    ///
-    /// Optional: when unset the UAC keeps its private manager, so
-    /// existing single-role embedders are unaffected.
-    ///
-    /// A daemon running both roles passes the UAS's store — in practice
-    /// `uas.dialog_manager()` — to every UAC it constructs:
-    ///
-    /// ```no_run
-    /// # use std::sync::Arc;
-    /// # use sip_dialog::DialogManager;
-    /// # use sip_uac::integrated::IntegratedUAC;
-    /// # fn example(shared: Arc<DialogManager>) -> anyhow::Result<()> {
-    /// let uac = IntegratedUAC::builder()
-    ///     .local_uri("sip:agent@example.com")
-    ///     .dialog_manager(shared) // e.g. uas.dialog_manager()
-    ///     // … other required setters …
-    ///     .build()?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn dialog_manager(mut self, mgr: Arc<DialogManager>) -> Self {
-        self.dialog_manager = Some(mgr);
-        self
-    }
-
-    /// Sets authentication credentials (username, password).
-    pub fn credentials(mut self, username: impl Into<String>, password: impl Into<String>) -> Self {
-        self.credentials = Some((username.into(), password.into()));
-        self
-    }
-
-    /// Sets a credential provider (per realm).
-    pub fn credential_provider(mut self, provider: Arc<dyn CredentialProvider>) -> Self {
-        self.config.credential_provider = Some(provider);
-        self
-    }
-
-    /// Sets the display name for From headers.
-    pub fn display_name(mut self, name: impl Into<String>) -> Self {
-        self.display_name = Some(name.into());
-        self
-    }
-
-    /// Sets the SDP answer generator for late offer scenarios.
-    ///
-    /// When set, this generator will be invoked to create an SDP answer
-    /// when receiving a 200 OK with SDP offer after sending an INVITE
-    /// without SDP (late offer flow per RFC 3264).
-    ///
-    /// # Example
-    /// ```ignore
-    /// use sip_uac::integrated::{IntegratedUAC, SdpAnswerGenerator};
-    /// use std::sync::Arc;
-    ///
-    /// struct MySdpGenerator;
-    ///
-    /// #[async_trait::async_trait]
-    /// impl SdpAnswerGenerator for MySdpGenerator {
-    ///     async fn generate_answer(
-    ///         &self,
-    ///         offer: &sip_sdp::SessionDescription,
-    ///         dialog: &sip_dialog::Dialog,
-    ///     ) -> anyhow::Result<sip_sdp::SessionDescription> {
-    ///         // Parse offer and generate answer...
-    ///         println!("Got offer for dialog {:?}", dialog.id);
-    ///         Ok(offer.clone())
-    ///     }
-    /// }
-    ///
-    /// let uac = IntegratedUAC::builder()
-    ///     .sdp_answer_generator(Arc::new(MySdpGenerator))
-    ///     // ... other config
-    ///     .build()?;
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    pub fn sdp_answer_generator(mut self, generator: Arc<dyn SdpAnswerGenerator>) -> Self {
-        self.config.sdp_answer_generator = Some(generator);
-        self
-    }
-
-    /// Sets the SDP profile for generating offers.
-    ///
-    /// When set, the UAC can generate SDP offers automatically using
-    /// pre-configured profiles (AudioOnly, AudioVideo).
-    ///
-    /// # Example
-    /// ```no_run
-    /// use sip_uac::integrated::IntegratedUAC;
-    /// use sip_sdp::profiles::SdpProfile;
-    ///
-    /// let uac = IntegratedUAC::builder()
-    ///     .sdp_profile(SdpProfile::AudioOnly)
-    ///     .local_audio_port(8000)
-    ///     // ... other config
-    ///     .build()?;
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    pub fn sdp_profile(mut self, profile: profiles::SdpProfile) -> Self {
-        self.config.sdp_profile = Some(profile);
-        self
-    }
-
-    /// Sets a custom SDP media profile builder for richer offers/answers.
-    pub fn sdp_profile_builder(mut self, builder: profiles::MediaProfileBuilder) -> Self {
-        self.config.sdp_profile_builder = Some(builder);
-        self
-    }
-
-    /// Sets the local RTP audio port for SDP (default: 8000).
-    pub fn local_audio_port(mut self, port: u16) -> Self {
-        self.config.local_audio_port = port;
-        self
-    }
-
-    /// Sets the local RTP video port for SDP (default: 8002).
-    pub fn local_video_port(mut self, port: u16) -> Self {
-        self.config.local_video_port = port;
-        self
-    }
-
-    /// Sets the UAC configuration.
-    pub fn config(mut self, config: UACConfig) -> Self {
-        self.config = config;
-        self
-    }
-
-    /// Builds the IntegratedUAC.
-    pub fn build(self) -> Result<IntegratedUAC> {
-        let local_uri = self
-            .local_uri
-            .ok_or_else(|| anyhow!("local_uri is required"))?;
-        let local_addr = self
-            .local_addr
-            .ok_or_else(|| anyhow!("local_addr is required"))?;
-        let transaction_manager = self
-            .transaction_manager
-            .ok_or_else(|| anyhow!("transaction_manager is required"))?;
-        let resolver = self
-            .resolver
-            .ok_or_else(|| anyhow!("resolver is required"))?;
-        let dispatcher = self
-            .dispatcher
-            .ok_or_else(|| anyhow!("dispatcher is required"))?;
-
-        // Create embedded helper
-        let contact_uri = self.contact_uri.unwrap_or_else(|| {
-            // Default contact: sip:user@advertised_contact
-            let user = local_uri.user().unwrap_or("user");
-            let contact_host = self
-                .config
-                .contact_advertised
-                .or(self.public_addr)
-                .unwrap_or(local_addr);
-            SipUri::parse(&format!("sip:{}@{}", user, contact_host)).unwrap()
-        });
-
-        let mut helper = UserAgentClient::new(local_uri, contact_uri);
-
-        if let Some((username, password)) = self.credentials {
-            helper = helper.with_credentials(&username, &password);
-        }
-
-        if let Some(display_name) = self.display_name {
-            helper = helper.with_display_name(display_name)?;
-        }
-
-        // Point the helper at the shared store *before* cloning the
-        // handle below, so both halves of the UAC agree.
-        //
-        // Redirecting only the `IntegratedUAC` handle would not fix
-        // anything: the confirmed dialog for an outbound call is
-        // registered by `UserAgentClient::process_invite_response`, which
-        // inserts into the *helper's* manager, and that runs on every
-        // INVITE response path here. Leave the helper on its constructor
-        // default and the dialog still lands somewhere UAS dispatch can't
-        // see — the 481 stays exactly as it was.
-        if let Some(shared) = self.dialog_manager {
-            helper.dialog_manager = shared;
-        }
-
-        let dialog_manager = helper.dialog_manager.clone();
-        let subscription_manager = helper.subscription_manager.clone();
-
-        Ok(IntegratedUAC {
-            helper: Arc::new(Mutex::new(helper)),
-            transaction_manager,
-            resolver,
-            transport_dispatcher: dispatcher,
-            local_addr,
-            public_addr: self.public_addr,
-            config: self.config,
-            dialog_manager,
-            subscription_manager,
-        })
     }
 }
