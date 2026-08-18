@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Change: the expected first digest challenge logs at `debug!`, not `warn!`** (sip-uac) — closes #107 (a registered node emitted one WARN per registration refresh forever):
+  * `IntegratedUAC` warned whenever a `401`/`407` arrived and `auto_retry_auth` was set. That is the first leg of RFC 3261 §22 working exactly as specified — the registrar is *supposed* to challenge, the stack answers immediately, and the request succeeds. Nothing happened that an operator can act on.
+  * Measured downstream on a node registering with a 120 s granted expiry (refresh once a minute): **~1,440 WARNs/day on an idle, healthy box**, 361 of them in a 6-hour window. A permanent non-zero baseline is what makes warn-level alerting useless.
+  * The two genuinely abnormal auth outcomes in the same function keep their `warn!` — `auth still rejected; retrying with refreshed credentials` and `auth retry limit reached; returning last challenge to caller`. Those fire when credentials or nonces really are wrong; this one fired when everything was right.
+  * Now `debug!` with structured fields (`code`, `method`) rather than a positional format string. No behaviour change: the retry path and `max_auth_retries` accounting are untouched.
+
 - **Fix: `ack_received` reports whether it absorbed the ACK** (sip-transaction) — closes #101 (the caller could not tell a hop-by-hop ACK from one the transaction user must see, so ACK dispatch had to guess):
   * `TransactionManager::ack_received` took a key, silently no-op'd on a miss and returned `()`. RFC 3261 §17.2.1 makes the distinction it was swallowing load-bearing: an ACK for a **non-2xx** final is absorbed by the completed INVITE server transaction and must never reach the transaction user, while an ACK for a **2xx** is end-to-end and the TU is the only layer that can handle it — it carries the answer to a delayed offer, among other things.
   * The manager already knew which was which and simply did not say. `send_final` terminates the server transaction as it sends a 2xx (`fsm.rs`, `ServerInviteState::Terminated` plus a `Terminate` action that removes the entry), and leaves it `Completed` for a non-2xx. So **"matched an entry" is exactly "ACK to a non-2xx"** — the signal is precise, needs no new state, and only had to be returned.
