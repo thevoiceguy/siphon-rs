@@ -1287,7 +1287,16 @@ impl IntegratedUAC {
                 if (response.code() == 401 || response.code() == 407)
                     && self.config.auto_retry_auth
                 {
-                    warn!("Received {} challenge, retrying with authentication", response.code());
+                    // A challenge on the first send is RFC 3261 §22 working as
+                    // specified, not a problem: `auto_retry_auth` answers it
+                    // immediately and the request succeeds. Only the abnormal
+                    // outcomes below — still rejected after a retry, or the
+                    // retry limit reached — warrant a `warn!`.
+                    debug!(
+                        code = response.code(),
+                        method = ?request.method(),
+                        "challenged; retrying with authentication"
+                    );
                     return self.retry_with_auth(request, response, dns_target, 1).await;
                 }
 
