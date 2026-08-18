@@ -1274,10 +1274,13 @@ impl IntegratedUAC {
             .start_client_transaction(request.clone(), ctx, tu)
             .await?;
 
-        info!(
-            "Started client transaction {} for {:?}",
-            key.branch(),
-            request.method()
+        // Transaction mechanics, not a lifecycle moment: this fires once per
+        // client transaction, so at `info` the volume tracks request rate.
+        // `TransactionMetrics` is where a per-transaction signal belongs.
+        debug!(
+            branch = %key.branch(),
+            method = ?request.method(),
+            "client transaction started"
         );
 
         // Wait for final response or termination
@@ -1366,11 +1369,11 @@ impl IntegratedUAC {
             .start_client_transaction(auth_request.clone(), ctx, tu)
             .await?;
 
-        info!(
-            "Started authenticated client transaction {} (attempt {}) for {:?}",
-            key.branch(),
+        debug!(
+            branch = %key.branch(),
             attempt,
-            auth_request.method()
+            method = ?auth_request.method(),
+            "authenticated client transaction started"
         );
 
         let response = tokio::select! {
@@ -3389,7 +3392,7 @@ impl ClientTransactionUser for InviteTransactionUser {
     }
 
     async fn on_final(&self, _key: &TransactionKey, response: &Response) {
-        info!("Received final response: {}", response.code());
+        debug!(code = response.code(), "received final response");
 
         // 401/407: start an authenticated retry instead of surfacing the
         // challenge (the transaction layer has already ACK'd this final).
@@ -3724,11 +3727,11 @@ struct SimpleTransactionUser {
 #[async_trait]
 impl ClientTransactionUser for SimpleTransactionUser {
     async fn on_provisional(&self, _key: &TransactionKey, response: &Response) {
-        debug!("Received provisional response: {}", response.code());
+        debug!(code = response.code(), "received provisional response");
     }
 
     async fn on_final(&self, _key: &TransactionKey, response: &Response) {
-        info!("Received final response: {}", response.code());
+        debug!(code = response.code(), "received final response");
 
         let mut tx = self.final_tx.lock().await;
         if let Some(tx) = tx.take() {
