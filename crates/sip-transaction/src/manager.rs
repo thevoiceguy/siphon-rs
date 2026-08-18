@@ -1229,6 +1229,56 @@ impl TransactionManager {
                 self.apply_client_non_invite_actions(key, actions).await;
             }
         }
+        self.reap_terminated_client(key);
+    }
+
+    /// Removes a client transaction whose FSM has reached `Terminated`.
+    ///
+    /// The terminal wait timers — K for non-INVITE (RFC 3261 §17.1.2.2), D for
+    /// INVITE (§17.1.1.2) — mark the FSM `Terminated` and emit only `Cancel`.
+    /// `Terminate` is reserved for abnormal endings, because it notifies the
+    /// transaction user; a transaction that simply ran to completion has
+    /// nothing to report. Nothing then removed the entry, so every normally
+    /// completing client transaction stayed in the table until the
+    /// `max_client_transactions` eviction reclaimed it — a registrar refresh
+    /// alone filled the default 10_000 cap in about three and a half days.
+    ///
+    /// Keying the reap off the FSM state rather than the action keeps the
+    /// transaction-user contract unchanged: no extra `on_terminated` call, and
+    /// so no log line, for an ordinary completion.
+    fn reap_terminated_client(&self, key: &TransactionKey) {
+        let terminated = {
+            let Some(entry) = self.inner.client.get(key) else {
+                return;
+            };
+            match &entry.kind {
+                ClientKind::Invite(fsm) => fsm.state() == crate::ClientInviteState::Terminated,
+                ClientKind::NonInvite(fsm) => {
+                    fsm.state() == crate::ClientNonInviteState::Terminated
+                }
+            }
+        };
+        if !terminated {
+            return;
+        }
+
+        if let Some((_, entry)) = self.inner.client.remove(key) {
+            let duration = entry.start_time.elapsed();
+            let transport = TransportType::from(transport_kind_to_transport(entry.ctx.transport));
+            self.inner.metrics.record_transaction_duration(
+                transport,
+                &format!("{:?}", entry.method),
+                duration,
+            );
+            self.inner
+                .metrics
+                .record_transaction_outcome(transport, TransactionOutcome::Completed);
+            self.inner.metrics.record_complete(
+                transport,
+                &format!("{:?}", entry.method),
+                TransactionRole::Client,
+            );
+        }
     }
 
     async fn apply_client_invite_actions(
@@ -1909,6 +1959,72 @@ mod tests {
 
         let finals = tu.finals.lock().await;
         assert_eq!(finals.as_slice(), &[200]);
+    }
+
+    /// A client transaction that completes normally must leave the table.
+    ///
+    /// The terminal wait timers (K for non-INVITE, D for INVITE) mark the FSM
+    /// `Terminated` but emit only `Cancel`, and `Terminate` — the action that
+    /// used to be the sole trigger for removal — is reserved for abnormal
+    /// endings. Nothing reaped the entry, so every completed client
+    /// transaction accumulated until the `max_client_transactions` eviction
+    /// reclaimed it: a registrar refreshing once a minute filled the 10_000
+    /// default in about three and a half days, and the eviction then picked
+    /// its victim purely by `start_time`, so a live transaction could go.
+    ///
+    /// This is the exact production shape the leak was found in: a REGISTER
+    /// refresh over UDP, challenged 401 by the registrar.
+    #[tokio::test]
+    async fn completed_client_transaction_leaves_the_table() {
+        let dispatcher = Arc::new(TestDispatcher::default());
+        let manager = TransactionManager::new(dispatcher);
+        let ctx =
+            TransportContext::new(TransportKind::Udp, "127.0.0.1:5080".parse().unwrap(), None);
+        let tu = Arc::new(TestClientTu::default());
+        let branch = "z9hG4bKregisterreap";
+
+        manager
+            .start_client_transaction(
+                build_client_request(Method::Register, branch),
+                ctx,
+                tu.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(manager.inner.client.len(), 1, "transaction should be live");
+
+        // The registrar challenges the refresh — a final response, so the FSM
+        // goes Completed and schedules Timer K.
+        manager
+            .receive_response(build_response_with_branch(401, branch, Method::Register))
+            .await;
+
+        // Timer K is T4 on UDP; poll rather than oversleep.
+        let reaped = wait_until(
+            || async { manager.inner.client.is_empty() },
+            Duration::from_millis(50),
+            Duration::from_secs(8),
+        )
+        .await;
+        assert!(
+            reaped,
+            "completed client transaction still in the table after Timer K \
+             ({} entries) — this is the leak",
+            manager.inner.client.len(),
+        );
+
+        // The TU still saw the response...
+        assert_eq!(tu.finals.lock().await.as_slice(), &[401]);
+        // ...and must NOT be told the transaction "terminated". Reaping keys
+        // off FSM state precisely so an ordinary completion adds no
+        // on_terminated call — and so no WARN — on a path that runs once per
+        // registration refresh, and once per request on a busy proxy.
+        let terminated = tu.terminated.lock().await;
+        assert!(
+            terminated.is_empty(),
+            "ordinary completion must not notify the transaction user, got {:?}",
+            *terminated,
+        );
     }
 
     // ---------------------------------------------------------------
