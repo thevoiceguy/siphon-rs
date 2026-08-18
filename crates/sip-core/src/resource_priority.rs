@@ -516,7 +516,7 @@ mod tests {
 
         for i in 0..MAX_VALUES {
             header
-                .add_value(ResourcePriorityValue::new("dsn", &format!("{}", i)).unwrap())
+                .add_value(ResourcePriorityValue::new("dsn", format!("{}", i)).unwrap())
                 .unwrap();
         }
 

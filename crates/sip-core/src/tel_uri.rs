@@ -166,12 +166,11 @@ fn validate_phone_context(context: &str) -> Result<(), TelUriError> {
         ));
     }
 
-    if context.starts_with('+') {
+    if let Some(rest) = context.strip_prefix('+') {
         // Global number form. The rest must be 1*phonedigit and must
         // contain at least one digit. Visual separators are allowed
         // (`-`, `.`, `(`, `)`); DTMF digits A–D and `*`/`#` are
         // permitted by RFC 3966 §5.1.1 but rare for phone-context.
-        let rest = &context[1..];
         let mut has_digit = false;
         for c in rest.chars() {
             if c.is_ascii_digit() {

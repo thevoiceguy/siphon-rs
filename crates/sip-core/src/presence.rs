@@ -784,7 +784,7 @@ mod tests {
         let mut doc = PresenceDocument::new("pres:alice@example.com").unwrap();
 
         for i in 0..MAX_TUPLES {
-            let tuple = Tuple::new(&format!("t{}", i)).unwrap();
+            let tuple = Tuple::new(format!("t{}", i)).unwrap();
             doc.add_tuple(tuple).unwrap();
         }
 

@@ -628,7 +628,7 @@ mod tests {
         let mut mime = MimeType::new("text", "plain").unwrap();
 
         for i in 0..MAX_PARAMS {
-            mime.add_param(&format!("p{}", i), "value").unwrap();
+            mime.add_param(format!("p{}", i), "value").unwrap();
         }
 
         // Should fail

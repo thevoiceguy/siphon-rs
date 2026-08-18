@@ -2018,7 +2018,7 @@ mod tests {
             nonce.value(),
             DigestAlgorithm::Sha512_256,
             Some(Qop::Auth),
-            Some(&server.opaque()),
+            Some(server.opaque()),
             b"",
         );
 
@@ -2417,7 +2417,7 @@ mod tests {
     fn nonce_manager_generate_and_verify() {
         let manager = NonceManager::new(Duration::from_secs(60));
         let nonce = manager.generate();
-        assert!(manager.verify(&nonce.value()));
+        assert!(manager.verify(nonce.value()));
         assert!(!manager.verify("invalid-nonce"));
     }
 
@@ -2682,7 +2682,7 @@ mod tests {
             creds.password(),
             &method,
             uri,
-            &nonce.value(),
+            nonce.value(),
             Some(nc),
             Some(cnonce),
             Some(Qop::Auth),
@@ -2730,7 +2730,7 @@ mod tests {
             creds.password(),
             &method,
             uri,
-            &nonce.value(),
+            nonce.value(),
             Some(nc),
             Some(cnonce),
             Some(Qop::Auth),
@@ -2778,7 +2778,7 @@ mod tests {
             creds.password(),
             &method,
             uri,
-            &nonce.value(),
+            nonce.value(),
             Some(nc),
             Some(cnonce),
             Some(Qop::Auth),
@@ -2893,7 +2893,7 @@ mod tests {
             creds.password(),
             &method,
             auth_uri,
-            &nonce.value(),
+            nonce.value(),
             Some(nc),
             Some(cnonce),
             Some(Qop::Auth),
@@ -2939,7 +2939,7 @@ mod tests {
             creds.password(),
             &method,
             uri,
-            &nonce.value(),
+            nonce.value(),
             None,
             None,
             None,
@@ -3042,10 +3042,10 @@ mod tests {
             &Method::Invite,
             uri,
             "sip.example.com",
-            &nonce.value(),
+            nonce.value(),
             DigestAlgorithm::Sha256,
             Some(Qop::Auth),
-            Some(&server_auth.opaque()),
+            Some(server_auth.opaque()),
             b"",
         );
 
@@ -3090,7 +3090,7 @@ mod tests {
             creds.password(),
             &method,
             uri,
-            &nonce.value(),
+            nonce.value(),
             Some(nc),
             Some(cnonce),
             Some(Qop::AuthInt),
@@ -3138,7 +3138,7 @@ mod tests {
             creds.password(),
             &method,
             uri,
-            &nonce.value(),
+            nonce.value(),
             Some(nc),
             Some(cnonce),
             Some(Qop::Auth),
@@ -3202,7 +3202,7 @@ mod tests {
             creds.password(),
             &method,
             uri,
-            &nonce.value(),
+            nonce.value(),
             Some(nc2),
             Some(cnonce),
             Some(Qop::Auth),
@@ -3237,7 +3237,7 @@ mod tests {
             creds.password(),
             &method,
             uri,
-            &nonce.value(),
+            nonce.value(),
             Some(nc1),
             Some(cnonce),
             Some(Qop::Auth),
@@ -3292,7 +3292,7 @@ mod tests {
             creds.password(),
             &method,
             uri1,
-            &nonce.value(),
+            nonce.value(),
             Some(nc),
             Some(cnonce),
             Some(Qop::Auth),
@@ -3326,7 +3326,7 @@ mod tests {
             creds.password(),
             &method,
             uri2,
-            &nonce.value(),
+            nonce.value(),
             Some(nc),
             Some(cnonce),
             Some(Qop::Auth),
@@ -3380,7 +3380,7 @@ mod tests {
             creds.password(),
             &method,
             uri,
-            &nonce.value(),
+            nonce.value(),
             Some(nc),
             Some(cnonce),
             Some(Qop::Auth),
@@ -3414,7 +3414,7 @@ mod tests {
             creds.password(),
             &method,
             uri,
-            &nonce.value(),
+            nonce.value(),
             Some(nc),
             Some(cnonce),
             Some(Qop::Auth),
@@ -3467,7 +3467,7 @@ mod tests {
             creds.password(),
             &method,
             uri,
-            &nonce.value(),
+            nonce.value(),
             Some(nc),
             Some(cnonce),
             Some(Qop::Auth),
@@ -3530,7 +3530,7 @@ mod tests {
             creds.password(),
             &method,
             uri,
-            &nonce.value(),
+            nonce.value(),
             Some(nc),
             Some(cnonce),
             Some(Qop::Auth),
@@ -3579,7 +3579,7 @@ mod tests {
             creds.password(),
             &method,
             uri,
-            &nonce.value(),
+            nonce.value(),
             Some(nc),
             Some(cnonce),
             Some(Qop::Auth),
@@ -3699,7 +3699,7 @@ mod tests {
             creds.password(),
             &method,
             uri,
-            &nonce.value(),
+            nonce.value(),
             Some("00000001"),
             Some("abc"),
             Some(Qop::Auth),
@@ -3729,7 +3729,7 @@ mod tests {
             creds.password(),
             &method,
             uri,
-            &nonce.value(),
+            nonce.value(),
             Some("00005000"),
             Some("def"),
             Some(Qop::Auth),
@@ -3805,6 +3805,6 @@ mod tests {
         assert!(!manager.verify(&nonce_values[0]));
         // Last nonces should still be valid
         assert!(manager.verify(&nonce_values[9]));
-        assert!(manager.verify(&new_nonce.value()));
+        assert!(manager.verify(new_nonce.value()));
     }
 }

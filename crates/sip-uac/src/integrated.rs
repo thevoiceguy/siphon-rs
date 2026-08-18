@@ -3094,1388 +3094,6 @@ async fn commit_advanced_dialog(shared: &Arc<RwLock<Dialog>>, advanced: Dialog) 
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use bytes::Bytes;
-    use sip_core::{Headers, RequestLine, StatusLine};
-    use sip_dialog::{DialogId, DialogStateType};
-    use std::time::Duration;
-
-    fn base_dialog() -> Dialog {
-        let dialog_id = DialogId::unchecked_new("call", "local", "remote");
-        Dialog::unchecked_new(
-            dialog_id,
-            DialogStateType::Confirmed,
-            SipUri::parse("sip:local@example.com").unwrap(),
-            SipUri::parse("sip:remote@example.com").unwrap(),
-            SipUri::parse("sip:remote@example.com").unwrap(),
-            1,                             // local_cseq
-            0,                             // remote_cseq
-            None,                          // last_ack_cseq
-            vec![],                        // route_set
-            false,                         // secure
-            Some(Duration::from_secs(30)), // session_expires
-            None,                          // refresher
-            true,                          // is_uac
-        )
-    }
-
-    /// Issue #76: a fresh TLS dial to an IP-literal route-set hop must
-    /// use the configured trunk hostname for SNI/verification, not the IP.
-    #[test]
-    fn tls_server_name_overrides_ip_literal_sni() {
-        let target = DnsTarget::unchecked_new("203.0.113.5", 5061, sip_dns::Transport::Tls);
-        let out = apply_tls_server_name(target, Some("example.pstn.twilio.com"));
-        assert_eq!(out.sni(), "example.pstn.twilio.com");
-        assert_eq!(out.host(), "203.0.113.5", "connect addr is unchanged");
-    }
-
-    /// The override must not clobber a real hostname target, an existing
-    /// RFC 3263 reference identity, or non-TLS transports.
-    #[test]
-    fn tls_server_name_leaves_hostnames_and_non_tls_alone() {
-        let hostname = DnsTarget::unchecked_new("edge.example.com", 5061, sip_dns::Transport::Tls);
-        assert_eq!(
-            apply_tls_server_name(hostname, Some("other.example.com")).sni(),
-            "edge.example.com"
-        );
-
-        let with_ref = DnsTarget::unchecked_new("203.0.113.5", 5061, sip_dns::Transport::Tls)
-            .with_tls_name("resolved.example.com");
-        assert_eq!(
-            apply_tls_server_name(with_ref, Some("other.example.com")).sni(),
-            "resolved.example.com"
-        );
-
-        let udp = DnsTarget::unchecked_new("203.0.113.5", 5060, sip_dns::Transport::Udp);
-        assert_eq!(
-            apply_tls_server_name(udp, Some("other.example.com")).sni(),
-            "203.0.113.5"
-        );
-
-        let no_override = DnsTarget::unchecked_new("203.0.113.5", 5061, sip_dns::Transport::Tls);
-        assert_eq!(
-            apply_tls_server_name(no_override, None).sni(),
-            "203.0.113.5"
-        );
-    }
-
-    // Helper to create dialog with custom route_set
-    fn dialog_with_route_set(route_set: Vec<SipUri>) -> Dialog {
-        let dialog_id = DialogId::unchecked_new("call", "local", "remote");
-        Dialog::unchecked_new(
-            dialog_id,
-            DialogStateType::Confirmed,
-            SipUri::parse("sip:local@example.com").unwrap(),
-            SipUri::parse("sip:remote@example.com").unwrap(),
-            SipUri::parse("sip:remote@example.com").unwrap(),
-            1,                             // local_cseq
-            0,                             // remote_cseq
-            None,                          // last_ack_cseq
-            route_set,                     // custom route_set
-            false,                         // secure
-            Some(Duration::from_secs(30)), // session_expires
-            None,                          // refresher
-            true,                          // is_uac
-        )
-    }
-
-    #[test]
-    fn prepare_in_dialog_respects_loose_routing() {
-        let mut dialog = dialog_with_route_set(vec![
-            SipUri::parse("sip:proxy.example.com;lr").expect("valid route")
-        ]);
-
-        let mut request = Request::new(
-            RequestLine::new(Method::Info, dialog.remote_target().clone()),
-            Headers::new(),
-            Bytes::new(),
-        )
-        .expect("valid request");
-
-        let target = prepare_in_dialog_request(&mut dialog, &mut request);
-
-        assert_eq!(target, dialog.route_set()[0]);
-        assert_eq!(request.uri(), &dialog.remote_target().clone().into());
-        assert_eq!(
-            request.headers().get("Route"),
-            Some("<sip:proxy.example.com;lr>")
-        );
-        assert_eq!(dialog.local_cseq(), 2);
-        assert_eq!(request.headers().get("CSeq"), Some("2 INFO"));
-    }
-
-    #[test]
-    fn prepare_in_dialog_handles_strict_routing() {
-        let mut dialog = dialog_with_route_set(vec![
-            SipUri::parse("sip:strict.example.com").unwrap(),
-            SipUri::parse("sip:loose.example.com;lr").unwrap(),
-        ]);
-
-        let mut request = Request::new(
-            RequestLine::new(Method::Update, dialog.remote_target().clone()),
-            Headers::new(),
-            Bytes::new(),
-        )
-        .expect("valid request");
-
-        let target = prepare_in_dialog_request(&mut dialog, &mut request);
-        let routes: Vec<&SmolStr> = request.headers().get_all_smol("Route").collect();
-
-        assert_eq!(target, dialog.route_set()[0]);
-        assert_eq!(request.uri(), &dialog.route_set()[0].clone().into());
-        assert_eq!(routes.len(), 2);
-        assert_eq!(routes[0].as_str(), "<sip:loose.example.com;lr>");
-        assert_eq!(routes[1].as_str(), "<sip:remote@example.com>");
-    }
-
-    #[test]
-    fn apply_response_updates_remote_target() {
-        let mut dialog = base_dialog();
-        let manager = DialogManager::new();
-        let mut headers = Headers::new();
-        headers
-            .push(
-                SmolStr::new("Contact"),
-                SmolStr::new("<sip:new-remote@example.com>"),
-            )
-            .unwrap();
-        let response = Response::new(
-            StatusLine::new(200, SmolStr::new("OK")).expect("valid status line"),
-            headers,
-            Bytes::new(),
-        )
-        .expect("valid response");
-
-        apply_in_dialog_response(&manager, &mut dialog, &response).unwrap();
-        assert_eq!(
-            dialog.remote_target().as_str(),
-            "sip:new-remote@example.com"
-        );
-        assert_eq!(dialog.state(), DialogStateType::Confirmed);
-    }
-
-    #[test]
-    fn apply_response_marks_termination_on_481() {
-        let mut dialog = base_dialog();
-        let manager = DialogManager::new();
-        let response = Response::new(
-            StatusLine::new(481, SmolStr::new("Call/Transaction Does Not Exist"))
-                .expect("valid status line"),
-            Headers::new(),
-            Bytes::new(),
-        )
-        .expect("valid response");
-
-        let result = apply_in_dialog_response(&manager, &mut dialog, &response);
-        assert!(result.is_err());
-        assert_eq!(dialog.state(), DialogStateType::Terminated);
-    }
-
-    // ── Via auto-fill: flow-routed requests advertise the listener port ──
-
-    #[test]
-    fn via_port_tracks_flow_listener() {
-        // The nit from #56's sibling: a request leaving over the TLS
-        // listener's connection advertised the configured (UDP) port.
-        // Host stays the advertised one; only the port follows the flow.
-        let advertised: SocketAddr = "203.0.113.7:5070".parse().unwrap();
-        let tls_local: SocketAddr = "0.0.0.0:5071".parse().unwrap();
-        let via = build_via_value("TLS", advertised, Some(tls_local), "z9hG4bKabc");
-        assert_eq!(via, "SIP/2.0/TLS 203.0.113.7:5071;branch=z9hG4bKabc;rport");
-    }
-
-    #[test]
-    fn via_without_flow_keeps_advertised_port() {
-        let advertised: SocketAddr = "203.0.113.7:5070".parse().unwrap();
-        let via = build_via_value("UDP", advertised, None, "z9hG4bKabc");
-        assert_eq!(via, "SIP/2.0/UDP 203.0.113.7:5070;branch=z9hG4bKabc;rport");
-    }
-
-    // ── send_refer_via_flow: REFER rides the flow connection ──
-
-    #[derive(Default)]
-    struct CapturingDispatcher {
-        sent: Mutex<Vec<(TransportContext, Bytes)>>,
-    }
-
-    #[async_trait]
-    impl TransportDispatcher for CapturingDispatcher {
-        async fn dispatch(&self, ctx: &TransportContext, payload: Bytes) -> Result<()> {
-            self.sent.lock().await.push((ctx.clone(), payload));
-            Ok(())
-        }
-    }
-
-    #[tokio::test]
-    async fn send_refer_via_flow_reuses_connection_and_completes_on_202() {
-        let dispatcher = Arc::new(CapturingDispatcher::default());
-        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
-        let uac = Arc::new(
-            IntegratedUAC::builder()
-                .local_uri("sip:siphon@127.0.0.1")
-                .local_addr("127.0.0.1:5070")
-                .unwrap()
-                .transaction_manager(manager.clone())
-                .resolver(Arc::new(SipResolver::from_system().unwrap()))
-                .dispatcher(dispatcher.clone())
-                .build()
-                .unwrap(),
-        );
-
-        // UAS-side confirmed dialog whose peer arrived over TLS: the remote
-        // target names the peer's ephemeral source port, which nothing
-        // listens on — the whole reason the REFER must reuse the flow.
-        let dialog = Dialog::unchecked_new(
-            DialogId::unchecked_new("flow-call", "local-tag", "remote-tag"),
-            DialogStateType::Confirmed,
-            SipUri::parse("sip:siphon@127.0.0.1").unwrap(),
-            SipUri::parse("sip:tester@192.0.2.10").unwrap(),
-            SipUri::parse("sip:tester@192.0.2.10:49152;transport=tls").unwrap(),
-            1,      // local_cseq
-            1,      // remote_cseq
-            None,   // last_ack_cseq
-            vec![], // route_set
-            false,  // secure
-            None,   // session_expires
-            None,   // refresher
-            false,  // is_uac (we are the UAS of the original INVITE)
-        );
-
-        let (flow_tx, _flow_rx) = mpsc::channel::<Bytes>(8);
-        let flow = Flow::new(flow_tx, "192.0.2.10:49152".parse().unwrap())
-            .with_local_addr("127.0.0.1:5071".parse().unwrap());
-        let refer_to = SipUri::parse("sip:agent@198.51.100.20:5060").unwrap();
-
-        let task = {
-            let uac = uac.clone();
-            tokio::spawn(async move {
-                let mut dialog = dialog;
-                let result = uac
-                    .send_refer_via_flow(&mut dialog, &refer_to, None, flow)
-                    .await;
-                (result, dialog)
-            })
-        };
-
-        // Wait for the transaction layer to emit the REFER, then check it
-        // went out on the flow rather than a fresh dial-out.
-        let request = loop {
-            if let Some((ctx, payload)) = dispatcher.sent.lock().await.first().cloned() {
-                assert!(ctx.stream().is_some(), "REFER must carry the flow stream");
-                assert_eq!(ctx.peer(), "192.0.2.10:49152".parse().unwrap());
-                assert_eq!(ctx.local_addr(), Some("127.0.0.1:5071".parse().unwrap()));
-                break sip_parse::parse_request(&payload).expect("valid REFER on the wire");
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        };
-
-        assert_eq!(request.method(), &Method::Refer);
-        assert_eq!(request.headers().get("CSeq"), Some("2 REFER"));
-        assert!(request.headers().get("Refer-To").is_some());
-        let via = request.headers().get("Via").unwrap();
-        assert!(
-            via.starts_with("SIP/2.0/TLS 127.0.0.1:5071;"),
-            "Via must advertise the flow listener's port, got: {via}"
-        );
-
-        // Answer 202 Accepted so the transaction completes.
-        let mut headers = Headers::new();
-        for name in ["Via", "From", "To", "Call-ID", "CSeq"] {
-            headers
-                .push(
-                    SmolStr::new(name),
-                    request.headers().get_smol(name).unwrap().clone(),
-                )
-                .unwrap();
-        }
-        let response = Response::new(
-            StatusLine::new(202, SmolStr::new("Accepted")).expect("valid status line"),
-            headers,
-            Bytes::new(),
-        )
-        .expect("valid response");
-        manager.receive_response(response).await;
-
-        let (result, dialog) = task.await.unwrap();
-        let (response, _subscription) = result.unwrap();
-        assert_eq!(response.code(), 202);
-        assert_eq!(dialog.local_cseq(), 2);
-    }
-
-    // ── bye_via_flow: the closing BYE must carry the dialog route set ──
-
-    /// Regression for the stranded-caller bug: force-terminating an inbound
-    /// call answered through a record-routing carrier edge sent a BYE with
-    /// *no* Route headers and the peer's private Contact as Request-URI. The
-    /// edge could not correlate it, answered 481, and the far leg sat in dead
-    /// air until session-expires. The BYE must instead loose-route through the
-    /// record-route proxy, exactly as every other in-dialog request does.
-    #[tokio::test]
-    async fn bye_via_flow_carries_route_set_and_dialog_local_uri() {
-        let dispatcher = Arc::new(CapturingDispatcher::default());
-        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
-        let uac = Arc::new(
-            IntegratedUAC::builder()
-                .local_uri("sip:siphon@127.0.0.1")
-                .local_addr("127.0.0.1:5070")
-                .unwrap()
-                .transaction_manager(manager.clone())
-                .resolver(Arc::new(SipResolver::from_system().unwrap()))
-                .dispatcher(dispatcher.clone())
-                .build()
-                .unwrap(),
-        );
-
-        // UAS-role confirmed dialog for an inbound call answered through a
-        // record-routing edge. The route set holds the edge's loose-route
-        // URI; the remote target is the peer's private (unroutable) Contact.
-        // The dialog's local URI is the answered AOR — deliberately *not*
-        // the UAC's configured `local_uri` — so the From-URI fix is exercised.
-        // IP literal so `resolve_target` does no real DNS lookup in CI.
-        let proxy = SipUri::parse("sip:198.51.100.10:5061;transport=tls;lr").unwrap();
-        let local_aor = SipUri::parse("sip:+15551234567@127.0.0.1:5061;transport=tls").unwrap();
-        let dialog = Dialog::unchecked_new(
-            DialogId::unchecked_new("rr-call", "local-tag", "remote-tag"),
-            DialogStateType::Confirmed,
-            local_aor.clone(),
-            SipUri::parse("sip:+15551234567@carrier.example.net").unwrap(),
-            SipUri::parse("sip:+15551234567@10.8.0.4:5060;transport=udp").unwrap(),
-            0,                   // local_cseq (UAS role: first outbound is CSeq 1)
-            1,                   // remote_cseq
-            None,                // last_ack_cseq
-            vec![proxy.clone()], // route_set from Record-Route
-            false,               // secure
-            None,                // session_expires
-            None,                // refresher
-            false,               // is_uac (we answered the INVITE)
-        );
-
-        let (flow_tx, _flow_rx) = mpsc::channel::<Bytes>(8);
-        let flow = Flow::new(flow_tx, "10.8.0.4:49152".parse().unwrap())
-            .with_local_addr("127.0.0.1:5071".parse().unwrap());
-
-        let task = {
-            let uac = uac.clone();
-            tokio::spawn(async move { uac.bye_via_flow(&dialog, flow).await })
-        };
-
-        // Grab the BYE the transaction layer emitted and check the wire form.
-        let request = loop {
-            if let Some((ctx, payload)) = dispatcher.sent.lock().await.first().cloned() {
-                assert!(ctx.stream().is_some(), "BYE must reuse the inbound flow");
-                break sip_parse::parse_request(&payload).expect("valid BYE on the wire");
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        };
-
-        assert_eq!(request.method(), &Method::Bye);
-        // The fix: the record-route proxy is present as a Route header and the
-        // Request-URI is the remote target (loose routing).
-        assert_eq!(
-            request.headers().get("Route"),
-            Some("<sip:198.51.100.10:5061;transport=tls;lr>"),
-            "BYE must loose-route through the record-route proxy"
-        );
-        assert_eq!(
-            request.uri(),
-            &SipUri::parse("sip:+15551234567@10.8.0.4:5060;transport=udp")
-                .unwrap()
-                .into(),
-            "loose routing keeps the remote target as Request-URI"
-        );
-        // The From URI is the dialog's local AOR, not the UAC's identity.
-        let from = request.headers().get("From").unwrap();
-        assert!(
-            from.contains("sip:+15551234567@127.0.0.1:5061;transport=tls"),
-            "From must be the dialog local URI, got: {from}"
-        );
-        assert!(
-            !from.contains("sip:siphon@127.0.0.1"),
-            "From must not be the UAC's configured identity, got: {from}"
-        );
-
-        // Answer 200 OK so the transaction — and the spawned task — complete.
-        let mut headers = Headers::new();
-        for name in ["Via", "From", "To", "Call-ID", "CSeq"] {
-            headers
-                .push(
-                    SmolStr::new(name),
-                    request.headers().get_smol(name).unwrap().clone(),
-                )
-                .unwrap();
-        }
-        let response = Response::new(
-            StatusLine::new(200, SmolStr::new("OK")).expect("valid status line"),
-            headers,
-            Bytes::new(),
-        )
-        .expect("valid response");
-        manager.receive_response(response).await;
-
-        let response = task.await.unwrap().expect("BYE completes on 200");
-        assert_eq!(response.code(), 200);
-    }
-
-    // ── via-flow sends recover when the inbound connection is dead ──
-
-    /// Dispatcher shaped like the production one: a context carrying a
-    /// flow stream sends through it (and surfaces the channel error when
-    /// the connection's writer is gone); a context without one is a pool
-    /// dial-out, captured for inspection.
-    #[derive(Default)]
-    struct StreamAwareDispatcher {
-        pool_sent: Mutex<Vec<(TransportContext, Bytes)>>,
-        flow_attempts: Mutex<usize>,
-    }
-
-    #[async_trait]
-    impl TransportDispatcher for StreamAwareDispatcher {
-        async fn dispatch(&self, ctx: &TransportContext, payload: Bytes) -> Result<()> {
-            if let Some(stream) = ctx.stream() {
-                *self.flow_attempts.lock().await += 1;
-                stream
-                    .send(payload)
-                    .await
-                    .map_err(|_| anyhow!("connection writer dropped"))?;
-                Ok(())
-            } else {
-                self.pool_sent.lock().await.push((ctx.clone(), payload));
-                Ok(())
-            }
-        }
-    }
-
-    /// Regression for issue #73: the peer idle-closed the inbound TCP/TLS
-    /// connection, so the flow send fails fast (post-teardown-fix) — and
-    /// the BYE must fail over to dialing the dialog's route-set edge
-    /// through the pool instead of dying at Timer B with the caller in
-    /// dead air.
-    #[tokio::test]
-    async fn bye_via_flow_falls_back_to_pool_when_flow_is_dead() {
-        let dispatcher = Arc::new(StreamAwareDispatcher::default());
-        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
-        let uac = Arc::new(
-            IntegratedUAC::builder()
-                .local_uri("sip:siphon@127.0.0.1")
-                .local_addr("127.0.0.1:5070")
-                .unwrap()
-                .transaction_manager(manager.clone())
-                .resolver(Arc::new(SipResolver::from_system().unwrap()))
-                .dispatcher(dispatcher.clone())
-                .build()
-                .unwrap(),
-        );
-
-        // Same record-routed inbound-call shape as the test above: the
-        // route set names the carrier edge (IP literal: no DNS in CI),
-        // the remote target is the peer's private Contact.
-        let proxy = SipUri::parse("sip:198.51.100.10:5061;transport=tls;lr").unwrap();
-        let dialog = Dialog::unchecked_new(
-            DialogId::unchecked_new("dead-flow-call", "local-tag", "remote-tag"),
-            DialogStateType::Confirmed,
-            SipUri::parse("sip:+15551234567@127.0.0.1:5061;transport=tls").unwrap(),
-            SipUri::parse("sip:+15551234567@carrier.example.net").unwrap(),
-            SipUri::parse("sip:+15551234567@10.8.0.4:5060;transport=udp").unwrap(),
-            0,                   // local_cseq
-            1,                   // remote_cseq
-            None,                // last_ack_cseq
-            vec![proxy.clone()], // route_set from Record-Route
-            false,               // secure
-            None,                // session_expires
-            None,                // refresher
-            false,               // is_uac (we answered the INVITE)
-        );
-
-        // A dead flow: the receiver is dropped, exactly what the
-        // transport's writer teardown does once the peer FINs.
-        let (flow_tx, flow_rx) = mpsc::channel::<Bytes>(8);
-        drop(flow_rx);
-        let flow = Flow::new(flow_tx, "10.8.0.4:49152".parse().unwrap())
-            .with_local_addr("127.0.0.1:5071".parse().unwrap());
-
-        let task = {
-            let uac = uac.clone();
-            tokio::spawn(async move { uac.bye_via_flow(&dialog, flow).await })
-        };
-
-        // The BYE must show up as a pool dial-out to the route-set edge.
-        let (ctx, request) = loop {
-            if let Some((ctx, payload)) = dispatcher.pool_sent.lock().await.first().cloned() {
-                break (
-                    ctx,
-                    sip_parse::parse_request(&payload).expect("valid BYE on the wire"),
-                );
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        };
-
-        assert!(
-            *dispatcher.flow_attempts.lock().await >= 1,
-            "the flow must be tried first"
-        );
-        assert!(ctx.stream().is_none(), "fallback target dials the pool");
-        assert_eq!(
-            ctx.peer(),
-            "198.51.100.10:5061".parse().unwrap(),
-            "fallback dials the route-set edge, not the peer's ephemeral port"
-        );
-        assert_eq!(
-            ctx.server_name(),
-            Some("198.51.100.10"),
-            "fallback keeps the SNI for the TLS pool"
-        );
-        assert_eq!(request.method(), &Method::Bye);
-        assert_eq!(
-            request.headers().get("Route"),
-            Some("<sip:198.51.100.10:5061;transport=tls;lr>"),
-            "the fallback BYE still loose-routes through the edge"
-        );
-
-        // Answer 200 OK: the response completes the transaction even
-        // though it was transmitted on the fallback target.
-        let mut headers = Headers::new();
-        for name in ["Via", "From", "To", "Call-ID", "CSeq"] {
-            headers
-                .push(
-                    SmolStr::new(name),
-                    request.headers().get_smol(name).unwrap().clone(),
-                )
-                .unwrap();
-        }
-        let response = Response::new(
-            StatusLine::new(200, SmolStr::new("OK")).expect("valid status line"),
-            headers,
-            Bytes::new(),
-        )
-        .expect("valid response");
-        manager.receive_response(response).await;
-
-        let response = task.await.unwrap().expect("BYE completes via fallback");
-        assert_eq!(response.code(), 200);
-    }
-
-    // ── builder: sharing a DialogManager with the UAS ──
-
-    /// Build a minimally-configured UAC, optionally sharing a store.
-    fn uac_with_optional_store(shared: Option<Arc<DialogManager>>) -> IntegratedUAC {
-        let dispatcher = Arc::new(CapturingDispatcher::default());
-        let mut builder = IntegratedUAC::builder()
-            .local_uri("sip:siphon@127.0.0.1")
-            .local_addr("127.0.0.1:5070")
-            .unwrap()
-            .transaction_manager(Arc::new(TransactionManager::new(dispatcher.clone())))
-            .resolver(Arc::new(SipResolver::from_system().unwrap()))
-            .dispatcher(dispatcher);
-        if let Some(mgr) = shared {
-            builder = builder.dialog_manager(mgr);
-        }
-        builder.build().unwrap()
-    }
-
-    /// An inbound in-dialog BYE as the peer would send it for a dialog we
-    /// created as UAC: From carries *their* tag, To carries ours.
-    fn inbound_bye(call_id: &str, our_tag: &str, their_tag: &str) -> Request {
-        let mut headers = Headers::new();
-        headers.push("Call-ID", call_id).unwrap();
-        headers
-            .push("From", &format!("<sip:remote@example.com>;tag={their_tag}"))
-            .unwrap();
-        headers
-            .push("To", &format!("<sip:local@example.com>;tag={our_tag}"))
-            .unwrap();
-        Request::new(
-            RequestLine::new(Method::Bye, SipUri::parse("sip:local@example.com").unwrap()),
-            headers,
-            Bytes::new(),
-        )
-        .expect("valid BYE")
-    }
-
-    /// Both halves of the UAC — the `IntegratedUAC` handle and the inner
-    /// `UserAgentClient` helper — must land on the injected store.
-    /// Redirecting only one would relocate the split rather than close it,
-    /// since the helper registers dialogs on its own from 2xx responses.
-    #[tokio::test]
-    async fn builder_shares_injected_dialog_manager_with_helper_too() {
-        let shared = Arc::new(DialogManager::new());
-        let uac = uac_with_optional_store(Some(shared.clone()));
-
-        assert!(Arc::ptr_eq(uac.dialog_manager().unwrap(), &shared));
-        let helper = uac.helper.lock().await;
-        assert!(
-            Arc::ptr_eq(&helper.dialog_manager, &shared),
-            "helper must use the shared store, not its constructor default"
-        );
-    }
-
-    /// Omitting the setter leaves the private store intact, so existing
-    /// single-role embedders keep their current behaviour.
-    #[tokio::test]
-    async fn builder_without_injection_keeps_private_store() {
-        let unrelated = Arc::new(DialogManager::new());
-        let uac = uac_with_optional_store(None);
-
-        assert!(!Arc::ptr_eq(uac.dialog_manager().unwrap(), &unrelated));
-        let helper = uac.helper.lock().await;
-        assert!(
-            Arc::ptr_eq(&helper.dialog_manager, uac.dialog_manager().unwrap()),
-            "un-injected UAC still agrees with itself"
-        );
-    }
-
-    /// The regression this setter exists for: a dialog the UAC created
-    /// must be resolvable by the lookup UAS dispatch performs on an
-    /// inbound BYE. Before sharing was possible this missed, dispatch
-    /// answered 481, and the outbound call never tore down.
-    #[tokio::test]
-    async fn uac_dialog_is_found_by_shared_manager_lookup() {
-        let shared = Arc::new(DialogManager::new());
-        let uac = uac_with_optional_store(Some(shared.clone()));
-
-        // Register a confirmed UAC dialog the way the UAC does.
-        let dialog = base_dialog(); // id = (call, local=our tag, remote=peer tag)
-        let _ = uac.dialog_manager().unwrap().insert(dialog.clone());
-
-        let bye = inbound_bye("call", "local", "remote");
-        let found = shared
-            .find_by_request(&bye)
-            .expect("UAS dispatch must resolve the UAC's dialog through the shared store");
-        assert_eq!(found.id(), dialog.id());
-    }
-
-    /// The same lookup against a *separate* manager still misses — this
-    /// is the 481 path, pinned so the test above can't pass for the
-    /// wrong reason (e.g. a global/static store).
-    #[tokio::test]
-    async fn unshared_uac_dialog_is_invisible_to_another_manager() {
-        let uas_side = Arc::new(DialogManager::new());
-        let uac = uac_with_optional_store(None);
-
-        let _ = uac.dialog_manager().unwrap().insert(base_dialog());
-
-        let bye = inbound_bye("call", "local", "remote");
-        assert!(
-            uas_side.find_by_request(&bye).is_none(),
-            "a private UAC store must stay invisible to an unrelated manager"
-        );
-    }
-
-    // ── INVITE auth retry on 401/407 (issue #83) ──
-
-    fn auth_test_uac(
-        dispatcher: Arc<CapturingDispatcher>,
-        manager: Arc<TransactionManager>,
-        config: Option<UACConfig>,
-    ) -> Arc<IntegratedUAC> {
-        let mut builder = IntegratedUAC::builder()
-            .local_uri("sip:alice@127.0.0.1")
-            .local_addr("127.0.0.1:5070")
-            .unwrap()
-            .credentials("alice", "secret")
-            .transaction_manager(manager)
-            .resolver(Arc::new(SipResolver::from_system().unwrap()))
-            .dispatcher(dispatcher);
-        if let Some(config) = config {
-            builder = builder.config(config);
-        }
-        Arc::new(builder.build().unwrap())
-    }
-
-    async fn sent_requests(dispatcher: &CapturingDispatcher) -> Vec<Request> {
-        dispatcher
-            .sent
-            .lock()
-            .await
-            .iter()
-            .filter_map(|(_, payload)| sip_parse::parse_request(payload))
-            .collect()
-    }
-
-    async fn wait_for_request<F>(dispatcher: &CapturingDispatcher, pred: F) -> Request
-    where
-        F: Fn(&Request) -> bool,
-    {
-        loop {
-            if let Some(request) = sent_requests(dispatcher).await.into_iter().find(&pred) {
-                return request;
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-    }
-
-    fn via_branch(request: &Request) -> String {
-        let via = request.headers().get("Via").unwrap();
-        via.split("branch=").nth(1).unwrap().to_string()
-    }
-
-    /// 401/407 challenge echoing the request's transaction identifiers,
-    /// shaped like FreeSWITCH's (To tag, MD5 digest with qop).
-    fn challenge_response(request: &Request, code: u16) -> Response {
-        let mut headers = Headers::new();
-        for name in ["Via", "From", "Call-ID", "CSeq"] {
-            headers
-                .push(
-                    SmolStr::new(name),
-                    request.headers().get_smol(name).unwrap().clone(),
-                )
-                .unwrap();
-        }
-        headers
-            .push(
-                SmolStr::new("To"),
-                SmolStr::new(format!("{};tag=chal", request.headers().get("To").unwrap())),
-            )
-            .unwrap();
-        let (reason, auth_header) = if code == 407 {
-            ("Proxy Authentication Required", "Proxy-Authenticate")
-        } else {
-            ("Unauthorized", "WWW-Authenticate")
-        };
-        headers
-            .push(
-                SmolStr::new(auth_header),
-                SmolStr::new(
-                    "Digest realm=\"127.0.0.1\", nonce=\"abc123\", algorithm=MD5, qop=\"auth\"",
-                ),
-            )
-            .unwrap();
-        Response::new(
-            StatusLine::new(code, SmolStr::new(reason)).expect("valid status line"),
-            headers,
-            Bytes::new(),
-        )
-        .expect("valid response")
-    }
-
-    fn ok_response(request: &Request) -> Response {
-        let mut headers = Headers::new();
-        for name in ["Via", "From", "Call-ID", "CSeq"] {
-            headers
-                .push(
-                    SmolStr::new(name),
-                    request.headers().get_smol(name).unwrap().clone(),
-                )
-                .unwrap();
-        }
-        headers
-            .push(
-                SmolStr::new("To"),
-                SmolStr::new(format!(
-                    "{};tag=uas-ok",
-                    request.headers().get("To").unwrap()
-                )),
-            )
-            .unwrap();
-        headers
-            .push(
-                SmolStr::new("Contact"),
-                SmolStr::new("<sip:9196@127.0.0.1:5060>"),
-            )
-            .unwrap();
-        Response::new(
-            StatusLine::new(200, SmolStr::new("OK")).expect("valid status line"),
-            headers,
-            Bytes::new(),
-        )
-        .expect("valid response")
-    }
-
-    /// The headline regression from issue #83: an INVITE answered with 407
-    /// must be re-sent with Proxy-Authorization (same Call-ID and From tag,
-    /// CSeq+1, fresh branch, original body), and the application must see
-    /// only the authenticated attempt's final response.
-    #[tokio::test]
-    async fn invite_407_is_retried_and_confirms_dialog() {
-        let dispatcher = Arc::new(CapturingDispatcher::default());
-        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
-        let uac = auth_test_uac(dispatcher.clone(), manager.clone(), None);
-
-        let sdp = "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=-\r\n";
-        let call = uac
-            .invite("sip:9196@127.0.0.1:5060", Some(sdp))
-            .await
-            .unwrap();
-
-        let invite1 = wait_for_request(&dispatcher, |r| r.method() == &Method::Invite).await;
-        assert!(invite1.headers().get("Proxy-Authorization").is_none());
-        assert_eq!(invite1.headers().get("CSeq"), Some("1 INVITE"));
-
-        manager
-            .receive_response(challenge_response(&invite1, 407))
-            .await;
-
-        // The transaction layer ACKs the challenge...
-        let ack = wait_for_request(&dispatcher, |r| r.method() == &Method::Ack).await;
-        assert_eq!(via_branch(&ack), via_branch(&invite1));
-
-        // ...and the authenticated re-INVITE goes out as a new transaction.
-        let invite2 = wait_for_request(&dispatcher, |r| {
-            r.method() == &Method::Invite && r.headers().get("Proxy-Authorization").is_some()
-        })
-        .await;
-        assert_eq!(invite2.headers().get("CSeq"), Some("2 INVITE"));
-        assert_eq!(
-            invite2.headers().get("Call-ID"),
-            invite1.headers().get("Call-ID")
-        );
-        assert_eq!(invite2.headers().get("From"), invite1.headers().get("From"));
-        assert_ne!(via_branch(&invite2), via_branch(&invite1));
-        assert_eq!(invite2.body(), invite1.body(), "retry keeps the SDP offer");
-
-        manager.receive_response(ok_response(&invite2)).await;
-
-        let final_response = call.await_final().await.unwrap();
-        assert_eq!(final_response.code(), 200, "only the 200 reaches the app");
-        assert_eq!(call.dialog.read().await.id().remote_tag(), "uas-ok");
-
-        // CANCEL/ACK bookkeeping follows the live attempt.
-        assert_eq!(
-            call.invite_request().await.headers().get("CSeq"),
-            Some("2 INVITE")
-        );
-    }
-
-    /// Same retry for a 401 challenge: the retry carries Authorization
-    /// (not Proxy-Authorization), per the challenge header form.
-    #[tokio::test]
-    async fn invite_401_is_retried_with_authorization() {
-        let dispatcher = Arc::new(CapturingDispatcher::default());
-        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
-        let uac = auth_test_uac(dispatcher.clone(), manager.clone(), None);
-
-        let _call = uac
-            .invite("sip:9196@127.0.0.1:5060", Some("v=0\r\n"))
-            .await
-            .unwrap();
-        let invite1 = wait_for_request(&dispatcher, |r| r.method() == &Method::Invite).await;
-
-        manager
-            .receive_response(challenge_response(&invite1, 401))
-            .await;
-
-        let invite2 = wait_for_request(&dispatcher, |r| {
-            r.method() == &Method::Invite && r.headers().get("Authorization").is_some()
-        })
-        .await;
-        assert_eq!(invite2.headers().get("CSeq"), Some("2 INVITE"));
-        assert!(invite2.headers().get("Proxy-Authorization").is_none());
-    }
-
-    /// Delayed-offer INVITEs retry with the body they originally had:
-    /// none. The authenticated attempt must not grow an SDP body.
-    #[tokio::test]
-    async fn offerless_invite_retry_keeps_empty_body() {
-        let dispatcher = Arc::new(CapturingDispatcher::default());
-        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
-        let uac = auth_test_uac(dispatcher.clone(), manager.clone(), None);
-
-        let _call = uac.invite("sip:9196@127.0.0.1:5060", None).await.unwrap();
-        let invite1 = wait_for_request(&dispatcher, |r| r.method() == &Method::Invite).await;
-        assert!(invite1.body().is_empty());
-
-        manager
-            .receive_response(challenge_response(&invite1, 407))
-            .await;
-
-        let invite2 = wait_for_request(&dispatcher, |r| {
-            r.method() == &Method::Invite && r.headers().get("Proxy-Authorization").is_some()
-        })
-        .await;
-        assert!(invite2.body().is_empty(), "offerless retry stays offerless");
-        assert_eq!(invite2.headers().get("Content-Length"), Some("0"));
-    }
-
-    /// Persistent challenges stop at `max_auth_retries`, and the last
-    /// challenge is surfaced as the final response (matching non-INVITE
-    /// retry semantics).
-    #[tokio::test]
-    async fn invite_auth_retry_limit_surfaces_last_challenge() {
-        let dispatcher = Arc::new(CapturingDispatcher::default());
-        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
-        let config = UACConfig {
-            max_auth_retries: 1,
-            ..Default::default()
-        };
-        let uac = auth_test_uac(dispatcher.clone(), manager.clone(), Some(config));
-
-        let call = uac
-            .invite("sip:9196@127.0.0.1:5060", Some("v=0\r\n"))
-            .await
-            .unwrap();
-        let invite1 = wait_for_request(&dispatcher, |r| r.method() == &Method::Invite).await;
-
-        manager
-            .receive_response(challenge_response(&invite1, 407))
-            .await;
-
-        let invite2 = wait_for_request(&dispatcher, |r| {
-            r.method() == &Method::Invite && r.headers().get("Proxy-Authorization").is_some()
-        })
-        .await;
-
-        // Challenge the authenticated attempt too: budget (1) exhausted.
-        manager
-            .receive_response(challenge_response(&invite2, 407))
-            .await;
-
-        let final_response = call.await_final().await.unwrap();
-        assert_eq!(final_response.code(), 407, "last challenge surfaces");
-
-        // Exactly two INVITE attempts went out (distinct branches).
-        let branches: std::collections::HashSet<String> = sent_requests(&dispatcher)
-            .await
-            .iter()
-            .filter(|r| r.method() == &Method::Invite)
-            .map(via_branch)
-            .collect();
-        assert_eq!(branches.len(), 2);
-    }
-
-    /// `auto_retry_auth = false` preserves the old behaviour: the
-    /// challenge is the final response and nothing is re-sent.
-    #[tokio::test]
-    async fn invite_auth_retry_disabled_surfaces_challenge() {
-        let dispatcher = Arc::new(CapturingDispatcher::default());
-        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
-        let config = UACConfig {
-            auto_retry_auth: false,
-            ..Default::default()
-        };
-        let uac = auth_test_uac(dispatcher.clone(), manager.clone(), Some(config));
-
-        let call = uac
-            .invite("sip:9196@127.0.0.1:5060", Some("v=0\r\n"))
-            .await
-            .unwrap();
-        let invite1 = wait_for_request(&dispatcher, |r| r.method() == &Method::Invite).await;
-
-        manager
-            .receive_response(challenge_response(&invite1, 407))
-            .await;
-
-        let final_response = call.await_final().await.unwrap();
-        assert_eq!(final_response.code(), 407);
-        assert!(sent_requests(&dispatcher)
-            .await
-            .iter()
-            .all(|r| r.headers().get("Proxy-Authorization").is_none()));
-    }
-
-    /// Issue #92: the refresh period must be Session-Expires/2 with no
-    /// 90 s floor. The old `max(90, se/2)` scheduled the refresh for a
-    /// 90 s session (the RFC 4028 minimum) exactly on the expiry
-    /// deadline, leaving zero margin.
-    #[test]
-    fn session_refresh_period_is_half_session_expires() {
-        assert_eq!(session_refresh_period(90), Duration::from_secs(45));
-        assert_eq!(session_refresh_period(100), Duration::from_secs(50));
-        assert_eq!(session_refresh_period(120), Duration::from_secs(60));
-        assert_eq!(session_refresh_period(180), Duration::from_secs(90));
-        assert_eq!(session_refresh_period(1800), Duration::from_secs(900));
-    }
-
-    /// Out-of-range values (below the RFC 4028 minimum of 90, which
-    /// `SessionExpires::new` would have rejected) must not spin the
-    /// refresh loop with a zero period.
-    #[test]
-    fn session_refresh_period_floors_at_one_second() {
-        assert_eq!(session_refresh_period(0), Duration::from_secs(1));
-        assert_eq!(session_refresh_period(1), Duration::from_secs(1));
-        assert_eq!(session_refresh_period(2), Duration::from_secs(1));
-    }
-
-    // ── issue #95: the refresh CSeq must reach the dialog's owner ──
-
-    /// Confirmed dialog whose peer is an IP literal, so the in-dialog send
-    /// resolves without touching DNS.
-    fn refresh_dialog() -> Dialog {
-        Dialog::unchecked_new(
-            DialogId::unchecked_new("refresh-call", "local-tag", "remote-tag"),
-            DialogStateType::Confirmed,
-            SipUri::parse("sip:siphon@127.0.0.1").unwrap(),
-            SipUri::parse("sip:callee@192.0.2.10").unwrap(),
-            SipUri::parse("sip:callee@192.0.2.10:5060").unwrap(),
-            1,      // local_cseq — the answered INVITE consumed it
-            1,      // remote_cseq
-            None,   // last_ack_cseq
-            vec![], // route_set
-            false,  // secure
-            Some(Duration::from_secs(90)),
-            None, // refresher
-            true, // is_uac
-        )
-    }
-
-    fn refresh_uac(
-        dispatcher: Arc<CapturingDispatcher>,
-        manager: Arc<TransactionManager>,
-    ) -> Arc<IntegratedUAC> {
-        Arc::new(
-            IntegratedUAC::builder()
-                .local_uri("sip:siphon@127.0.0.1")
-                .local_addr("127.0.0.1:5080")
-                .unwrap()
-                .transaction_manager(manager)
-                .resolver(Arc::new(SipResolver::from_system().unwrap()))
-                .dispatcher(dispatcher)
-                .build()
-                .unwrap(),
-        )
-    }
-
-    /// Bounded [`wait_for_request`]. Regressing this fix does not produce a
-    /// wrong request — it produces no second request at all, because the
-    /// refresh reuses the CSeq it already sent. Without the timeout that is
-    /// an infinite wait; with it, the test fails in five seconds.
-    async fn await_cseq(dispatcher: &CapturingDispatcher, cseq: &'static str) -> Request {
-        tokio::time::timeout(
-            Duration::from_secs(5),
-            wait_for_request(dispatcher, move |r| r.headers().get("CSeq") == Some(cseq)),
-        )
-        .await
-        .unwrap_or_else(|_| panic!("no request with CSeq {cseq} reached the wire"))
-    }
-
-    /// Mirror the request's dialog identifiers straight back. Unlike
-    /// [`ok_response`] this adds no `To` tag: an in-dialog request already
-    /// carries one, and a second would land the response outside the dialog.
-    fn in_dialog_response(request: &Request, code: u16, reason: &str) -> Response {
-        let mut headers = Headers::new();
-        for name in ["Via", "From", "To", "Call-ID", "CSeq"] {
-            headers
-                .push(
-                    SmolStr::new(name),
-                    request.headers().get_smol(name).unwrap().clone(),
-                )
-                .unwrap();
-        }
-        Response::new(
-            StatusLine::new(code, SmolStr::new(reason)).expect("valid status line"),
-            headers,
-            Bytes::new(),
-        )
-        .expect("valid response")
-    }
-
-    /// The defect: refreshes advanced a CSeq only the timer task could see,
-    /// so the owner's next BYE/re-INVITE/REFER reused a consumed number and
-    /// a record-routing peer answered `408`. Two consecutive refreshes must
-    /// leave the *shared* dialog at 3, not frozen at the arming value.
-    #[tokio::test]
-    async fn session_refresh_commits_the_advanced_cseq_to_the_shared_dialog() {
-        let dispatcher = Arc::new(CapturingDispatcher::default());
-        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
-        let uac = refresh_uac(dispatcher.clone(), manager.clone());
-        let shared = Arc::new(RwLock::new(refresh_dialog()));
-
-        for expected_cseq in ["2 INVITE", "3 INVITE"] {
-            let task = {
-                let (uac, shared) = (uac.clone(), shared.clone());
-                tokio::spawn(async move {
-                    refresh_shared_session(&uac, &shared, 90, "uac", false).await
-                })
-            };
-
-            // Match on CSeq rather than send order: the auto-ACK for the
-            // first refresh is dispatched between the two iterations.
-            let request = await_cseq(&dispatcher, expected_cseq).await;
-            assert_eq!(request.method(), &Method::Invite);
-            assert!(
-                request.headers().get("Session-Expires").is_some(),
-                "a refresh must carry Session-Expires"
-            );
-            manager
-                .receive_response(in_dialog_response(&request, 200, "OK"))
-                .await;
-
-            let response = task.await.unwrap().expect("refresh succeeded");
-            assert_eq!(response.code(), 200);
-        }
-
-        assert_eq!(
-            shared.read().await.local_cseq(),
-            3,
-            "both refreshes must be visible to the dialog's owner"
-        );
-    }
-
-    /// A refresh that fails still consumed its CSeq: `prepare_in_dialog_request`
-    /// burns the number when it builds the request, long before the response
-    /// decides anything. Dropping the advance would hand the owner a CSeq the
-    /// peer has already seen — the very reuse this fix prevents.
-    #[tokio::test]
-    async fn session_refresh_commits_the_cseq_even_when_the_refresh_fails() {
-        let dispatcher = Arc::new(CapturingDispatcher::default());
-        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
-        let uac = refresh_uac(dispatcher.clone(), manager.clone());
-        let shared = Arc::new(RwLock::new(refresh_dialog()));
-
-        let task = {
-            let (uac, shared) = (uac.clone(), shared.clone());
-            tokio::spawn(
-                async move { refresh_shared_session(&uac, &shared, 90, "uac", false).await },
-            )
-        };
-
-        let request = await_cseq(&dispatcher, "2 INVITE").await;
-        manager
-            .receive_response(in_dialog_response(
-                &request,
-                481,
-                "Call/Transaction Does Not Exist",
-            ))
-            .await;
-
-        let result = task.await.unwrap();
-        assert!(result.is_err(), "481 on an in-dialog request is an error");
-        let dialog = shared.read().await;
-        assert_eq!(
-            dialog.local_cseq(),
-            2,
-            "the consumed CSeq must be committed"
-        );
-        assert_eq!(
-            dialog.state(),
-            DialogStateType::Terminated,
-            "481 terminates the dialog, and that must reach the owner too"
-        );
-    }
-
-    /// Issue #99: the CSeq a refresh will consume must be visible to the
-    /// dialog's owner *while the refresh is still in flight*, not only once
-    /// it has been answered.
-    ///
-    /// Committing after the response left the shared dialog reading the
-    /// pre-request number for a whole round trip, so an owner that resolved
-    /// it in that window — to send a teardown BYE — built its request on the
-    /// number the refresh was already using. Measured on a downstream owner:
-    /// a refresh re-INVITE and a BYE 564 us apart, both `CSeq: 3`.
-    #[tokio::test]
-    async fn session_refresh_reserves_its_cseq_before_the_request_leaves() {
-        let dispatcher = Arc::new(CapturingDispatcher::default());
-        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
-        let uac = refresh_uac(dispatcher.clone(), manager.clone());
-        let shared = Arc::new(RwLock::new(refresh_dialog()));
-
-        let task = {
-            let (uac, shared) = (uac.clone(), shared.clone());
-            tokio::spawn(
-                async move { refresh_shared_session(&uac, &shared, 90, "uac", false).await },
-            )
-        };
-
-        // The refresh is on the wire and unanswered — the window in which the
-        // owner's own request used to collide with it.
-        let request = await_cseq(&dispatcher, "2 INVITE").await;
-
-        let mut owner = shared.read().await.clone();
-        assert_eq!(
-            owner.local_cseq(),
-            2,
-            "the in-flight refresh's CSeq must already be published"
-        );
-        assert_eq!(
-            owner.next_local_cseq(),
-            3,
-            "an owner request racing the refresh must continue the sequence, not reuse it"
-        );
-
-        manager
-            .receive_response(in_dialog_response(&request, 200, "OK"))
-            .await;
-        task.await.unwrap().expect("refresh succeeded");
-        assert_eq!(
-            shared.read().await.local_cseq(),
-            2,
-            "committing the answered refresh must not advance past the reservation"
-        );
-    }
-
-    // ── issue #93: a timer that has given up must say so ──
-
-    fn refresh_uac_with_max_failures(
-        dispatcher: Arc<CapturingDispatcher>,
-        manager: Arc<TransactionManager>,
-        max_session_refresh_failures: u32,
-    ) -> Arc<IntegratedUAC> {
-        Arc::new(
-            IntegratedUAC::builder()
-                .local_uri("sip:siphon@127.0.0.1")
-                .local_addr("127.0.0.1:5080")
-                .unwrap()
-                .transaction_manager(manager)
-                .resolver(Arc::new(SipResolver::from_system().unwrap()))
-                .dispatcher(dispatcher)
-                .config(UACConfig {
-                    max_session_refresh_failures,
-                    ..UACConfig::default()
-                })
-                .build()
-                .unwrap(),
-        )
-    }
-
-    /// Wait for the watch channel to publish a state the predicate accepts.
-    /// Bounded: the defect being fixed is a loop that reports *nothing*, so an
-    /// unbounded wait would hang rather than fail.
-    async fn await_state<F>(rx: &mut watch::Receiver<SessionTimerState>, pred: F)
-    where
-        F: Fn(&SessionTimerState) -> bool,
-    {
-        let observed = tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                if pred(&rx.borrow_and_update()) {
-                    return;
-                }
-                if rx.changed().await.is_err() {
-                    panic!("session timer state channel closed");
-                }
-            }
-        })
-        .await;
-        assert!(
-            observed.is_ok(),
-            "timed out waiting for the expected session timer state; last was {:?}",
-            *rx.borrow()
-        );
-    }
-
-    /// The peer answering `481` means the dialog is gone: no number of
-    /// retries brings it back, so the loop must stop on the first one and
-    /// name the reason rather than retry until the task is dropped.
-    #[tokio::test]
-    async fn session_timer_stops_immediately_when_the_peer_says_the_dialog_is_gone() {
-        let dispatcher = Arc::new(CapturingDispatcher::default());
-        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
-        // A high threshold: 481 must be terminal regardless of it.
-        let uac = refresh_uac_with_max_failures(dispatcher.clone(), manager.clone(), 99);
-        let dialog = Arc::new(RwLock::new(refresh_dialog()));
-        let state = Arc::new(watch::Sender::new(SessionTimerState::Idle));
-        let mut rx = state.subscribe();
-
-        // session_expires 2 → a refresh every second.
-        let task = tokio::spawn(run_session_timer(
-            uac,
-            dialog.clone(),
-            state,
-            2,
-            "uac",
-            false,
-        ));
-
-        let first = await_cseq(&dispatcher, "2 INVITE").await;
-        manager
-            .receive_response(in_dialog_response(&first, 200, "OK"))
-            .await;
-        await_state(&mut rx, |s| matches!(s, SessionTimerState::Healthy { .. })).await;
-
-        let second = await_cseq(&dispatcher, "3 INVITE").await;
-        manager
-            .receive_response(in_dialog_response(
-                &second,
-                481,
-                "Call/Transaction Does Not Exist",
-            ))
-            .await;
-
-        await_state(&mut rx, |s| {
-            *s == SessionTimerState::Stopped {
-                reason: SessionTimerStop::DialogGone,
-            }
-        })
-        .await;
-
-        tokio::time::timeout(Duration::from_secs(5), task)
-            .await
-            .expect("the loop must exit, not keep ticking")
-            .expect("task did not panic");
-    }
-
-    /// A non-2xx rejection is a failed refresh even though
-    /// `apply_in_dialog_response` returns `Ok` for it. Two of them, with the
-    /// threshold set to two, must stop the loop and report `Exhausted` —
-    /// previously this retried forever while the owner saw nothing at all.
-    #[tokio::test]
-    async fn session_timer_gives_up_after_the_configured_consecutive_failures() {
-        let dispatcher = Arc::new(CapturingDispatcher::default());
-        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
-        let uac = refresh_uac_with_max_failures(dispatcher.clone(), manager.clone(), 2);
-        let dialog = Arc::new(RwLock::new(refresh_dialog()));
-        let state = Arc::new(watch::Sender::new(SessionTimerState::Idle));
-        let mut rx = state.subscribe();
-
-        let task = tokio::spawn(run_session_timer(
-            uac,
-            dialog.clone(),
-            state,
-            2,
-            "uac",
-            false,
-        ));
-
-        // 503 leaves the dialog alive, so this is the retryable kind.
-        let first = await_cseq(&dispatcher, "2 INVITE").await;
-        manager
-            .receive_response(in_dialog_response(&first, 503, "Service Unavailable"))
-            .await;
-        await_state(&mut rx, |s| {
-            *s == SessionTimerState::Failing { consecutive: 1 }
-        })
-        .await;
-
-        let second = await_cseq(&dispatcher, "3 INVITE").await;
-        manager
-            .receive_response(in_dialog_response(&second, 503, "Service Unavailable"))
-            .await;
-
-        await_state(&mut rx, |s| {
-            *s == SessionTimerState::Stopped {
-                reason: SessionTimerStop::Exhausted { consecutive: 2 },
-            }
-        })
-        .await;
-
-        assert_eq!(
-            dialog.read().await.state(),
-            DialogStateType::Confirmed,
-            "giving up must not terminate the dialog — the BYE is the owner's call"
-        );
-        tokio::time::timeout(Duration::from_secs(5), task)
-            .await
-            .expect("the loop must exit, not keep ticking")
-            .expect("task did not panic");
-    }
-
-    /// The residual race, bounded: if the owner sent and committed its own
-    /// in-dialog request while a refresh was in flight, the refresh's older
-    /// dialog must not overwrite it and walk the CSeq backwards.
-    #[tokio::test]
-    async fn session_refresh_commit_never_regresses_the_owners_cseq() {
-        let shared = Arc::new(RwLock::new(refresh_dialog()));
-
-        // A refresh resolves the dialog and consumes CSeq 2...
-        let mut in_flight = shared.read().await.clone();
-        in_flight.next_local_cseq();
-
-        // ...while the owner sends a hold re-INVITE and a REFER of its own.
-        {
-            let mut owner = shared.write().await;
-            owner.next_local_cseq();
-            owner.next_local_cseq();
-        }
-
-        commit_advanced_dialog(&shared, in_flight).await;
-
-        assert_eq!(
-            shared.read().await.local_cseq(),
-            3,
-            "the owner's newer CSeq must survive the late commit"
-        );
-    }
-}
-
 /// Handle returned from INVITE/re-INVITE with CANCEL capability.
 impl CallHandle {
     /// Sends a CANCEL request to cancel the pending INVITE transaction.
@@ -5507,5 +4125,1387 @@ impl IntegratedUACBuilder {
             dialog_manager,
             subscription_manager,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+    use sip_core::{Headers, RequestLine, StatusLine};
+    use sip_dialog::{DialogId, DialogStateType};
+    use std::time::Duration;
+
+    fn base_dialog() -> Dialog {
+        let dialog_id = DialogId::unchecked_new("call", "local", "remote");
+        Dialog::unchecked_new(
+            dialog_id,
+            DialogStateType::Confirmed,
+            SipUri::parse("sip:local@example.com").unwrap(),
+            SipUri::parse("sip:remote@example.com").unwrap(),
+            SipUri::parse("sip:remote@example.com").unwrap(),
+            1,                             // local_cseq
+            0,                             // remote_cseq
+            None,                          // last_ack_cseq
+            vec![],                        // route_set
+            false,                         // secure
+            Some(Duration::from_secs(30)), // session_expires
+            None,                          // refresher
+            true,                          // is_uac
+        )
+    }
+
+    /// Issue #76: a fresh TLS dial to an IP-literal route-set hop must
+    /// use the configured trunk hostname for SNI/verification, not the IP.
+    #[test]
+    fn tls_server_name_overrides_ip_literal_sni() {
+        let target = DnsTarget::unchecked_new("203.0.113.5", 5061, sip_dns::Transport::Tls);
+        let out = apply_tls_server_name(target, Some("example.pstn.twilio.com"));
+        assert_eq!(out.sni(), "example.pstn.twilio.com");
+        assert_eq!(out.host(), "203.0.113.5", "connect addr is unchanged");
+    }
+
+    /// The override must not clobber a real hostname target, an existing
+    /// RFC 3263 reference identity, or non-TLS transports.
+    #[test]
+    fn tls_server_name_leaves_hostnames_and_non_tls_alone() {
+        let hostname = DnsTarget::unchecked_new("edge.example.com", 5061, sip_dns::Transport::Tls);
+        assert_eq!(
+            apply_tls_server_name(hostname, Some("other.example.com")).sni(),
+            "edge.example.com"
+        );
+
+        let with_ref = DnsTarget::unchecked_new("203.0.113.5", 5061, sip_dns::Transport::Tls)
+            .with_tls_name("resolved.example.com");
+        assert_eq!(
+            apply_tls_server_name(with_ref, Some("other.example.com")).sni(),
+            "resolved.example.com"
+        );
+
+        let udp = DnsTarget::unchecked_new("203.0.113.5", 5060, sip_dns::Transport::Udp);
+        assert_eq!(
+            apply_tls_server_name(udp, Some("other.example.com")).sni(),
+            "203.0.113.5"
+        );
+
+        let no_override = DnsTarget::unchecked_new("203.0.113.5", 5061, sip_dns::Transport::Tls);
+        assert_eq!(
+            apply_tls_server_name(no_override, None).sni(),
+            "203.0.113.5"
+        );
+    }
+
+    // Helper to create dialog with custom route_set
+    fn dialog_with_route_set(route_set: Vec<SipUri>) -> Dialog {
+        let dialog_id = DialogId::unchecked_new("call", "local", "remote");
+        Dialog::unchecked_new(
+            dialog_id,
+            DialogStateType::Confirmed,
+            SipUri::parse("sip:local@example.com").unwrap(),
+            SipUri::parse("sip:remote@example.com").unwrap(),
+            SipUri::parse("sip:remote@example.com").unwrap(),
+            1,                             // local_cseq
+            0,                             // remote_cseq
+            None,                          // last_ack_cseq
+            route_set,                     // custom route_set
+            false,                         // secure
+            Some(Duration::from_secs(30)), // session_expires
+            None,                          // refresher
+            true,                          // is_uac
+        )
+    }
+
+    #[test]
+    fn prepare_in_dialog_respects_loose_routing() {
+        let mut dialog = dialog_with_route_set(vec![
+            SipUri::parse("sip:proxy.example.com;lr").expect("valid route")
+        ]);
+
+        let mut request = Request::new(
+            RequestLine::new(Method::Info, dialog.remote_target().clone()),
+            Headers::new(),
+            Bytes::new(),
+        )
+        .expect("valid request");
+
+        let target = prepare_in_dialog_request(&mut dialog, &mut request);
+
+        assert_eq!(target, dialog.route_set()[0]);
+        assert_eq!(request.uri(), &dialog.remote_target().clone().into());
+        assert_eq!(
+            request.headers().get("Route"),
+            Some("<sip:proxy.example.com;lr>")
+        );
+        assert_eq!(dialog.local_cseq(), 2);
+        assert_eq!(request.headers().get("CSeq"), Some("2 INFO"));
+    }
+
+    #[test]
+    fn prepare_in_dialog_handles_strict_routing() {
+        let mut dialog = dialog_with_route_set(vec![
+            SipUri::parse("sip:strict.example.com").unwrap(),
+            SipUri::parse("sip:loose.example.com;lr").unwrap(),
+        ]);
+
+        let mut request = Request::new(
+            RequestLine::new(Method::Update, dialog.remote_target().clone()),
+            Headers::new(),
+            Bytes::new(),
+        )
+        .expect("valid request");
+
+        let target = prepare_in_dialog_request(&mut dialog, &mut request);
+        let routes: Vec<&SmolStr> = request.headers().get_all_smol("Route").collect();
+
+        assert_eq!(target, dialog.route_set()[0]);
+        assert_eq!(request.uri(), &dialog.route_set()[0].clone().into());
+        assert_eq!(routes.len(), 2);
+        assert_eq!(routes[0].as_str(), "<sip:loose.example.com;lr>");
+        assert_eq!(routes[1].as_str(), "<sip:remote@example.com>");
+    }
+
+    #[test]
+    fn apply_response_updates_remote_target() {
+        let mut dialog = base_dialog();
+        let manager = DialogManager::new();
+        let mut headers = Headers::new();
+        headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new("<sip:new-remote@example.com>"),
+            )
+            .unwrap();
+        let response = Response::new(
+            StatusLine::new(200, SmolStr::new("OK")).expect("valid status line"),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid response");
+
+        apply_in_dialog_response(&manager, &mut dialog, &response).unwrap();
+        assert_eq!(
+            dialog.remote_target().as_str(),
+            "sip:new-remote@example.com"
+        );
+        assert_eq!(dialog.state(), DialogStateType::Confirmed);
+    }
+
+    #[test]
+    fn apply_response_marks_termination_on_481() {
+        let mut dialog = base_dialog();
+        let manager = DialogManager::new();
+        let response = Response::new(
+            StatusLine::new(481, SmolStr::new("Call/Transaction Does Not Exist"))
+                .expect("valid status line"),
+            Headers::new(),
+            Bytes::new(),
+        )
+        .expect("valid response");
+
+        let result = apply_in_dialog_response(&manager, &mut dialog, &response);
+        assert!(result.is_err());
+        assert_eq!(dialog.state(), DialogStateType::Terminated);
+    }
+
+    // ── Via auto-fill: flow-routed requests advertise the listener port ──
+
+    #[test]
+    fn via_port_tracks_flow_listener() {
+        // The nit from #56's sibling: a request leaving over the TLS
+        // listener's connection advertised the configured (UDP) port.
+        // Host stays the advertised one; only the port follows the flow.
+        let advertised: SocketAddr = "203.0.113.7:5070".parse().unwrap();
+        let tls_local: SocketAddr = "0.0.0.0:5071".parse().unwrap();
+        let via = build_via_value("TLS", advertised, Some(tls_local), "z9hG4bKabc");
+        assert_eq!(via, "SIP/2.0/TLS 203.0.113.7:5071;branch=z9hG4bKabc;rport");
+    }
+
+    #[test]
+    fn via_without_flow_keeps_advertised_port() {
+        let advertised: SocketAddr = "203.0.113.7:5070".parse().unwrap();
+        let via = build_via_value("UDP", advertised, None, "z9hG4bKabc");
+        assert_eq!(via, "SIP/2.0/UDP 203.0.113.7:5070;branch=z9hG4bKabc;rport");
+    }
+
+    // ── send_refer_via_flow: REFER rides the flow connection ──
+
+    #[derive(Default)]
+    struct CapturingDispatcher {
+        sent: Mutex<Vec<(TransportContext, Bytes)>>,
+    }
+
+    #[async_trait]
+    impl TransportDispatcher for CapturingDispatcher {
+        async fn dispatch(&self, ctx: &TransportContext, payload: Bytes) -> Result<()> {
+            self.sent.lock().await.push((ctx.clone(), payload));
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn send_refer_via_flow_reuses_connection_and_completes_on_202() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = Arc::new(
+            IntegratedUAC::builder()
+                .local_uri("sip:siphon@127.0.0.1")
+                .local_addr("127.0.0.1:5070")
+                .unwrap()
+                .transaction_manager(manager.clone())
+                .resolver(Arc::new(SipResolver::from_system().unwrap()))
+                .dispatcher(dispatcher.clone())
+                .build()
+                .unwrap(),
+        );
+
+        // UAS-side confirmed dialog whose peer arrived over TLS: the remote
+        // target names the peer's ephemeral source port, which nothing
+        // listens on — the whole reason the REFER must reuse the flow.
+        let dialog = Dialog::unchecked_new(
+            DialogId::unchecked_new("flow-call", "local-tag", "remote-tag"),
+            DialogStateType::Confirmed,
+            SipUri::parse("sip:siphon@127.0.0.1").unwrap(),
+            SipUri::parse("sip:tester@192.0.2.10").unwrap(),
+            SipUri::parse("sip:tester@192.0.2.10:49152;transport=tls").unwrap(),
+            1,      // local_cseq
+            1,      // remote_cseq
+            None,   // last_ack_cseq
+            vec![], // route_set
+            false,  // secure
+            None,   // session_expires
+            None,   // refresher
+            false,  // is_uac (we are the UAS of the original INVITE)
+        );
+
+        let (flow_tx, _flow_rx) = mpsc::channel::<Bytes>(8);
+        let flow = Flow::new(flow_tx, "192.0.2.10:49152".parse().unwrap())
+            .with_local_addr("127.0.0.1:5071".parse().unwrap());
+        let refer_to = SipUri::parse("sip:agent@198.51.100.20:5060").unwrap();
+
+        let task = {
+            let uac = uac.clone();
+            tokio::spawn(async move {
+                let mut dialog = dialog;
+                let result = uac
+                    .send_refer_via_flow(&mut dialog, &refer_to, None, flow)
+                    .await;
+                (result, dialog)
+            })
+        };
+
+        // Wait for the transaction layer to emit the REFER, then check it
+        // went out on the flow rather than a fresh dial-out.
+        let request = loop {
+            if let Some((ctx, payload)) = dispatcher.sent.lock().await.first().cloned() {
+                assert!(ctx.stream().is_some(), "REFER must carry the flow stream");
+                assert_eq!(ctx.peer(), "192.0.2.10:49152".parse().unwrap());
+                assert_eq!(ctx.local_addr(), Some("127.0.0.1:5071".parse().unwrap()));
+                break sip_parse::parse_request(&payload).expect("valid REFER on the wire");
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+
+        assert_eq!(request.method(), &Method::Refer);
+        assert_eq!(request.headers().get("CSeq"), Some("2 REFER"));
+        assert!(request.headers().get("Refer-To").is_some());
+        let via = request.headers().get("Via").unwrap();
+        assert!(
+            via.starts_with("SIP/2.0/TLS 127.0.0.1:5071;"),
+            "Via must advertise the flow listener's port, got: {via}"
+        );
+
+        // Answer 202 Accepted so the transaction completes.
+        let mut headers = Headers::new();
+        for name in ["Via", "From", "To", "Call-ID", "CSeq"] {
+            headers
+                .push(
+                    SmolStr::new(name),
+                    request.headers().get_smol(name).unwrap().clone(),
+                )
+                .unwrap();
+        }
+        let response = Response::new(
+            StatusLine::new(202, SmolStr::new("Accepted")).expect("valid status line"),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid response");
+        manager.receive_response(response).await;
+
+        let (result, dialog) = task.await.unwrap();
+        let (response, _subscription) = result.unwrap();
+        assert_eq!(response.code(), 202);
+        assert_eq!(dialog.local_cseq(), 2);
+    }
+
+    // ── bye_via_flow: the closing BYE must carry the dialog route set ──
+
+    /// Regression for the stranded-caller bug: force-terminating an inbound
+    /// call answered through a record-routing carrier edge sent a BYE with
+    /// *no* Route headers and the peer's private Contact as Request-URI. The
+    /// edge could not correlate it, answered 481, and the far leg sat in dead
+    /// air until session-expires. The BYE must instead loose-route through the
+    /// record-route proxy, exactly as every other in-dialog request does.
+    #[tokio::test]
+    async fn bye_via_flow_carries_route_set_and_dialog_local_uri() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = Arc::new(
+            IntegratedUAC::builder()
+                .local_uri("sip:siphon@127.0.0.1")
+                .local_addr("127.0.0.1:5070")
+                .unwrap()
+                .transaction_manager(manager.clone())
+                .resolver(Arc::new(SipResolver::from_system().unwrap()))
+                .dispatcher(dispatcher.clone())
+                .build()
+                .unwrap(),
+        );
+
+        // UAS-role confirmed dialog for an inbound call answered through a
+        // record-routing edge. The route set holds the edge's loose-route
+        // URI; the remote target is the peer's private (unroutable) Contact.
+        // The dialog's local URI is the answered AOR — deliberately *not*
+        // the UAC's configured `local_uri` — so the From-URI fix is exercised.
+        // IP literal so `resolve_target` does no real DNS lookup in CI.
+        let proxy = SipUri::parse("sip:198.51.100.10:5061;transport=tls;lr").unwrap();
+        let local_aor = SipUri::parse("sip:+15551234567@127.0.0.1:5061;transport=tls").unwrap();
+        let dialog = Dialog::unchecked_new(
+            DialogId::unchecked_new("rr-call", "local-tag", "remote-tag"),
+            DialogStateType::Confirmed,
+            local_aor.clone(),
+            SipUri::parse("sip:+15551234567@carrier.example.net").unwrap(),
+            SipUri::parse("sip:+15551234567@10.8.0.4:5060;transport=udp").unwrap(),
+            0,                   // local_cseq (UAS role: first outbound is CSeq 1)
+            1,                   // remote_cseq
+            None,                // last_ack_cseq
+            vec![proxy.clone()], // route_set from Record-Route
+            false,               // secure
+            None,                // session_expires
+            None,                // refresher
+            false,               // is_uac (we answered the INVITE)
+        );
+
+        let (flow_tx, _flow_rx) = mpsc::channel::<Bytes>(8);
+        let flow = Flow::new(flow_tx, "10.8.0.4:49152".parse().unwrap())
+            .with_local_addr("127.0.0.1:5071".parse().unwrap());
+
+        let task = {
+            let uac = uac.clone();
+            tokio::spawn(async move { uac.bye_via_flow(&dialog, flow).await })
+        };
+
+        // Grab the BYE the transaction layer emitted and check the wire form.
+        let request = loop {
+            if let Some((ctx, payload)) = dispatcher.sent.lock().await.first().cloned() {
+                assert!(ctx.stream().is_some(), "BYE must reuse the inbound flow");
+                break sip_parse::parse_request(&payload).expect("valid BYE on the wire");
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+
+        assert_eq!(request.method(), &Method::Bye);
+        // The fix: the record-route proxy is present as a Route header and the
+        // Request-URI is the remote target (loose routing).
+        assert_eq!(
+            request.headers().get("Route"),
+            Some("<sip:198.51.100.10:5061;transport=tls;lr>"),
+            "BYE must loose-route through the record-route proxy"
+        );
+        assert_eq!(
+            request.uri(),
+            &SipUri::parse("sip:+15551234567@10.8.0.4:5060;transport=udp")
+                .unwrap()
+                .into(),
+            "loose routing keeps the remote target as Request-URI"
+        );
+        // The From URI is the dialog's local AOR, not the UAC's identity.
+        let from = request.headers().get("From").unwrap();
+        assert!(
+            from.contains("sip:+15551234567@127.0.0.1:5061;transport=tls"),
+            "From must be the dialog local URI, got: {from}"
+        );
+        assert!(
+            !from.contains("sip:siphon@127.0.0.1"),
+            "From must not be the UAC's configured identity, got: {from}"
+        );
+
+        // Answer 200 OK so the transaction — and the spawned task — complete.
+        let mut headers = Headers::new();
+        for name in ["Via", "From", "To", "Call-ID", "CSeq"] {
+            headers
+                .push(
+                    SmolStr::new(name),
+                    request.headers().get_smol(name).unwrap().clone(),
+                )
+                .unwrap();
+        }
+        let response = Response::new(
+            StatusLine::new(200, SmolStr::new("OK")).expect("valid status line"),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid response");
+        manager.receive_response(response).await;
+
+        let response = task.await.unwrap().expect("BYE completes on 200");
+        assert_eq!(response.code(), 200);
+    }
+
+    // ── via-flow sends recover when the inbound connection is dead ──
+
+    /// Dispatcher shaped like the production one: a context carrying a
+    /// flow stream sends through it (and surfaces the channel error when
+    /// the connection's writer is gone); a context without one is a pool
+    /// dial-out, captured for inspection.
+    #[derive(Default)]
+    struct StreamAwareDispatcher {
+        pool_sent: Mutex<Vec<(TransportContext, Bytes)>>,
+        flow_attempts: Mutex<usize>,
+    }
+
+    #[async_trait]
+    impl TransportDispatcher for StreamAwareDispatcher {
+        async fn dispatch(&self, ctx: &TransportContext, payload: Bytes) -> Result<()> {
+            if let Some(stream) = ctx.stream() {
+                *self.flow_attempts.lock().await += 1;
+                stream
+                    .send(payload)
+                    .await
+                    .map_err(|_| anyhow!("connection writer dropped"))?;
+                Ok(())
+            } else {
+                self.pool_sent.lock().await.push((ctx.clone(), payload));
+                Ok(())
+            }
+        }
+    }
+
+    /// Regression for issue #73: the peer idle-closed the inbound TCP/TLS
+    /// connection, so the flow send fails fast (post-teardown-fix) — and
+    /// the BYE must fail over to dialing the dialog's route-set edge
+    /// through the pool instead of dying at Timer B with the caller in
+    /// dead air.
+    #[tokio::test]
+    async fn bye_via_flow_falls_back_to_pool_when_flow_is_dead() {
+        let dispatcher = Arc::new(StreamAwareDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = Arc::new(
+            IntegratedUAC::builder()
+                .local_uri("sip:siphon@127.0.0.1")
+                .local_addr("127.0.0.1:5070")
+                .unwrap()
+                .transaction_manager(manager.clone())
+                .resolver(Arc::new(SipResolver::from_system().unwrap()))
+                .dispatcher(dispatcher.clone())
+                .build()
+                .unwrap(),
+        );
+
+        // Same record-routed inbound-call shape as the test above: the
+        // route set names the carrier edge (IP literal: no DNS in CI),
+        // the remote target is the peer's private Contact.
+        let proxy = SipUri::parse("sip:198.51.100.10:5061;transport=tls;lr").unwrap();
+        let dialog = Dialog::unchecked_new(
+            DialogId::unchecked_new("dead-flow-call", "local-tag", "remote-tag"),
+            DialogStateType::Confirmed,
+            SipUri::parse("sip:+15551234567@127.0.0.1:5061;transport=tls").unwrap(),
+            SipUri::parse("sip:+15551234567@carrier.example.net").unwrap(),
+            SipUri::parse("sip:+15551234567@10.8.0.4:5060;transport=udp").unwrap(),
+            0,                   // local_cseq
+            1,                   // remote_cseq
+            None,                // last_ack_cseq
+            vec![proxy.clone()], // route_set from Record-Route
+            false,               // secure
+            None,                // session_expires
+            None,                // refresher
+            false,               // is_uac (we answered the INVITE)
+        );
+
+        // A dead flow: the receiver is dropped, exactly what the
+        // transport's writer teardown does once the peer FINs.
+        let (flow_tx, flow_rx) = mpsc::channel::<Bytes>(8);
+        drop(flow_rx);
+        let flow = Flow::new(flow_tx, "10.8.0.4:49152".parse().unwrap())
+            .with_local_addr("127.0.0.1:5071".parse().unwrap());
+
+        let task = {
+            let uac = uac.clone();
+            tokio::spawn(async move { uac.bye_via_flow(&dialog, flow).await })
+        };
+
+        // The BYE must show up as a pool dial-out to the route-set edge.
+        let (ctx, request) = loop {
+            if let Some((ctx, payload)) = dispatcher.pool_sent.lock().await.first().cloned() {
+                break (
+                    ctx,
+                    sip_parse::parse_request(&payload).expect("valid BYE on the wire"),
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+
+        assert!(
+            *dispatcher.flow_attempts.lock().await >= 1,
+            "the flow must be tried first"
+        );
+        assert!(ctx.stream().is_none(), "fallback target dials the pool");
+        assert_eq!(
+            ctx.peer(),
+            "198.51.100.10:5061".parse().unwrap(),
+            "fallback dials the route-set edge, not the peer's ephemeral port"
+        );
+        assert_eq!(
+            ctx.server_name(),
+            Some("198.51.100.10"),
+            "fallback keeps the SNI for the TLS pool"
+        );
+        assert_eq!(request.method(), &Method::Bye);
+        assert_eq!(
+            request.headers().get("Route"),
+            Some("<sip:198.51.100.10:5061;transport=tls;lr>"),
+            "the fallback BYE still loose-routes through the edge"
+        );
+
+        // Answer 200 OK: the response completes the transaction even
+        // though it was transmitted on the fallback target.
+        let mut headers = Headers::new();
+        for name in ["Via", "From", "To", "Call-ID", "CSeq"] {
+            headers
+                .push(
+                    SmolStr::new(name),
+                    request.headers().get_smol(name).unwrap().clone(),
+                )
+                .unwrap();
+        }
+        let response = Response::new(
+            StatusLine::new(200, SmolStr::new("OK")).expect("valid status line"),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid response");
+        manager.receive_response(response).await;
+
+        let response = task.await.unwrap().expect("BYE completes via fallback");
+        assert_eq!(response.code(), 200);
+    }
+
+    // ── builder: sharing a DialogManager with the UAS ──
+
+    /// Build a minimally-configured UAC, optionally sharing a store.
+    fn uac_with_optional_store(shared: Option<Arc<DialogManager>>) -> IntegratedUAC {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let mut builder = IntegratedUAC::builder()
+            .local_uri("sip:siphon@127.0.0.1")
+            .local_addr("127.0.0.1:5070")
+            .unwrap()
+            .transaction_manager(Arc::new(TransactionManager::new(dispatcher.clone())))
+            .resolver(Arc::new(SipResolver::from_system().unwrap()))
+            .dispatcher(dispatcher);
+        if let Some(mgr) = shared {
+            builder = builder.dialog_manager(mgr);
+        }
+        builder.build().unwrap()
+    }
+
+    /// An inbound in-dialog BYE as the peer would send it for a dialog we
+    /// created as UAC: From carries *their* tag, To carries ours.
+    fn inbound_bye(call_id: &str, our_tag: &str, their_tag: &str) -> Request {
+        let mut headers = Headers::new();
+        headers.push("Call-ID", call_id).unwrap();
+        headers
+            .push("From", format!("<sip:remote@example.com>;tag={their_tag}"))
+            .unwrap();
+        headers
+            .push("To", format!("<sip:local@example.com>;tag={our_tag}"))
+            .unwrap();
+        Request::new(
+            RequestLine::new(Method::Bye, SipUri::parse("sip:local@example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid BYE")
+    }
+
+    /// Both halves of the UAC — the `IntegratedUAC` handle and the inner
+    /// `UserAgentClient` helper — must land on the injected store.
+    /// Redirecting only one would relocate the split rather than close it,
+    /// since the helper registers dialogs on its own from 2xx responses.
+    #[tokio::test]
+    async fn builder_shares_injected_dialog_manager_with_helper_too() {
+        let shared = Arc::new(DialogManager::new());
+        let uac = uac_with_optional_store(Some(shared.clone()));
+
+        assert!(Arc::ptr_eq(uac.dialog_manager().unwrap(), &shared));
+        let helper = uac.helper.lock().await;
+        assert!(
+            Arc::ptr_eq(&helper.dialog_manager, &shared),
+            "helper must use the shared store, not its constructor default"
+        );
+    }
+
+    /// Omitting the setter leaves the private store intact, so existing
+    /// single-role embedders keep their current behaviour.
+    #[tokio::test]
+    async fn builder_without_injection_keeps_private_store() {
+        let unrelated = Arc::new(DialogManager::new());
+        let uac = uac_with_optional_store(None);
+
+        assert!(!Arc::ptr_eq(uac.dialog_manager().unwrap(), &unrelated));
+        let helper = uac.helper.lock().await;
+        assert!(
+            Arc::ptr_eq(&helper.dialog_manager, uac.dialog_manager().unwrap()),
+            "un-injected UAC still agrees with itself"
+        );
+    }
+
+    /// The regression this setter exists for: a dialog the UAC created
+    /// must be resolvable by the lookup UAS dispatch performs on an
+    /// inbound BYE. Before sharing was possible this missed, dispatch
+    /// answered 481, and the outbound call never tore down.
+    #[tokio::test]
+    async fn uac_dialog_is_found_by_shared_manager_lookup() {
+        let shared = Arc::new(DialogManager::new());
+        let uac = uac_with_optional_store(Some(shared.clone()));
+
+        // Register a confirmed UAC dialog the way the UAC does.
+        let dialog = base_dialog(); // id = (call, local=our tag, remote=peer tag)
+        let _ = uac.dialog_manager().unwrap().insert(dialog.clone());
+
+        let bye = inbound_bye("call", "local", "remote");
+        let found = shared
+            .find_by_request(&bye)
+            .expect("UAS dispatch must resolve the UAC's dialog through the shared store");
+        assert_eq!(found.id(), dialog.id());
+    }
+
+    /// The same lookup against a *separate* manager still misses — this
+    /// is the 481 path, pinned so the test above can't pass for the
+    /// wrong reason (e.g. a global/static store).
+    #[tokio::test]
+    async fn unshared_uac_dialog_is_invisible_to_another_manager() {
+        let uas_side = Arc::new(DialogManager::new());
+        let uac = uac_with_optional_store(None);
+
+        let _ = uac.dialog_manager().unwrap().insert(base_dialog());
+
+        let bye = inbound_bye("call", "local", "remote");
+        assert!(
+            uas_side.find_by_request(&bye).is_none(),
+            "a private UAC store must stay invisible to an unrelated manager"
+        );
+    }
+
+    // ── INVITE auth retry on 401/407 (issue #83) ──
+
+    fn auth_test_uac(
+        dispatcher: Arc<CapturingDispatcher>,
+        manager: Arc<TransactionManager>,
+        config: Option<UACConfig>,
+    ) -> Arc<IntegratedUAC> {
+        let mut builder = IntegratedUAC::builder()
+            .local_uri("sip:alice@127.0.0.1")
+            .local_addr("127.0.0.1:5070")
+            .unwrap()
+            .credentials("alice", "secret")
+            .transaction_manager(manager)
+            .resolver(Arc::new(SipResolver::from_system().unwrap()))
+            .dispatcher(dispatcher);
+        if let Some(config) = config {
+            builder = builder.config(config);
+        }
+        Arc::new(builder.build().unwrap())
+    }
+
+    async fn sent_requests(dispatcher: &CapturingDispatcher) -> Vec<Request> {
+        dispatcher
+            .sent
+            .lock()
+            .await
+            .iter()
+            .filter_map(|(_, payload)| sip_parse::parse_request(payload))
+            .collect()
+    }
+
+    async fn wait_for_request<F>(dispatcher: &CapturingDispatcher, pred: F) -> Request
+    where
+        F: Fn(&Request) -> bool,
+    {
+        loop {
+            if let Some(request) = sent_requests(dispatcher).await.into_iter().find(&pred) {
+                return request;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    fn via_branch(request: &Request) -> String {
+        let via = request.headers().get("Via").unwrap();
+        via.split("branch=").nth(1).unwrap().to_string()
+    }
+
+    /// 401/407 challenge echoing the request's transaction identifiers,
+    /// shaped like FreeSWITCH's (To tag, MD5 digest with qop).
+    fn challenge_response(request: &Request, code: u16) -> Response {
+        let mut headers = Headers::new();
+        for name in ["Via", "From", "Call-ID", "CSeq"] {
+            headers
+                .push(
+                    SmolStr::new(name),
+                    request.headers().get_smol(name).unwrap().clone(),
+                )
+                .unwrap();
+        }
+        headers
+            .push(
+                SmolStr::new("To"),
+                SmolStr::new(format!("{};tag=chal", request.headers().get("To").unwrap())),
+            )
+            .unwrap();
+        let (reason, auth_header) = if code == 407 {
+            ("Proxy Authentication Required", "Proxy-Authenticate")
+        } else {
+            ("Unauthorized", "WWW-Authenticate")
+        };
+        headers
+            .push(
+                SmolStr::new(auth_header),
+                SmolStr::new(
+                    "Digest realm=\"127.0.0.1\", nonce=\"abc123\", algorithm=MD5, qop=\"auth\"",
+                ),
+            )
+            .unwrap();
+        Response::new(
+            StatusLine::new(code, SmolStr::new(reason)).expect("valid status line"),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid response")
+    }
+
+    fn ok_response(request: &Request) -> Response {
+        let mut headers = Headers::new();
+        for name in ["Via", "From", "Call-ID", "CSeq"] {
+            headers
+                .push(
+                    SmolStr::new(name),
+                    request.headers().get_smol(name).unwrap().clone(),
+                )
+                .unwrap();
+        }
+        headers
+            .push(
+                SmolStr::new("To"),
+                SmolStr::new(format!(
+                    "{};tag=uas-ok",
+                    request.headers().get("To").unwrap()
+                )),
+            )
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new("<sip:9196@127.0.0.1:5060>"),
+            )
+            .unwrap();
+        Response::new(
+            StatusLine::new(200, SmolStr::new("OK")).expect("valid status line"),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid response")
+    }
+
+    /// The headline regression from issue #83: an INVITE answered with 407
+    /// must be re-sent with Proxy-Authorization (same Call-ID and From tag,
+    /// CSeq+1, fresh branch, original body), and the application must see
+    /// only the authenticated attempt's final response.
+    #[tokio::test]
+    async fn invite_407_is_retried_and_confirms_dialog() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = auth_test_uac(dispatcher.clone(), manager.clone(), None);
+
+        let sdp = "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=-\r\n";
+        let call = uac
+            .invite("sip:9196@127.0.0.1:5060", Some(sdp))
+            .await
+            .unwrap();
+
+        let invite1 = wait_for_request(&dispatcher, |r| r.method() == &Method::Invite).await;
+        assert!(invite1.headers().get("Proxy-Authorization").is_none());
+        assert_eq!(invite1.headers().get("CSeq"), Some("1 INVITE"));
+
+        manager
+            .receive_response(challenge_response(&invite1, 407))
+            .await;
+
+        // The transaction layer ACKs the challenge...
+        let ack = wait_for_request(&dispatcher, |r| r.method() == &Method::Ack).await;
+        assert_eq!(via_branch(&ack), via_branch(&invite1));
+
+        // ...and the authenticated re-INVITE goes out as a new transaction.
+        let invite2 = wait_for_request(&dispatcher, |r| {
+            r.method() == &Method::Invite && r.headers().get("Proxy-Authorization").is_some()
+        })
+        .await;
+        assert_eq!(invite2.headers().get("CSeq"), Some("2 INVITE"));
+        assert_eq!(
+            invite2.headers().get("Call-ID"),
+            invite1.headers().get("Call-ID")
+        );
+        assert_eq!(invite2.headers().get("From"), invite1.headers().get("From"));
+        assert_ne!(via_branch(&invite2), via_branch(&invite1));
+        assert_eq!(invite2.body(), invite1.body(), "retry keeps the SDP offer");
+
+        manager.receive_response(ok_response(&invite2)).await;
+
+        let final_response = call.await_final().await.unwrap();
+        assert_eq!(final_response.code(), 200, "only the 200 reaches the app");
+        assert_eq!(call.dialog.read().await.id().remote_tag(), "uas-ok");
+
+        // CANCEL/ACK bookkeeping follows the live attempt.
+        assert_eq!(
+            call.invite_request().await.headers().get("CSeq"),
+            Some("2 INVITE")
+        );
+    }
+
+    /// Same retry for a 401 challenge: the retry carries Authorization
+    /// (not Proxy-Authorization), per the challenge header form.
+    #[tokio::test]
+    async fn invite_401_is_retried_with_authorization() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = auth_test_uac(dispatcher.clone(), manager.clone(), None);
+
+        let _call = uac
+            .invite("sip:9196@127.0.0.1:5060", Some("v=0\r\n"))
+            .await
+            .unwrap();
+        let invite1 = wait_for_request(&dispatcher, |r| r.method() == &Method::Invite).await;
+
+        manager
+            .receive_response(challenge_response(&invite1, 401))
+            .await;
+
+        let invite2 = wait_for_request(&dispatcher, |r| {
+            r.method() == &Method::Invite && r.headers().get("Authorization").is_some()
+        })
+        .await;
+        assert_eq!(invite2.headers().get("CSeq"), Some("2 INVITE"));
+        assert!(invite2.headers().get("Proxy-Authorization").is_none());
+    }
+
+    /// Delayed-offer INVITEs retry with the body they originally had:
+    /// none. The authenticated attempt must not grow an SDP body.
+    #[tokio::test]
+    async fn offerless_invite_retry_keeps_empty_body() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = auth_test_uac(dispatcher.clone(), manager.clone(), None);
+
+        let _call = uac.invite("sip:9196@127.0.0.1:5060", None).await.unwrap();
+        let invite1 = wait_for_request(&dispatcher, |r| r.method() == &Method::Invite).await;
+        assert!(invite1.body().is_empty());
+
+        manager
+            .receive_response(challenge_response(&invite1, 407))
+            .await;
+
+        let invite2 = wait_for_request(&dispatcher, |r| {
+            r.method() == &Method::Invite && r.headers().get("Proxy-Authorization").is_some()
+        })
+        .await;
+        assert!(invite2.body().is_empty(), "offerless retry stays offerless");
+        assert_eq!(invite2.headers().get("Content-Length"), Some("0"));
+    }
+
+    /// Persistent challenges stop at `max_auth_retries`, and the last
+    /// challenge is surfaced as the final response (matching non-INVITE
+    /// retry semantics).
+    #[tokio::test]
+    async fn invite_auth_retry_limit_surfaces_last_challenge() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let config = UACConfig {
+            max_auth_retries: 1,
+            ..Default::default()
+        };
+        let uac = auth_test_uac(dispatcher.clone(), manager.clone(), Some(config));
+
+        let call = uac
+            .invite("sip:9196@127.0.0.1:5060", Some("v=0\r\n"))
+            .await
+            .unwrap();
+        let invite1 = wait_for_request(&dispatcher, |r| r.method() == &Method::Invite).await;
+
+        manager
+            .receive_response(challenge_response(&invite1, 407))
+            .await;
+
+        let invite2 = wait_for_request(&dispatcher, |r| {
+            r.method() == &Method::Invite && r.headers().get("Proxy-Authorization").is_some()
+        })
+        .await;
+
+        // Challenge the authenticated attempt too: budget (1) exhausted.
+        manager
+            .receive_response(challenge_response(&invite2, 407))
+            .await;
+
+        let final_response = call.await_final().await.unwrap();
+        assert_eq!(final_response.code(), 407, "last challenge surfaces");
+
+        // Exactly two INVITE attempts went out (distinct branches).
+        let branches: std::collections::HashSet<String> = sent_requests(&dispatcher)
+            .await
+            .iter()
+            .filter(|r| r.method() == &Method::Invite)
+            .map(via_branch)
+            .collect();
+        assert_eq!(branches.len(), 2);
+    }
+
+    /// `auto_retry_auth = false` preserves the old behaviour: the
+    /// challenge is the final response and nothing is re-sent.
+    #[tokio::test]
+    async fn invite_auth_retry_disabled_surfaces_challenge() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let config = UACConfig {
+            auto_retry_auth: false,
+            ..Default::default()
+        };
+        let uac = auth_test_uac(dispatcher.clone(), manager.clone(), Some(config));
+
+        let call = uac
+            .invite("sip:9196@127.0.0.1:5060", Some("v=0\r\n"))
+            .await
+            .unwrap();
+        let invite1 = wait_for_request(&dispatcher, |r| r.method() == &Method::Invite).await;
+
+        manager
+            .receive_response(challenge_response(&invite1, 407))
+            .await;
+
+        let final_response = call.await_final().await.unwrap();
+        assert_eq!(final_response.code(), 407);
+        assert!(sent_requests(&dispatcher)
+            .await
+            .iter()
+            .all(|r| r.headers().get("Proxy-Authorization").is_none()));
+    }
+
+    /// Issue #92: the refresh period must be Session-Expires/2 with no
+    /// 90 s floor. The old `max(90, se/2)` scheduled the refresh for a
+    /// 90 s session (the RFC 4028 minimum) exactly on the expiry
+    /// deadline, leaving zero margin.
+    #[test]
+    fn session_refresh_period_is_half_session_expires() {
+        assert_eq!(session_refresh_period(90), Duration::from_secs(45));
+        assert_eq!(session_refresh_period(100), Duration::from_secs(50));
+        assert_eq!(session_refresh_period(120), Duration::from_secs(60));
+        assert_eq!(session_refresh_period(180), Duration::from_secs(90));
+        assert_eq!(session_refresh_period(1800), Duration::from_secs(900));
+    }
+
+    /// Out-of-range values (below the RFC 4028 minimum of 90, which
+    /// `SessionExpires::new` would have rejected) must not spin the
+    /// refresh loop with a zero period.
+    #[test]
+    fn session_refresh_period_floors_at_one_second() {
+        assert_eq!(session_refresh_period(0), Duration::from_secs(1));
+        assert_eq!(session_refresh_period(1), Duration::from_secs(1));
+        assert_eq!(session_refresh_period(2), Duration::from_secs(1));
+    }
+
+    // ── issue #95: the refresh CSeq must reach the dialog's owner ──
+
+    /// Confirmed dialog whose peer is an IP literal, so the in-dialog send
+    /// resolves without touching DNS.
+    fn refresh_dialog() -> Dialog {
+        Dialog::unchecked_new(
+            DialogId::unchecked_new("refresh-call", "local-tag", "remote-tag"),
+            DialogStateType::Confirmed,
+            SipUri::parse("sip:siphon@127.0.0.1").unwrap(),
+            SipUri::parse("sip:callee@192.0.2.10").unwrap(),
+            SipUri::parse("sip:callee@192.0.2.10:5060").unwrap(),
+            1,      // local_cseq — the answered INVITE consumed it
+            1,      // remote_cseq
+            None,   // last_ack_cseq
+            vec![], // route_set
+            false,  // secure
+            Some(Duration::from_secs(90)),
+            None, // refresher
+            true, // is_uac
+        )
+    }
+
+    fn refresh_uac(
+        dispatcher: Arc<CapturingDispatcher>,
+        manager: Arc<TransactionManager>,
+    ) -> Arc<IntegratedUAC> {
+        Arc::new(
+            IntegratedUAC::builder()
+                .local_uri("sip:siphon@127.0.0.1")
+                .local_addr("127.0.0.1:5080")
+                .unwrap()
+                .transaction_manager(manager)
+                .resolver(Arc::new(SipResolver::from_system().unwrap()))
+                .dispatcher(dispatcher)
+                .build()
+                .unwrap(),
+        )
+    }
+
+    /// Bounded [`wait_for_request`]. Regressing this fix does not produce a
+    /// wrong request — it produces no second request at all, because the
+    /// refresh reuses the CSeq it already sent. Without the timeout that is
+    /// an infinite wait; with it, the test fails in five seconds.
+    async fn await_cseq(dispatcher: &CapturingDispatcher, cseq: &'static str) -> Request {
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            wait_for_request(dispatcher, move |r| r.headers().get("CSeq") == Some(cseq)),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("no request with CSeq {cseq} reached the wire"))
+    }
+
+    /// Mirror the request's dialog identifiers straight back. Unlike
+    /// [`ok_response`] this adds no `To` tag: an in-dialog request already
+    /// carries one, and a second would land the response outside the dialog.
+    fn in_dialog_response(request: &Request, code: u16, reason: &str) -> Response {
+        let mut headers = Headers::new();
+        for name in ["Via", "From", "To", "Call-ID", "CSeq"] {
+            headers
+                .push(
+                    SmolStr::new(name),
+                    request.headers().get_smol(name).unwrap().clone(),
+                )
+                .unwrap();
+        }
+        Response::new(
+            StatusLine::new(code, SmolStr::new(reason)).expect("valid status line"),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid response")
+    }
+
+    /// The defect: refreshes advanced a CSeq only the timer task could see,
+    /// so the owner's next BYE/re-INVITE/REFER reused a consumed number and
+    /// a record-routing peer answered `408`. Two consecutive refreshes must
+    /// leave the *shared* dialog at 3, not frozen at the arming value.
+    #[tokio::test]
+    async fn session_refresh_commits_the_advanced_cseq_to_the_shared_dialog() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = refresh_uac(dispatcher.clone(), manager.clone());
+        let shared = Arc::new(RwLock::new(refresh_dialog()));
+
+        for expected_cseq in ["2 INVITE", "3 INVITE"] {
+            let task = {
+                let (uac, shared) = (uac.clone(), shared.clone());
+                tokio::spawn(async move {
+                    refresh_shared_session(&uac, &shared, 90, "uac", false).await
+                })
+            };
+
+            // Match on CSeq rather than send order: the auto-ACK for the
+            // first refresh is dispatched between the two iterations.
+            let request = await_cseq(&dispatcher, expected_cseq).await;
+            assert_eq!(request.method(), &Method::Invite);
+            assert!(
+                request.headers().get("Session-Expires").is_some(),
+                "a refresh must carry Session-Expires"
+            );
+            manager
+                .receive_response(in_dialog_response(&request, 200, "OK"))
+                .await;
+
+            let response = task.await.unwrap().expect("refresh succeeded");
+            assert_eq!(response.code(), 200);
+        }
+
+        assert_eq!(
+            shared.read().await.local_cseq(),
+            3,
+            "both refreshes must be visible to the dialog's owner"
+        );
+    }
+
+    /// A refresh that fails still consumed its CSeq: `prepare_in_dialog_request`
+    /// burns the number when it builds the request, long before the response
+    /// decides anything. Dropping the advance would hand the owner a CSeq the
+    /// peer has already seen — the very reuse this fix prevents.
+    #[tokio::test]
+    async fn session_refresh_commits_the_cseq_even_when_the_refresh_fails() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = refresh_uac(dispatcher.clone(), manager.clone());
+        let shared = Arc::new(RwLock::new(refresh_dialog()));
+
+        let task = {
+            let (uac, shared) = (uac.clone(), shared.clone());
+            tokio::spawn(
+                async move { refresh_shared_session(&uac, &shared, 90, "uac", false).await },
+            )
+        };
+
+        let request = await_cseq(&dispatcher, "2 INVITE").await;
+        manager
+            .receive_response(in_dialog_response(
+                &request,
+                481,
+                "Call/Transaction Does Not Exist",
+            ))
+            .await;
+
+        let result = task.await.unwrap();
+        assert!(result.is_err(), "481 on an in-dialog request is an error");
+        let dialog = shared.read().await;
+        assert_eq!(
+            dialog.local_cseq(),
+            2,
+            "the consumed CSeq must be committed"
+        );
+        assert_eq!(
+            dialog.state(),
+            DialogStateType::Terminated,
+            "481 terminates the dialog, and that must reach the owner too"
+        );
+    }
+
+    /// Issue #99: the CSeq a refresh will consume must be visible to the
+    /// dialog's owner *while the refresh is still in flight*, not only once
+    /// it has been answered.
+    ///
+    /// Committing after the response left the shared dialog reading the
+    /// pre-request number for a whole round trip, so an owner that resolved
+    /// it in that window — to send a teardown BYE — built its request on the
+    /// number the refresh was already using. Measured on a downstream owner:
+    /// a refresh re-INVITE and a BYE 564 us apart, both `CSeq: 3`.
+    #[tokio::test]
+    async fn session_refresh_reserves_its_cseq_before_the_request_leaves() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = refresh_uac(dispatcher.clone(), manager.clone());
+        let shared = Arc::new(RwLock::new(refresh_dialog()));
+
+        let task = {
+            let (uac, shared) = (uac.clone(), shared.clone());
+            tokio::spawn(
+                async move { refresh_shared_session(&uac, &shared, 90, "uac", false).await },
+            )
+        };
+
+        // The refresh is on the wire and unanswered — the window in which the
+        // owner's own request used to collide with it.
+        let request = await_cseq(&dispatcher, "2 INVITE").await;
+
+        let mut owner = shared.read().await.clone();
+        assert_eq!(
+            owner.local_cseq(),
+            2,
+            "the in-flight refresh's CSeq must already be published"
+        );
+        assert_eq!(
+            owner.next_local_cseq(),
+            3,
+            "an owner request racing the refresh must continue the sequence, not reuse it"
+        );
+
+        manager
+            .receive_response(in_dialog_response(&request, 200, "OK"))
+            .await;
+        task.await.unwrap().expect("refresh succeeded");
+        assert_eq!(
+            shared.read().await.local_cseq(),
+            2,
+            "committing the answered refresh must not advance past the reservation"
+        );
+    }
+
+    // ── issue #93: a timer that has given up must say so ──
+
+    fn refresh_uac_with_max_failures(
+        dispatcher: Arc<CapturingDispatcher>,
+        manager: Arc<TransactionManager>,
+        max_session_refresh_failures: u32,
+    ) -> Arc<IntegratedUAC> {
+        Arc::new(
+            IntegratedUAC::builder()
+                .local_uri("sip:siphon@127.0.0.1")
+                .local_addr("127.0.0.1:5080")
+                .unwrap()
+                .transaction_manager(manager)
+                .resolver(Arc::new(SipResolver::from_system().unwrap()))
+                .dispatcher(dispatcher)
+                .config(UACConfig {
+                    max_session_refresh_failures,
+                    ..UACConfig::default()
+                })
+                .build()
+                .unwrap(),
+        )
+    }
+
+    /// Wait for the watch channel to publish a state the predicate accepts.
+    /// Bounded: the defect being fixed is a loop that reports *nothing*, so an
+    /// unbounded wait would hang rather than fail.
+    async fn await_state<F>(rx: &mut watch::Receiver<SessionTimerState>, pred: F)
+    where
+        F: Fn(&SessionTimerState) -> bool,
+    {
+        let observed = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if pred(&rx.borrow_and_update()) {
+                    return;
+                }
+                if rx.changed().await.is_err() {
+                    panic!("session timer state channel closed");
+                }
+            }
+        })
+        .await;
+        assert!(
+            observed.is_ok(),
+            "timed out waiting for the expected session timer state; last was {:?}",
+            *rx.borrow()
+        );
+    }
+
+    /// The peer answering `481` means the dialog is gone: no number of
+    /// retries brings it back, so the loop must stop on the first one and
+    /// name the reason rather than retry until the task is dropped.
+    #[tokio::test]
+    async fn session_timer_stops_immediately_when_the_peer_says_the_dialog_is_gone() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        // A high threshold: 481 must be terminal regardless of it.
+        let uac = refresh_uac_with_max_failures(dispatcher.clone(), manager.clone(), 99);
+        let dialog = Arc::new(RwLock::new(refresh_dialog()));
+        let state = Arc::new(watch::Sender::new(SessionTimerState::Idle));
+        let mut rx = state.subscribe();
+
+        // session_expires 2 → a refresh every second.
+        let task = tokio::spawn(run_session_timer(
+            uac,
+            dialog.clone(),
+            state,
+            2,
+            "uac",
+            false,
+        ));
+
+        let first = await_cseq(&dispatcher, "2 INVITE").await;
+        manager
+            .receive_response(in_dialog_response(&first, 200, "OK"))
+            .await;
+        await_state(&mut rx, |s| matches!(s, SessionTimerState::Healthy { .. })).await;
+
+        let second = await_cseq(&dispatcher, "3 INVITE").await;
+        manager
+            .receive_response(in_dialog_response(
+                &second,
+                481,
+                "Call/Transaction Does Not Exist",
+            ))
+            .await;
+
+        await_state(&mut rx, |s| {
+            *s == SessionTimerState::Stopped {
+                reason: SessionTimerStop::DialogGone,
+            }
+        })
+        .await;
+
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("the loop must exit, not keep ticking")
+            .expect("task did not panic");
+    }
+
+    /// A non-2xx rejection is a failed refresh even though
+    /// `apply_in_dialog_response` returns `Ok` for it. Two of them, with the
+    /// threshold set to two, must stop the loop and report `Exhausted` —
+    /// previously this retried forever while the owner saw nothing at all.
+    #[tokio::test]
+    async fn session_timer_gives_up_after_the_configured_consecutive_failures() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = refresh_uac_with_max_failures(dispatcher.clone(), manager.clone(), 2);
+        let dialog = Arc::new(RwLock::new(refresh_dialog()));
+        let state = Arc::new(watch::Sender::new(SessionTimerState::Idle));
+        let mut rx = state.subscribe();
+
+        let task = tokio::spawn(run_session_timer(
+            uac,
+            dialog.clone(),
+            state,
+            2,
+            "uac",
+            false,
+        ));
+
+        // 503 leaves the dialog alive, so this is the retryable kind.
+        let first = await_cseq(&dispatcher, "2 INVITE").await;
+        manager
+            .receive_response(in_dialog_response(&first, 503, "Service Unavailable"))
+            .await;
+        await_state(&mut rx, |s| {
+            *s == SessionTimerState::Failing { consecutive: 1 }
+        })
+        .await;
+
+        let second = await_cseq(&dispatcher, "3 INVITE").await;
+        manager
+            .receive_response(in_dialog_response(&second, 503, "Service Unavailable"))
+            .await;
+
+        await_state(&mut rx, |s| {
+            *s == SessionTimerState::Stopped {
+                reason: SessionTimerStop::Exhausted { consecutive: 2 },
+            }
+        })
+        .await;
+
+        assert_eq!(
+            dialog.read().await.state(),
+            DialogStateType::Confirmed,
+            "giving up must not terminate the dialog — the BYE is the owner's call"
+        );
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("the loop must exit, not keep ticking")
+            .expect("task did not panic");
+    }
+
+    /// The residual race, bounded: if the owner sent and committed its own
+    /// in-dialog request while a refresh was in flight, the refresh's older
+    /// dialog must not overwrite it and walk the CSeq backwards.
+    #[tokio::test]
+    async fn session_refresh_commit_never_regresses_the_owners_cseq() {
+        let shared = Arc::new(RwLock::new(refresh_dialog()));
+
+        // A refresh resolves the dialog and consumes CSeq 2...
+        let mut in_flight = shared.read().await.clone();
+        in_flight.next_local_cseq();
+
+        // ...while the owner sends a hold re-INVITE and a REFER of its own.
+        {
+            let mut owner = shared.write().await;
+            owner.next_local_cseq();
+            owner.next_local_cseq();
+        }
+
+        commit_advanced_dialog(&shared, in_flight).await;
+
+        assert_eq!(
+            shared.read().await.local_cseq(),
+            3,
+            "the owner's newer CSeq must survive the late commit"
+        );
     }
 }

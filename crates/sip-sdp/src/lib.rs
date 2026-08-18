@@ -145,7 +145,7 @@ fn validate_field(value: &str, field: &'static str, max_length: usize) -> Result
 
 /// Validates a clock rate
 fn validate_clock_rate(rate: u32) -> Result<(), SdpError> {
-    if rate < MIN_CLOCK_RATE || rate > MAX_CLOCK_RATE {
+    if !(MIN_CLOCK_RATE..=MAX_CLOCK_RATE).contains(&rate) {
         return Err(SdpError::InvalidClockRate {
             rate,
             min: MIN_CLOCK_RATE,

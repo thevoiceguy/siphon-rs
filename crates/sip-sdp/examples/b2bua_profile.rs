@@ -27,7 +27,7 @@ fn main() {
     // B2BUA constructs offer toward callee using the same profile (audio/opus)
     let offer_b = profile_b.build("b2bua", "198.51.100.1", 6000, None);
 
-    println!("Caller offer (A):\n{}", offer_a.to_string());
-    println!("Answer to caller (A):\n{}", answer_to_a.to_string());
-    println!("Offer to callee (B):\n{}", offer_b.to_string());
+    println!("Caller offer (A):\n{}", offer_a);
+    println!("Answer to caller (A):\n{}", answer_to_a);
+    println!("Offer to callee (B):\n{}", offer_b);
 }

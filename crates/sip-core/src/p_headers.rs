@@ -965,7 +965,7 @@ mod tests {
 
         for i in 0..MAX_PARAMS {
             identity
-                .add_param(&format!("p{}", i), Some("value"))
+                .add_param(format!("p{}", i), Some("value"))
                 .unwrap();
         }
 

@@ -562,7 +562,7 @@ async fn handle_packet(
     use sip_transaction::{branch_from_via, request_branch_id, TransactionKey, TransportContext};
 
     // Try parsing as a request
-    if let Some(req) = parse_request(&packet.payload()) {
+    if let Some(req) = parse_request(packet.payload()) {
         let ws_override = if matches!(
             packet.transport(),
             sip_transport::TransportKind::Ws | sip_transport::TransportKind::Wss
@@ -694,7 +694,7 @@ async fn handle_packet(
     }
 
     // Try parsing as a response
-    if let Some(response) = parse_response(&packet.payload()) {
+    if let Some(response) = parse_response(packet.payload()) {
         // Check if this response belongs to a B2BUA call leg
         if services.config.enable_b2bua() {
             if let Some(call_id_header) = response.headers().get("Call-ID") {
@@ -849,7 +849,7 @@ async fn handle_packet(
 
     // Check for SIP keep-alive packets (RFC 5626)
     // Keep-alives are CRLF sequences: single CRLF (2 bytes) or double CRLF (4 bytes)
-    if is_keepalive(&packet.payload()) {
+    if is_keepalive(packet.payload()) {
         tracing::trace!(
             peer = %packet.peer(),
             transport = ?packet.transport(),
@@ -961,34 +961,6 @@ fn is_loopback_bind(bind: &str) -> bool {
         return ip.is_loopback();
     }
     matches!(host, "localhost")
-}
-
-#[cfg(test)]
-mod open_relay_warning_tests {
-    use super::is_loopback_bind;
-
-    #[test]
-    fn loopback_addresses_are_loopback() {
-        assert!(is_loopback_bind("127.0.0.1:5060"));
-        assert!(is_loopback_bind("127.1.2.3:5060"));
-        assert!(is_loopback_bind("[::1]:5060"));
-        assert!(is_loopback_bind("localhost:5060"));
-    }
-
-    #[test]
-    fn wildcards_and_public_addresses_are_not_loopback() {
-        assert!(!is_loopback_bind("0.0.0.0:5060"));
-        assert!(!is_loopback_bind("[::]:5060"));
-        assert!(!is_loopback_bind("192.168.1.10:5060"));
-        assert!(!is_loopback_bind("203.0.113.5:5060"));
-    }
-
-    #[test]
-    fn malformed_bind_treated_as_exposed() {
-        // Better to over-warn than miss a misconfigured bind.
-        assert!(!is_loopback_bind(""));
-        assert!(!is_loopback_bind("not-a-host:5060"));
-    }
 }
 
 /// Print informational message about the current mode
@@ -1115,5 +1087,33 @@ fn print_mode_info(config: &DaemonConfig) {
 
     if config.requires_auth() {
         info!("Authentication realm: {}", config.auth.realm);
+    }
+}
+
+#[cfg(test)]
+mod open_relay_warning_tests {
+    use super::is_loopback_bind;
+
+    #[test]
+    fn loopback_addresses_are_loopback() {
+        assert!(is_loopback_bind("127.0.0.1:5060"));
+        assert!(is_loopback_bind("127.1.2.3:5060"));
+        assert!(is_loopback_bind("[::1]:5060"));
+        assert!(is_loopback_bind("localhost:5060"));
+    }
+
+    #[test]
+    fn wildcards_and_public_addresses_are_not_loopback() {
+        assert!(!is_loopback_bind("0.0.0.0:5060"));
+        assert!(!is_loopback_bind("[::]:5060"));
+        assert!(!is_loopback_bind("192.168.1.10:5060"));
+        assert!(!is_loopback_bind("203.0.113.5:5060"));
+    }
+
+    #[test]
+    fn malformed_bind_treated_as_exposed() {
+        // Better to over-warn than miss a misconfigured bind.
+        assert!(!is_loopback_bind(""));
+        assert!(!is_loopback_bind("not-a-host:5060"));
     }
 }

@@ -1604,6 +1604,9 @@ impl Subscription {
     ///
     /// **Warning**: This bypasses validation and should only be used when values are already trusted
     /// (e.g., from parsed SIP messages or internal construction).
+    // Mirrors Dialog::unchecked_new: the argument list is the struct's fields,
+    // and collapsing it into a builder would change a public constructor.
+    #[allow(clippy::too_many_arguments)]
     pub fn unchecked_new(
         id: SubscriptionId,
         state: SubscriptionState,
@@ -1823,7 +1826,7 @@ mod tests {
     ) -> Request {
         let mut headers = Headers::new();
         headers
-            .push(SmolStr::new("Call-ID"), SmolStr::new(call_id.to_owned()))
+            .push(SmolStr::new("Call-ID"), SmolStr::new(call_id))
             .unwrap();
         headers
             .push(
@@ -1840,10 +1843,7 @@ mod tests {
                 .unwrap();
         } else {
             headers
-                .push(
-                    SmolStr::new("To"),
-                    SmolStr::new("<sip:bob@example.com>".to_owned()),
-                )
+                .push(SmolStr::new("To"), SmolStr::new("<sip:bob@example.com>"))
                 .unwrap();
         }
         headers
@@ -1855,7 +1855,7 @@ mod tests {
         headers
             .push(
                 SmolStr::new("Contact"),
-                SmolStr::new("<sip:alice@client.example.com>".to_owned()),
+                SmolStr::new("<sip:alice@client.example.com>"),
             )
             .unwrap();
 
@@ -1891,7 +1891,7 @@ mod tests {
         headers
             .push(
                 SmolStr::new("Contact"),
-                SmolStr::new("<sip:bob@server.example.com>".to_owned()),
+                SmolStr::new("<sip:bob@server.example.com>"),
             )
             .unwrap();
 
@@ -2300,7 +2300,7 @@ mod tests {
         reinvite_resp_headers
             .push(
                 SmolStr::new("Contact"),
-                SmolStr::new("<sip:bob@newserver.example.com>".to_owned()),
+                SmolStr::new("<sip:bob@newserver.example.com>"),
             )
             .unwrap();
 
@@ -2320,23 +2320,20 @@ mod tests {
     #[test]
     fn extract_tag_variations() {
         assert_eq!(
-            extract_tag(&SmolStr::new("<sip:user@host>;tag=abc123".to_owned())),
-            Some(SmolStr::new("abc123".to_owned()))
+            extract_tag(&SmolStr::new("<sip:user@host>;tag=abc123")),
+            Some(SmolStr::new("abc123"))
         );
         assert_eq!(
-            extract_tag(&SmolStr::new("sip:user@host;tag=xyz".to_owned())),
-            Some(SmolStr::new("xyz".to_owned()))
+            extract_tag(&SmolStr::new("sip:user@host;tag=xyz")),
+            Some(SmolStr::new("xyz"))
         );
         assert_eq!(
             extract_tag(&SmolStr::new(
-                "<sip:user@host>;param=val;tag=test;other=val".to_owned()
+                "<sip:user@host>;param=val;tag=test;other=val"
             )),
-            Some(SmolStr::new("test".to_owned()))
+            Some(SmolStr::new("test"))
         );
-        assert_eq!(
-            extract_tag(&SmolStr::new("<sip:user@host>".to_owned())),
-            None
-        );
+        assert_eq!(extract_tag(&SmolStr::new("<sip:user@host>")), None);
     }
 
     #[test]

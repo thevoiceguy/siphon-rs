@@ -138,21 +138,23 @@ mod tests {
     #[test]
     fn parses_name_addr_with_brackets() {
         let uri = parse_name_addr_uri("Alice <sip:alice@example.com>").unwrap();
-        assert_eq!(uri.user().as_deref(), Some("alice"));
+        assert_eq!(uri.user(), Some("alice"));
         assert_eq!(uri.host(), "example.com");
     }
 
     #[test]
     fn parses_name_addr_without_brackets() {
         let uri = parse_name_addr_uri("sip:bob@example.com;tag=123").unwrap();
-        assert_eq!(uri.user().as_deref(), Some("bob"));
+        assert_eq!(uri.user(), Some("bob"));
         assert_eq!(uri.host(), "example.com");
     }
 
     #[test]
     fn extracts_local_identity() {
-        let mut config = DaemonConfig::default();
-        config.local_uri = "sip:test@192.168.1.100".to_string();
+        let config = DaemonConfig {
+            local_uri: "sip:test@192.168.1.100".to_string(),
+            ..Default::default()
+        };
         let (username, host) = local_identity(&config);
         assert_eq!(username, "test");
         assert_eq!(host, "192.168.1.100");

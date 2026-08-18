@@ -866,8 +866,8 @@ mod tests {
 
         for i in 0..MAX_REGISTRATIONS {
             let reg = Registration::new(
-                &format!("sip:user{}@example.com", i),
-                &format!("reg{}", i),
+                format!("sip:user{}@example.com", i),
+                format!("reg{}", i),
                 RegistrationState::Active,
             )
             .unwrap();
@@ -892,9 +892,9 @@ mod tests {
 
         for i in 0..MAX_CONTACTS {
             let contact = Contact::new(
-                &format!("contact{}", i),
+                format!("contact{}", i),
                 ContactState::Active,
-                &format!("sip:alice@192.168.1.{}:5060", i),
+                format!("sip:alice@192.168.1.{}:5060", i),
             )
             .unwrap();
             registration.add_contact(contact).unwrap();

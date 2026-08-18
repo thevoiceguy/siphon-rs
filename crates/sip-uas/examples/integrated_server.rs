@@ -212,11 +212,7 @@ impl UasRequestHandler for AutoAnswerServer {
             println!("   Contact: {}", contact);
         }
 
-        let expires = request
-            .headers()
-            .get("Expires")
-            .map(|e| e)
-            .unwrap_or("3600");
+        let expires = request.headers().get("Expires").unwrap_or("3600");
         println!("   Expires: {} seconds", expires);
 
         // Accept registration

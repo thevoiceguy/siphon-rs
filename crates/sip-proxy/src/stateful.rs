@@ -785,9 +785,7 @@ impl ProxyContext {
         // and the transport error is now irrelevant.
         {
             let branches = self.branches.read().await;
-            let Some(branch) = branches.get(branch_id) else {
-                return None;
-            };
+            let branch = branches.get(branch_id)?;
             if matches!(
                 branch.state,
                 BranchState::Completed | BranchState::Cancelled
@@ -1667,14 +1665,8 @@ mod tests {
             .expect("final aggregate forwarded");
         assert_eq!(forwarded.code(), 401);
         let www: Vec<&str> = forwarded.headers().get_all("WWW-Authenticate").collect();
-        assert!(
-            www.iter().any(|v| *v == challenge_a),
-            "challenge_a missing: {www:?}",
-        );
-        assert!(
-            www.iter().any(|v| *v == challenge_b),
-            "challenge_b missing: {www:?}",
-        );
+        assert!(www.contains(&challenge_a), "challenge_a missing: {www:?}",);
+        assert!(www.contains(&challenge_b), "challenge_b missing: {www:?}",);
     }
 
     /// Same as above but for 407 / Proxy-Authenticate.
@@ -1716,8 +1708,8 @@ mod tests {
             .expect("final aggregate forwarded");
         assert_eq!(forwarded.code(), 407);
         let proxy_auth: Vec<&str> = forwarded.headers().get_all("Proxy-Authenticate").collect();
-        assert!(proxy_auth.iter().any(|v| *v == challenge_a));
-        assert!(proxy_auth.iter().any(|v| *v == challenge_b));
+        assert!(proxy_auth.contains(&challenge_a));
+        assert!(proxy_auth.contains(&challenge_b));
     }
 
     /// Identical challenges from two branches must NOT be appended
@@ -1875,7 +1867,7 @@ mod tests {
 
         // Simulate a 200 OK winning response
         let resp = make_response(200);
-        context.process_response("z9hG4bKclient".into(), resp).await;
+        context.process_response("z9hG4bKclient", resp).await;
 
         // Incoming ACK with Route header (dialog path)
         let ack = {
