@@ -3,9 +3,13 @@ AI helped build this library. It’s either a stroke of genius or a very convinc
 
 A modern, production-grade SIP (Session Initiation Protocol) stack implementation in Rust, implementing RFC 3261 and related specifications.
 
-## Status: Beta 🧪
+## Status: Production use, pre-1.0 🚀
 
-Feature-complete with comprehensive test coverage (1000+ tests), but not yet battle-tested in production environments. Early adopters welcome!
+Deployed in production and battle-tested against live carrier trunks (Twilio Secure
+Trunking, real PSTN traffic) with HEP/Homer capture in the signaling path. Runtime
+behavior is hardened by real-world exposure; the API surface is still pre-1.0 and
+breaking changes land between 0.x releases — see [CHANGELOG.md](CHANGELOG.md) for
+each release's breaking-change summary.
 
 **Core Features:**
 - ✅ Full RFC 3261 transaction layer with state machines
@@ -22,11 +26,18 @@ Feature-complete with comprehensive test coverage (1000+ tests), but not yet bat
 - ✅ tel URI support (RFC 3966 - E.164 and local numbers)
 - ✅ Transport-aware timers (optimized for TCP/TLS vs UDP)
 - ✅ Transaction performance metrics
+- ✅ Session timers with automatic refresh (RFC 4028)
+- ✅ SDP offer/answer negotiation (RFC 3264)
+- ✅ Stateful proxy (RFC 3261 §16 — forking, strict/loose routing, auth aggregation)
+- ✅ B2BUA with response bridging
+- ✅ STIR/SHAKEN caller identity (RFC 8224/8225 — PASSporT parsing, ES256 verification, X.509 chain validation)
+- ✅ HEP3 (Homer) capture emission on every transport
+- ✅ Per-source ingress rate limiting (token bucket, configurable)
 
 **Production-Grade Implementation:**
 - 🔒 Secure TLS via rustls (modern pure-Rust implementation)
 - 📊 Comprehensive observability and metrics
-- 🧪 1000+ unit and integration tests
+- 🧪 2200+ unit and integration tests
 - 📚 Extensive documentation and examples
 - 🎯 RFC-compliant and interop-tested
 
@@ -50,6 +61,12 @@ cargo run -p siphond -- --mode registrar --auth --auth-users users.json
 # Call server mode
 cargo run -p siphond -- --mode call-server --auto-accept-calls
 
+# Stateful proxy - forwards calls to registered users
+cargo run -p siphond -- --mode proxy --local-uri sip:proxy@192.168.1.81
+
+# B2BUA - bridges calls between registered users
+cargo run -p siphond -- --mode b2bua --local-uri sip:b2bua@192.168.1.81
+
 # See all options
 cargo run -p siphond -- --help
 ```
@@ -70,8 +87,11 @@ crates/
   sip-registrar/     # REGISTER handler and location service
   sip-uas/           # User Agent Server helpers
   sip-uac/           # User Agent Client helpers
-  sip-proxy/         # Proxy functionality (placeholder)
-  sip-sdp/           # SDP model (placeholder)
+  sip-proxy/         # Stateful proxy (RFC 3261 §16: forking, routing, location service)
+  sip-sdp/           # SDP model and offer/answer negotiation (RFC 3264)
+  sip-identity/      # STIR/SHAKEN caller identity (RFC 8224/8225)
+  sip-hep/           # HEP3 (Homer) capture emission
+  sip-ratelimit/     # Token-bucket rate limiting
   sip-observe/       # Observability and metrics
   sip-testkit/       # Testing utilities
 
@@ -82,7 +102,7 @@ bins/
 ## Testing
 
 **Test Suite Status:**
-- ✅ **1000+ Unit & Integration Tests** - All passing
+- ✅ **2200+ Unit & Integration Tests** - All passing
 - ✅ **UDP/TCP Transport** - 24/24 scenarios passing
 - ✅ **IPv6 Support** - All scenarios passing
 - ⚠️ **Authentication Tests** - Known SIPp tool limitation (see below)

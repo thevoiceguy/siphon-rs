@@ -1,6 +1,6 @@
 [package]
 name = "sip-identity"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license.workspace = true
 description = "STIR/SHAKEN caller identity: RFC 8224 Identity header + RFC 8225 PASSporT parsing, ES256 verification, and X.509 chain validation."
