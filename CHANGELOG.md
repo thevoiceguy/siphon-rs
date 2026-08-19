@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026-08-19] — workspace release
+
+Crate versions in this release: sip-core 0.7.7, sip-transport 0.4.0, sip-dns 0.3.0,
+sip-transaction 0.6.0, sip-dialog 0.3.4, sip-auth 0.4.0, sip-identity 0.2.0,
+sip-registrar 0.3.1, sip-uas 0.3.0, sip-uac 0.5.0, sip-sdp 0.3.1, sip-observe 0.3.0,
+sip-ratelimit 0.3.0, sip-testkit 0.1.1, siphond 0.6.0. (sip-parse 0.3.4, sip-proxy 0.3.0,
+and sip-hep 0.0.1 are unchanged.)
+
+Breaking changes: sip-uas response builders (`create_ok`, `create_reliable_provisional`,
+`accept_publish`, `create_notify_sipfrag`) now return `Result`, and `on_bye`/`on_cancel`
+receive a `TransportContext` (#43); sip-uac's `*_via_flow` methods take a `Flow` struct
+instead of separate stream/peer arguments (#57), and `CallHandle::start_session_timer`
+no longer takes a `Dialog` (#96); sip-transaction's `ack_received` now returns `bool`
+(#102 — source-compatible in statement position); sip-ratelimit's `RateLimitConfig::new`
+returns `Result`.
+
 - **Change: `IntegratedUAC`'s per-transaction chatter drops to `debug!`** (sip-uac) — closes #108 (at `info` the log volume tracked request rate rather than anything an operator chose):
   * Four sites fired once per client transaction: the transaction start, the authenticated-retry start, and `on_final` in **both** `InviteTransactionUser` and `SimpleTransactionUser`. The precedent was already in the file — `on_provisional`, the sibling method handling the same class of event, has always been `debug!`. A 180 was debug and a 200 was info for the same "a response arrived on the transaction I started" mechanic.
   * Measured downstream at `RUST_LOG=info`: **~13,100 client transactions produced 52,568 lines from these four statements alone** — four per REGISTER refresh cycle, ~750 lines/s at a sustained 566 transactions/s, and a 20 MB log in 70 s of driving. The cost lands hardest on someone who turns `info` on to investigate a live problem, which is when per-request logging is least affordable.
@@ -41,6 +57,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   * The commit happens **on failure too**: `prepare_in_dialog_request` consumes the CSeq when it *builds* the request, so a refresh that times out has still put the number on the wire. Dropping the advance because the response disappointed us would hand the owner a CSeq the peer has already seen — precisely the reuse being fixed.
   * One race is bounded rather than closed, and is documented on the method: an owner that resolves, sends and commits while a refresh is in flight collides on the same CSeq. Serialising the two would mean holding the dialog's write lock across a network round trip (up to Timer B/F, ~32 s) and stalling the very BYE this keeps working, so the commit instead refuses to move the CSeq *backwards* and keeps the owner's newer state.
   * Regression tests: `session_refresh_commits_the_advanced_cseq_to_the_shared_dialog` (two refreshes leave the shared dialog at CSeq 3, not frozen at 1), `session_refresh_commits_the_cseq_even_when_the_refresh_fails` (481 → the advance and the termination both reach the owner) and `session_refresh_commit_never_regresses_the_owners_cseq`. Both wire tests fail in 5 s against the old behaviour — regressing the fix produces no second request at all, so the waits are bounded deliberately.
+- **Fix: client transactions that complete normally are reaped** (sip-transaction) — closes #103 (#104): the terminal wait timers (K for non-INVITE, D for INVITE) moved the FSM to `Terminated` but emitted only `Cancel`, and the manager removed entries solely on `Terminate` — so a transaction that failed was reclaimed while one that succeeded stayed in the table forever. Terminated FSMs are now removed on the normal completion path too.
+
+- **Fix: the session refresh reserves its CSeq before the request leaves** (sip-uac) — closes #99 (#100): `refresh_shared_session` cloned the dialog, sent, and committed the CSeq advance only after the response — so for the whole round trip an owner resolving the shared dialog (teardown BYE, hold re-INVITE, REFER) built its request on the number the refresh was already using, two requests on one sequence number (RFC 3261 §12.2.1.1). The CSeq is now reserved on the shared dialog before the refresh goes out.
+
+- **Fix: a doomed session timer stops and tells the owner** (sip-uac) — closes #93 (#98): the refresh loop only `warn!`'d on failure and kept ticking against a peer that had gone away, so the owner believed a dead session was healthy until the peer expired the call. New `CallHandle::session_timer_state()` returns a `watch::Receiver<SessionTimerState>`; on a fatal refresh outcome the timer stops and publishes why (`SessionTimerStop`).
+
+- **Fix: session refreshes are scheduled at Session-Expires/2, not immediately and not at the deadline** (sip-uac) — closes #92: `start_session_timer` used `max(90, se/2)`, which for any Session-Expires under 180 s landed the refresh on (or past) the expiry deadline — at the RFC 4028 minimum of 90 s, exactly on it — and `tokio::time::interval`'s immediate first tick fired a gratuitous re-INVITE/UPDATE the moment the call was answered. The refresh now fires at se/2 per §10, starting half an interval after answer.
+
+- **Fix: the ingress rate-limit warning throttle is keyed by source IP** (sip-transport, sip-ratelimit) — closes #90 (#91): the one-per-second warning throttle was global, so a single noisy peer suppressed drop warnings for every other source. Each source IP now gets its own throttle window, independently per limiter.
+
+- **Fix: per-source ingress rate limits are observable and configurable** (sip-transport, sip-observe, siphond) — closes #88 (#89): every dropped packet/frame is now counted via a new defaulted `TransportMetrics::on_rate_limited` hook, and the limits are configurable at startup via `sip_transport::set_udp_rate_limit()` / `set_stream_rate_limit()` (siphond: `--udp-rate-limit` / `--stream-rate-limit`, 0 disables; default 200/sec).
+
+- **Feat: nonce reuse-window rejection is discriminated from credential failure** (sip-auth) — #87: new `reuse_window_exceeded` / `is_nonce_reuse_expired` APIs let a server distinguish a stale-but-honest client (re-challenge with `stale=true`) from bad credentials, instead of lumping both into one rejection.
+
+- **Fix: the UAC auto-retries INVITE on 401/407 auth challenges** (sip-uac) — #86: `auto_retry_auth` was never read on the INVITE path, so a digest-authenticated gateway's 407 was surfaced as a terminal rejection while REGISTER through the same UAC authenticated fine. A challenged INVITE now resends with credentials (same Call-ID and From tag, CSeq+1, fresh branch, original body) in a new client transaction.
+
+- **Fix: `negotiate_answer` accepts only one m-line per media type** (sip-sdp) — #85: an offer carrying duplicate m-lines of the same type no longer produces an answer accepting both.
+
+- **Fix: configurable TLS certificate name for IP-literal dial targets** (sip-uac) — #79: carrier edges Record-Route themselves as IP literals, so a fresh TLS dial to a route-set hop took its SNI from the connect address and failed verification against the trunk's hostname-only certificate. New `UACConfig::tls_server_name` (builder: `tls_server_name(...)`) carries the trunk hostname, applied centrally in `resolve_target` so every dial path inherits it; it only kicks in for TLS/WSS targets whose SNI would otherwise be an IP literal.
 
 - **Fix: a mid-dialog 2xx no longer replaces the dialog's route set** (sip-dialog) — closes #81 (BYE after a hold/resume on a re-dialed connection drew a `408` and stalled teardown 30 s):
   * `Dialog::update_from_response` refreshed the remote target (correct — RFC 3261 §12.2.1.2 / RFC 5057 target refresh) and then **also** overwrote `route_set` from the response's `Record-Route`, for *any* response. RFC 3261 fixes the route set when the dialog is created; §12.2.1.2 refreshes the target and nothing else. The one exception is §13.2.2.4: a 2xx that confirms an **early** dialog recomputes the set, because RFC 2543 peers mirrored `Record-Route` only in the 2xx. The recompute is now gated on exactly that condition.
