@@ -205,7 +205,7 @@ impl Default for DaemonConfig {
             auth: AuthConfig::default(),
             registrar: RegistrarConfig::default(),
             local_uri: "sip:siphond@localhost".to_string(),
-            user_agent: "siphond/0.1".to_string(),
+            user_agent: concat!("siphond/", env!("CARGO_PKG_VERSION")).to_string(),
         }
     }
 }
