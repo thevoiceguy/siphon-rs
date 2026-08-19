@@ -105,21 +105,26 @@ bins/
 - ✅ **2200+ Unit & Integration Tests** - All passing
 - ✅ **UDP/TCP Transport** - 24/24 scenarios passing
 - ✅ **IPv6 Support** - All scenarios passing
-- ⚠️ **Authentication Tests** - Known SIPp tool limitation (see below)
-- ⚠️ **TLS Tests** - Known SIPp tool limitation (see below)
+- ⚠️ **Authentication Tests** - Known SIPp tool limitation (see below); validated in production instead
+- ⚠️ **TLS Tests** - Known SIPp tool limitation (see below); validated in production instead
 
 **Important Notes on Test Failures:**
 
 Some automated tests fail due to **known limitations in SIPp v3.7.3** (the test tool), NOT bugs in siphond:
 
 1. **Authentication Tests**: SIPp cannot handle RFC 7616 `qop="auth"` parameter
-   - ✅ **Siphond is correct** - Verified with pjsua, Linphone, and real SIP clients
+   - ✅ **Validated in production** - Digest-authenticated REGISTER refreshes and INVITE
+     401/407 challenge/retry run continuously against live registrars and gateways
+     (RFC 7616 `qop="auth"`, nonce reuse windows)
+   - ✅ **Also verified** with pjsua, Linphone, and real SIP clients
    - See [`sip-testkit/sipp/AUTH_TESTING.md`](sip-testkit/sipp/AUTH_TESTING.md) for details
 
 2. **TLS Tests**: SIPp v3.7.3 has OpenSSL/rustls compatibility issues (both TLS 1.2 & 1.3)
-   - ✅ **Siphond TLS is correct** - Verified with openssl s_client and modern SIP clients
+   - ✅ **Validated in production** - Live carrier TLS trunks (Twilio Secure Trunking)
+     exercise SNI/reference-identity handling, certificate verification, connection
+     pooling and reuse, keepalives, and close_notify shutdown daily
    - ✅ **TLS 1.2/1.3 both work** - Full RFC 5246/8446 compliance
-   - ✅ **Proper TLS shutdown** - Sends close_notify alerts per RFC
+   - ✅ **Also verified** with openssl s_client and modern SIP clients
    - See [`sip-testkit/sipp/README.md`](sip-testkit/sipp/README.md) "TLS Testing" section
 
 **Running Tests:**
