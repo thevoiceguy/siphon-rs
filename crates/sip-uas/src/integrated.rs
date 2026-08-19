@@ -312,7 +312,7 @@ pub struct UASConfig {
     /// Automatically send 100 Trying for INVITE requests (default: true)
     pub auto_send_100_trying: bool,
 
-    /// User-Agent header value (default: "siphon-rs/0.1.0")
+    /// Server (responses) / User-Agent header value (default: `sip-uas/<crate version>`)
     pub user_agent: String,
 
     /// Require authentication for requests (default: false)
@@ -325,7 +325,7 @@ impl Default for UASConfig {
             auto_via_filling: true,
             auto_contact_filling: true,
             auto_send_100_trying: true,
-            user_agent: "siphon-rs/0.1.0".to_string(),
+            user_agent: concat!("sip-uas/", env!("CARGO_PKG_VERSION")).to_string(),
             require_authentication: false,
         }
     }

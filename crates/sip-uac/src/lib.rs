@@ -43,6 +43,10 @@ const MAX_CONTENT_TYPE_LENGTH: usize = 128;
 const MAX_BODY_LENGTH: usize = 1_048_576; // 1 MB max body
 const MAX_REGISTRAR_CALL_IDS: usize = 100; // Max registrars to track
 const MAX_EARLY_DIALOGS: usize = 100; // Max early dialogs per INVITE (forking limit)
+
+/// Default User-Agent product token, derived from this crate's version at
+/// compile time so it can never go stale.
+pub const DEFAULT_USER_AGENT: &str = concat!("sip-uac/", env!("CARGO_PKG_VERSION"));
 const MAX_AUTH_PARAMS: usize = 20; // Max parameters in WWW-Authenticate
 
 /// Error type for UAC operations
@@ -346,7 +350,7 @@ impl UserAgentClient {
 
         // User-Agent
         headers
-            .push(SmolStr::new("User-Agent"), SmolStr::new("siphon-rs/0.1.0"))
+            .push(SmolStr::new("User-Agent"), SmolStr::new(DEFAULT_USER_AGENT))
             .unwrap();
 
         // Content-Type and body
@@ -434,7 +438,7 @@ impl UserAgentClient {
             .unwrap();
 
         headers
-            .push(SmolStr::new("User-Agent"), SmolStr::new("siphon-rs/0.1.0"))
+            .push(SmolStr::new("User-Agent"), SmolStr::new(DEFAULT_USER_AGENT))
             .unwrap();
 
         headers
@@ -504,7 +508,7 @@ impl UserAgentClient {
 
         // User-Agent
         headers
-            .push(SmolStr::new("User-Agent"), SmolStr::new("siphon-rs/0.1.0"))
+            .push(SmolStr::new("User-Agent"), SmolStr::new(DEFAULT_USER_AGENT))
             .unwrap();
 
         // Content-Length
@@ -597,7 +601,7 @@ impl UserAgentClient {
 
         // User-Agent
         headers
-            .push(SmolStr::new("User-Agent"), SmolStr::new("siphon-rs/0.1.0"))
+            .push(SmolStr::new("User-Agent"), SmolStr::new(DEFAULT_USER_AGENT))
             .unwrap();
 
         // Content-Length
@@ -999,7 +1003,7 @@ impl UserAgentClient {
 
         // User-Agent
         headers
-            .push(SmolStr::new("User-Agent"), SmolStr::new("siphon-rs/0.1.0"))
+            .push(SmolStr::new("User-Agent"), SmolStr::new(DEFAULT_USER_AGENT))
             .unwrap();
 
         let body = if let Some(sdp) = sdp_body {
@@ -1106,7 +1110,7 @@ impl UserAgentClient {
 
         // User-Agent
         headers
-            .push(SmolStr::new("User-Agent"), SmolStr::new("siphon-rs/0.1.0"))
+            .push(SmolStr::new("User-Agent"), SmolStr::new(DEFAULT_USER_AGENT))
             .unwrap();
 
         // Content-Type
@@ -1375,7 +1379,7 @@ impl UserAgentClient {
 
         // User-Agent
         headers
-            .push(SmolStr::new("User-Agent"), SmolStr::new("siphon-rs/0.1.0"))
+            .push(SmolStr::new("User-Agent"), SmolStr::new(DEFAULT_USER_AGENT))
             .unwrap();
 
         let body = if let Some(sdp) = sdp_body {
@@ -1487,7 +1491,7 @@ impl UserAgentClient {
 
         // User-Agent
         headers
-            .push(SmolStr::new("User-Agent"), SmolStr::new("siphon-rs/0.1.0"))
+            .push(SmolStr::new("User-Agent"), SmolStr::new(DEFAULT_USER_AGENT))
             .unwrap();
 
         let body = if let Some(sdp) = sdp_body {
@@ -1570,7 +1574,7 @@ impl UserAgentClient {
             .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
             .unwrap();
         headers
-            .push(SmolStr::new("User-Agent"), SmolStr::new("siphon-rs/0.1.0"))
+            .push(SmolStr::new("User-Agent"), SmolStr::new(DEFAULT_USER_AGENT))
             .unwrap();
         headers
             .push(SmolStr::new("Content-Type"), SmolStr::new(content_type))
@@ -2308,7 +2312,7 @@ impl UserAgentClient {
 
         // User-Agent
         headers
-            .push(SmolStr::new("User-Agent"), SmolStr::new("siphon-rs/0.1.0"))
+            .push(SmolStr::new("User-Agent"), SmolStr::new(DEFAULT_USER_AGENT))
             .unwrap();
 
         // Content-Length

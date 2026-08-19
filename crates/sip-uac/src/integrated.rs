@@ -125,7 +125,7 @@ pub struct UACConfig {
     /// Default SUBSCRIBE expires value in seconds (default: 3600)
     pub default_subscribe_expires: u32,
 
-    /// User-Agent header value (default: "siphon-rs/0.1.0")
+    /// User-Agent header value (default: `sip-uac/<crate version>`)
     pub user_agent: String,
 
     /// Automatically fill Via header from local transport context (default: true)
@@ -212,7 +212,7 @@ impl Default for UACConfig {
             max_session_refresh_failures: 3,
             default_register_expires: 3600,
             default_subscribe_expires: 3600,
-            user_agent: "siphon-rs/0.1.0".to_string(),
+            user_agent: crate::DEFAULT_USER_AGENT.to_string(),
             auto_via_filling: true,
             auto_contact_filling: true,
             auto_dns_resolution: true,
