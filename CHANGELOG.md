@@ -23,6 +23,8 @@ no longer takes a `Dialog` (#96); sip-transaction's `ack_received` now returns `
 (#102 — source-compatible in statement position); sip-ratelimit's `RateLimitConfig::new`
 returns `Result`.
 
+- **Fix: default `User-Agent`/`Server` tokens derive from crate versions at compile time** (sip-uac, sip-uas, siphond) — #113: the defaults were hardcoded at pre-release values (`siphon-rs/0.1.0`, `siphond/0.1`), so un-configured deployments advertised `0.1` on the wire forever; they are now `env!("CARGO_PKG_VERSION")`-derived (`sip-uac/0.5.0`, `sip-uas/0.3.0`, `siphond/0.6.0`) via a shared `sip_uac::DEFAULT_USER_AGENT` constant.
+
 - **Change: `IntegratedUAC`'s per-transaction chatter drops to `debug!`** (sip-uac) — closes #108 (at `info` the log volume tracked request rate rather than anything an operator chose):
   * Four sites fired once per client transaction: the transaction start, the authenticated-retry start, and `on_final` in **both** `InviteTransactionUser` and `SimpleTransactionUser`. The precedent was already in the file — `on_provisional`, the sibling method handling the same class of event, has always been `debug!`. A 180 was debug and a 200 was info for the same "a response arrived on the transaction I started" mechanic.
   * Measured downstream at `RUST_LOG=info`: **~13,100 client transactions produced 52,568 lines from these four statements alone** — four per REGISTER refresh cycle, ~750 lines/s at a sustained 566 transactions/s, and a 20 MB log in 70 s of driving. The cost lands hardest on someone who turns `info` on to investigate a live problem, which is when per-request logging is least affordable.
