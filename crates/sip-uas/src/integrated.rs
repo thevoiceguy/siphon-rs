@@ -36,7 +36,7 @@
 ///
 /// # async fn example() -> anyhow::Result<()> {
 /// let uas = IntegratedUAS::builder()
-///     .local_uri("sip:server@example.com")
+///     .local_uri("sip:server@example.com")?
 ///     .local_addr("192.168.1.100:5060")
 ///     .transaction_manager(tx_mgr)
 ///     .dispatcher(dispatcher)
@@ -923,15 +923,33 @@ impl IntegratedUASBuilder {
     }
 
     /// Sets the local SIP URI (used in To/Contact headers).
-    pub fn local_uri(mut self, uri: impl AsRef<str>) -> Self {
-        self.local_uri = SipUri::parse(uri.as_ref()).ok();
-        self
+    ///
+    /// Fails on a URI that does not parse, rather than leaving the
+    /// builder looking as though nothing was set — `build()` would then
+    /// report `local_uri is required` for a URI that *was* supplied
+    /// (#118).
+    pub fn local_uri(mut self, uri: impl AsRef<str>) -> Result<Self> {
+        let uri = uri.as_ref();
+        self.local_uri = Some(
+            SipUri::parse(uri)
+                .map_err(|e| anyhow!("local_uri {uri:?} is not a valid SIP URI: {e}"))?,
+        );
+        Ok(self)
     }
 
     /// Sets the contact URI (used in Contact header).
-    pub fn contact_uri(mut self, uri: impl AsRef<str>) -> Self {
-        self.contact_uri = SipUri::parse(uri.as_ref()).ok();
-        self
+    ///
+    /// Fails on a URI that does not parse. Discarding it instead left
+    /// `build()` unable to tell "caller set nothing" from "caller set
+    /// something unusable", so it synthesized a default and panicked
+    /// when that did not parse either (#118).
+    pub fn contact_uri(mut self, uri: impl AsRef<str>) -> Result<Self> {
+        let uri = uri.as_ref();
+        self.contact_uri = Some(
+            SipUri::parse(uri)
+                .map_err(|e| anyhow!("contact_uri {uri:?} is not a valid SIP URI: {e}"))?,
+        );
+        Ok(self)
     }
 
     /// Sets the local transport address for Via/Contact auto-filling.
@@ -1015,11 +1033,20 @@ impl IntegratedUASBuilder {
             .ok_or_else(|| anyhow!("request_handler is required"))?;
 
         // Create embedded helper
-        let contact_uri = self.contact_uri.unwrap_or_else(|| {
-            // Default contact: sip:server@local_addr
-            let user = local_uri.user().unwrap_or("server");
-            SipUri::parse(&format!("sip:{}@{}", user, local_addr)).unwrap()
-        });
+        let contact_uri = match self.contact_uri {
+            Some(uri) => uri,
+            None => {
+                // Default contact: sip:server@local_addr
+                let user = local_uri.user().unwrap_or("server");
+                let candidate = format!("sip:{}@{}", user, local_addr);
+                // An error, not a panic — see the UAC's equivalent (#118).
+                SipUri::parse(&candidate).map_err(|e| {
+                    anyhow!(
+                        "cannot build a default Contact from {candidate:?}: {e}. Set                          contact_uri explicitly, or bind a real address (a port of 0                          cannot go in a Contact)."
+                    )
+                })?
+            }
+        };
 
         let helper = if let Some(authenticator) = self.authenticator {
             UserAgentServer::new(local_uri, contact_uri).with_authenticator(authenticator)
@@ -1055,6 +1082,31 @@ mod tests {
     use sip_transaction::TransportKind;
     use smol_str::SmolStr;
     use std::net::SocketAddr;
+
+    // ── #118: a rejected URI is reported, not swallowed ────────────
+
+    #[test]
+    fn uri_setters_report_a_parse_failure() {
+        // `expect_err` would need Debug on the builder, which it does
+        // not implement; match instead.
+        let err = match super::IntegratedUAS::builder().local_uri("not a sip uri") {
+            Ok(_) => panic!("a bare string is not a SIP URI"),
+            Err(e) => e,
+        };
+        assert!(
+            err.to_string().contains("local_uri"),
+            "the error should name the setter, got: {err}"
+        );
+
+        let err = match super::IntegratedUAS::builder().contact_uri("sip:server@127.0.0.1:0") {
+            Ok(_) => panic!("port 0 is not a valid Contact"),
+            Err(e) => e,
+        };
+        assert!(
+            err.to_string().contains("contact_uri"),
+            "the error should name the setter, got: {err}"
+        );
+    }
 
     // ── Contact auto-fill: per-listener port (RFC 3261 §8.1.1.8) ────
 
