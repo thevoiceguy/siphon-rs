@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Fix: `UACConfig::user_agent` now reaches the `User-Agent` header** (sip-uac) — the field existed and was documented as "User-Agent header value", but nothing on the request path read it. All ten request builders in `UserAgentClient` (`create_register`, `create_options`, `create_invite_with_from`, `create_invite_with_body`, `create_reinvite`, `create_update`, `create_publish`, `create_subscribe`, and both unsolicited-NOTIFY variants) pushed the crate constant `DEFAULT_USER_AGENT` directly, so **every embedder advertised `sip-uac/<version>` on the wire no matter what it configured**; the only consumer of the configured value was the SDP session name in `negotiate_answer`. Found downstream in siphon-ai ([#539](https://github.com/thevoiceguy/siphon-ai/issues/539)), where a documented `[sip].user_agent` key could brand responses via `UASConfig` but not requests.
+  * `UserAgentClient` gains a `user_agent` field with `with_user_agent` / `set_user_agent` / `user_agent()`, mirroring the existing display-name accessors, and `IntegratedUAC::build` seeds it from `UACConfig::user_agent`. Unconfigured behaviour is unchanged: the field defaults to `DEFAULT_USER_AGENT`.
+  * The token is validated once on the way in — control characters (a header-injection vector, since this string goes out on every request) and a 256-byte cap, matching what `sip-uas` already applies to `Server`. Two new `UacError` variants: `UserAgentContainsControlChars`, `UserAgentTooLong`.
+  * New `IntegratedUACBuilder::user_agent(...)`, because reaching for `config()` to set one field is a trap: `config()` replaces the struct wholesale, and `tls_server_name`, `credential_provider`, `sdp_answer_generator`, `sdp_profile` and `local_audio_port` all write into it — so `.config()` after any of them silently discards credentials or a TLS reference identity. `config()`'s doc comment now says so.
+
 ## [2026-08-19] — workspace release
 
 Crate versions in this release: sip-core 0.7.7, sip-transport 0.4.0, sip-dns 0.3.0,

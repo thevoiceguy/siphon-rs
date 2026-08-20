@@ -43,6 +43,7 @@ const MAX_CONTENT_TYPE_LENGTH: usize = 128;
 const MAX_BODY_LENGTH: usize = 1_048_576; // 1 MB max body
 const MAX_REGISTRAR_CALL_IDS: usize = 100; // Max registrars to track
 const MAX_EARLY_DIALOGS: usize = 100; // Max early dialogs per INVITE (forking limit)
+const MAX_USER_AGENT_LENGTH: usize = 256; // Matches sip-uas's limit for the same header
 
 /// Default User-Agent product token, derived from this crate's version at
 /// compile time so it can never go stale.
@@ -72,6 +73,10 @@ pub enum UacError {
     TooManyEarlyDialogs { max: usize },
     /// Too many authentication parameters
     TooManyAuthParams { max: usize },
+    /// User-Agent product token contains control characters
+    UserAgentContainsControlChars,
+    /// User-Agent product token exceeds maximum length
+    UserAgentTooLong { max: usize, actual: usize },
 }
 
 impl std::fmt::Display for UacError {
@@ -119,6 +124,12 @@ impl std::fmt::Display for UacError {
             UacError::TooManyAuthParams { max } => {
                 write!(f, "Too many auth parameters (max: {})", max)
             }
+            UacError::UserAgentContainsControlChars => {
+                write!(f, "User-Agent contains control characters")
+            }
+            UacError::UserAgentTooLong { max, actual } => {
+                write!(f, "User-Agent too long (max: {}, actual: {})", max, actual)
+            }
         }
     }
 }
@@ -126,6 +137,23 @@ impl std::fmt::Display for UacError {
 impl std::error::Error for UacError {}
 
 // Validation functions
+
+/// A product token goes out on every request this client builds, so it
+/// is validated on the way in rather than at each of the ten sites that
+/// stamp it. Same limits as `sip-uas` applies to its `Server`.
+fn validate_user_agent(agent: &str) -> std::result::Result<(), UacError> {
+    if agent.len() > MAX_USER_AGENT_LENGTH {
+        return Err(UacError::UserAgentTooLong {
+            max: MAX_USER_AGENT_LENGTH,
+            actual: agent.len(),
+        });
+    }
+    if agent.chars().any(|c| c.is_control()) {
+        return Err(UacError::UserAgentContainsControlChars);
+    }
+    Ok(())
+}
+
 fn validate_display_name(name: &str) -> std::result::Result<(), UacError> {
     if name.len() > MAX_DISPLAY_NAME_LENGTH {
         return Err(UacError::DisplayNameTooLong {
@@ -217,6 +245,13 @@ pub struct UserAgentClient {
     /// request").
     register_cseqs: Mutex<HashMap<String, u32>>,
 
+    /// Product token stamped on `User-Agent` for every request this
+    /// client builds. Defaults to [`DEFAULT_USER_AGENT`]; an embedder
+    /// that wants its own product named sets it through
+    /// [`UserAgentClient::with_user_agent`] or, via `IntegratedUAC`,
+    /// `UACConfig::user_agent`.
+    user_agent: SmolStr,
+
     /// Stable From tag per registrar, paired with `register_call_ids`.
     /// A REGISTER refresh series reuses one Call-ID (RFC 3261 §10.2), and
     /// the From tag stays with it so registrars that correlate refreshes
@@ -240,6 +275,7 @@ impl UserAgentClient {
             register_call_ids: Mutex::new(HashMap::new()),
             register_cseqs: Mutex::new(HashMap::new()),
             register_from_tags: Mutex::new(HashMap::new()),
+            user_agent: SmolStr::new(DEFAULT_USER_AGENT),
         }
     }
 
@@ -265,6 +301,31 @@ impl UserAgentClient {
     /// Clears the display name.
     pub fn clear_display_name(&mut self) {
         self.display_name = None;
+    }
+
+    /// Sets the `User-Agent` product token, with validation.
+    ///
+    /// Every request this client builds carries it. Unset, it is
+    /// [`DEFAULT_USER_AGENT`] — which names *this crate*, and is
+    /// therefore the wrong thing for an embedded product to advertise
+    /// to a carrier.
+    pub fn with_user_agent(mut self, agent: &str) -> std::result::Result<Self, UacError> {
+        validate_user_agent(agent)?;
+        self.user_agent = SmolStr::new(agent);
+        Ok(self)
+    }
+
+    /// Sets the `User-Agent` product token in place (see
+    /// [`Self::with_user_agent`]).
+    pub fn set_user_agent(&mut self, agent: &str) -> std::result::Result<(), UacError> {
+        validate_user_agent(agent)?;
+        self.user_agent = SmolStr::new(agent);
+        Ok(())
+    }
+
+    /// The `User-Agent` product token currently in use.
+    pub fn user_agent(&self) -> &str {
+        self.user_agent.as_str()
     }
 
     /// Configures digest authentication credentials.
@@ -350,7 +411,7 @@ impl UserAgentClient {
 
         // User-Agent
         headers
-            .push(SmolStr::new("User-Agent"), SmolStr::new(DEFAULT_USER_AGENT))
+            .push(SmolStr::new("User-Agent"), self.user_agent.clone())
             .unwrap();
 
         // Content-Type and body
@@ -438,7 +499,7 @@ impl UserAgentClient {
             .unwrap();
 
         headers
-            .push(SmolStr::new("User-Agent"), SmolStr::new(DEFAULT_USER_AGENT))
+            .push(SmolStr::new("User-Agent"), self.user_agent.clone())
             .unwrap();
 
         headers
@@ -508,7 +569,7 @@ impl UserAgentClient {
 
         // User-Agent
         headers
-            .push(SmolStr::new("User-Agent"), SmolStr::new(DEFAULT_USER_AGENT))
+            .push(SmolStr::new("User-Agent"), self.user_agent.clone())
             .unwrap();
 
         // Content-Length
@@ -601,7 +662,7 @@ impl UserAgentClient {
 
         // User-Agent
         headers
-            .push(SmolStr::new("User-Agent"), SmolStr::new(DEFAULT_USER_AGENT))
+            .push(SmolStr::new("User-Agent"), self.user_agent.clone())
             .unwrap();
 
         // Content-Length
@@ -1003,7 +1064,7 @@ impl UserAgentClient {
 
         // User-Agent
         headers
-            .push(SmolStr::new("User-Agent"), SmolStr::new(DEFAULT_USER_AGENT))
+            .push(SmolStr::new("User-Agent"), self.user_agent.clone())
             .unwrap();
 
         let body = if let Some(sdp) = sdp_body {
@@ -1110,7 +1171,7 @@ impl UserAgentClient {
 
         // User-Agent
         headers
-            .push(SmolStr::new("User-Agent"), SmolStr::new(DEFAULT_USER_AGENT))
+            .push(SmolStr::new("User-Agent"), self.user_agent.clone())
             .unwrap();
 
         // Content-Type
@@ -1379,7 +1440,7 @@ impl UserAgentClient {
 
         // User-Agent
         headers
-            .push(SmolStr::new("User-Agent"), SmolStr::new(DEFAULT_USER_AGENT))
+            .push(SmolStr::new("User-Agent"), self.user_agent.clone())
             .unwrap();
 
         let body = if let Some(sdp) = sdp_body {
@@ -1491,7 +1552,7 @@ impl UserAgentClient {
 
         // User-Agent
         headers
-            .push(SmolStr::new("User-Agent"), SmolStr::new(DEFAULT_USER_AGENT))
+            .push(SmolStr::new("User-Agent"), self.user_agent.clone())
             .unwrap();
 
         let body = if let Some(sdp) = sdp_body {
@@ -1574,7 +1635,7 @@ impl UserAgentClient {
             .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
             .unwrap();
         headers
-            .push(SmolStr::new("User-Agent"), SmolStr::new(DEFAULT_USER_AGENT))
+            .push(SmolStr::new("User-Agent"), self.user_agent.clone())
             .unwrap();
         headers
             .push(SmolStr::new("Content-Type"), SmolStr::new(content_type))
@@ -2312,7 +2373,7 @@ impl UserAgentClient {
 
         // User-Agent
         headers
-            .push(SmolStr::new("User-Agent"), SmolStr::new(DEFAULT_USER_AGENT))
+            .push(SmolStr::new("User-Agent"), self.user_agent.clone())
             .unwrap();
 
         // Content-Length
@@ -3400,6 +3461,78 @@ mod tests {
     use super::*;
     use sip_core::{StatusLine, Uri};
     use sip_dialog::{Dialog, DialogId, DialogStateType};
+
+    /// Every request builder stamps the configured token, not the
+    /// crate's own. Asserted on more than one method because the
+    /// header is pushed at ten separate sites, and a fix that reached
+    /// only the one someone happened to test is how this survived
+    /// until now.
+    #[test]
+    fn configured_user_agent_reaches_every_request_builder() {
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+        let uac = UserAgentClient::new(local_uri, contact_uri)
+            .with_user_agent("Acme Voice Bridge/2.1")
+            .expect("token is valid");
+
+        let registrar = SipUri::parse("sip:registrar.example.com").unwrap();
+        let target = SipUri::parse("sip:bob@example.com").unwrap();
+
+        for (label, request) in [
+            ("REGISTER", uac.create_register(&registrar, 3600)),
+            ("OPTIONS", uac.create_options(&target)),
+            (
+                "INVITE",
+                uac.create_invite_with_body(&target, "v=0\r\n", "application/sdp")
+                    .expect("INVITE builds"),
+            ),
+            ("SUBSCRIBE", uac.create_subscribe(&target, "presence", 3600)),
+        ] {
+            assert_eq!(
+                request.headers().get("User-Agent"),
+                Some("Acme Voice Bridge/2.1"),
+                "{label} must carry the configured product token"
+            );
+        }
+    }
+
+    #[test]
+    fn user_agent_defaults_to_this_crate() {
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+        let registrar = SipUri::parse("sip:registrar.example.com").unwrap();
+
+        assert_eq!(
+            uac.create_register(&registrar, 3600)
+                .headers()
+                .get("User-Agent"),
+            Some(DEFAULT_USER_AGENT),
+        );
+    }
+
+    #[test]
+    fn user_agent_is_validated() {
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+
+        // A control character would inject a header break into every
+        // request the client builds.
+        assert!(matches!(
+            uac.with_user_agent("Acme\r\nInjected: yes"),
+            Err(UacError::UserAgentContainsControlChars)
+        ));
+
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+        let too_long = "x".repeat(MAX_USER_AGENT_LENGTH + 1);
+        assert!(matches!(
+            uac.with_user_agent(&too_long),
+            Err(UacError::UserAgentTooLong { .. })
+        ));
+    }
 
     #[test]
     fn creates_register_request() {

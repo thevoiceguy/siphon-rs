@@ -4063,7 +4063,25 @@ impl IntegratedUACBuilder {
         self
     }
 
+    /// Sets the `User-Agent` product token for every request this UAC
+    /// sends (and the SDP session name it generates).
+    ///
+    /// Prefer this over building a whole [`UACConfig`] just to name your
+    /// product: it touches one field, so it composes with the other
+    /// setters in any order.
+    pub fn user_agent(mut self, agent: impl Into<String>) -> Self {
+        self.config.user_agent = agent.into();
+        self
+    }
+
     /// Sets the UAC configuration.
+    ///
+    /// **Replaces the config wholesale.** Several setters on this
+    /// builder — [`Self::tls_server_name`], [`Self::credential_provider`],
+    /// [`Self::sdp_answer_generator`], [`Self::sdp_profile`],
+    /// [`Self::local_audio_port`], [`Self::user_agent`] — write into the
+    /// same struct, so calling this *after* them discards what they set.
+    /// Call it first, or use the individual setters.
     pub fn config(mut self, config: UACConfig) -> Self {
         self.config = config;
         self
@@ -4108,6 +4126,13 @@ impl IntegratedUACBuilder {
         if let Some(display_name) = self.display_name {
             helper = helper.with_display_name(display_name)?;
         }
+
+        // The helper is what stamps `User-Agent` on every request it
+        // builds, so the configured token has to reach it here. Until
+        // this line existed, `UACConfig::user_agent` was consumed only
+        // as an SDP session name and every request advertised
+        // `DEFAULT_USER_AGENT` no matter what an embedder configured.
+        helper.set_user_agent(&self.config.user_agent)?;
 
         // Point the helper at the shared store *before* cloning the
         // handle below, so both halves of the UAC agree.
@@ -4718,6 +4743,46 @@ mod tests {
             builder = builder.dialog_manager(mgr);
         }
         builder.build().unwrap()
+    }
+
+    /// The configured product token has to reach the embedded helper,
+    /// because the helper is what stamps `User-Agent` on the requests.
+    /// Until it did, `UACConfig::user_agent` was consumed only as an SDP
+    /// session name, and every request an embedder sent advertised this
+    /// crate regardless of what was configured.
+    #[tokio::test]
+    async fn configured_user_agent_reaches_the_embedded_helper() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let uac = IntegratedUAC::builder()
+            .user_agent("Acme Voice Bridge/2.1")
+            .local_uri("sip:acme@127.0.0.1")
+            .local_addr("127.0.0.1:5070")
+            .unwrap()
+            .transaction_manager(Arc::new(TransactionManager::new(dispatcher.clone())))
+            .resolver(Arc::new(SipResolver::from_system().unwrap()))
+            .dispatcher(dispatcher)
+            .build()
+            .unwrap();
+
+        let registrar = SipUri::parse("sip:registrar.example.com").unwrap();
+        let register = uac.helper.lock().await.create_register(&registrar, 3600);
+        assert_eq!(
+            register.headers().get("User-Agent"),
+            Some("Acme Voice Bridge/2.1"),
+        );
+    }
+
+    /// …and an embedder that configures nothing still gets this crate's
+    /// own token, unchanged.
+    #[tokio::test]
+    async fn unconfigured_user_agent_stays_the_crate_default() {
+        let uac = uac_with_optional_store(None);
+        let registrar = SipUri::parse("sip:registrar.example.com").unwrap();
+        let register = uac.helper.lock().await.create_register(&registrar, 3600);
+        assert_eq!(
+            register.headers().get("User-Agent"),
+            Some(crate::DEFAULT_USER_AGENT),
+        );
     }
 
     /// An inbound in-dialog BYE as the peer would send it for a dialog we
