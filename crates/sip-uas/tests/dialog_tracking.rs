@@ -192,6 +192,39 @@ fn ctx() -> TransportContext {
     TransportContext::new(TransportKind::Udp, peer, None)
 }
 
+// ─── #118: a default Contact that cannot parse is an error ──────────────
+
+/// With no `contact_uri` set, `build()` synthesizes one from `local_addr`
+/// — and used to `unwrap()` that parse, so an ephemeral `:0` bind
+/// panicked the caller instead of failing. Mirrors the UAC's test of the
+/// same path.
+#[tokio::test(flavor = "current_thread")]
+async fn default_contact_that_cannot_parse_is_an_error_not_a_panic() {
+    let dispatcher = Arc::new(CapturingDispatcher::default());
+    let txm = Arc::new(TransactionManager::new(dispatcher.clone()));
+    let handler = Arc::new(RecordingHandler::new());
+
+    let built = IntegratedUAS::builder()
+        .local_uri("sip:5000@127.0.0.1")
+        .unwrap()
+        .local_addr("127.0.0.1:0")
+        .expect("local_addr")
+        .transaction_manager(Arc::clone(&txm))
+        .dispatcher(dispatcher.clone() as Arc<dyn TransportDispatcher>)
+        .request_handler(handler.clone() as Arc<dyn UasRequestHandler>)
+        .build();
+
+    let err = match built {
+        Ok(_) => panic!("a default Contact on port 0 cannot be built"),
+        Err(e) => e,
+    };
+    let msg = err.to_string();
+    assert!(
+        msg.contains("default Contact") && msg.contains("contact_uri"),
+        "the error should say what failed and what to do, got: {msg}"
+    );
+}
+
 // ─── The regression test ────────────────────────────────────────────────
 
 #[tokio::test(flavor = "current_thread")]
@@ -204,7 +237,9 @@ async fn accept_invite_registers_dialog_so_bye_dispatches() {
     let uas = Arc::new(
         IntegratedUAS::builder()
             .local_uri("sip:5000@127.0.0.1:5070")
+            .unwrap()
             .contact_uri("sip:5000@127.0.0.1:5070")
+            .unwrap()
             .local_addr("127.0.0.1:5070")
             .expect("local_addr")
             .transaction_manager(Arc::clone(&txm))
@@ -317,7 +352,9 @@ async fn create_ok_path_demonstrates_old_bug_for_documentation() {
     let uas = Arc::new(
         IntegratedUAS::builder()
             .local_uri("sip:5000@127.0.0.1:5070")
+            .unwrap()
             .contact_uri("sip:5000@127.0.0.1:5070")
+            .unwrap()
             .local_addr("127.0.0.1:5070")
             .expect("local_addr")
             .transaction_manager(Arc::clone(&txm))
@@ -394,7 +431,9 @@ async fn invite_2xx_uses_server_header_and_advertises_allow() {
     let uas = Arc::new(
         IntegratedUAS::builder()
             .local_uri("sip:5000@127.0.0.1:5070")
+            .unwrap()
             .contact_uri("sip:5000@127.0.0.1:5070")
+            .unwrap()
             .local_addr("127.0.0.1:5070")
             .expect("local_addr")
             .transaction_manager(Arc::clone(&txm))
