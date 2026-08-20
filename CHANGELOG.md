@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026-08-20.1] — workspace release
+
+Crate versions in this release: sip-uac 0.7.0, sip-uas 0.4.0. (sip-core 0.7.7,
+sip-transport 0.4.0, sip-dns 0.3.0, sip-transaction 0.6.0, sip-dialog 0.3.4,
+sip-auth 0.4.0, sip-identity 0.2.0, sip-registrar 0.3.1, sip-sdp 0.3.1,
+sip-observe 0.3.0, sip-ratelimit 0.3.0, sip-testkit 0.1.1, sip-parse 0.3.4,
+sip-proxy 0.3.0, sip-hep 0.0.1, and siphond 0.6.0 are unchanged.)
+
+The day's second release, under the same-day counter rule in RELEASING.md.
+
+Breaking changes: `IntegratedUACBuilder::local_uri` / `contact_uri` and
+`IntegratedUASBuilder::local_uri` / `contact_uri` now return `Result<Self>`
+(#119). Callers add `?`, or `.unwrap()` in tests — the same shape as
+`local_addr` / `public_addr` on the same builders, which have always been
+fallible.
+
 - **Fix: the integrated builders' `local_uri` / `contact_uri` report a parse failure instead of discarding it** (sip-uac, sip-uas) — closes #118. Both setters parsed with `SipUri::parse(...).ok()`, so a rejected URI became indistinguishable from an unset one and the caller had no way to learn it had been dropped. `build()` then either reported `local_uri is required` for a URI that *was* supplied, or — for `contact_uri` — synthesized a default and `unwrap()`ed *that* parse, panicking when it failed too. An ephemeral `:0` bind reaches the panic: `sip:user@127.0.0.1:0` does not parse, so both the caller's Contact and the synthesized one fail. Observed downstream in siphon-ai as `called Result::unwrap() on an Err value: InvalidPort("port cannot be 0")` from `integrated.rs:4117`.
   * **Breaking**: `IntegratedUACBuilder::local_uri` / `contact_uri` and `IntegratedUASBuilder::local_uri` / `contact_uri` now return `Result<Self>`. Callers add `?` (or `.unwrap()` in tests), the same shape as `local_addr` / `public_addr` two methods down, which have always been fallible.
   * The two default-Contact `unwrap()`s become errors naming the address that failed and what to do about it — `build()` already returned `Result`, and an address the caller supplied can fail for reasons the caller can fix.
