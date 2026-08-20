@@ -154,6 +154,7 @@ SIPHON_TLS12_ONLY=1 cargo run -p siphond -- --sips-bind 0.0.0.0:5061 --tls-cert 
 
 - **siphond**: See [`bins/siphond/README.md`](bins/siphond/README.md) for detailed daemon documentation
 - **Architecture**: See [`CLAUDE.md`](CLAUDE.md) for development guide and architecture overview
+- **Releases**: See [`RELEASING.md`](RELEASING.md) for versioning/tagging conventions and the release checklist
 - **Examples**: Check `crates/sip-*/examples/` for usage examples
 
 ## License
