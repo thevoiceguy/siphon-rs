@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Fix: a UAC dialog's local URI is the request's `From` URI, not the client's configured identity** (sip-uac) — closes siphon-ai #549. `process_invite_response` built the confirmed dialog with `self.local_uri`, ignoring the `From` the dialog-forming INVITE actually put on the wire. The two agree for an embedder that always dials as itself, which is why this went unnoticed; they diverge for one that sets a per-call `From` — `create_invite_with_from` exists precisely so it can — and then every in-dialog request built from that dialog (BYE, re-INVITE, REFER) swaps the `From` URI mid-dialog while keeping the tag. RFC 3261 §12.2.1.1 takes the local URI from the dialog-forming request. Peers matching on Call-ID + tags tolerate the mismatch; peers validating the URI answer `481`, and anything correlating by `From` attributes the two halves of one call to different identities. Observed downstream as a B2BUA dialling for a registered AOR: `INVITE From: <sip:1000@pbx>` and `BYE From: <sip:siphon@10.0.0.2>`, same tag.
+  * The early placeholder dialogs in `integrated.rs` take the same source, so an in-dialog request built before the 2xx agrees with one built after.
+  * Falls back to the configured identity when the request carries no parseable `From`, so a malformed request behaves as it did before rather than losing the dialog.
+- **Fix: every request builder stamps `User-Agent`** (sip-uac) — the other half of siphon-ai #549. Roughly half of them did: a capture of one call showed the token on the INVITE and nothing on the ACK, the BYE, the REFER, the INFO, the PRACK, the NOTIFY or the MESSAGE. Builders that delegate (`create_invite`, `create_session_refresh`, `create_bye_with_reason`, `create_reg_subscribe`, `create_message_with_headers`, both PRACK entry points) inherit it from the builder they call; `create_authenticated_request*` still inherit it from the request they re-sign. `create_ack` and `create_notify` push it outside their body branches, so a body-less ACK or NOTIFY carries it too. `configured_user_agent_reaches_every_request_builder` never checked an in-dialog request despite its name; a companion test now does.
+
 ## [2026-08-20.1] — workspace release
 
 Crate versions in this release: sip-uac 0.7.0, sip-uas 0.4.0. (sip-core 0.7.7,
