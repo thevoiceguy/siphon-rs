@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026-08-21] — workspace release
+
+Crate versions in this release: sip-uac 0.7.1. (sip-core 0.7.7,
+sip-transport 0.4.0, sip-dns 0.3.0, sip-transaction 0.6.0, sip-dialog 0.3.4,
+sip-uas 0.4.0, sip-auth 0.4.0, sip-identity 0.2.0, sip-registrar 0.3.1,
+sip-sdp 0.3.1, sip-observe 0.3.0, sip-ratelimit 0.3.0, sip-testkit 0.1.1,
+sip-parse 0.3.4, sip-proxy 0.3.0, sip-hep 0.0.1, and siphond 0.6.0 are
+unchanged.)
+
+Breaking changes: none. sip-uac takes a patch bump — both entries are
+behaviour corrections behind unchanged signatures. Downstream absorbs this
+by bumping the tag alone.
+
 - **Fix: a UAC dialog's local URI is the request's `From` URI, not the client's configured identity** (sip-uac) — closes siphon-ai #549. `process_invite_response` built the confirmed dialog with `self.local_uri`, ignoring the `From` the dialog-forming INVITE actually put on the wire. The two agree for an embedder that always dials as itself, which is why this went unnoticed; they diverge for one that sets a per-call `From` — `create_invite_with_from` exists precisely so it can — and then every in-dialog request built from that dialog (BYE, re-INVITE, REFER) swaps the `From` URI mid-dialog while keeping the tag. RFC 3261 §12.2.1.1 takes the local URI from the dialog-forming request. Peers matching on Call-ID + tags tolerate the mismatch; peers validating the URI answer `481`, and anything correlating by `From` attributes the two halves of one call to different identities. Observed downstream as a B2BUA dialling for a registered AOR: `INVITE From: <sip:1000@pbx>` and `BYE From: <sip:siphon@10.0.0.2>`, same tag.
   * The early placeholder dialogs in `integrated.rs` take the same source, so an in-dialog request built before the 2xx agrees with one built after.
   * Falls back to the configured identity when the request carries no parseable `From`, so a malformed request behaves as it did before rather than losing the dialog.
