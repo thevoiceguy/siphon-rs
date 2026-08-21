@@ -376,6 +376,23 @@ fn build_via_value(
 /// The helper generates a fresh tag per dialog-forming request
 /// (RFC 3261 §8.1.1.3), so the tag must be read back from the request
 /// rather than from any per-client state.
+/// The From-header URI of an outgoing request — the dialog's local URI
+/// per RFC 3261 §12.2.1.1. Companion to [`request_from_tag`]; see
+/// `UserAgentClient::dialog_local_uri` for why the configured identity
+/// is the wrong source (siphon-ai #549).
+fn request_from_uri(request: &Request) -> Option<SipUri> {
+    let from = request.headers().get_smol("From")?;
+    let uri_str = if let Some(start) = from.find('<') {
+        let end = from[start + 1..].find('>')?;
+        &from[start + 1..start + 1 + end]
+    } else if let Some(semi) = from.find(';') {
+        &from[..semi]
+    } else {
+        from.as_str()
+    };
+    SipUri::parse(uri_str.trim()).ok()
+}
+
 fn request_from_tag(request: &Request) -> SmolStr {
     request
         .headers()
@@ -1655,7 +1672,13 @@ impl IntegratedUAC {
         let placeholder_dialog = Dialog::unchecked_new(
             dialog_id,
             sip_dialog::DialogStateType::Early,
-            helper.local_uri.clone(),
+            // Same rule as the confirmed dialog built on the 2xx: the
+            // local URI is the request's From URI, not the configured
+            // identity (siphon-ai #549). Keeping the placeholder in step
+            // means an in-dialog request built against an early dialog
+            // (a CANCEL-race BYE, say) carries the same URI as one built
+            // after the 2xx.
+            request_from_uri(&request).unwrap_or_else(|| helper.local_uri.clone()),
             target_uri.clone(),
             target_uri.clone(),
             1,
@@ -1764,7 +1787,13 @@ impl IntegratedUAC {
         let placeholder_dialog = Dialog::unchecked_new(
             dialog_id,
             sip_dialog::DialogStateType::Early,
-            helper.local_uri.clone(),
+            // Same rule as the confirmed dialog built on the 2xx: the
+            // local URI is the request's From URI, not the configured
+            // identity (siphon-ai #549). Keeping the placeholder in step
+            // means an in-dialog request built against an early dialog
+            // (a CANCEL-race BYE, say) carries the same URI as one built
+            // after the 2xx.
+            request_from_uri(&request).unwrap_or_else(|| helper.local_uri.clone()),
             target_uri.clone(),
             target_uri.clone(),
             1,
@@ -1894,7 +1923,13 @@ impl IntegratedUAC {
         let placeholder_dialog = Dialog::unchecked_new(
             dialog_id,
             sip_dialog::DialogStateType::Early,
-            helper.local_uri.clone(),
+            // Same rule as the confirmed dialog built on the 2xx: the
+            // local URI is the request's From URI, not the configured
+            // identity (siphon-ai #549). Keeping the placeholder in step
+            // means an in-dialog request built against an early dialog
+            // (a CANCEL-race BYE, say) carries the same URI as one built
+            // after the 2xx.
+            request_from_uri(&request).unwrap_or_else(|| helper.local_uri.clone()),
             target_uri.clone(),
             target_uri.clone(),
             1,
@@ -2012,7 +2047,13 @@ impl IntegratedUAC {
         let placeholder_dialog = Dialog::unchecked_new(
             dialog_id,
             sip_dialog::DialogStateType::Early,
-            helper.local_uri.clone(),
+            // Same rule as the confirmed dialog built on the 2xx: the
+            // local URI is the request's From URI, not the configured
+            // identity (siphon-ai #549). Keeping the placeholder in step
+            // means an in-dialog request built against an early dialog
+            // (a CANCEL-race BYE, say) carries the same URI as one built
+            // after the 2xx.
+            request_from_uri(&request).unwrap_or_else(|| helper.local_uri.clone()),
             target_uri.clone(),
             target_uri.clone(),
             1,

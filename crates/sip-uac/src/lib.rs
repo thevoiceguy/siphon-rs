@@ -1254,6 +1254,13 @@ impl UserAgentClient {
             .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
             .unwrap();
 
+        // User-Agent — every request this UAC builds names the same
+        // product, in-dialog ones included (siphon-ai #549). Outside the
+        // SDP branch below: a body-less ACK needs it just as much.
+        headers
+            .push(SmolStr::new("User-Agent"), self.user_agent.clone())
+            .unwrap();
+
         // Handle SDP body (for late offer scenario)
         let body = if let Some(sdp) = sdp_body {
             // Content-Type
@@ -1345,6 +1352,12 @@ impl UserAgentClient {
         // Max-Forwards
         headers
             .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
+            .unwrap();
+
+        // User-Agent — every request this UAC builds names the same
+        // product, in-dialog ones included (siphon-ai #549).
+        headers
+            .push(SmolStr::new("User-Agent"), self.user_agent.clone())
             .unwrap();
 
         // Content-Length
@@ -1834,6 +1847,12 @@ impl UserAgentClient {
             .push(SmolStr::new("Content-Type"), SmolStr::new(content_type))
             .unwrap();
 
+        // User-Agent — every request this UAC builds names the same
+        // product, in-dialog ones included (siphon-ai #549).
+        headers
+            .push(SmolStr::new("User-Agent"), self.user_agent.clone())
+            .unwrap();
+
         // Content-Length
         headers
             .push(
@@ -2248,6 +2267,12 @@ impl UserAgentClient {
             )
             .unwrap();
 
+        // User-Agent — every request this UAC builds names the same
+        // product, in-dialog ones included (siphon-ai #549).
+        headers
+            .push(SmolStr::new("User-Agent"), self.user_agent.clone())
+            .unwrap();
+
         // Content-Length
         headers
             .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
@@ -2279,7 +2304,9 @@ impl UserAgentClient {
         let dialog = Dialog::new_uac(
             request,
             response,
-            self.local_uri.clone(),
+            // The dialog's local URI is the request's From URI, not this
+            // UAC's configured identity — see `dialog_local_uri`.
+            dialog_local_uri(request, &self.local_uri),
             extract_to_uri(response)?,
         )?;
 
@@ -2505,12 +2532,20 @@ impl UserAgentClient {
             .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
             .unwrap();
 
+        // User-Agent — every request this UAC builds names the same
+        // product, in-dialog ones included (siphon-ai #549). Outside the
+        // body branch below: a body-less NOTIFY needs it just as much.
+        headers
+            .push(SmolStr::new("User-Agent"), self.user_agent.clone())
+            .unwrap();
+
         // Handle body
         let request_body = if let Some(content) = body {
             // Content-Type (depends on event package, defaulting to plain text)
             headers
                 .push(SmolStr::new("Content-Type"), SmolStr::new("text/plain"))
                 .unwrap();
+
             headers
                 .push(
                     SmolStr::new("Content-Length"),
@@ -2720,6 +2755,12 @@ impl UserAgentClient {
 
         // Body (reginfo XML)
         let body = reginfo.to_string();
+        // User-Agent — every request this UAC builds names the same
+        // product, in-dialog ones included (siphon-ai #549).
+        headers
+            .push(SmolStr::new("User-Agent"), self.user_agent.clone())
+            .unwrap();
+
         headers
             .push(
                 SmolStr::new("Content-Length"),
@@ -2812,6 +2853,12 @@ impl UserAgentClient {
         // Max-Forwards
         headers
             .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
+            .unwrap();
+
+        // User-Agent — every request this UAC builds names the same
+        // product, in-dialog ones included (siphon-ai #549).
+        headers
+            .push(SmolStr::new("User-Agent"), self.user_agent.clone())
             .unwrap();
 
         // Content-Length
@@ -2930,6 +2977,12 @@ impl UserAgentClient {
             .push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))
             .unwrap();
 
+        // User-Agent — every request this UAC builds names the same
+        // product, in-dialog ones included (siphon-ai #549).
+        headers
+            .push(SmolStr::new("User-Agent"), self.user_agent.clone())
+            .unwrap();
+
         // Content-Length
         headers
             .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
@@ -3024,6 +3077,12 @@ impl UserAgentClient {
         // Content-Type
         headers
             .push(SmolStr::new("Content-Type"), SmolStr::new(content_type))
+            .unwrap();
+
+        // User-Agent — every request this UAC builds names the same
+        // product, in-dialog ones included (siphon-ai #549).
+        headers
+            .push(SmolStr::new("User-Agent"), self.user_agent.clone())
             .unwrap();
 
         // Content-Length
@@ -3436,6 +3495,42 @@ pub(crate) fn replace_via_branch(via: &str, new_branch: &str) -> String {
         format!("{};{}", base, params.join(";"))
     }
 }
+/// The local URI of a dialog this UAC opens: the URI actually written
+/// into the request's `From`, not the UAC's configured identity.
+///
+/// RFC 3261 §12.2.1.1 takes a UAC dialog's local URI from the
+/// dialog-forming request's `From`. Those are the same thing for an
+/// embedder that always dials as itself, so `self.local_uri` looked
+/// correct for years — but an embedder that sets a per-call `From`
+/// (a B2BUA dialling on behalf of a registered AOR, say) ends up with a
+/// dialog whose local URI is not what went on the wire, and every
+/// in-dialog request it later builds — BYE, re-INVITE, REFER — swaps the
+/// `From` URI mid-dialog while keeping the tag. Peers that match on
+/// Call-ID + tags tolerate it; peers that validate the URI answer 481,
+/// and anything correlating by `From` attributes the two to different
+/// identities (siphon-ai #549).
+///
+/// Falls back to the configured identity when the request has no
+/// parseable `From` URI, which keeps a malformed request behaving
+/// exactly as it did before rather than losing the dialog.
+fn dialog_local_uri(request: &Request, configured: &SipUri) -> SipUri {
+    extract_from_uri(request).unwrap_or_else(|| configured.clone())
+}
+
+/// Extract the From URI from a request. Mirrors [`extract_to_uri`].
+fn extract_from_uri(request: &Request) -> Option<SipUri> {
+    let from_header = header(request.headers(), "From")?;
+    let uri_str = if let Some(start) = from_header.find('<') {
+        let end = from_header[start + 1..].find('>')?;
+        &from_header[start + 1..start + 1 + end]
+    } else if let Some(semi) = from_header.find(';') {
+        &from_header[..semi]
+    } else {
+        from_header
+    };
+    SipUri::parse(uri_str.trim()).ok()
+}
+
 fn extract_to_uri(response: &Response) -> Option<SipUri> {
     let to_header = header(response.headers(), "To")?;
     // Simple extraction - look for URI between < >
@@ -3468,6 +3563,10 @@ mod tests {
     /// only the one someone happened to test is how this survived
     /// until now.
     #[test]
+    /// Dialog-forming and out-of-dialog builders. In-dialog ones are
+    /// covered by `every_in_dialog_request_carries_the_user_agent` —
+    /// they were the half this test's name always claimed but never
+    /// checked (siphon-ai #549).
     fn configured_user_agent_reaches_every_request_builder() {
         let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
         let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
@@ -3976,6 +4075,149 @@ mod tests {
         assert_eq!(request.headers().get("Event").unwrap(), "refer");
         assert_eq!(request.headers().get("Expires").unwrap(), "3600");
         assert!(request.headers().get("Contact").is_some());
+    }
+
+    /// Builds an INVITE/200 pair whose `From` is `from_header`, i.e. the
+    /// shape a B2BUA produces when it dials on behalf of some other
+    /// identity than the UAC's own.
+    fn invite_and_ok(from_header: &str) -> (Request, Response) {
+        let mut headers = Headers::new();
+        headers
+            .push(SmolStr::new("From"), SmolStr::new(from_header))
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("To"),
+                SmolStr::new("<sip:9664@pbx.example.com>;tag=def456"),
+            )
+            .unwrap();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new("uri-test-call-id"))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"))
+            .unwrap();
+        headers
+            .push(
+                SmolStr::new("Contact"),
+                SmolStr::new("<sip:9664@pbx.example.com:5060>"),
+            )
+            .unwrap();
+        let invite = Request::new(
+            RequestLine::new(
+                Method::Invite,
+                SipUri::parse("sip:9664@pbx.example.com").unwrap(),
+            ),
+            headers.clone(),
+            Bytes::new(),
+        )
+        .expect("valid INVITE request");
+        let response = Response::new(
+            StatusLine::new(200, "OK").expect("valid status line"),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid response");
+        (invite, response)
+    }
+
+    /// RFC 3261 §12.2.1.1: the dialog's local URI is the one the
+    /// dialog-forming request actually put in `From` — not whatever this
+    /// UAC was configured with. An embedder that dials on behalf of a
+    /// registered AOR sets the former per call; taking the latter made
+    /// every later in-dialog request disagree with the INVITE
+    /// (siphon-ai #549).
+    #[test]
+    fn uac_dialog_local_uri_comes_from_the_request_not_the_config() {
+        let uac = UserAgentClient::new(
+            SipUri::parse("sip:siphon@10.0.0.2").unwrap(),
+            SipUri::parse("sip:siphon@10.0.0.2:5060").unwrap(),
+        );
+        let (invite, response) = invite_and_ok("<sip:1000@pbx.example.com>;tag=abc123");
+
+        let dialog = uac.process_invite_response(&invite, &response).unwrap();
+
+        assert_eq!(
+            dialog.local_uri().as_str(),
+            "sip:1000@pbx.example.com",
+            "dialog took the UAC's configured identity instead of the INVITE's From"
+        );
+    }
+
+    /// The consequence the previous test exists to prevent: a BYE whose
+    /// `From` URI silently changes mid-dialog while the tag stays put.
+    #[test]
+    fn bye_from_uri_matches_the_invite_that_opened_the_dialog() {
+        let uac = UserAgentClient::new(
+            SipUri::parse("sip:siphon@10.0.0.2").unwrap(),
+            SipUri::parse("sip:siphon@10.0.0.2:5060").unwrap(),
+        );
+        let (invite, response) = invite_and_ok("<sip:1000@pbx.example.com>;tag=abc123");
+        let dialog = uac.process_invite_response(&invite, &response).unwrap();
+
+        let bye = uac.create_bye(&dialog);
+        let from = bye.headers().get("From").unwrap();
+
+        assert!(
+            from.contains("sip:1000@pbx.example.com"),
+            "BYE From URI drifted from the INVITE's: {from}"
+        );
+        assert!(
+            from.contains("tag=abc123"),
+            "BYE must keep the dialog's local tag: {from}"
+        );
+    }
+
+    /// A request with no parseable `From` URI keeps the pre-fix
+    /// behaviour rather than losing the dialog entirely.
+    #[test]
+    fn dialog_local_uri_falls_back_to_the_configured_identity() {
+        let configured = SipUri::parse("sip:siphon@10.0.0.2").unwrap();
+        let (invite, _) = invite_and_ok("not-a-uri;tag=abc123");
+
+        assert_eq!(
+            dialog_local_uri(&invite, &configured).as_str(),
+            configured.as_str()
+        );
+    }
+
+    /// The product token belongs on *every* request this client builds,
+    /// in-dialog ones included. It used to be pushed by roughly half the
+    /// builders, so a capture of one call showed `User-Agent` on the
+    /// INVITE and nothing on the ACK or the BYE (siphon-ai #549).
+    #[test]
+    fn every_in_dialog_request_carries_the_user_agent() {
+        let uac = UserAgentClient::new(
+            SipUri::parse("sip:siphon@10.0.0.2").unwrap(),
+            SipUri::parse("sip:siphon@10.0.0.2:5060").unwrap(),
+        )
+        .with_user_agent("acme-sbc/9.9")
+        .expect("valid token");
+        let (invite, response) = invite_and_ok("<sip:1000@pbx.example.com>;tag=abc123");
+        let dialog = uac.process_invite_response(&invite, &response).unwrap();
+
+        let requests: Vec<(&str, Request)> = vec![
+            ("BYE", uac.create_bye(&dialog)),
+            ("re-INVITE", uac.create_reinvite(&dialog, None)),
+            ("UPDATE", uac.create_update(&dialog, None)),
+            ("ACK", uac.create_ack(&invite, &response, None)),
+            (
+                "REFER",
+                uac.create_refer(&dialog, &SipUri::parse("sip:x@example.com").unwrap()),
+            ),
+            (
+                "INFO",
+                uac.create_info(&dialog, "application/dtmf", "5")
+                    .expect("valid INFO"),
+            ),
+        ];
+        for (name, req) in requests {
+            assert_eq!(
+                req.headers().get("User-Agent").map(|h| h.to_string()),
+                Some("acme-sbc/9.9".to_string()),
+                "{name} carries no User-Agent"
+            );
+        }
     }
 
     #[test]
