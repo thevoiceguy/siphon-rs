@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`sip-identity`: PASSporT *signing* (feature `sign`).** The complement to the existing ES256
+  verification path: build a SHAKEN (ATIS-1000074) PASSporT from a claim set (`attest`, `orig.tn`,
+  `dest.tn`, `iat`, `origid`, `x5u`), sign it ES256 with a P-256 `EcdsaKeyPair`, and get the
+  compact-JWS token plus the RFC 8224 `Identity` header value (`<token>;info=<x5u>;alg=ES256;ppt=shaken`).
+  It round-trips exactly through `Passport::decode` + `verify_signature` (a test signs, decodes, and
+  verifies under the signing key, and confirms a different key fails). Adds no dependency — only
+  `ring`'s ECDSA signing, already in the tree. Provider-side only: whether a deployment is *entitled*
+  to assert a number (SPC token / STI certificate) is an operating-authority question the crate does
+  not decide; a non-authorized gateway MUST NOT present a self-signed PASSporT as attestation. New
+  public API: `sign`, `PassportParams`, `SignedPassport`, `SignError` (all behind `sign`).
+
+
 ## [2026-08-21] — workspace release
 
 Crate versions in this release: sip-uac 0.7.1. (sip-core 0.7.7,
