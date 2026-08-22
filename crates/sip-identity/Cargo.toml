@@ -26,6 +26,11 @@ rustls-webpki = { version = "0.103", default-features = false, features = ["std"
 # Cert/time types webpki operates on (CertificateDer, UnixTime, TrustAnchor).
 rustls-pki-types = "1"
 
+[features]
+default = []
+# PASSporT *signing* (provider side). Adds only `ring` signing, already a dependency.
+sign = []
+
 [dev-dependencies]
 serde_json = "1"
 # Test-only: generate a throwaway CA + leaf chain to exercise validation.

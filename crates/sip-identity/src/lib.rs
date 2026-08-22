@@ -46,11 +46,15 @@ mod chain;
 mod error;
 mod header;
 mod passport;
+#[cfg(feature = "sign")]
+mod sign;
 mod verify;
 
 pub use error::IdentityError;
 pub use header::IdentityHeader;
 pub use passport::{AttestationLevel, Passport, PassportClaims, PassportHeader};
+#[cfg(feature = "sign")]
+pub use sign::{sign, PassportParams, SignError, SignedPassport};
 pub use verify::VerifyError;
 
 #[cfg(test)]
