@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026-08-24] — workspace release
+
+Crate versions in this release: sip-identity 0.3.0. (sip-core 0.7.7,
+sip-transport 0.4.0, sip-dns 0.3.0, sip-transaction 0.6.0, sip-dialog 0.3.4,
+sip-uac 0.7.1, sip-uas 0.4.0, sip-auth 0.4.0, sip-registrar 0.3.1,
+sip-sdp 0.3.1, sip-observe 0.3.0, sip-ratelimit 0.3.0, sip-testkit 0.1.1,
+sip-parse 0.3.4, sip-proxy 0.3.0, sip-hep 0.0.1, and siphond 0.6.0 are
+unchanged.)
+
+Breaking changes: none. sip-identity takes a minor bump for additive public
+API (#123), all behind the new off-by-default `sign` feature —
+verification-only builds are unchanged. Downstream absorbs this by bumping
+the tag alone.
+
 ### Added
 
 - **`sip-identity`: PASSporT *signing* (feature `sign`).** The complement to the existing ES256
