@@ -905,6 +905,44 @@ fn ws_url_to_socketaddr(url: &str) -> Option<SocketAddr> {
     host_port.parse().ok()
 }
 
+/// Accept-time policy for the SIP WebSocket listeners.
+///
+/// Browsers attach an `Origin` header to every WebSocket upgrade, naming
+/// the page that opened the connection. A SIP-over-WSS listener is
+/// typically dialed only by an operator's own web app, so an allow-list
+/// turns "any page on the internet can open signalling to this daemon"
+/// into "only pages we serve can" (the CSWSH class of bug). The check is
+/// advisory against non-browser clients — they can forge `Origin` — which
+/// is why digest auth stays the real authentication; this only removes
+/// the drive-by browser vector.
+#[cfg(feature = "ws")]
+#[derive(Debug, Clone, Default)]
+pub struct WsAcceptPolicy {
+    /// Allowed `Origin` header values, compared ASCII-case-insensitively
+    /// against the full serialized origin (e.g.
+    /// `https://ops.example.com`). Empty = no check: any origin, and
+    /// upgrades with no `Origin` at all (non-browser RFC 7118 clients),
+    /// are accepted. Non-empty = the header must be present and match,
+    /// or the upgrade is refused with `403 Forbidden`.
+    pub allowed_origins: Vec<String>,
+}
+
+#[cfg(feature = "ws")]
+impl WsAcceptPolicy {
+    fn origin_allowed(&self, origin: Option<&str>) -> bool {
+        if self.allowed_origins.is_empty() {
+            return true;
+        }
+        match origin {
+            Some(o) => self
+                .allowed_origins
+                .iter()
+                .any(|allowed| allowed.eq_ignore_ascii_case(o.trim())),
+            None => false,
+        }
+    }
+}
+
 #[cfg(feature = "ws")]
 async fn handle_ws_connection<S>(
     peer: SocketAddr,
@@ -912,6 +950,7 @@ async fn handle_ws_connection<S>(
     stream: S,
     transport: TransportKind,
     tx: mpsc::Sender<InboundPacket>,
+    policy: WsAcceptPolicy,
 ) -> Result<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
@@ -931,6 +970,16 @@ where
     let ws_stream = tokio_tungstenite::accept_hdr_async_with_config(
         stream,
         |req: &Request, mut resp: tungstenite::handshake::server::Response| {
+            // Origin allow-list runs before subprotocol selection: a
+            // disallowed page gets 403 whether or not it speaks SIP.
+            let origin = req
+                .headers()
+                .get("Origin")
+                .and_then(|v| v.to_str().ok());
+            if !policy.origin_allowed(origin) {
+                warn!(%peer, origin = origin.unwrap_or("<none>"), "ws upgrade refused: origin not allowed");
+                return Err(ws_origin_error_response());
+            }
             if let Some(value) = req.headers().get("Sec-WebSocket-Protocol") {
                 if let Ok(proto_str) = value.to_str() {
                     if proto_str
@@ -958,14 +1007,30 @@ where
     let (mut sink, mut stream) = ws_stream.split();
     let (writer_tx, mut writer_rx) = mpsc::channel::<Bytes>(64);
 
+    // Two-phase idle timeout, same semantics as the TCP/TLS read loops:
+    // the short Slowloris window until the first complete SIP message,
+    // the long configurable window after. Only SIP traffic (either
+    // direction) resets the timer — WS-native ping/pong is transport
+    // liveness, not dialog activity, the same way TCP ACKs don't reset
+    // the stream loops' timer. A browser that keeps pinging on a dead
+    // page still idles out.
+    let mut established = false;
+    let mut last_activity = tokio::time::Instant::now();
+
     loop {
+        let idle = select_idle_timeout(established);
         tokio::select! {
+            _ = tokio::time::sleep_until(last_activity + idle) => {
+                tracing::debug!(%peer, ?idle, established, "closing idle websocket session");
+                break;
+            }
             outbound = writer_rx.recv() => {
                 if let Some(data) = outbound {
                     if let Err(e) = sink.send(tungstenite::Message::Binary(data.to_vec())).await {
                         warn!(%peer, %e, "websocket send error");
                         break;
                     }
+                    last_activity = tokio::time::Instant::now();
                     transport_metrics().on_packet_sent(transport.into());
                     // HEP3 outbound capture. SIP-over-WS uses TCP
                     // underneath; the SIP message text is what
@@ -995,6 +1060,8 @@ where
                         if !check_stream_rate(peer, transport.into()) {
                             continue;
                         }
+                        established = true;
+                        last_activity = tokio::time::Instant::now();
                         transport_metrics().on_packet_received(transport.into());
                         // HEP3 inbound capture for binary WS frames.
                         if let Some(emitter) = sip_hep::sip_hep() {
@@ -1028,6 +1095,8 @@ where
                         if !check_stream_rate(peer, transport.into()) {
                             continue;
                         }
+                        established = true;
+                        last_activity = tokio::time::Instant::now();
                         transport_metrics().on_packet_received(transport.into());
                         let payload_bytes = text.into_bytes();
                         // HEP3 inbound capture for text WS frames.
@@ -1078,7 +1147,21 @@ where
 
 #[cfg(feature = "ws")]
 /// Runs a WebSocket listener and forwards SIP-over-WS packets to the channel.
+///
+/// Accepts any `Origin` — see [`run_ws_with_policy`] for the
+/// allow-listed variant.
 pub async fn run_ws(bind: &str, tx: mpsc::Sender<InboundPacket>) -> Result<()> {
+    run_ws_with_policy(bind, WsAcceptPolicy::default(), tx).await
+}
+
+#[cfg(feature = "ws")]
+/// [`run_ws`] with an accept-time [`WsAcceptPolicy`] (`Origin`
+/// allow-list).
+pub async fn run_ws_with_policy(
+    bind: &str,
+    policy: WsAcceptPolicy,
+    tx: mpsc::Sender<InboundPacket>,
+) -> Result<()> {
     let listener = TcpListener::bind(bind).await?;
     let local_addr = listener.local_addr()?;
     info!(%bind, "listening (ws)");
@@ -1102,10 +1185,11 @@ pub async fn run_ws(bind: &str, tx: mpsc::Sender<InboundPacket>) -> Result<()> {
             }
         };
         let tx = tx.clone();
+        let policy = policy.clone();
         tokio::spawn(async move {
             let _permit = permit;
             if let Err(e) =
-                handle_ws_connection(peer, local_addr, stream, TransportKind::Ws, tx).await
+                handle_ws_connection(peer, local_addr, stream, TransportKind::Ws, tx, policy).await
             {
                 warn!(%peer, %e, "ws session ended with error");
             }
@@ -1140,6 +1224,18 @@ pub async fn run_wss_with_swappable_config(
     swappable: std::sync::Arc<arc_swap::ArcSwap<tokio_rustls::rustls::ServerConfig>>,
     tx: mpsc::Sender<InboundPacket>,
 ) -> Result<()> {
+    run_wss_with_swappable_config_and_policy(bind, swappable, WsAcceptPolicy::default(), tx).await
+}
+
+#[cfg(all(feature = "ws", feature = "tls"))]
+/// [`run_wss_with_swappable_config`] with an accept-time
+/// [`WsAcceptPolicy`] (`Origin` allow-list).
+pub async fn run_wss_with_swappable_config_and_policy(
+    bind: &str,
+    swappable: std::sync::Arc<arc_swap::ArcSwap<tokio_rustls::rustls::ServerConfig>>,
+    policy: WsAcceptPolicy,
+    tx: mpsc::Sender<InboundPacket>,
+) -> Result<()> {
     use tokio_rustls::TlsAcceptor;
 
     let listener = TcpListener::bind(bind).await?;
@@ -1165,6 +1261,7 @@ pub async fn run_wss_with_swappable_config(
             }
         };
         let tx = tx.clone();
+        let policy = policy.clone();
         // Snapshot the current ServerConfig for this accept. See
         // run_tls_with_swappable_config for the in-flight-safety
         // story.
@@ -1173,9 +1270,15 @@ pub async fn run_wss_with_swappable_config(
             let _permit = permit;
             match acceptor.accept(stream).await {
                 Ok(tls_stream) => {
-                    if let Err(e) =
-                        handle_ws_connection(peer, local_addr, tls_stream, TransportKind::Wss, tx)
-                            .await
+                    if let Err(e) = handle_ws_connection(
+                        peer,
+                        local_addr,
+                        tls_stream,
+                        TransportKind::Wss,
+                        tx,
+                        policy,
+                    )
+                    .await
                     {
                         warn!(%peer, %e, "wss session ended with error");
                     }
@@ -2081,6 +2184,20 @@ fn ws_subprotocol_error_response() -> tungstenite::handshake::server::ErrorRespo
         .unwrap_or_else(|_| {
             Response::builder()
                 .status(StatusCode::BAD_REQUEST)
+                .body(None)
+                .unwrap()
+        })
+}
+
+#[cfg(feature = "ws")]
+fn ws_origin_error_response() -> tungstenite::handshake::server::ErrorResponse {
+    use tokio_tungstenite::tungstenite::http::{Response, StatusCode};
+    Response::builder()
+        .status(StatusCode::FORBIDDEN)
+        .body(Some("Origin not allowed".to_string()))
+        .unwrap_or_else(|_| {
+            Response::builder()
+                .status(StatusCode::FORBIDDEN)
                 .body(None)
                 .unwrap()
         })
