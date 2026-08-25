@@ -202,7 +202,12 @@ impl UasRequestHandler for AutoAnswerServer {
     }
 
     /// Handle incoming REGISTER requests
-    async fn on_register(&self, request: &Request, handle: ServerTransactionHandle) -> Result<()> {
+    async fn on_register(
+        &self,
+        request: &Request,
+        handle: ServerTransactionHandle,
+        _ctx: &TransportContext,
+    ) -> Result<()> {
         if let Some(from) = request.headers().get("From") {
             println!("📝 Received REGISTER from {}", from);
         }

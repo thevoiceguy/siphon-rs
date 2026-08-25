@@ -208,7 +208,19 @@ pub trait UasRequestHandler: Send + Sync {
     }
 
     /// Handle an incoming REGISTER request.
-    async fn on_register(&self, request: &Request, handle: ServerTransactionHandle) -> Result<()> {
+    ///
+    /// `ctx` carries the transport the request arrived on — a registrar
+    /// binding registrations to their connection (RFC 7118 §5.2 /
+    /// RFC 5626-lite: a WebSocket client is reachable only down the
+    /// connection it opened) reads the per-connection writer from it,
+    /// the same way `on_invite` does.
+    async fn on_register(
+        &self,
+        request: &Request,
+        handle: ServerTransactionHandle,
+        ctx: &TransportContext,
+    ) -> Result<()> {
+        let _ = ctx;
         let response = method_not_allowed_response(request, &self.allow_header());
         handle.send_final(response).await;
         Ok(())
@@ -462,7 +474,9 @@ impl IntegratedUAS {
                 }
             }
             "REGISTER" => {
-                self.request_handler.on_register(request, handle).await?;
+                self.request_handler
+                    .on_register(request, handle, ctx)
+                    .await?;
             }
             "OPTIONS" => {
                 // OPTIONS is a capability query — RFC 3261 §11. The
