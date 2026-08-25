@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026-08-24.1] — workspace release
+
+Crate versions in this release: sip-transport 0.5.0. (sip-core 0.7.7,
+sip-dns 0.3.0, sip-transaction 0.6.0, sip-dialog 0.3.4, sip-uac 0.7.1,
+sip-uas 0.4.0, sip-auth 0.4.0, sip-registrar 0.3.1, sip-sdp 0.3.1,
+sip-observe 0.3.0, sip-ratelimit 0.3.0, sip-testkit 0.1.1, sip-parse 0.3.4,
+sip-proxy 0.3.0, sip-hep 0.0.1, sip-identity 0.3.0, and siphond 0.6.0 are
+unchanged.)
+
+Breaking changes: none. sip-transport takes a minor bump for additive public
+API (#125), all behind the `ws` feature; existing `run_ws` / `run_wss`
+signatures are unchanged. The WS idle timeout is a behaviour change for
+`ws`-feature consumers only: WS sessions now idle out on the same two-phase
+schedule TCP/TLS always had (previously never). Downstream absorbs this by
+bumping the tag alone.
+
+### Added
+
+- **`sip-transport`: `Origin` allow-list for the SIP WebSocket listeners (feature `ws`).**
+  Browsers stamp every WebSocket upgrade with the opening page's `Origin`; a SIP-over-WSS
+  listener is typically dialed only by an operator's own web app, so `WsAcceptPolicy
+  { allowed_origins }` turns "any page on the internet can open signalling to this daemon"
+  into "only pages we serve can" (the CSWSH class). Empty list (the default, and the old
+  behaviour of the unchanged `run_ws` / `run_wss` signatures) = no check; non-empty = the
+  header must be present and match ASCII-case-insensitively or the upgrade is refused
+  `403 Forbidden` before subprotocol selection. Advisory against non-browser clients (they
+  can forge the header) — digest auth remains the real authentication. New entry points:
+  `run_ws_with_policy`, `run_wss_with_swappable_config_and_policy`. First consumer:
+  siphon-ai's browser/WebRTC plan (`DEV_PLAN_WebRTC.md` Phase 1).
+
+### Fixed
+
+- **`sip-transport`: WS sessions now idle out; previously they never did.** The WS read
+  loop applies the same two-phase idle timeout as the TCP/TLS loops (#60): the 60 s
+  Slowloris window until the first complete SIP message, the configurable established
+  window after ([`set_established_idle_timeout`]). Only SIP traffic in either direction
+  resets the timer — WS-native ping/pong is transport liveness, not dialog activity, the
+  same way TCP ACKs don't reset the stream loops' timer — so a browser that keeps pinging
+  from a dead page still idles out. Also new in tests: a pin on the RFC 7118 §5.2 property
+  that a reply written to `InboundPacket::stream` goes back down the same WS connection (a
+  browser's Via/Contact addresses are unroutable; this is the only response path that
+  works).
+
 ## [2026-08-24] — workspace release
 
 Crate versions in this release: sip-identity 0.3.0. (sip-core 0.7.7,
