@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026-08-25] — workspace release
+
+Crate versions in this release: sip-uas 0.5.0. (sip-core 0.7.7,
+sip-transport 0.5.0, sip-dns 0.3.0, sip-transaction 0.6.0,
+sip-dialog 0.3.4, sip-uac 0.7.1, sip-auth 0.4.0, sip-registrar 0.3.1,
+sip-sdp 0.3.1, sip-observe 0.3.0, sip-ratelimit 0.3.0,
+sip-testkit 0.1.1, sip-parse 0.3.4, sip-proxy 0.3.0, sip-hep 0.0.1,
+sip-identity 0.3.0, and siphond 0.6.0 are unchanged.)
+
+Breaking changes: **sip-uas 0.5.0** — `UasRequestHandler::on_register`
+now takes `ctx: &TransportContext` like `on_invite`/`on_bye`
+([#127](https://github.com/thevoiceguy/siphon-rs/pull/127)); trait
+implementors add the parameter (the default body ignores it and still
+405s). Downstream absorbs this with a one-line signature change per
+`on_register` override.
+
+### Changed
+
+- **`sip-uas`: `on_register` receives the `TransportContext`.** A registrar binding
+  registrations to their connection (RFC 7118 §5.2 / RFC 5626-lite — a WebSocket client is
+  reachable only down the connection it opened) needs the per-connection writer, which lives
+  on the `TransportContext` the dispatch loop already holds at the REGISTER arm. First
+  consumer: siphon-ai's browser registrar (DEV_PLAN_WebRTC.md Phase 1 §3.2).
+
 ## [2026-08-24.1] — workspace release
 
 Crate versions in this release: sip-transport 0.5.0. (sip-core 0.7.7,
