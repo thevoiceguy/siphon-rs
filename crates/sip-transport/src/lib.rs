@@ -62,7 +62,7 @@ use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 #[cfg(feature = "ws")]
 use {
     futures_util::{SinkExt, StreamExt},
@@ -1021,7 +1021,7 @@ where
         let idle = select_idle_timeout(established);
         tokio::select! {
             _ = tokio::time::sleep_until(last_activity + idle) => {
-                debug!(%peer, ?idle, established, "closing idle websocket session");
+                tracing::debug!(%peer, ?idle, established, "closing idle websocket session");
                 break;
             }
             outbound = writer_rx.recv() => {
