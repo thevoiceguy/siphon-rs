@@ -644,6 +644,7 @@ impl ConnectionPool {
                                             // (RFC 5923 reuse), not a listener — no
                                             // listener port to advertise.
                                             local: None,
+                                            peer_identity: None,
                                         };
                                         if inbound_tx.send(packet).await.is_err() {
                                             warn!(peer = %peer, "TCP client inbound_tx channel closed");
@@ -796,6 +797,7 @@ impl ConnectionPool {
                                     payload: Bytes::from(data),
                                     stream: None,
                                     local: None,
+                                    peer_identity: None,
                                 };
                                 if inbound_tx.send(packet).await.is_err() {
                                     debug!(url = %reader_key, "WS reader: inbound channel closed");
@@ -809,6 +811,7 @@ impl ConnectionPool {
                                     payload: Bytes::from(text.into_bytes()),
                                     stream: None,
                                     local: None,
+                                    peer_identity: None,
                                 };
                                 if inbound_tx.send(packet).await.is_err() {
                                     break;
@@ -1161,6 +1164,12 @@ impl TlsPool {
         // is consumed by the TLS handshake (#341).
         let hep_local = stream.local_addr().ok();
         let tls_stream = connector.connect(server_name, stream).await?;
+        // The server certificate this connection was verified against,
+        // so an in-dialog request the peer sends back down this
+        // connection carries the same identity a listener-side packet
+        // would. Read before the split consumes the stream.
+        let peer_identity =
+            crate::mtls::peer_identity_from_certs(tls_stream.get_ref().1.peer_certificates(), addr);
         // Split so the reader and writer tasks own separate halves; without
         // this the writer task holds the only handle to the TLS stream and
         // we never read responses (the original send_tls bug).
@@ -1232,6 +1241,7 @@ impl TlsPool {
                                         payload,
                                         stream: Some(writer_tx.clone()),
                                         local: None,
+                                        peer_identity: peer_identity.clone(),
                                     };
                                     if inbound_tx.send(packet).await.is_err() {
                                         warn!(peer = %peer, "tls client inbound_tx channel closed");

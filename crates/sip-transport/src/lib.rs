@@ -55,7 +55,17 @@ use sip_ratelimit::RateLimiter;
 // Re-exported so callers can build configs for `set_udp_rate_limit` /
 // `set_stream_rate_limit` without depending on sip-ratelimit directly.
 pub use sip_ratelimit::{RateLimitConfig, RateLimitError};
+mod peer_identity;
 pub mod pool;
+pub use peer_identity::{PeerIdentity, PeerIdentityBuilder};
+#[cfg(feature = "tls")]
+pub mod mtls;
+#[cfg(feature = "tls")]
+pub use mtls::{
+    build_rustls_client_config, build_rustls_server_config, client_cert_verifier, load_cert_chain,
+    load_client_ca_roots, load_private_key, load_rustls_server_config_with_client_auth,
+    ClientAuthMode, ClientIdentity,
+};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -362,6 +372,14 @@ pub struct InboundPacket {
     /// advertise the matching `host:port;transport`. `None` when the
     /// receiving listener's local address wasn't available.
     local: Option<SocketAddr>,
+    /// Identity of the peer's verified TLS certificate, when the
+    /// connection this packet arrived on completed a handshake with
+    /// one — a client certificate the listener asked for (see
+    /// [`mtls`]) or the server certificate an outbound connection
+    /// was dialed against. `None` on UDP/TCP/WS, on a TLS connection
+    /// where the peer presented nothing, and on packets built by
+    /// hand. Shared by `Arc` across every packet on the connection.
+    peer_identity: Option<Arc<PeerIdentity>>,
 }
 
 impl InboundPacket {
@@ -380,6 +398,7 @@ impl InboundPacket {
             payload,
             stream,
             local: None,
+            peer_identity: None,
         }
     }
 
@@ -387,6 +406,22 @@ impl InboundPacket {
     pub fn with_local_addr(mut self, local: Option<SocketAddr>) -> Self {
         self.local = local;
         self
+    }
+
+    /// Attaches the peer's verified certificate identity (see
+    /// [`InboundPacket::peer_identity`]).
+    pub fn with_peer_identity(mut self, identity: Option<Arc<PeerIdentity>>) -> Self {
+        self.peer_identity = identity;
+        self
+    }
+
+    /// The identity of the verified certificate the peer presented on
+    /// the connection this packet arrived on, if any. Presence means
+    /// rustls validated the chain against the roots the connection
+    /// was configured with; see [`PeerIdentity`] for what that does
+    /// and does not promise.
+    pub fn peer_identity(&self) -> Option<&Arc<PeerIdentity>> {
+        self.peer_identity.as_ref()
     }
 
     /// Returns the local address of the listener that received this
@@ -593,6 +628,7 @@ pub async fn run_udp(socket: Arc<UdpSocket>, tx: mpsc::Sender<InboundPacket>) ->
                     payload,
                     stream: None,
                     local: Some(udp_local),
+                    peer_identity: None,
                 };
                 if tx.send(packet).await.is_err() {
                     error!("receiver dropped; shutting down udp loop");
@@ -951,6 +987,9 @@ async fn handle_ws_connection<S>(
     transport: TransportKind,
     tx: mpsc::Sender<InboundPacket>,
     policy: WsAcceptPolicy,
+    // Verified TLS peer certificate identity for WSS; `None` for
+    // plaintext WS. Stamped on every packet framed on this session.
+    peer_identity: Option<Arc<PeerIdentity>>,
 ) -> Result<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
@@ -1081,6 +1120,7 @@ where
                             payload: Bytes::from(data),
                             stream: Some(writer_tx.clone()),
                             local: Some(local),
+                            peer_identity: peer_identity.clone(),
                         };
                         if tx.send(packet).await.is_err() {
                             warn!(%peer, "websocket receiver dropped");
@@ -1117,6 +1157,7 @@ where
                             payload: Bytes::from(payload_bytes),
                             stream: Some(writer_tx.clone()),
                             local: Some(local),
+                            peer_identity: peer_identity.clone(),
                         };
                         if tx.send(packet).await.is_err() {
                             warn!(%peer, "websocket receiver dropped");
@@ -1188,8 +1229,16 @@ pub async fn run_ws_with_policy(
         let policy = policy.clone();
         tokio::spawn(async move {
             let _permit = permit;
-            if let Err(e) =
-                handle_ws_connection(peer, local_addr, stream, TransportKind::Ws, tx, policy).await
+            if let Err(e) = handle_ws_connection(
+                peer,
+                local_addr,
+                stream,
+                TransportKind::Ws,
+                tx,
+                policy,
+                None,
+            )
+            .await
             {
                 warn!(%peer, %e, "ws session ended with error");
             }
@@ -1270,6 +1319,16 @@ pub async fn run_wss_with_swappable_config_and_policy(
             let _permit = permit;
             match acceptor.accept(stream).await {
                 Ok(tls_stream) => {
+                    // Read the verified client certificate (if the
+                    // ServerConfig asked for one) before the stream
+                    // is consumed by the WebSocket upgrade.
+                    let peer_identity = mtls::peer_identity_from_certs(
+                        tls_stream.get_ref().1.peer_certificates(),
+                        peer,
+                    );
+                    if let Some(identity) = &peer_identity {
+                        info!(%peer, %identity, "wss peer presented verified client certificate");
+                    }
                     if let Err(e) = handle_ws_connection(
                         peer,
                         local_addr,
@@ -1277,6 +1336,7 @@ pub async fn run_wss_with_swappable_config_and_policy(
                         TransportKind::Wss,
                         tx,
                         policy,
+                        peer_identity,
                     )
                     .await
                     {
@@ -1466,51 +1526,16 @@ pub async fn run_tls_with_swappable_config(
 /// Uses `with_single_cert` which ignores SNI entirely. This is important for SIP
 /// because clients often send IP addresses as SNI, which would be rejected by
 /// SNI-aware configurations (per RFC 6066, SNI should be DNS names only).
+///
+/// Never requests a client certificate. For mutual TLS use
+/// [`load_rustls_server_config_with_client_auth`].
 pub fn load_rustls_server_config(
     cert_path: &str,
     key_path: &str,
 ) -> Result<std::sync::Arc<tokio_rustls::rustls::ServerConfig>> {
-    use rustls_pki_types::pem::PemObject;
-    use tokio_rustls::rustls::{
-        self,
-        pki_types::{CertificateDer, PrivateKeyDer},
-    };
-
-    let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(cert_path)
-        .map_err(|e| anyhow!("failed to read certificate file: {e}"))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| anyhow!("invalid certificate: {e}"))?;
-    if certs.is_empty() {
-        return Err(anyhow!("no certificates found in {}", cert_path));
-    }
-
-    // Before touching the private key, refuse to load it if the file is
-    // readable by anyone other than the owner. A world- or group-readable
-    // key is an immediate disclosure to every local user — the same
-    // guard we apply to --auth-users.
-    enforce_secure_key_perms(key_path)?;
-
-    let key = PrivateKeyDer::from_pem_file(key_path)
-        .map_err(|e| anyhow!("no private keys found in {}: {e}", key_path))?;
-
-    let tls12_only = std::env::var("SIPHON_TLS12_ONLY")
-        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE"))
-        .unwrap_or(false);
-
-    let builder = if tls12_only {
-        rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS12])
-    } else {
-        rustls::ServerConfig::builder()
-    };
-
-    // Use with_single_cert which ignores SNI entirely (per rustls issue #130).
-    // This is necessary for SIP clients that send IP addresses as SNI.
-    let config = builder
-        .with_no_client_auth()
-        .with_single_cert(certs, key)
-        .map_err(|e| anyhow!("failed to create TLS config: {e}"))?;
-
-    Ok(std::sync::Arc::new(config))
+    let certs = mtls::load_cert_chain(cert_path)?;
+    let key = mtls::load_private_key(key_path)?;
+    mtls::build_rustls_server_config(certs, key, None)
 }
 
 /// On Unix, refuse to load a TLS private key whose permissions are more
@@ -1521,8 +1546,8 @@ pub fn load_rustls_server_config(
 /// On non-Unix platforms, log a warning since portable permission
 /// semantics aren't easily expressible; the caller is responsible for
 /// enforcing filesystem ACLs.
-#[cfg(unix)]
-fn enforce_secure_key_perms(path: &str) -> Result<()> {
+#[cfg(all(unix, feature = "tls"))]
+pub(crate) fn enforce_secure_key_perms(path: &str) -> Result<()> {
     use std::os::unix::fs::MetadataExt;
     let meta =
         std::fs::metadata(path).map_err(|e| anyhow!("failed to stat TLS key {}: {}", path, e))?;
@@ -1539,8 +1564,8 @@ fn enforce_secure_key_perms(path: &str) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(unix))]
-fn enforce_secure_key_perms(path: &str) -> Result<()> {
+#[cfg(all(not(unix), feature = "tls"))]
+pub(crate) fn enforce_secure_key_perms(path: &str) -> Result<()> {
     tracing::warn!(
         %path,
         "cannot enforce TLS key permissions on this platform; \
@@ -1603,6 +1628,16 @@ async fn spawn_tls_session(
     tx: mpsc::Sender<InboundPacket>,
 ) {
     use tokio::io::AsyncWriteExt as _;
+
+    // Identity of the verified client certificate, read once per
+    // connection and shared by every packet framed on it. `None`
+    // unless the ServerConfig requested client auth and the peer
+    // presented a chain rustls accepted.
+    let peer_identity =
+        mtls::peer_identity_from_certs(tls_stream.get_ref().1.peer_certificates(), peer);
+    if let Some(identity) = &peer_identity {
+        info!(%peer, %identity, "tls peer presented verified client certificate");
+    }
 
     // Split by ownership so we can reunite later for shutdown
     let (mut reader, writer) = tokio::io::split(tls_stream);
@@ -1730,6 +1765,7 @@ async fn spawn_tls_session(
                                 payload,
                                 stream: Some(writer_tx.clone()),
                                 local: Some(local),
+                                peer_identity: peer_identity.clone(),
                             };
                             if tx.send(packet).await.is_err() {
                                 error!("receiver dropped; shutting down tls session");
@@ -1943,6 +1979,7 @@ async fn spawn_stream_session<S>(
                                 payload,
                                 stream: Some(writer_tx.clone()),
                                 local: Some(local),
+                                peer_identity: None,
                             };
                             if tx.send(packet).await.is_err() {
                                 error!("receiver dropped; shutting down {:?} session", transport);

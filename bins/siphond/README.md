@@ -276,6 +276,18 @@ siphond --mode b2bua \
 |--------|-------------|
 | `--tls-cert <PATH>` | TLS certificate file (PEM format) |
 | `--tls-key <PATH>` | TLS private key file (PEM format) |
+| `--require-tls` | Refuse to start if the cert/key fail to load instead of falling back to cleartext |
+| `--tls-client-ca <PATH>` | Mutual TLS: PEM bundle of CAs a peer's client certificate must chain to (SIPS + WSS listeners). Pair with `--tls-client-auth` |
+| `--tls-client-auth <MODE>` | `optional` (no certificate still connects, a bad one is refused) or `required` (no certificate, no connection). Pair with `--tls-client-ca` |
+| `--tls-client-cert <PATH>` | Client certificate (PEM) presented on outbound TLS connections. Pair with `--tls-client-key` |
+| `--tls-client-key <PATH>` | Private key (PEM, must be `0600`) for `--tls-client-cert` |
+
+With `--tls-client-ca`, every request that arrives on a connection whose
+client certificate verified carries a `PeerIdentity` (subject, CN, DNS /
+URI / IP SANs, SHA-256 fingerprint) on its `TransportContext` —
+`ctx.peer_identity()` — so a handler can authorize by who the connection
+proved itself to be. A connection with no certificate (only possible in
+`optional` mode) has `None` there.
 
 ### Feature Flags
 
@@ -379,6 +391,17 @@ siphond --mode full-uas \
   --sips-bind 0.0.0.0:5061 \
   --tls-cert cert.pem \
   --tls-key key.pem
+```
+
+Mutual TLS — peers must present a certificate issued by your CA, and the
+daemon presents its own on the connections it opens:
+
+```bash
+siphond --mode full-uas \
+  --sips-bind 0.0.0.0:5061 \
+  --tls-cert cert.pem --tls-key key.pem \
+  --tls-client-ca ca.pem --tls-client-auth required \
+  --tls-client-cert cert.pem --tls-client-key key.pem
 ```
 
 ### Example 4: Call Server with Custom SDP
