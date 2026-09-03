@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026-09-03] — workspace release
+
+Crate versions in this release: sip-transport 0.6.0, sip-transaction 0.7.0,
+siphond 0.7.0. (sip-core 0.7.7, sip-dns 0.3.0, sip-dialog 0.3.4,
+sip-uac 0.7.1, sip-uas 0.5.0, sip-auth 0.4.0, sip-registrar 0.3.1,
+sip-sdp 0.3.1, sip-observe 0.3.0, sip-ratelimit 0.3.0, sip-testkit 0.1.1,
+sip-parse 0.3.4, sip-proxy 0.3.0, sip-hep 0.0.1, and sip-identity 0.3.0
+are unchanged.)
+
+Breaking changes: none. sip-transport and sip-transaction take minor bumps
+for additive public API ([#130](https://github.com/thevoiceguy/siphon-rs/pull/130));
+every existing signature is unchanged and a listener that never asked for
+a client certificate behaves exactly as before. Downstream absorbs this by
+bumping the tag alone; to *use* mutual TLS, copy
+`InboundPacket::peer_identity()` onto the `TransportContext` in the
+inbound dispatch loop and build the listener config with
+`load_rustls_server_config_with_client_auth`.
+
 ### Added
 
 - **Mutual TLS for SIP over TLS: client certificates, server-side verification, and peer
