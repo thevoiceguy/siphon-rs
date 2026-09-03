@@ -214,6 +214,13 @@ pub struct TransportContext {
     /// matching `host:port;transport`. `None` for contexts not tied to a
     /// specific inbound listener (UAC-originated, tests, pooled reuse).
     local_addr: Option<SocketAddr>,
+    /// Identity of the verified TLS certificate the peer presented on
+    /// the connection the request arrived on (mutual TLS). `None` for
+    /// non-TLS transports, for a TLS peer that presented no
+    /// certificate, and for contexts not built from an inbound packet.
+    /// Lets a transaction user authorize by who the connection proved
+    /// itself to be rather than by what the message claims.
+    peer_identity: Option<std::sync::Arc<sip_transport::PeerIdentity>>,
 }
 
 impl TransportContext {
@@ -230,6 +237,7 @@ impl TransportContext {
             ws_uri: None,
             udp_socket: None,
             local_addr: None,
+            peer_identity: None,
         }
     }
 
@@ -269,6 +277,12 @@ impl TransportContext {
         self.local_addr
     }
 
+    /// Returns the peer's verified TLS certificate identity, if the
+    /// connection presented one (see [`sip_transport::PeerIdentity`]).
+    pub fn peer_identity(&self) -> Option<&std::sync::Arc<sip_transport::PeerIdentity>> {
+        self.peer_identity.as_ref()
+    }
+
     /// Builder-style helper to set server name (for TLS SNI).
     pub fn with_server_name(mut self, name: Option<String>) -> Self {
         self.server_name = name;
@@ -303,6 +317,17 @@ impl TransportContext {
     /// port the request arrived on (see [`TransportContext::local_addr`]).
     pub fn with_local_addr(mut self, local_addr: Option<SocketAddr>) -> Self {
         self.local_addr = local_addr;
+        self
+    }
+
+    /// Builder-style helper to attach the peer's verified certificate
+    /// identity. The inbound dispatch loop copies it from
+    /// `InboundPacket::peer_identity`.
+    pub fn with_peer_identity(
+        mut self,
+        identity: Option<std::sync::Arc<sip_transport::PeerIdentity>>,
+    ) -> Self {
+        self.peer_identity = identity;
         self
     }
 }
@@ -1655,6 +1680,29 @@ impl ServerTransactionHandle {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn transport_context_carries_peer_identity_when_attached() {
+        use super::{TransportContext, TransportKind};
+        let peer = "127.0.0.1:5061".parse().unwrap();
+        let bare = TransportContext::new(TransportKind::Tls, peer, None);
+        assert!(bare.peer_identity().is_none(), "default is no identity");
+
+        let identity = std::sync::Arc::new(
+            sip_transport::PeerIdentity::builder("CN=node-1")
+                .common_name("node-1")
+                .uri_name("sip:node-1@example.com")
+                .build(),
+        );
+        let ctx = TransportContext::new(TransportKind::Tls, peer, None)
+            .with_local_addr(Some("127.0.0.1:5061".parse().unwrap()))
+            .with_peer_identity(Some(identity.clone()));
+        let got = ctx.peer_identity().expect("identity attached");
+        assert!(std::sync::Arc::ptr_eq(got, &identity), "shared, not copied");
+        assert!(got.has_uri_name("sip:node-1@example.com"));
+        // Clone keeps it (retransmissions reuse the same context).
+        assert!(ctx.clone().peer_identity().is_some());
+    }
+
     use super::*;
     use sip_core::{
         headers::Headers,

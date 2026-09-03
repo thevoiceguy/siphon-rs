@@ -7,10 +7,16 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
 use sip_transaction::{TransportContext, TransportDispatcher, TransportKind};
+#[cfg(feature = "tls")]
 use sip_transport::{
-    load_rustls_server_config,
+    build_rustls_client_config, load_rustls_server_config_with_client_auth, ClientAuthMode,
+    ClientIdentity,
+};
+#[cfg(feature = "tls")]
+use sip_transport::{load_rustls_server_config, run_tls};
+use sip_transport::{
     pool::{ConnectionPool, TlsClientConfig, TlsPool},
-    run_tcp, run_tls, run_udp, send_stream, send_udp, DefaultTransportPolicy, InboundPacket,
+    run_tcp, run_udp, send_stream, send_udp, DefaultTransportPolicy, InboundPacket,
     TransportPolicy,
 };
 #[cfg(feature = "ws")]
@@ -19,7 +25,9 @@ use std::sync::Arc;
 use tokio::{net::UdpSocket, sync::mpsc};
 #[cfg(feature = "tls")]
 use tokio_rustls::rustls;
-use tracing::{info, warn};
+#[cfg(any(feature = "tls", feature = "ws"))]
+use tracing::info;
+use tracing::warn;
 
 /// Start all transport layers and return the transport dispatcher and UDP socket.
 ///
@@ -28,14 +36,31 @@ use tracing::{info, warn};
 /// insecure permissions). Without this flag the daemon would silently
 /// fall back to cleartext, which is a footgun for operators who meant
 /// to enforce SIPS.
+/// Everything the `--tls-*` flags say about TLS, in one place.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TlsOptions<'a> {
+    /// `--tls-cert`: the listener's own certificate chain (PEM).
+    pub cert: Option<&'a str>,
+    /// `--tls-key`: the listener's private key (PEM).
+    pub key: Option<&'a str>,
+    /// `--require-tls`: fail closed when the cert/key won't load.
+    pub require_tls: bool,
+    /// `--tls-client-ca`: mutual TLS trust bundle for client certs.
+    pub client_ca: Option<&'a str>,
+    /// `--tls-client-auth`: `optional` | `required`.
+    pub client_auth: Option<&'a str>,
+    /// `--tls-client-cert`: identity presented on outbound TLS.
+    pub client_cert: Option<&'a str>,
+    /// `--tls-client-key`: key for `client_cert`.
+    pub client_key: Option<&'a str>,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn start_transports(
     udp_bind: &str,
     tcp_bind: &str,
     tls_bind: &str,
-    tls_cert: Option<&str>,
-    tls_key: Option<&str>,
-    require_tls: bool,
+    tls: &TlsOptions<'_>,
     #[cfg(feature = "ws")] ws_bind: Option<&str>,
     #[cfg(feature = "ws")] wss_bind: Option<&str>,
     tx: mpsc::Sender<InboundPacket>,
@@ -53,8 +78,9 @@ pub async fn start_transports(
     // previously absent, silently dropping all 1xx/2xx on outbound TLS).
     tls_pool.set_inbound_tx(tx.clone()).await;
 
-    // Prepare optional TLS client config (system roots, default crypto)
-    let tls_client_config = build_tls_client_config();
+    // Prepare optional TLS client config (system roots, default
+    // crypto, plus the outbound client identity if one was given).
+    let tls_client_config = build_tls_client_config(tls.client_cert, tls.client_key)?;
 
     // Create transport dispatcher (clone socket since we need to return it too)
     let dispatcher = Arc::new(SiphonTransportDispatcher::new(
@@ -91,12 +117,27 @@ pub async fn start_transports(
     // with --require-tls we refuse to start rather than silently
     // downgrade to cleartext. Without --require-tls the legacy
     // warn-and-continue behaviour is preserved for backwards compat.
+    let require_tls = tls.require_tls;
     #[cfg(feature = "tls")]
-    let tls_server_config = if let (Some(cert), Some(key)) = (tls_cert, tls_key) {
-        match load_rustls_server_config(cert, key) {
+    let tls_server_config = if let (Some(cert), Some(key)) = (tls.cert, tls.key) {
+        // Mutual TLS when --tls-client-ca/--tls-client-auth are set;
+        // clap guarantees they come as a pair. A bad mode string or an
+        // unloadable CA bundle is always fatal — there is no sensible
+        // cleartext fallback for "verify the peer's certificate".
+        let loaded = match (tls.client_ca, tls.client_auth) {
+            (Some(ca), Some(mode)) => {
+                let mode: ClientAuthMode = mode
+                    .parse()
+                    .map_err(|e| anyhow!("--tls-client-auth: {e}"))?;
+                info!(client_ca = %ca, %mode, "mutual TLS enabled on SIPS/WSS listeners");
+                load_rustls_server_config_with_client_auth(cert, key, ca, mode)
+            }
+            _ => load_rustls_server_config(cert, key),
+        };
+        match loaded {
             Ok(config) => Some(config),
             Err(e) => {
-                if require_tls {
+                if require_tls || tls.client_ca.is_some() {
                     return Err(anyhow!(
                         "TLS is required (--require-tls) but loading cert/key failed: {e}"
                     ));
@@ -106,7 +147,7 @@ pub async fn start_transports(
             }
         }
     } else {
-        if tls_cert.is_some() || tls_key.is_some() {
+        if tls.cert.is_some() || tls.key.is_some() {
             // Partial TLS args is always a misconfig — fail-closed even
             // without --require-tls since continuing silently would be
             // surprising.
@@ -127,6 +168,14 @@ pub async fn start_transports(
             "--require-tls set but siphond was built without the `tls` feature"
         ));
     }
+    #[cfg(not(feature = "tls"))]
+    if tls.client_ca.is_some() || tls.client_cert.is_some() {
+        return Err(anyhow!(
+            "--tls-client-* flags need siphond built with the `tls` feature"
+        ));
+    }
+    #[cfg(not(feature = "tls"))]
+    let _ = (tls.cert, tls.key, tls.client_auth, tls.client_key, tls_bind);
 
     // Spawn TLS listener if certificate and key are provided
     #[cfg(feature = "tls")]
@@ -173,22 +222,36 @@ pub async fn start_transports(
     Ok((dispatcher, udp_socket))
 }
 
-/// Builds a client TLS config using system roots.
-pub fn build_tls_client_config() -> Option<Arc<TlsClientConfig>> {
+/// Builds a client TLS config using system roots, presenting
+/// `client_cert` / `client_key` (PEM paths) to servers that request a
+/// client certificate when both are given.
+pub fn build_tls_client_config(
+    client_cert: Option<&str>,
+    client_key: Option<&str>,
+) -> Result<Option<Arc<TlsClientConfig>>> {
     #[cfg(feature = "tls")]
     {
         let mut root_store = rustls::RootCertStore::empty();
         root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 
-        let config = rustls::ClientConfig::builder()
-            .with_root_certificates(root_store)
-            .with_no_client_auth();
+        let identity = match (client_cert, client_key) {
+            (Some(cert), Some(key)) => {
+                let identity = ClientIdentity::load(cert, key)
+                    .map_err(|e| anyhow!("--tls-client-cert/--tls-client-key: {e}"))?;
+                info!(cert = %cert, "outbound TLS client certificate loaded");
+                Some(identity)
+            }
+            _ => None,
+        };
 
-        return Some(Arc::new(config));
+        return build_rustls_client_config(root_store, identity).map(Some);
     }
 
     #[allow(unreachable_code)]
-    None
+    {
+        let _ = (client_cert, client_key);
+        Ok(None)
+    }
 }
 
 /// Transport dispatcher implementation for siphond.

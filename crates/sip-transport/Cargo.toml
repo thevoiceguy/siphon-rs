@@ -1,6 +1,6 @@
 [package]
 name = "sip-transport"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 license.workspace = true
 description = "SIP transport layer for UDP, TCP, and TLS."
@@ -19,6 +19,10 @@ tokio-rustls = { version = "0.26", optional = true }
 rustls = { version = "0.23", optional = true }
 rustls-pki-types = { version = "1.2", optional = true }
 arc-swap = { version = "1.7", optional = true }
+# Peer-certificate identity extraction for mutual TLS (subject + SANs
+# off the verified leaf). Pure Rust; only pulled in by the `tls` feature.
+x509-parser = { version = "0.18", optional = true }
+sha2 = { version = "0.10", optional = true }
 sip-observe = { path = "../sip-observe" }
 sip-hep = { path = "../sip-hep" }
 sip-ratelimit = { path = "../sip-ratelimit" }
@@ -41,5 +45,5 @@ rustls-pemfile = "2"
 
 [features]
 default = []
-tls = ["tokio-rustls", "rustls", "rustls-pki-types", "arc-swap"]
+tls = ["tokio-rustls", "rustls", "rustls-pki-types", "arc-swap", "x509-parser", "sha2"]
 ws = ["tokio-tungstenite", "futures-util"]

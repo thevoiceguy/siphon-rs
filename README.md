@@ -148,6 +148,11 @@ cargo run -p siphond -- --sips-bind 0.0.0.0:5061 --tls-cert cert.pem --tls-key k
 
 # Force TLS 1.2 for legacy clients
 SIPHON_TLS12_ONLY=1 cargo run -p siphond -- --sips-bind 0.0.0.0:5061 --tls-cert cert.pem --tls-key key.pem
+
+# Mutual TLS: require a client certificate chaining to ca.pem; the verified
+# identity (CN + SANs) arrives on TransportContext::peer_identity()
+cargo run -p siphond -- --sips-bind 0.0.0.0:5061 --tls-cert cert.pem --tls-key key.pem \
+  --tls-client-ca ca.pem --tls-client-auth required
 ```
 
 ## Documentation

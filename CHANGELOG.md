@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Mutual TLS for SIP over TLS: client certificates, server-side verification, and peer
+  identity on the transport context** ([#129](https://github.com/thevoiceguy/siphon-rs/issues/129)).
+  A SIP peer that reaches a listener over mTLS can now be *identified* by the transaction
+  user rather than merely encrypted to: the connection proves who is calling before a single
+  SIP message is read, which is what a trunk INVITE that bypasses per-user checks (PIN, lock,
+  capacity) needs.
+  - `sip-transport` (feature `tls`): new `mtls` module. **Server side** —
+    `load_rustls_server_config_with_client_auth(cert, key, client_ca, mode)` builds a
+    `ServerConfig` that requests a client certificate and verifies it against a PEM CA bundle
+    (`WebPkiClientVerifier`); `ClientAuthMode::Required` fails the handshake for a peer with
+    no certificate, `ClientAuthMode::Optional` admits it (with no identity) while still
+    refusing a certificate that does not chain. `load_rustls_server_config` is unchanged and
+    still never asks. Composable pieces (`load_cert_chain`, `load_private_key`,
+    `load_client_ca_roots`, `client_cert_verifier`, `build_rustls_server_config`) for callers
+    that hold parsed material or hot-reload via `ArcSwap`. **Client side** —
+    `ClientIdentity::load(cert, key)` + `build_rustls_client_config(roots, Some(identity))`
+    produce a `ClientConfig` that presents a certificate on outbound connections; it drops
+    into the existing `TlsConfig` / `TlsPool::send_tls` plumbing untouched. Private keys are
+    refused unless owner-only readable, the guard the server key always had.
+  - `sip-transport`: new `PeerIdentity` (always compiled; parsing behind `tls`) — subject DN,
+    Common Name, DNS / URI / IP / e-mail SANs (RFC 5922 §7.1 puts a SIP identity in a `sip:`
+    URI SAN, a DNS SAN, or the CN), SHA-256 fingerprint, and the leaf DER. Helpers
+    `has_dns_name` (case-insensitive, no wildcards), `has_uri_name` (exact), `names()`. It is
+    data, not policy: matching an expected node id against it belongs to the application.
+  - `sip-transport`: `InboundPacket::peer_identity()` / `with_peer_identity()`. Stamped on
+    every packet from a TLS listener connection whose client certificate verified, from a WSS
+    connection likewise, and from an outbound `TlsPool` connection (where it is the *server*
+    certificate the dial was verified against, so an in-dialog request coming back down that
+    connection is identified too). `None` on UDP/TCP/WS and on a TLS peer that presented
+    nothing — presence *is* the verification signal, since rustls only reports a certificate
+    it accepted.
+  - `sip-transaction`: `TransportContext::peer_identity()` / `with_peer_identity()`; the
+    dispatch loop copies it from the packet, so every `UasRequestHandler` callback that takes
+    a `ctx` can authorize by it.
+  - `siphond`: `--tls-client-ca <PATH>` + `--tls-client-auth optional|required` enable mTLS
+    on the SIPS and WSS listeners; `--tls-client-cert` / `--tls-client-key` present an identity
+    on outbound TLS. An unloadable CA bundle or a bad mode is fatal regardless of
+    `--require-tls` — there is no cleartext fallback for "verify the peer".
+  - Tests: `crates/sip-transport/tests/mtls.rs` — an rcgen private CA issues server and
+    client certificates; loopback runs cover accepted handshake with the identity (CN, DNS
+    SAN, `sip:` URI SAN, fingerprint) arriving on the packet, rejected handshake without a
+    certificate under `Required`, rejected certificate from a different CA, `Optional` with
+    and without a certificate, the no-client-auth listener unchanged, and the outbound pool
+    presenting a client identity while the response carries the server's.
+  - New dependency (feature `tls` only): `x509-parser` for subject/SAN extraction off the
+    verified leaf; `sha2` (already in the tree via `sip-auth`) for the fingerprint.
+
+  Crate bumps: sip-transport 0.5.0 → 0.6.0 (additive API; the private `InboundPacket` gains a
+  field, so struct-literal construction was never possible outside the crate),
+  sip-transaction 0.6.0 → 0.7.0 (additive), siphond 0.6.0 → 0.7.0 (new flags).
+
 ## [2026-08-25] — workspace release
 
 Crate versions in this release: sip-uas 0.5.0. (sip-core 0.7.7,

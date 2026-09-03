@@ -71,6 +71,27 @@ struct Args {
     #[arg(long, default_value = "false", value_parser = clap::value_parser!(bool))]
     require_tls: bool,
 
+    /// Mutual TLS: PEM bundle of CAs that a connecting peer's client
+    /// certificate must chain to. Applies to the SIPS and WSS
+    /// listeners. Pair with `--tls-client-auth`.
+    #[arg(long, requires = "tls_client_auth")]
+    tls_client_ca: Option<String>,
+
+    /// Mutual TLS mode: `optional` (a peer without a certificate may
+    /// still connect; a bad certificate is refused) or `required`
+    /// (no certificate, no connection). Pair with `--tls-client-ca`.
+    #[arg(long, requires = "tls_client_ca")]
+    tls_client_auth: Option<String>,
+
+    /// Client certificate (PEM) presented on outbound TLS connections
+    /// to peers that ask for one. Pair with `--tls-client-key`.
+    #[arg(long, requires = "tls_client_key")]
+    tls_client_cert: Option<String>,
+
+    /// Private key (PEM, owner-only readable) for `--tls-client-cert`.
+    #[arg(long, requires = "tls_client_cert")]
+    tls_client_key: Option<String>,
+
     /// WebSocket bind address (RFC 7118)
     #[cfg(feature = "ws")]
     #[arg(long)]
@@ -331,13 +352,20 @@ async fn main() -> Result<()> {
     let (tx, mut rx) = mpsc::channel::<InboundPacket>(1024);
 
     // Start transport layers
+    let tls_options = transport::TlsOptions {
+        cert: args.tls_cert.as_deref(),
+        key: args.tls_key.as_deref(),
+        require_tls: args.require_tls,
+        client_ca: args.tls_client_ca.as_deref(),
+        client_auth: args.tls_client_auth.as_deref(),
+        client_cert: args.tls_client_cert.as_deref(),
+        client_key: args.tls_client_key.as_deref(),
+    };
     let (transport_dispatcher, udp_socket) = start_transports(
         &args.udp_bind,
         &args.tcp_bind,
         &args.sips_bind,
-        args.tls_cert.as_deref(),
-        args.tls_key.as_deref(),
-        args.require_tls,
+        &tls_options,
         #[cfg(feature = "ws")]
         args.ws_bind.as_deref(),
         #[cfg(feature = "ws")]
@@ -379,7 +407,9 @@ async fn main() -> Result<()> {
     if services.set_udp_socket(udp_socket.clone()).is_err() {
         panic!("Failed to set UDP socket - already initialized");
     }
-    if let Some(tls_client_config) = transport::build_tls_client_config() {
+    if let Some(tls_client_config) =
+        transport::build_tls_client_config(tls_options.client_cert, tls_options.client_key)?
+    {
         if services.set_tls_client_config(tls_client_config).is_err() {
             panic!("Failed to set TLS client config - already initialized");
         }
@@ -590,7 +620,10 @@ async fn handle_packet(
             packet.stream().cloned(),
         )
         .with_ws_uri(ws_override)
-        .with_udp_socket(services.udp_socket.get().cloned());
+        .with_udp_socket(services.udp_socket.get().cloned())
+        // Mutual TLS: the verified client certificate, when the SIPS
+        // listener asked for one, so handlers can authorize by it.
+        .with_peer_identity(packet.peer_identity().cloned());
 
         // Special handling for ACK (doesn't create a transaction)
         if req.method() == &Method::Ack {
