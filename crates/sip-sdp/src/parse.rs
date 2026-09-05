@@ -480,28 +480,27 @@ fn parse_port(input: &str) -> IResult<&str, (u16, Option<u16>)> {
     )(input)
 }
 
-/// Parse protocol: RTP/AVP, RTP/AVPF, RTP/SAVP, RTP/SAVPF, UDP/TLS/RTP/SAVPF,
-/// TCP/TLS/RTP/SAVPF, UDP, TCP, etc. Every profile with a feedback suffix is
-/// tried before its plain prefix, or the `F` would be left in the input.
+/// Parse the protocol token of an `m=` line: RTP/AVP, RTP/AVPF, RTP/SAVP,
+/// RTP/SAVPF, UDP/TLS/RTP/SAVPF, TCP/TLS/RTP/SAVPF, UDP, TCP, or anything
+/// else as `Other`. The whole token is taken first and then matched, so a
+/// profile that extends a known one (`RTP/AVPF` over `RTP/AVP`, `UDP/BFCP`
+/// or `UDP/DTLS/SCTP` over `UDP`) can never be read as its prefix with the
+/// rest left in the input.
 fn parse_protocol(input: &str) -> IResult<&str, Protocol> {
-    alt((
-        // WebRTC protocols (longest first to avoid partial matches)
-        map(tag("UDP/TLS/RTP/SAVPF"), |_| Protocol::UdpTlsRtpSavpf),
-        map(tag("TCP/TLS/RTP/SAVPF"), |_| Protocol::TcpTlsRtpSavpf),
-        map(tag("RTP/SAVPF"), |_| Protocol::RtpSavpf),
-        map(tag("RTP/AVPF"), |_| Protocol::RtpAvpf),
-        // Traditional RTP protocols
-        map(tag("RTP/SAVP"), |_| Protocol::RtpSavp),
-        map(tag("RTP/AVP"), |_| Protocol::RtpAvp),
-        // Basic protocols
-        map(tag("UDP"), |_| Protocol::Udp),
-        map(tag("TCP"), |_| Protocol::Tcp),
-        // Fallback for unknown protocols
-        map(
-            take_till(|c| c == ' ' || c == '\r' || c == '\n'),
-            |s: &str| Protocol::Other(SmolStr::new(s)),
-        ),
-    ))(input)
+    map(
+        take_till(|c| c == ' ' || c == '\r' || c == '\n'),
+        |token: &str| match token {
+            "UDP/TLS/RTP/SAVPF" => Protocol::UdpTlsRtpSavpf,
+            "TCP/TLS/RTP/SAVPF" => Protocol::TcpTlsRtpSavpf,
+            "RTP/SAVPF" => Protocol::RtpSavpf,
+            "RTP/AVPF" => Protocol::RtpAvpf,
+            "RTP/SAVP" => Protocol::RtpSavp,
+            "RTP/AVP" => Protocol::RtpAvp,
+            "UDP" => Protocol::Udp,
+            "TCP" => Protocol::Tcp,
+            other => Protocol::Other(SmolStr::new(other)),
+        },
+    )(input)
 }
 
 /// Parse network type: IN (Internet)
@@ -823,6 +822,26 @@ mod tests {
             Some("VP8".to_string())
         );
         assert_eq!(parse_protocol("RTP/AVP 0 8").unwrap().1, Protocol::RtpAvp);
+        // A profile extending a known prefix is its own token, never the
+        // prefix plus leftovers.
+        assert_eq!(
+            parse_protocol("UDP/BFCP *").unwrap(),
+            (" *", Protocol::Other(SmolStr::new("UDP/BFCP")))
+        );
+        assert_eq!(
+            parse_protocol("UDP/DTLS/SCTP webrtc-datachannel")
+                .unwrap()
+                .1,
+            Protocol::Other(SmolStr::new("UDP/DTLS/SCTP"))
+        );
+        assert_eq!(parse_protocol("UDP 5000").unwrap().1, Protocol::Udp);
+        let bfcp = "v=0\r\no=- 1 1 IN IP4 10.0.0.1\r\ns=-\r\nc=IN IP4 10.0.0.1\r\nt=0 0\r\n\
+                    m=application 5000 UDP/BFCP *\r\na=floorctrl:c-s\r\n";
+        let bfcp_parsed = SessionDescription::parse(bfcp).expect("BFCP section parses");
+        assert_eq!(bfcp_parsed.media[0].formats, vec![SmolStr::new("*")]);
+        assert!(bfcp_parsed
+            .serialize()
+            .contains("m=application 5000 UDP/BFCP *\r\n"));
         assert_eq!(
             parse_protocol("RTP/SAVPF 96").unwrap().1,
             Protocol::RtpSavpf
