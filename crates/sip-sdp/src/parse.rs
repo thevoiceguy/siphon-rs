@@ -480,13 +480,16 @@ fn parse_port(input: &str) -> IResult<&str, (u16, Option<u16>)> {
     )(input)
 }
 
-/// Parse protocol: RTP/AVP, RTP/SAVP, RTP/SAVPF, UDP/TLS/RTP/SAVPF, TCP/TLS/RTP/SAVPF, UDP, TCP, etc.
+/// Parse protocol: RTP/AVP, RTP/AVPF, RTP/SAVP, RTP/SAVPF, UDP/TLS/RTP/SAVPF,
+/// TCP/TLS/RTP/SAVPF, UDP, TCP, etc. Every profile with a feedback suffix is
+/// tried before its plain prefix, or the `F` would be left in the input.
 fn parse_protocol(input: &str) -> IResult<&str, Protocol> {
     alt((
         // WebRTC protocols (longest first to avoid partial matches)
         map(tag("UDP/TLS/RTP/SAVPF"), |_| Protocol::UdpTlsRtpSavpf),
         map(tag("TCP/TLS/RTP/SAVPF"), |_| Protocol::TcpTlsRtpSavpf),
         map(tag("RTP/SAVPF"), |_| Protocol::RtpSavpf),
+        map(tag("RTP/AVPF"), |_| Protocol::RtpAvpf),
         // Traditional RTP protocols
         map(tag("RTP/SAVP"), |_| Protocol::RtpSavp),
         map(tag("RTP/AVP"), |_| Protocol::RtpAvp),
@@ -767,6 +770,7 @@ fn is_rtp_protocol(protocol: &Protocol) -> bool {
     matches!(
         protocol,
         Protocol::RtpAvp
+            | Protocol::RtpAvpf
             | Protocol::RtpSavp
             | Protocol::RtpSavpf
             | Protocol::UdpTlsRtpSavpf
@@ -803,6 +807,30 @@ fn parse_rtpmap(value: &str) -> Option<RtpMap> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn avpf_is_its_own_profile_not_avp_with_a_stray_letter() {
+        let sdp = "v=0\r\no=- 1 1 IN IP4 10.0.0.1\r\ns=-\r\nc=IN IP4 10.0.0.1\r\nt=0 0\r\n\
+                   m=video 5004 RTP/AVPF 96\r\na=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 nack pli\r\n";
+        let parsed = SessionDescription::parse(sdp).expect("parses");
+        let video = &parsed.media[0];
+        assert_eq!(video.protocol, Protocol::RtpAvpf);
+        assert_eq!(video.protocol.to_string(), "RTP/AVPF");
+        // A feedback profile is still RTP: its rtpmaps are read.
+        let vp8 = video.rtpmaps_iter().find(|r| r.payload_type == 96);
+        assert_eq!(
+            vp8.map(|r| r.encoding_name.to_string()),
+            Some("VP8".to_string())
+        );
+        assert_eq!(parse_protocol("RTP/AVP 0 8").unwrap().1, Protocol::RtpAvp);
+        assert_eq!(
+            parse_protocol("RTP/SAVPF 96").unwrap().1,
+            Protocol::RtpSavpf
+        );
+        // Round trip.
+        let out = parsed.serialize();
+        assert!(out.contains("m=video 5004 RTP/AVPF 96\r\n"), "{out}");
+    }
 
     #[test]
     fn parses_simple_audio_sdp() {
