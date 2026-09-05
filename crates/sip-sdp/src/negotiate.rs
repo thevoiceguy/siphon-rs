@@ -439,6 +439,7 @@ fn is_rtp_protocol(protocol: &Protocol) -> bool {
     matches!(
         protocol,
         Protocol::RtpAvp
+            | Protocol::RtpAvpf
             | Protocol::RtpSavp
             | Protocol::RtpSavpf
             | Protocol::UdpTlsRtpSavpf

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **sip-sdp 0.3.2**: `Protocol::RtpAvpf` (RFC 4585 `RTP/AVPF`). The parser had no arm for
+  it and matched the `RTP/AVP` prefix instead, leaving the `F` in the input, so a
+  feedback-capable video offer was mis-read; it now parses, prints and counts as an RTP
+  profile for rtpmap extraction and negotiation. The protocol parser now takes the whole
+  token before matching it, so `UDP/BFCP`, `UDP/DTLS/SCTP` and the like are `Other(...)`
+  rather than `UDP` with the rest of the token left in the input (which made such
+  sections fail to parse).
+
 ## [2026-09-03] — workspace release
 
 Crate versions in this release: sip-transport 0.6.0, sip-transaction 0.7.0,
