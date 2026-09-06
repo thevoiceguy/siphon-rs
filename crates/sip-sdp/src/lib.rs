@@ -313,6 +313,8 @@ pub enum MediaType {
 pub enum Protocol {
     /// RTP Profile for Audio and Video Conferences (RFC 3551)
     RtpAvp,
+    /// RTP/AVPF - RTP Profile with RTCP-based Feedback (RFC 4585)
+    RtpAvpf,
     /// Secure RTP Profile (RFC 3711)
     RtpSavp,
     /// RTP/SAVPF - Secure RTP Profile with RTCP Feedback (RFC 5124)
@@ -872,6 +874,7 @@ impl std::fmt::Display for Protocol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Protocol::RtpAvp => write!(f, "RTP/AVP"),
+            Protocol::RtpAvpf => write!(f, "RTP/AVPF"),
             Protocol::RtpSavp => write!(f, "RTP/SAVP"),
             Protocol::RtpSavpf => write!(f, "RTP/SAVPF"),
             Protocol::UdpTlsRtpSavpf => write!(f, "UDP/TLS/RTP/SAVPF"),
