@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026-09-05] — workspace release
+
+Crate versions in this release: sip-sdp 0.3.2.
+
 ### Fixed
 
 - **sip-sdp 0.3.2**: `Protocol::RtpAvpf` (RFC 4585 `RTP/AVPF`). The parser had no arm for
