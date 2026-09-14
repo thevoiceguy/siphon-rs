@@ -986,13 +986,16 @@ impl TransactionManager {
             remaining_targets,
         };
 
+        let tu_for_actions = Arc::clone(&entry.tu);
+        let ctx_for_actions = entry.ctx.clone();
         self.inner.client.insert(key.clone(), entry);
         self.inner.metrics.record_start(
             transport_type,
             &format!("{:?}", key.method),
             TransactionRole::Client,
         );
-        self.apply_client_actions(&key, actions).await;
+        self.apply_client_actions(&key, actions, tu_for_actions, ctx_for_actions)
+            .await;
         Ok(key)
     }
 
@@ -1100,14 +1103,16 @@ impl TransactionManager {
                     fsm.on_event(ClientNonInviteEvent::TimerFired(timer)),
                 ),
             };
+            let tu = entry.tu.clone();
+            let ctx = entry.ctx.clone();
             drop(entry);
-            self.apply_client_actions(&key, actions).await;
+            self.apply_client_actions(&key, actions, tu, ctx).await;
         }
     }
 
     async fn process_client_transport_error(&self, key: TransactionKey) {
-        if let Some(actions) = self.client_transport_error_actions(&key).await {
-            self.apply_client_actions(&key, actions).await;
+        if let Some((actions, tu, ctx)) = self.client_transport_error_actions(&key).await {
+            self.apply_client_actions(&key, actions, tu, ctx).await;
         }
     }
 
@@ -1137,7 +1142,11 @@ impl TransactionManager {
     async fn client_transport_error_actions(
         &self,
         key: &TransactionKey,
-    ) -> Option<ClientRuntimeActions> {
+    ) -> Option<(
+        ClientRuntimeActions,
+        Arc<dyn ClientTransactionUser>,
+        TransportContext,
+    )> {
         if let Some(mut entry) = self.inner.client.get_mut(key) {
             let actions = match &mut entry.kind {
                 ClientKind::Invite(fsm) => {
@@ -1148,9 +1157,10 @@ impl TransactionManager {
                 ),
             };
             let tu = entry.tu.clone();
+            let ctx = entry.ctx.clone();
             drop(entry);
             tu.on_transport_error(key).await;
-            Some(actions)
+            Some((actions, tu, ctx))
         } else {
             None
         }
@@ -1245,13 +1255,32 @@ impl TransactionManager {
         }
     }
 
-    async fn apply_client_actions(&self, key: &TransactionKey, actions: ClientRuntimeActions) {
+    /// Runs the actions one FSM event produced. `tu` and `ctx` are the
+    /// entry's, captured by the caller while it held the entry: two
+    /// responses to one transaction can be processed on two tasks at
+    /// once, and the one whose actions reach `Terminated` first lets the
+    /// other's [`reap_terminated_client`](Self::reap_terminated_client)
+    /// remove the entry — so an action that looked the entry up again to
+    /// find the TU would find nothing, and a final response or its ACK
+    /// would be lost. (Seen with a callee whose 100, 180 and 200 arrived
+    /// within microseconds: the 200 terminated the FSM, the 100's empty
+    /// action list reaped the entry, and the 200's `Deliver` and
+    /// `GenerateAck` found no TU.)
+    async fn apply_client_actions(
+        &self,
+        key: &TransactionKey,
+        actions: ClientRuntimeActions,
+        tu: Arc<dyn ClientTransactionUser>,
+        ctx: TransportContext,
+    ) {
         match actions {
             ClientRuntimeActions::Invite(actions) => {
-                self.apply_client_invite_actions(key, actions).await;
+                self.apply_client_invite_actions(key, actions, tu, ctx)
+                    .await;
             }
             ClientRuntimeActions::NonInvite(actions) => {
-                self.apply_client_non_invite_actions(key, actions).await;
+                self.apply_client_non_invite_actions(key, actions, tu, ctx)
+                    .await;
             }
         }
         self.reap_terminated_client(key);
@@ -1310,6 +1339,8 @@ impl TransactionManager {
         &self,
         key: &TransactionKey,
         actions: Vec<ClientInviteAction>,
+        tu: Arc<dyn ClientTransactionUser>,
+        ctx: TransportContext,
     ) {
         debug!(
             key = ?key,
@@ -1336,39 +1367,23 @@ impl TransactionManager {
 
             match action {
                 ClientInviteAction::Transmit { bytes, .. } => {
-                    if let Some(entry) = self.inner.client.get(key) {
-                        let transport_type =
-                            TransportType::from(transport_kind_to_transport(entry.ctx.transport));
-                        self.inner.metrics.record_retransmission(transport_type);
-                    }
+                    let transport_type =
+                        TransportType::from(transport_kind_to_transport(ctx.transport));
+                    self.inner.metrics.record_retransmission(transport_type);
                     self.dispatch_with_failover(key, bytes).await;
                 }
                 ClientInviteAction::Deliver(response) => {
-                    if let Some(entry) = self.inner.client.get(key) {
-                        let tu = entry.tu.clone();
-                        drop(entry);
-                        if response.code() < 200 {
-                            tu.on_provisional(key, &response).await;
-                        } else {
-                            tu.on_final(key, &response).await;
-                        }
+                    if response.code() < 200 {
+                        tu.on_provisional(key, &response).await;
+                    } else {
+                        tu.on_final(key, &response).await;
                     }
                 }
                 ClientInviteAction::ExpectPrack(response) => {
-                    if let Some(entry) = self.inner.client.get(key) {
-                        let tu = entry.tu.clone();
-                        let ctx = entry.ctx.clone();
-                        drop(entry);
-                        tu.send_prack(key, response, &ctx).await;
-                    }
+                    tu.send_prack(key, response, &ctx).await;
                 }
                 ClientInviteAction::GenerateAck { response, is_2xx } => {
-                    if let Some(entry) = self.inner.client.get(key) {
-                        let tu = entry.tu.clone();
-                        let ctx = entry.ctx.clone();
-                        drop(entry);
-                        tu.send_ack(key, response, &ctx, is_2xx).await;
-                    }
+                    tu.send_ack(key, response, &ctx, is_2xx).await;
                 }
                 ClientInviteAction::Schedule { timer, duration } => {
                     self.schedule_client_timer(key.clone(), timer, duration);
@@ -1381,10 +1396,8 @@ impl TransactionManager {
                 ClientInviteAction::Terminate { reason } => {
                     if let Some(mut entry) = self.inner.client.get_mut(key) {
                         entry.cancel_all();
-                        let tu = entry.tu.clone();
-                        drop(entry);
-                        tu.on_terminated(key, reason.as_str()).await;
                     }
+                    tu.on_terminated(key, reason.as_str()).await;
                     self.inner.client.remove(key);
                 }
             }
@@ -1395,26 +1408,22 @@ impl TransactionManager {
         &self,
         key: &TransactionKey,
         actions: Vec<ClientAction>,
+        tu: Arc<dyn ClientTransactionUser>,
+        ctx: TransportContext,
     ) {
         for action in actions {
             match action {
                 ClientAction::Transmit { bytes, .. } => {
-                    if let Some(entry) = self.inner.client.get(key) {
-                        let transport_type =
-                            TransportType::from(transport_kind_to_transport(entry.ctx.transport));
-                        self.inner.metrics.record_retransmission(transport_type);
-                    }
+                    let transport_type =
+                        TransportType::from(transport_kind_to_transport(ctx.transport));
+                    self.inner.metrics.record_retransmission(transport_type);
                     self.dispatch_with_failover(key, bytes).await;
                 }
                 ClientAction::Deliver(response) => {
-                    if let Some(entry) = self.inner.client.get(key) {
-                        let tu = entry.tu.clone();
-                        drop(entry);
-                        if response.code() < 200 {
-                            tu.on_provisional(key, &response).await;
-                        } else {
-                            tu.on_final(key, &response).await;
-                        }
+                    if response.code() < 200 {
+                        tu.on_provisional(key, &response).await;
+                    } else {
+                        tu.on_final(key, &response).await;
                     }
                 }
                 ClientAction::Schedule { timer, duration } => {
@@ -1646,8 +1655,10 @@ impl TransactionManager {
                     ),
                 },
             };
+            let tu = entry.tu.clone();
+            let ctx = entry.ctx.clone();
             drop(entry);
-            self.apply_client_actions(key, actions).await;
+            self.apply_client_actions(key, actions, tu, ctx).await;
         }
     }
 }
@@ -2187,6 +2198,61 @@ mod tests {
 
         assert!(saw_err, "INVITE TU MUST see on_transport_error()");
         assert_eq!(*tu.transport_errors.lock().await, 1);
+    }
+
+    /// A callee that answers at once sends 100, 180 and 200 within
+    /// microseconds; a stack that handles each packet on its own task
+    /// can process the 200 first. The 2xx terminates the FSM, the 100's
+    /// empty action list reaps the entry, and the 200's `Deliver` and
+    /// `GenerateAck` must still reach the TU: the final and the ACK were
+    /// silently lost about once in thirty calls before the TU and
+    /// context were captured with the entry.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_responses_never_lose_the_final_or_its_ack() {
+        for round in 0..200 {
+            let dispatcher = Arc::new(TestDispatcher::default());
+            let manager = TransactionManager::new(dispatcher.clone());
+            let ctx =
+                TransportContext::new(TransportKind::Udp, "127.0.0.1:5061".parse().unwrap(), None);
+            let tu = Arc::new(TestClientTu::default());
+            let branch = format!("z9hG4bKrace{round}");
+            manager
+                .start_client_transaction(
+                    build_client_request(Method::Invite, &branch),
+                    ctx,
+                    tu.clone(),
+                )
+                .await
+                .unwrap();
+            let responses = [200u16, 100, 180];
+            let tasks: Vec<_> = responses
+                .iter()
+                .map(|&code| {
+                    let manager = manager.clone();
+                    let branch = branch.clone();
+                    tokio::spawn(async move {
+                        manager
+                            .receive_response(build_response_with_branch(
+                                code,
+                                &branch,
+                                Method::Invite,
+                            ))
+                            .await;
+                    })
+                })
+                .collect();
+            for t in tasks {
+                t.await.unwrap();
+            }
+            let finals = tu.finals.lock().await.clone();
+            assert_eq!(finals, vec![200], "round {round}: the 200 reached the TU");
+            let acks = tu.sent_acks.lock().await.clone();
+            assert_eq!(
+                acks,
+                vec![(true, 200)],
+                "round {round}: the ACK was generated"
+            );
+        }
     }
 
     #[tokio::test]

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026-09-14] — workspace release
+
+Crate versions in this release: sip-transaction 0.7.1.
+
+### Fixed
+
+- **sip-transaction 0.7.1**: a client transaction's final response, and the ACK
+  generated for it, could be lost when two responses to the same transaction were
+  processed on two tasks at once. A callee that answers immediately sends 100, 180 and
+  200 within microseconds; a stack that handles each packet on its own task can process
+  the 200 first, whose 2xx transition terminates the FSM, after which the 100's empty
+  action list reaped the entry from the table — and the 200's `Deliver` and
+  `GenerateAck`, which looked the entry up again to find the transaction user, found
+  nothing. The transaction user and transport context are now captured together with
+  the entry when the event is applied and handed to the action runner, so a reap by
+  another task cannot lose a delivery. Seen from FCP's call manager as one INVITE in
+  about thirty answering 480 while the callee was ringing. Regression test:
+  `concurrent_responses_never_lose_the_final_or_its_ack`.
+
 ## [2026-09-05] — workspace release
 
 Crate versions in this release: sip-sdp 0.3.2.
