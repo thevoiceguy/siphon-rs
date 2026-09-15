@@ -81,6 +81,7 @@ Available fuzz targets:
 - `parse_uri` - URI parsing
 - `parse_via` - Via header parsing
 - `parse_cpim` - CPIM message parsing (RFC 3862)
+- `parse_multipart` - multipart body parsing and re-writing (RFC 2046, RFC 5621)
 - `serialize_roundtrip` - Serialization round-trip testing
 
 ## Architecture Overview

@@ -224,10 +224,45 @@ impl GeolocationHeader {
     }
 }
 
+impl std::fmt::Display for GeolocationValue {
+    /// `<uri>;param[=value]…` (RFC 6442 §4.1 `locationValue`). Parameter
+    /// values are tokens, so none needs quoting.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<{}>", self.uri)?;
+        write_params(f, &self.params)
+    }
+}
+
+impl std::fmt::Display for GeolocationHeader {
+    /// The values, comma-separated (RFC 6442 §4.1).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (i, value) in self.values.iter().enumerate() {
+            if i > 0 {
+                f.write_str(", ")?;
+            }
+            write!(f, "{}", value)?;
+        }
+        Ok(())
+    }
+}
+
+fn write_params(
+    f: &mut std::fmt::Formatter<'_>,
+    params: &BTreeMap<SmolStr, Option<SmolStr>>,
+) -> std::fmt::Result {
+    for (name, value) in params {
+        match value {
+            Some(v) => write!(f, ";{}={}", name, v)?,
+            None => write!(f, ";{}", name)?,
+        }
+    }
+    Ok(())
+}
+
 /// Geolocation-Error header.
 ///
-/// Per RFC 6442, this header indicates an error in processing location information.
-/// Format: `Geolocation-Error: code "description" ;params`
+/// Per RFC 6442 §4.4, this header indicates an error in processing location
+/// information. Format: `Geolocation-Error: 300;code="description";params`
 ///
 /// # Security
 ///
@@ -335,6 +370,26 @@ impl Default for GeolocationErrorHeader {
     }
 }
 
+impl std::fmt::Display for GeolocationErrorHeader {
+    /// `code;code="description";params` (RFC 6442 §4.4): the description
+    /// travels as the `code` parameter's quoted string.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(code) = &self.code {
+            f.write_str(code)?;
+        }
+        if let Some(description) = &self.description {
+            write!(f, ";code=\"{}\"", description)?;
+        }
+        let params: BTreeMap<SmolStr, Option<SmolStr>> = self
+            .params
+            .iter()
+            .filter(|(name, _)| name.as_str() != "code")
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        write_params(f, &params)
+    }
+}
+
 /// Geolocation-Routing header.
 ///
 /// Per RFC 6442, this header controls whether location information should
@@ -349,12 +404,13 @@ impl Default for GeolocationErrorHeader {
 /// ```
 /// use sip_core::GeolocationRoutingHeader;
 ///
-/// let routing = GeolocationRoutingHeader::new()
-///     .with_param("routing-allowed", Some("yes"))
-///     .unwrap();
+/// let routing = GeolocationRoutingHeader::allowed(true);
+/// assert_eq!(routing.to_string(), "yes");
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GeolocationRoutingHeader {
+    /// `yes` or `no` (RFC 6442 §4.2); `None` when the value was neither.
+    allowed: Option<bool>,
     params: BTreeMap<SmolStr, Option<SmolStr>>,
 }
 
@@ -362,8 +418,30 @@ impl GeolocationRoutingHeader {
     /// Creates a new Geolocation-Routing header.
     pub fn new() -> Self {
         Self {
+            allowed: None,
             params: BTreeMap::new(),
         }
+    }
+
+    /// `Geolocation-Routing: yes` or `no`: whether the location may be used
+    /// to route the request (RFC 6442 §4.2).
+    pub fn allowed(allowed: bool) -> Self {
+        Self {
+            allowed: Some(allowed),
+            params: BTreeMap::new(),
+        }
+    }
+
+    /// Sets the routing value.
+    pub fn set_allowed(&mut self, allowed: Option<bool>) {
+        self.allowed = allowed;
+    }
+
+    /// Whether routing on the location is allowed: `Some(true)` for `yes`,
+    /// `Some(false)` for `no`, `None` when the header carried neither
+    /// (RFC 6442 treats that as `no`).
+    pub fn routing_allowed(&self) -> Option<bool> {
+        self.allowed
     }
 
     /// Adds a parameter.
@@ -409,15 +487,42 @@ impl GeolocationRoutingHeader {
         self.params.get(&SmolStr::new(name.to_ascii_lowercase()))
     }
 
-    /// Returns true if there are no parameters.
+    /// Returns true if there is neither a value nor any parameter.
     pub fn is_empty(&self) -> bool {
-        self.params.is_empty()
+        self.allowed.is_none() && self.params.is_empty()
     }
 }
 
 impl Default for GeolocationRoutingHeader {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl std::fmt::Display for GeolocationRoutingHeader {
+    /// `yes` or `no`, then the parameters.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.allowed {
+            Some(true) => f.write_str("yes")?,
+            Some(false) => f.write_str("no")?,
+            None => {}
+        }
+        if self.allowed.is_none() {
+            // No value: the parameters stand alone, without a leading `;`.
+            let mut first = true;
+            for (name, value) in &self.params {
+                if !first {
+                    f.write_str(";")?;
+                }
+                first = false;
+                match value {
+                    Some(v) => write!(f, "{}={}", name, v)?,
+                    None => f.write_str(name)?,
+                }
+            }
+            return Ok(());
+        }
+        write_params(f, &self.params)
     }
 }
 
@@ -692,6 +797,35 @@ mod tests {
         assert_eq!(
             routing.get_param("routing-allowed"),
             Some(&Some(SmolStr::new("yes")))
+        );
+    }
+
+    #[test]
+    fn geolocation_values_serialise_as_rfc_6442_writes_them() {
+        let by_value = GeolocationValue::new(Uri::parse("cid:loc-1@pbx.example").unwrap());
+        let by_reference = GeolocationValue::new(mock_uri())
+            .with_param("inserted-by", Some("proxy"))
+            .unwrap();
+        assert_eq!(by_value.to_string(), "<cid:loc-1@pbx.example>");
+        let header = GeolocationHeader::new(vec![by_value, by_reference]).unwrap();
+        assert_eq!(
+            header.to_string(),
+            "<cid:loc-1@pbx.example>, <https://example.com/location.xml>;inserted-by=proxy"
+        );
+    }
+
+    #[test]
+    fn geolocation_routing_and_error_serialise() {
+        assert_eq!(GeolocationRoutingHeader::allowed(true).to_string(), "yes");
+        assert_eq!(GeolocationRoutingHeader::allowed(false).to_string(), "no");
+        let error = GeolocationErrorHeader::new()
+            .with_code("300")
+            .unwrap()
+            .with_description("Insufficient Location Information")
+            .unwrap();
+        assert_eq!(
+            error.to_string(),
+            "300;code=\"Insufficient Location Information\""
         );
     }
 }

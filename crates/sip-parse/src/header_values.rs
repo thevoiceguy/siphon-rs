@@ -306,7 +306,9 @@ pub fn parse_geolocation_error(
         if let Some((name, val)) = part.split_once('=') {
             let key = name.trim().to_ascii_lowercase();
             let value = SmolStr::new(val.trim().trim_matches('"'));
-            if key == "reason" {
+            // RFC 6442 §4.4 carries the text as `code="…"`; `reason=` is
+            // accepted from peers that wrote it that way.
+            if key == "code" || (key == "reason" && header.description().is_none()) {
                 if let Ok(updated) = header.clone().with_description(value.as_str()) {
                     header = updated;
                 }
@@ -324,7 +326,23 @@ pub fn parse_geolocation_routing(
     value: &SmolStr,
 ) -> Result<GeolocationRoutingHeader, GeolocationError> {
     let mut header = GeolocationRoutingHeader::new();
-    let params = parse_params(value.as_str()).ok_or(GeolocationError::TooManyParams {
+    // RFC 6442 §4.2: `yes` or `no`, then generic parameters.
+    let (first, rest) = match value.split_once(';') {
+        Some((first, rest)) => (first.trim(), rest),
+        None => (value.trim(), ""),
+    };
+    let params_text = match first.to_ascii_lowercase().as_str() {
+        "yes" => {
+            header.set_allowed(Some(true));
+            rest
+        }
+        "no" => {
+            header.set_allowed(Some(false));
+            rest
+        }
+        _ => value.as_str(),
+    };
+    let params = parse_params(params_text).ok_or(GeolocationError::TooManyParams {
         max: MAX_PARAMS,
         actual: MAX_PARAMS + 1,
     })?;

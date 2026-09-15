@@ -73,7 +73,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, watch, Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
-use crate::{auth_utils::extract_realm, UserAgentClient};
+use crate::{auth_utils::extract_realm, InviteOptions, UserAgentClient};
 
 /// Trait for generating SDP answers in late offer scenarios.
 ///
@@ -1636,114 +1636,12 @@ impl IntegratedUAC {
         from_override: Option<SipUri>,
     ) -> Result<CallHandle> {
         let target = target.into();
-
-        // Generate request using helper
         let helper = self.helper.lock().await;
         let target_uri = self.extract_uri(&target)?;
-        let mut request =
-            helper.create_invite_with_from(&target_uri, sdp_body, from_override.as_ref());
+        let request = helper.create_invite_with_from(&target_uri, sdp_body, from_override.as_ref());
         drop(helper);
-
-        // Resolve target
-        let dns_target = self.resolve_target(&target).await?;
-
-        // Auto-fill Via/Contact using resolved transport
-        self.auto_fill_headers(&mut request, Some(dns_target.transport()))
-            .await;
-
-        // Create channels for responses
-        let (prov_tx, prov_rx) = mpsc::channel(16);
-        let (final_tx, final_rx) = oneshot::channel();
-        let (term_tx, term_rx) = oneshot::channel();
-
-        // Create transport context
-        let ctx = self.create_transport_context(&dns_target).await?;
-
-        // Create early dialogs map for forking support
-        let early_dialogs = Arc::new(Mutex::new(std::collections::HashMap::new()));
-
-        // Create placeholder dialog (will be updated when 2xx arrives)
-        let helper = self.helper.lock().await;
-        let dialog_id = sip_dialog::DialogId::unchecked_new(
-            request.headers().get_smol("Call-ID").unwrap().clone(),
-            request_from_tag(&request),
-            SmolStr::new("pending"),
-        );
-        let placeholder_dialog = Dialog::unchecked_new(
-            dialog_id,
-            sip_dialog::DialogStateType::Early,
-            // Same rule as the confirmed dialog built on the 2xx: the
-            // local URI is the request's From URI, not the configured
-            // identity (siphon-ai #549). Keeping the placeholder in step
-            // means an in-dialog request built against an early dialog
-            // (a CANCEL-race BYE, say) carries the same URI as one built
-            // after the 2xx.
-            request_from_uri(&request).unwrap_or_else(|| helper.local_uri.clone()),
-            target_uri.clone(),
-            target_uri.clone(),
-            1,
-            0,
-            None,
-            vec![],
-            false,
-            None,
-            None,
-            true,
-        );
-        drop(helper);
-
-        // Wrap dialog in Arc<RwLock> for sharing between CallHandle and transaction user
-        let shared_dialog = Arc::new(RwLock::new(placeholder_dialog));
-
-        // Create INVITE transaction user
-        let live_request = Arc::new(RwLock::new(Arc::new(request.clone())));
-        let tu = Arc::new(InviteTransactionUser {
-            prov_tx,
-            final_tx: Mutex::new(Some(final_tx)),
-            term_tx: Mutex::new(Some(term_tx)),
-            dialog_manager: self.dialog_manager.clone(),
-            helper: self.helper.clone(),
-            request: request.clone(),
-            config: self.config.clone(),
-            ctx: ctx.clone(),
-            auto_retry_auth: self.config.auto_retry_auth,
-            auth_attempt: 0,
-            live_request: live_request.clone(),
-            transaction_manager: self.transaction_manager.clone(),
-            dispatcher: self.transport_dispatcher.clone(),
-            early_dialogs: early_dialogs.clone(),
-            dialog: shared_dialog.clone(),
-            local_addr: self.local_addr,
-            public_addr: self.public_addr,
-        });
-
-        // Start client transaction
-        let key = self
-            .transaction_manager
-            .start_client_transaction(request.clone(), ctx.clone(), tu)
-            .await?;
-
-        info!(
-            "Started INVITE client transaction {} to {}",
-            key.branch(),
-            target_uri.as_str()
-        );
-
-        Ok(CallHandle {
-            dialog: shared_dialog,
-            transaction_key: key,
-            provisional_rx: Arc::new(Mutex::new(prov_rx)),
-            final_rx: Arc::new(Mutex::new(Some(final_rx))),
-            termination_rx: Arc::new(Mutex::new(Some(term_rx))),
-            invite_request: live_request,
-            transport_ctx: Arc::new(ctx),
-            dispatcher: self.transport_dispatcher.clone(),
-            transaction_manager: self.transaction_manager.clone(),
-            early_dialogs,
-            keepalive_cancel: Arc::new(Mutex::new(None)),
-            session_timer_cancel: Arc::new(Mutex::new(None)),
-            session_timer_state: Arc::new(watch::Sender::new(SessionTimerState::Idle)),
-        })
+        self.send_new_invite(target, target_uri, request, None)
+            .await
     }
 
     /// Send an INVITE with additional SIP headers.
@@ -1754,7 +1652,6 @@ impl IntegratedUAC {
         extra_headers: Headers,
     ) -> Result<CallHandle> {
         let target = target.into();
-
         let helper = self.helper.lock().await;
         let target_uri = self.extract_uri(&target)?;
         let mut request = helper.create_invite(&target_uri, sdp_body);
@@ -1766,96 +1663,25 @@ impl IntegratedUAC {
                 .push(header.name_smol().clone(), header.value_smol().clone())
                 .map_err(|e| anyhow!("failed to append extra INVITE header: {}", e))?;
         }
+        self.send_new_invite(target, target_uri, request, None)
+            .await
+    }
 
-        let dns_target = self.resolve_target(&target).await?;
-        self.auto_fill_headers(&mut request, Some(dns_target.transport()))
-            .await;
-
-        let (prov_tx, prov_rx) = mpsc::channel(16);
-        let (final_tx, final_rx) = oneshot::channel();
-        let (term_tx, term_rx) = oneshot::channel();
-
-        let ctx = self.create_transport_context(&dns_target).await?;
-        let early_dialogs = Arc::new(Mutex::new(std::collections::HashMap::new()));
-
+    /// Send an INVITE carrying what [`InviteOptions`] names: any body with
+    /// its Content-Type, extra headers and a per-call From, together. See
+    /// [`crate::UserAgentClient::create_invite_with_options`].
+    pub async fn invite_with_options(
+        &self,
+        target: impl Into<RequestTarget>,
+        options: InviteOptions,
+    ) -> Result<CallHandle> {
+        let target = target.into();
         let helper = self.helper.lock().await;
-        let dialog_id = sip_dialog::DialogId::unchecked_new(
-            request.headers().get_smol("Call-ID").unwrap().clone(),
-            request_from_tag(&request),
-            SmolStr::new("pending"),
-        );
-        let placeholder_dialog = Dialog::unchecked_new(
-            dialog_id,
-            sip_dialog::DialogStateType::Early,
-            // Same rule as the confirmed dialog built on the 2xx: the
-            // local URI is the request's From URI, not the configured
-            // identity (siphon-ai #549). Keeping the placeholder in step
-            // means an in-dialog request built against an early dialog
-            // (a CANCEL-race BYE, say) carries the same URI as one built
-            // after the 2xx.
-            request_from_uri(&request).unwrap_or_else(|| helper.local_uri.clone()),
-            target_uri.clone(),
-            target_uri.clone(),
-            1,
-            0,
-            None,
-            vec![],
-            false,
-            None,
-            None,
-            true,
-        );
+        let target_uri = self.extract_uri(&target)?;
+        let request = helper.create_invite_with_options(&target_uri, &options)?;
         drop(helper);
-
-        let shared_dialog = Arc::new(RwLock::new(placeholder_dialog));
-
-        let live_request = Arc::new(RwLock::new(Arc::new(request.clone())));
-        let tu = Arc::new(InviteTransactionUser {
-            prov_tx,
-            final_tx: Mutex::new(Some(final_tx)),
-            term_tx: Mutex::new(Some(term_tx)),
-            dialog_manager: self.dialog_manager.clone(),
-            helper: self.helper.clone(),
-            request: request.clone(),
-            config: self.config.clone(),
-            ctx: ctx.clone(),
-            auto_retry_auth: self.config.auto_retry_auth,
-            auth_attempt: 0,
-            live_request: live_request.clone(),
-            transaction_manager: self.transaction_manager.clone(),
-            dispatcher: self.transport_dispatcher.clone(),
-            early_dialogs: early_dialogs.clone(),
-            dialog: shared_dialog.clone(),
-            local_addr: self.local_addr,
-            public_addr: self.public_addr,
-        });
-
-        let key = self
-            .transaction_manager
-            .start_client_transaction(request.clone(), ctx.clone(), tu)
-            .await?;
-
-        info!(
-            "Started INVITE client transaction {} to {} with extra headers",
-            key.branch(),
-            target_uri.as_str()
-        );
-
-        Ok(CallHandle {
-            dialog: shared_dialog,
-            transaction_key: key,
-            provisional_rx: Arc::new(Mutex::new(prov_rx)),
-            final_rx: Arc::new(Mutex::new(Some(final_rx))),
-            termination_rx: Arc::new(Mutex::new(Some(term_rx))),
-            invite_request: live_request,
-            transport_ctx: Arc::new(ctx),
-            dispatcher: self.transport_dispatcher.clone(),
-            transaction_manager: self.transaction_manager.clone(),
-            early_dialogs,
-            keepalive_cancel: Arc::new(Mutex::new(None)),
-            session_timer_cancel: Arc::new(Mutex::new(None)),
-            session_timer_state: Arc::new(watch::Sender::new(SessionTimerState::Idle)),
-        })
+        self.send_new_invite(target, target_uri, request, None)
+            .await
     }
 
     /// Send an INVITE using an existing connection (RFC 5626 flow support).
@@ -1876,125 +1702,30 @@ impl IntegratedUAC {
         flow: Flow,
     ) -> Result<CallHandle> {
         let target = target.into();
-
-        // Generate request using helper
         let helper = self.helper.lock().await;
         let target_uri = self.extract_uri(&target)?;
-        let mut request = helper.create_invite(&target_uri, sdp_body);
+        let request = helper.create_invite(&target_uri, sdp_body);
         drop(helper);
+        self.send_new_invite(target, target_uri, request, Some(flow))
+            .await
+    }
 
-        // Resolve target to get transport type
-        let dns_target = self.resolve_target(&target).await?;
-
-        // Auto-fill Via/Contact using resolved transport and the flow's listener port
-        self.auto_fill_headers_for_flow(
-            &mut request,
-            Some(dns_target.transport()),
-            flow.local_addr,
-        )
-        .await;
-
-        // Create channels for responses
-        let (prov_tx, prov_rx) = mpsc::channel(16);
-        let (final_tx, final_rx) = oneshot::channel();
-        let (term_tx, term_rx) = oneshot::channel();
-
-        // Create transport context WITH the flow stream for connection reuse
-        use sip_transaction::TransportKind;
-        let transport = match dns_target.transport() {
-            sip_dns::Transport::Tls => TransportKind::Tls,
-            sip_dns::Transport::Tcp => TransportKind::Tcp,
-            _ => TransportKind::Tls, // Default to TLS for flow-based routing
-        };
-        let ctx = TransportContext::new(transport, flow.peer_addr, Some(flow.stream))
-            .with_server_name(Some(dns_target.sni().to_string()))
-            .with_local_addr(flow.local_addr);
-
-        // Create early dialogs map for forking support
-        let early_dialogs = Arc::new(Mutex::new(std::collections::HashMap::new()));
-
-        // Create placeholder dialog (will be updated when 2xx arrives)
+    /// [`Self::invite_with_options`] over an existing connection
+    /// ([`Self::invite_via_flow`]): the headers and body a target reached
+    /// through a flow needs are the same as any other's.
+    pub async fn invite_via_flow_with_options(
+        &self,
+        target: impl Into<RequestTarget>,
+        options: InviteOptions,
+        flow: Flow,
+    ) -> Result<CallHandle> {
+        let target = target.into();
         let helper = self.helper.lock().await;
-        let dialog_id = sip_dialog::DialogId::unchecked_new(
-            request.headers().get_smol("Call-ID").unwrap().clone(),
-            request_from_tag(&request),
-            SmolStr::new("pending"),
-        );
-        let placeholder_dialog = Dialog::unchecked_new(
-            dialog_id,
-            sip_dialog::DialogStateType::Early,
-            // Same rule as the confirmed dialog built on the 2xx: the
-            // local URI is the request's From URI, not the configured
-            // identity (siphon-ai #549). Keeping the placeholder in step
-            // means an in-dialog request built against an early dialog
-            // (a CANCEL-race BYE, say) carries the same URI as one built
-            // after the 2xx.
-            request_from_uri(&request).unwrap_or_else(|| helper.local_uri.clone()),
-            target_uri.clone(),
-            target_uri.clone(),
-            1,
-            0,
-            None,
-            vec![],
-            false,
-            None,
-            None,
-            true,
-        );
+        let target_uri = self.extract_uri(&target)?;
+        let request = helper.create_invite_with_options(&target_uri, &options)?;
         drop(helper);
-
-        // Wrap dialog in Arc<RwLock> for sharing between CallHandle and transaction user
-        let shared_dialog = Arc::new(RwLock::new(placeholder_dialog));
-
-        // Create INVITE transaction user
-        let live_request = Arc::new(RwLock::new(Arc::new(request.clone())));
-        let tu = Arc::new(InviteTransactionUser {
-            prov_tx,
-            final_tx: Mutex::new(Some(final_tx)),
-            term_tx: Mutex::new(Some(term_tx)),
-            dialog_manager: self.dialog_manager.clone(),
-            helper: self.helper.clone(),
-            request: request.clone(),
-            config: self.config.clone(),
-            ctx: ctx.clone(),
-            auto_retry_auth: self.config.auto_retry_auth,
-            auth_attempt: 0,
-            live_request: live_request.clone(),
-            transaction_manager: self.transaction_manager.clone(),
-            dispatcher: self.transport_dispatcher.clone(),
-            early_dialogs: early_dialogs.clone(),
-            dialog: shared_dialog.clone(),
-            local_addr: self.local_addr,
-            public_addr: self.public_addr,
-        });
-
-        // Start client transaction
-        let key = self
-            .transaction_manager
-            .start_client_transaction(request.clone(), ctx.clone(), tu)
-            .await?;
-
-        info!(
-            "Started INVITE client transaction {} to {} via flow",
-            key.branch(),
-            target_uri.as_str()
-        );
-
-        Ok(CallHandle {
-            dialog: shared_dialog,
-            transaction_key: key,
-            provisional_rx: Arc::new(Mutex::new(prov_rx)),
-            final_rx: Arc::new(Mutex::new(Some(final_rx))),
-            termination_rx: Arc::new(Mutex::new(Some(term_rx))),
-            invite_request: live_request,
-            transport_ctx: Arc::new(ctx),
-            dispatcher: self.transport_dispatcher.clone(),
-            transaction_manager: self.transaction_manager.clone(),
-            early_dialogs,
-            keepalive_cancel: Arc::new(Mutex::new(None)),
-            session_timer_cancel: Arc::new(Mutex::new(None)),
-            session_timer_state: Arc::new(watch::Sender::new(SessionTimerState::Idle)),
-        })
+        self.send_new_invite(target, target_uri, request, Some(flow))
+            .await
     }
 
     /// Send an INVITE with custom body and Content-Type.
@@ -2012,27 +1743,58 @@ impl IntegratedUAC {
         content_type: &str,
     ) -> Result<CallHandle> {
         let target = target.into();
-
-        // Generate request using helper
         let helper = self.helper.lock().await;
         let target_uri = self.extract_uri(&target)?;
-        let mut request = helper.create_invite_with_body(&target_uri, body, content_type)?;
+        let request = helper.create_invite_with_body(&target_uri, body, content_type)?;
         drop(helper);
+        self.send_new_invite(target, target_uri, request, None)
+            .await
+    }
 
-        // Resolve target
+    /// Send a built INVITE: resolve the target, fill in Via and Contact,
+    /// start the client transaction (over `flow` when given) and return
+    /// the call's handle, with a placeholder early dialog until a response
+    /// makes a real one.
+    async fn send_new_invite(
+        &self,
+        target: RequestTarget,
+        target_uri: SipUri,
+        mut request: Request,
+        flow: Option<Flow>,
+    ) -> Result<CallHandle> {
         let dns_target = self.resolve_target(&target).await?;
 
-        // Auto-fill Via/Contact using resolved transport
-        self.auto_fill_headers(&mut request, Some(dns_target.transport()))
-            .await;
+        let via_flow = flow.is_some();
+        let ctx = match flow {
+            None => {
+                self.auto_fill_headers(&mut request, Some(dns_target.transport()))
+                    .await;
+                self.create_transport_context(&dns_target).await?
+            }
+            Some(flow) => {
+                // Via/Contact from the flow's listener port, and the flow's
+                // stream for connection reuse.
+                self.auto_fill_headers_for_flow(
+                    &mut request,
+                    Some(dns_target.transport()),
+                    flow.local_addr,
+                )
+                .await;
+                use sip_transaction::TransportKind;
+                let transport = match dns_target.transport() {
+                    sip_dns::Transport::Tls => TransportKind::Tls,
+                    sip_dns::Transport::Tcp => TransportKind::Tcp,
+                    _ => TransportKind::Tls, // Default to TLS for flow-based routing
+                };
+                TransportContext::new(transport, flow.peer_addr, Some(flow.stream))
+                    .with_server_name(Some(dns_target.sni().to_string()))
+                    .with_local_addr(flow.local_addr)
+            }
+        };
 
-        // Create channels for responses
         let (prov_tx, prov_rx) = mpsc::channel(16);
         let (final_tx, final_rx) = oneshot::channel();
         let (term_tx, term_rx) = oneshot::channel();
-
-        // Create transport context
-        let ctx = self.create_transport_context(&dns_target).await?;
 
         // Create early dialogs map for forking support
         let early_dialogs = Arc::new(Mutex::new(std::collections::HashMap::new()));
@@ -2099,9 +1861,10 @@ impl IntegratedUAC {
             .await?;
 
         info!(
-            "Started INVITE (custom body) client transaction {} to {}",
+            "Started INVITE client transaction {} to {}{}",
             key.branch(),
-            target_uri.as_str()
+            target_uri.as_str(),
+            if via_flow { " via flow" } else { "" }
         );
 
         Ok(CallHandle {

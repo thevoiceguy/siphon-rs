@@ -42,6 +42,7 @@ pub mod message_waiting;
 pub mod method;
 pub mod mime;
 pub mod msg;
+pub mod multipart;
 pub mod name_addr;
 pub mod p_headers;
 pub mod presence;
@@ -95,6 +96,7 @@ pub use message_waiting::{
 pub use method::Method;
 pub use mime::MimeType;
 pub use msg::{Request, RequestLine, Response, SipMessage, StatusLine};
+pub use multipart::{BodyPart, MultipartBody, MultipartError};
 pub use name_addr::{NameAddr, NameAddrError};
 pub use p_headers::{
     parse_p_asserted_identity, parse_p_preferred_identity, PAccessNetworkInfo,

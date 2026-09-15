@@ -1163,6 +1163,45 @@ l: 0\r\n\r\n",
     }
 
     #[test]
+    fn geolocation_headers_round_trip() {
+        use sip_core::{GeolocationErrorHeader, GeolocationHeader, GeolocationRoutingHeader};
+
+        // A location by value (RFC 6442 §4.1): the cid: URI names a body part.
+        let value =
+            sip_core::GeolocationValue::new(sip_core::Uri::parse("cid:5f3a@pbx.example").unwrap());
+        let written = GeolocationHeader::single(value).to_string();
+        let mut headers = Headers::new();
+        headers.push("Geolocation", written.as_str()).unwrap();
+        let parsed = parse_geolocation_header(&headers).expect("geolocation");
+        assert_eq!(
+            parsed.first().unwrap().uri().as_absolute(),
+            Some("cid:5f3a@pbx.example")
+        );
+        assert_eq!(parsed.to_string(), written);
+
+        let routing = GeolocationRoutingHeader::allowed(false).to_string();
+        let parsed = parse_geolocation_routing(&SmolStr::new(routing)).unwrap();
+        assert_eq!(parsed.routing_allowed(), Some(false));
+
+        // RFC 6442 §4.4's own example.
+        let error = parse_geolocation_error(&SmolStr::new(
+            "300;code=\"Insufficient Location Information\"",
+        ))
+        .unwrap();
+        assert_eq!(error.code(), Some("300"));
+        assert_eq!(
+            error.description(),
+            Some("Insufficient Location Information")
+        );
+        let rewritten = GeolocationErrorHeader::new()
+            .with_code("300")
+            .unwrap()
+            .with_description("Insufficient Location Information")
+            .unwrap();
+        assert_eq!(error.to_string(), rewritten.to_string());
+    }
+
+    #[test]
     fn parses_contact_route_and_via_headers() {
         let resp = parse_response(&sample_response_bytes()).expect("parse");
         let via = parse_via_header(header(resp.headers(), "Via").unwrap()).expect("via");
@@ -1261,7 +1300,9 @@ l: 0\r\n\r\n",
         let geo_routing =
             parse_geolocation_routing(header(resp.headers(), "Geolocation-Routing").unwrap())
                 .expect("geolocation-routing");
-        assert!(geo_routing.get_param("yes").is_some());
+        assert_eq!(geo_routing.routing_allowed(), Some(true));
+        assert!(geo_routing.get_param("accept").is_some());
+        assert!(geo_routing.get_param("yes").is_none());
 
         let pani =
             parse_p_access_network_info(header(resp.headers(), "P-Access-Network-Info").unwrap())

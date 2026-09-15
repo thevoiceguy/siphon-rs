@@ -203,6 +203,63 @@ fn validate_body(body: &str) -> std::result::Result<(), UacError> {
     Ok(())
 }
 
+/// A new INVITE's body: bytes and the Content-Type that describes them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InviteBody {
+    pub content_type: SmolStr,
+    pub bytes: Bytes,
+}
+
+impl InviteBody {
+    /// An SDP offer (`application/sdp`).
+    pub fn sdp(sdp: impl AsRef<str>) -> Self {
+        Self {
+            content_type: SmolStr::new_static("application/sdp"),
+            bytes: Bytes::copy_from_slice(sdp.as_ref().as_bytes()),
+        }
+    }
+
+    /// A multipart body (RFC 5621), with its `multipart/…;boundary=` type.
+    pub fn multipart(body: &sip_core::MultipartBody) -> Self {
+        Self {
+            content_type: SmolStr::new(body.content_type()),
+            bytes: body.to_bytes(),
+        }
+    }
+
+    /// Any body of `content_type`.
+    pub fn new(content_type: impl AsRef<str>, bytes: impl Into<Bytes>) -> Self {
+        Self {
+            content_type: SmolStr::new(content_type.as_ref()),
+            bytes: bytes.into(),
+        }
+    }
+}
+
+/// What a new INVITE carries beyond its target: see
+/// [`UserAgentClient::create_invite_with_options`] and
+/// `IntegratedUAC::invite_with_options`.
+#[derive(Debug, Clone, Default)]
+pub struct InviteOptions {
+    /// The body; `None` for a late offer.
+    pub body: Option<InviteBody>,
+    /// Headers appended after the ones the builder writes.
+    pub extra_headers: Headers,
+    /// The From URI for this INVITE only, over the client's own identity
+    /// (and any `from_uri_override`).
+    pub from: Option<SipUri>,
+}
+
+impl InviteOptions {
+    /// Options carrying an SDP offer, when there is one.
+    pub fn with_sdp(sdp: Option<&str>) -> Self {
+        Self {
+            body: sdp.map(InviteBody::sdp),
+            ..Default::default()
+        }
+    }
+}
+
 ///
 /// **Note**: This is the low-level helper for request generation. For production
 /// use with automatic transaction management, DNS resolution, and authentication,
@@ -1098,6 +1155,108 @@ impl UserAgentClient {
             body,
         )
         .expect("valid INVITE request")
+    }
+
+    /// Creates an INVITE request from [`InviteOptions`]: any body with its
+    /// Content-Type, extra headers and a per-call From URI together. An
+    /// emergency call's INVITE uses all three: a `multipart/mixed` body with
+    /// SDP and a PIDF-LO, `Geolocation` and `Priority` headers, and the
+    /// callback number as the caller (RFC 6442).
+    ///
+    /// # Errors
+    /// The body or Content-Type fails validation, or an extra header names
+    /// one of the headers the builder writes itself (`Via`, `From`, `To`,
+    /// `Call-ID`, `CSeq`, `Contact`, `Max-Forwards`, `Content-Type`,
+    /// `Content-Length`).
+    pub fn create_invite_with_options(
+        &self,
+        target_uri: &SipUri,
+        options: &InviteOptions,
+    ) -> Result<Request> {
+        warn_if_sips_contact_downgrade(target_uri, &self.contact_uri, "INVITE");
+        if let Some(body) = &options.body {
+            if body.bytes.len() > MAX_BODY_LENGTH {
+                return Err(anyhow!(
+                    "body too long (max {}, got {})",
+                    MAX_BODY_LENGTH,
+                    body.bytes.len()
+                ));
+            }
+            validate_content_type(&body.content_type).map_err(|e| anyhow!("{}", e))?;
+        }
+        const BUILT: [&str; 11] = [
+            "via",
+            "v",
+            "from",
+            "f",
+            "to",
+            "t",
+            "call-id",
+            "i",
+            "cseq",
+            "content-type",
+            "c",
+        ];
+        for header in options.extra_headers.iter() {
+            let name = header.name().to_ascii_lowercase();
+            if BUILT.contains(&name.as_str())
+                || matches!(
+                    name.as_str(),
+                    "contact" | "m" | "max-forwards" | "content-length" | "l"
+                )
+            {
+                return Err(anyhow!(
+                    "extra INVITE header {} would duplicate one the builder writes",
+                    header.name()
+                ));
+            }
+        }
+
+        let mut headers = Headers::new();
+        let branch = generate_branch();
+        headers.push(
+            SmolStr::new("Via"),
+            SmolStr::new(format!("SIP/2.0/UDP placeholder;branch={}", branch)),
+        )?;
+        headers.push(
+            SmolStr::new("From"),
+            SmolStr::new(self.format_from_header_with(options.from.as_ref())),
+        )?;
+        headers.push(
+            SmolStr::new("To"),
+            SmolStr::new(format!("<{}>", target_uri.as_str())),
+        )?;
+        headers.push(SmolStr::new("Call-ID"), SmolStr::new(generate_call_id()))?;
+        headers.push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"))?;
+        headers.push(
+            SmolStr::new("Contact"),
+            SmolStr::new(format!("<{}>", self.contact_uri.as_str())),
+        )?;
+        headers.push(SmolStr::new("Max-Forwards"), SmolStr::new("70"))?;
+        headers.push(SmolStr::new("User-Agent"), self.user_agent.clone())?;
+        for header in options.extra_headers.iter() {
+            headers.push(header.name_smol().clone(), header.value_smol().clone())?;
+        }
+        let body = match &options.body {
+            Some(body) => {
+                headers.push(SmolStr::new("Content-Type"), body.content_type.clone())?;
+                headers.push(
+                    SmolStr::new("Content-Length"),
+                    SmolStr::new(body.bytes.len().to_string()),
+                )?;
+                body.bytes.clone()
+            }
+            None => {
+                headers.push(SmolStr::new("Content-Length"), SmolStr::new("0"))?;
+                Bytes::new()
+            }
+        };
+        Request::new(
+            RequestLine::new(Method::Invite, target_uri.clone()),
+            headers,
+            body,
+        )
+        .map_err(|e| anyhow!("invalid INVITE request: {}", e))
     }
 
     /// Creates an INVITE request with a custom body and Content-Type.
@@ -3562,6 +3721,68 @@ mod tests {
     /// header is pushed at ten separate sites, and a fix that reached
     /// only the one someone happened to test is how this survived
     /// until now.
+    #[test]
+    fn an_invite_takes_a_body_headers_and_a_caller_together() {
+        let local_uri = SipUri::parse("sip:pbx@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:pbx@192.168.1.100:5060").unwrap();
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+        let target = SipUri::parse("sip:911@psap.example").unwrap();
+
+        // An emergency INVITE (RFC 6442): SDP and a PIDF-LO in one body, the
+        // location referenced by cid:, the callback number as the caller.
+        let body = sip_core::MultipartBody::mixed()
+            .with_part(sip_core::BodyPart::new("application/sdp", "v=0\r\n").unwrap())
+            .with_part(
+                sip_core::BodyPart::new("application/pidf+xml", "<presence/>")
+                    .unwrap()
+                    .with_content_id("loc@pbx.example")
+                    .unwrap(),
+            );
+        let mut extra = Headers::new();
+        extra.push("Geolocation", "<cid:loc@pbx.example>").unwrap();
+        extra.push("Geolocation-Routing", "yes").unwrap();
+        let options = InviteOptions {
+            body: Some(InviteBody::multipart(&body)),
+            extra_headers: extra,
+            from: Some(SipUri::parse("sip:+15185550100@example.com").unwrap()),
+        };
+        let invite = uac.create_invite_with_options(&target, &options).unwrap();
+        assert!(invite
+            .headers()
+            .get("From")
+            .unwrap()
+            .starts_with("<sip:+15185550100@example.com>;tag="));
+        assert_eq!(
+            invite.headers().get("Geolocation"),
+            Some("<cid:loc@pbx.example>")
+        );
+        assert_eq!(invite.headers().get("Geolocation-Routing"), Some("yes"));
+        let content_type = invite.headers().get("Content-Type").unwrap().to_string();
+        assert_eq!(content_type, body.content_type());
+        let parsed = sip_core::MultipartBody::parse(&content_type, invite.body()).unwrap();
+        assert_eq!(parsed.parts().len(), 2);
+        assert_eq!(
+            invite.headers().get("Content-Length"),
+            Some(invite.body().len().to_string().as_str())
+        );
+
+        // A late offer with no options is a plain INVITE.
+        let late = uac
+            .create_invite_with_options(&target, &InviteOptions::default())
+            .unwrap();
+        assert!(late.body().is_empty());
+        assert!(late.headers().get("Content-Type").is_none());
+
+        // An extra header the builder writes itself is refused.
+        let mut dup = Headers::new();
+        dup.push("Content-Type", "text/plain").unwrap();
+        let clash = InviteOptions {
+            extra_headers: dup,
+            ..InviteOptions::with_sdp(Some("v=0\r\n"))
+        };
+        assert!(uac.create_invite_with_options(&target, &clash).is_err());
+    }
+
     #[test]
     /// Dialog-forming and out-of-dialog builders. In-dialog ones are
     /// covered by `every_in_dialog_request_carries_the_user_agent` —

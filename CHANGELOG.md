@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026-09-15] — workspace release
+
+Crate versions in this release: sip-core 0.7.8, sip-parse 0.4.0, sip-uac 0.7.2.
+
+### Added
+
+- **sip-core 0.7.8**: `multipart` — `MultipartBody` and `BodyPart` build and parse
+  `multipart/mixed` bodies (RFC 2046 §5.1, RFC 5621): parts with `Content-Type`,
+  `Content-ID` (for `cid:` references, RFC 2392) and other headers; a boundary chosen
+  when the body is made and moved if a part contains it; liberal parsing (LF line ends,
+  preamble, a missing close delimiter), at most 16 parts. For location by value (an
+  INVITE with SDP and a PIDF-LO, RFC 6442) and SIPREC metadata.
+- **sip-core 0.7.8**: the RFC 6442 geolocation headers serialise: `Display` for
+  `GeolocationValue` and `GeolocationHeader` (`<cid:…>`, comma-separated),
+  `GeolocationErrorHeader` (`300;code="…"`) and `GeolocationRoutingHeader`, which now
+  holds its `yes`/`no` value (`GeolocationRoutingHeader::allowed`, `routing_allowed()`).
+- **sip-uac 0.7.2**: `InviteOptions` and `InviteBody`, `UserAgentClient::create_invite_with_options`,
+  `IntegratedUAC::invite_with_options` and `invite_via_flow_with_options`: an INVITE
+  with any body and Content-Type, extra headers and a per-call From together, also over
+  an RFC 5626 flow, which before took none of them. Extra headers that would duplicate
+  one the builder writes are refused. The INVITE methods now share one send path.
+
+### Changed
+
+- **sip-parse 0.4.0**: `parse_geolocation_routing` reads a leading `yes`/`no` as the
+  header's value instead of a parameter named `yes`/`no`; `parse_geolocation_error` takes
+  the description from RFC 6442's `code="…"` parameter (still accepting `reason=`).
+
 ## [2026-09-14] — workspace release
 
 Crate versions in this release: sip-transaction 0.7.1.
