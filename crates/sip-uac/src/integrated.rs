@@ -1680,7 +1680,7 @@ impl IntegratedUAC {
         let target_uri = self.extract_uri(&target)?;
         let request = helper.create_invite_with_options(&target_uri, &options)?;
         drop(helper);
-        self.send_new_invite(target, target_uri, request, None)
+        self.send_new_invite_filtered(target, target_uri, request, None, options.filter)
             .await
     }
 
@@ -1724,7 +1724,7 @@ impl IntegratedUAC {
         let target_uri = self.extract_uri(&target)?;
         let request = helper.create_invite_with_options(&target_uri, &options)?;
         drop(helper);
-        self.send_new_invite(target, target_uri, request, Some(flow))
+        self.send_new_invite_filtered(target, target_uri, request, Some(flow), options.filter)
             .await
     }
 
@@ -1759,8 +1759,23 @@ impl IntegratedUAC {
         &self,
         target: RequestTarget,
         target_uri: SipUri,
+        request: Request,
+        flow: Option<Flow>,
+    ) -> Result<CallHandle> {
+        self.send_new_invite_filtered(target, target_uri, request, flow, None)
+            .await
+    }
+
+    /// As [`IntegratedUAC::send_new_invite`], giving `filter` the finished
+    /// request — Via, Contact and Content-Length filled in — before the
+    /// transaction starts.
+    async fn send_new_invite_filtered(
+        &self,
+        target: RequestTarget,
+        target_uri: SipUri,
         mut request: Request,
         flow: Option<Flow>,
+        filter: Option<crate::RequestFilter>,
     ) -> Result<CallHandle> {
         let dns_target = self.resolve_target(&target).await?;
 
@@ -1791,6 +1806,12 @@ impl IntegratedUAC {
                     .with_local_addr(flow.local_addr)
             }
         };
+
+        // The caller's last look at the finished request (header
+        // manipulation rules, an asserted identity).
+        if let Some(filter) = &filter {
+            filter.apply(&mut request);
+        }
 
         let (prov_tx, prov_rx) = mpsc::channel(16);
         let (final_tx, final_rx) = oneshot::channel();

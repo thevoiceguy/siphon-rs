@@ -236,6 +236,33 @@ impl InviteBody {
     }
 }
 
+/// A last look at a request on its way out, after the Via, Contact and
+/// Content-Length the client fills in and before the transaction starts.
+///
+/// A B2BUA that rewrites headers on the leg it is placing — an operator's
+/// header manipulation rules, an identity it must assert — has no other
+/// place to do it, because the request is built inside this crate.
+#[derive(Clone)]
+pub struct RequestFilter(Arc<dyn Fn(&mut Request) + Send + Sync>);
+
+impl RequestFilter {
+    /// A filter from any function that edits a request.
+    pub fn new(edit: impl Fn(&mut Request) + Send + Sync + 'static) -> Self {
+        Self(Arc::new(edit))
+    }
+
+    /// Run it.
+    pub fn apply(&self, request: &mut Request) {
+        (self.0)(request)
+    }
+}
+
+impl std::fmt::Debug for RequestFilter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RequestFilter(..)")
+    }
+}
+
 /// What a new INVITE carries beyond its target: see
 /// [`UserAgentClient::create_invite_with_options`] and
 /// `IntegratedUAC::invite_with_options`.
@@ -248,6 +275,10 @@ pub struct InviteOptions {
     /// The From URI for this INVITE only, over the client's own identity
     /// (and any `from_uri_override`).
     pub from: Option<SipUri>,
+    /// A last look at the INVITE once it is complete. Only the integrated
+    /// client, which sends the request, can honour this; the low-level
+    /// builder leaves it alone.
+    pub filter: Option<RequestFilter>,
 }
 
 impl InviteOptions {
@@ -3716,6 +3747,37 @@ mod tests {
     use sip_core::{StatusLine, Uri};
     use sip_dialog::{Dialog, DialogId, DialogStateType};
 
+    /// A filter is the only place a caller can reach a request this crate
+    /// built: it sees the whole of it and may add, replace or remove
+    /// anything, including headers the builder wrote.
+    #[test]
+    fn a_request_filter_edits_the_request_it_is_given() {
+        let local_uri = SipUri::parse("sip:pbx@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:pbx@192.168.1.100:5060").unwrap();
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+        let target = SipUri::parse("sip:+15125550100@carrier.example").unwrap();
+        let mut request = uac.create_invite(&target, None);
+        request.headers_mut().push("X-Internal", "leave-me").unwrap();
+
+        let filter = RequestFilter::new(|request: &mut Request| {
+            request.headers_mut().remove("X-Internal");
+            request
+                .headers_mut()
+                .push("P-Charge-Info", "<sip:acct@carrier.example>")
+                .unwrap();
+        });
+        filter.apply(&mut request);
+
+        assert!(request.headers().get("X-Internal").is_none());
+        assert_eq!(
+            request.headers().get("P-Charge-Info").map(|v| v.to_string()),
+            Some("<sip:acct@carrier.example>".to_string())
+        );
+        // What the builder wrote is still there for it to act on.
+        assert!(request.headers().get("Call-ID").is_some());
+        assert_eq!(format!("{:?}", filter), "RequestFilter(..)");
+    }
+
     /// Every request builder stamps the configured token, not the
     /// crate's own. Asserted on more than one method because the
     /// header is pushed at ten separate sites, and a fix that reached
@@ -3742,6 +3804,7 @@ mod tests {
         extra.push("Geolocation", "<cid:loc@pbx.example>").unwrap();
         extra.push("Geolocation-Routing", "yes").unwrap();
         let options = InviteOptions {
+            filter: None,
             body: Some(InviteBody::multipart(&body)),
             extra_headers: extra,
             from: Some(SipUri::parse("sip:+15185550100@example.com").unwrap()),
