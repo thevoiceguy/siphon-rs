@@ -1061,6 +1061,38 @@ impl IntegratedUAC {
         self.send_non_invite_request(request, dns_target).await
     }
 
+    /// Registers `account` at the registrar, rather than this agent's own
+    /// address of record, answering a challenge with `credentials`.
+    ///
+    /// This is how one node holds a binding for each of several accounts —
+    /// a carrier trunk apiece. `From` and `To` name the account, `Contact`
+    /// names this node, and each account keeps a refresh series of its own
+    /// (see [`UacHelper::create_register_as`]). `credentials` are the
+    /// account's own; without them a challenge is answered from the
+    /// agent's configured credentials, as [`Self::register`] does.
+    pub async fn register_as(
+        &self,
+        account: &SipUri,
+        registrar: impl Into<RequestTarget>,
+        expires: Option<u32>,
+        credentials: Option<(String, String)>,
+    ) -> Result<Response> {
+        let target = registrar.into();
+        let expires = expires.unwrap_or(self.config.default_register_expires);
+
+        let helper = self.helper.lock().await;
+        let registrar_uri = self.extract_uri(&target)?;
+        let mut request = helper.create_register_as(account, &registrar_uri, expires);
+        drop(helper);
+
+        let dns_target = self.resolve_target(&target).await?;
+        self.auto_fill_headers(&mut request, Some(dns_target.transport()))
+            .await;
+
+        self.send_non_invite_request_as(request, dns_target, credentials)
+            .await
+    }
+
     /// Helper to extract SipUri from RequestTarget
     fn extract_uri(&self, target: &RequestTarget) -> Result<SipUri> {
         match target {
@@ -1272,6 +1304,18 @@ impl IntegratedUAC {
         request: Request,
         dns_target: DnsTarget,
     ) -> Result<Response> {
+        self.send_non_invite_request_as(request, dns_target, None)
+            .await
+    }
+
+    /// As [`Self::send_non_invite_request`], answering a challenge with
+    /// `credentials` when they are given rather than with the agent's own.
+    async fn send_non_invite_request_as(
+        &self,
+        request: Request,
+        dns_target: DnsTarget,
+        credentials: Option<(String, String)>,
+    ) -> Result<Response> {
         // Create transport context from DNS target
         let ctx = self.create_transport_context(&dns_target).await?;
 
@@ -1317,7 +1361,9 @@ impl IntegratedUAC {
                         method = ?request.method(),
                         "challenged; retrying with authentication"
                     );
-                    return self.retry_with_auth(request, response, dns_target, 1).await;
+                    return self
+                        .retry_with_auth(request, response, dns_target, 1, credentials)
+                        .await;
                 }
 
                 Ok(response)
@@ -1345,6 +1391,7 @@ impl IntegratedUAC {
         challenge: Response,
         dns_target: DnsTarget,
         attempt: u32,
+        credentials: Option<(String, String)>,
     ) -> Result<Response> {
         // Extract realm for provider
         let realm = extract_realm(&challenge);
@@ -1354,15 +1401,22 @@ impl IntegratedUAC {
         let auth_request = helper.create_authenticated_request_with(
             &original_request,
             &challenge,
-            async {
-                if let Some(provider) = &self.config.credential_provider {
-                    if let Some(r) = realm.as_deref() {
-                        return provider.credentials(r).await;
+            match &credentials {
+                // The caller named the account's own credentials: they
+                // answer this challenge, not the agent's.
+                Some(pair) => Some(pair.clone()),
+                None => {
+                    async {
+                        if let Some(provider) = &self.config.credential_provider {
+                            if let Some(r) = realm.as_deref() {
+                                return provider.credentials(r).await;
+                            }
+                        }
+                        None
                     }
+                    .await
                 }
-                None
-            }
-            .await,
+            },
         )?;
         drop(helper);
 
@@ -1414,8 +1468,14 @@ impl IntegratedUAC {
                 max = self.config.max_auth_retries,
                 "auth still rejected; retrying with refreshed credentials"
             );
-            return Box::pin(self.retry_with_auth(auth_request, response, dns_target, attempt + 1))
-                .await;
+            return Box::pin(self.retry_with_auth(
+                auth_request,
+                response,
+                dns_target,
+                attempt + 1,
+                credentials,
+            ))
+            .await;
         }
 
         if response.code() == 401 || response.code() == 407 {

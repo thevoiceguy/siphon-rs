@@ -682,6 +682,31 @@ impl UserAgentClient {
     /// # Returns
     /// A REGISTER request ready to send
     pub fn create_register(&self, registrar_uri: &SipUri, expires: u32) -> Request {
+        let local = self.local_uri.clone();
+        self.create_register_as(&local, registrar_uri, expires)
+    }
+
+    /// Creates a REGISTER request that binds `account` rather than this
+    /// agent's own address of record.
+    ///
+    /// A node that registers on behalf of several accounts — one per
+    /// carrier trunk, say — puts the account in `From` and `To` and its
+    /// own address in `Contact`, which is what the binding points at
+    /// (RFC 3261 §10.2). Each account keeps a refresh series of its own:
+    /// the Call-ID, the `From` tag and the CSeq are kept per
+    /// (account, registrar), so two accounts at one carrier do not share
+    /// a series and neither one's refresh invalidates the other's.
+    ///
+    /// # Arguments
+    /// * `account` - the address of record being bound
+    /// * `registrar_uri` - URI of the registrar (Request-URI)
+    /// * `expires` - Registration expiration in seconds (0 to deregister)
+    pub fn create_register_as(
+        &self,
+        account: &SipUri,
+        registrar_uri: &SipUri,
+        expires: u32,
+    ) -> Request {
         warn_if_sips_contact_downgrade(registrar_uri, &self.contact_uri, "REGISTER");
         let mut headers = Headers::new();
 
@@ -696,8 +721,9 @@ impl UserAgentClient {
 
         // From header (stable tag per registrar — the refresh series keeps
         // one (Call-ID, From tag) identity, matching the reused Call-ID)
-        let from_tag = self.register_from_tag(registrar_uri);
-        let from = self.format_from_header_tagged(None, &from_tag);
+        let series = register_series_key(account, registrar_uri);
+        let from_tag = self.register_from_tag(&series);
+        let from = self.format_from_header_tagged(Some(account), &from_tag);
         headers
             .push(SmolStr::new("From"), SmolStr::new(from))
             .unwrap();
@@ -706,19 +732,19 @@ impl UserAgentClient {
         headers
             .push(
                 SmolStr::new("To"),
-                SmolStr::new(format!("<{}>", self.local_uri.as_str())),
+                SmolStr::new(format!("<{}>", account.as_str())),
             )
             .unwrap();
 
-        // Call-ID (reuse per-registrar for refreshes)
-        let call_id = self.register_call_id(registrar_uri);
+        // Call-ID (reuse per account and registrar for refreshes)
+        let call_id = self.register_call_id(&series);
         headers.push(SmolStr::new("Call-ID"), call_id).unwrap();
 
         // CSeq — monotonic per registrar. RFC 3261 §10.2 requires the CSeq
         // on a REGISTER to be greater than any previously-used value for
         // the same Call-ID, and `register_call_id` above reuses Call-IDs
         // per registrar to support refreshes.
-        let cseq = self.next_register_cseq(registrar_uri);
+        let cseq = self.next_register_cseq(&series);
         headers
             .push(
                 SmolStr::new("CSeq"),
@@ -3347,8 +3373,8 @@ impl UserAgentClient {
         request
     }
 
-    fn register_call_id(&self, registrar_uri: &SipUri) -> SmolStr {
-        let key = registrar_uri.as_str().to_string();
+    fn register_call_id(&self, series: &str) -> SmolStr {
+        let key = series.to_string();
         let mut map = self
             .register_call_ids
             .lock()
@@ -3362,7 +3388,7 @@ impl UserAgentClient {
             // Map is full - generate new Call-ID without caching
             // This prevents memory exhaustion while maintaining functionality
             tracing::warn!(
-                registrar = %registrar_uri.as_str(),
+                series = %series,
                 max = MAX_REGISTRAR_CALL_IDS,
                 "Max registrar Call-ID tracking limit reached, not caching"
             );
@@ -3380,8 +3406,8 @@ impl UserAgentClient {
     /// that correlate refresh series on (Call-ID, From tag) see one series.
     /// Capped like the Call-ID map; when full, fall back to uncached fresh
     /// tags (still valid, just no refresh-series stability).
-    fn register_from_tag(&self, registrar_uri: &SipUri) -> SmolStr {
-        let key = registrar_uri.as_str().to_string();
+    fn register_from_tag(&self, series: &str) -> SmolStr {
+        let key = series.to_string();
         let mut map = self
             .register_from_tags
             .lock()
@@ -3392,7 +3418,7 @@ impl UserAgentClient {
 
         if map.len() >= MAX_REGISTRAR_CALL_IDS {
             tracing::warn!(
-                registrar = %registrar_uri.as_str(),
+                series = %series,
                 max = MAX_REGISTRAR_CALL_IDS,
                 "Max registrar From-tag tracking limit reached, not caching"
             );
@@ -3414,8 +3440,8 @@ impl UserAgentClient {
     /// is reached, new registrars fall back to 1 (matching the Call-ID path,
     /// which also generates fresh uncached values when full). In practice a
     /// UAC talks to O(1) registrars.
-    fn next_register_cseq(&self, registrar_uri: &SipUri) -> u32 {
-        let key = registrar_uri.as_str().to_string();
+    fn next_register_cseq(&self, series: &str) -> u32 {
+        let key = series.to_string();
         let mut map = self
             .register_cseqs
             .lock()
@@ -3433,7 +3459,7 @@ impl UserAgentClient {
 
         if map.len() >= MAX_REGISTRAR_CALL_IDS {
             tracing::warn!(
-                registrar = %registrar_uri.as_str(),
+                series = %series,
                 max = MAX_REGISTRAR_CALL_IDS,
                 "Max registrar CSeq tracking limit reached, not caching"
             );
@@ -3477,6 +3503,13 @@ impl UserAgentClient {
             format!("<{}>;tag={}", uri.as_str(), tag)
         }
     }
+}
+
+/// The key a REGISTER refresh series is kept under: one per account at
+/// one registrar, so a node registering several accounts at one carrier
+/// keeps a Call-ID, `From` tag and CSeq for each.
+fn register_series_key(account: &SipUri, registrar_uri: &SipUri) -> String {
+    format!("{}|{}", account.as_str(), registrar_uri.as_str())
 }
 
 /// Warns (once per call) when a SIPS request is being built with a
@@ -3757,7 +3790,10 @@ mod tests {
         let uac = UserAgentClient::new(local_uri, contact_uri);
         let target = SipUri::parse("sip:+15125550100@carrier.example").unwrap();
         let mut request = uac.create_invite(&target, None);
-        request.headers_mut().push("X-Internal", "leave-me").unwrap();
+        request
+            .headers_mut()
+            .push("X-Internal", "leave-me")
+            .unwrap();
 
         let filter = RequestFilter::new(|request: &mut Request| {
             request.headers_mut().remove("X-Internal");
@@ -3770,7 +3806,10 @@ mod tests {
 
         assert!(request.headers().get("X-Internal").is_none());
         assert_eq!(
-            request.headers().get("P-Charge-Info").map(|v| v.to_string()),
+            request
+                .headers()
+                .get("P-Charge-Info")
+                .map(|v| v.to_string()),
             Some("<sip:acct@carrier.example>".to_string())
         );
         // What the builder wrote is still there for it to act on.
@@ -3972,6 +4011,83 @@ mod tests {
         assert_eq!(first.headers().get("CSeq"), Some("1 REGISTER"));
         assert_eq!(second.headers().get("CSeq"), Some("2 REGISTER"));
         assert_eq!(third.headers().get("CSeq"), Some("3 REGISTER"));
+    }
+
+    /// A node registering on an account's behalf binds the account, not
+    /// itself: `From` and `To` name the account and `Contact` names this
+    /// node, which is where the registrar sends the account's calls.
+    #[test]
+    fn register_as_binds_the_account_and_contacts_this_node() {
+        let local_uri = SipUri::parse("sip:node-a@fcp.local").unwrap();
+        let contact_uri = SipUri::parse("sip:node-a@192.168.1.100:5060").unwrap();
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+
+        let account = SipUri::parse("sip:acct-4471@carrier.example").unwrap();
+        let registrar = SipUri::parse("sip:carrier.example").unwrap();
+        let request = uac.create_register_as(&account, &registrar, 3600);
+
+        let from = request.headers().get("From").unwrap();
+        assert!(from.contains("sip:acct-4471@carrier.example"), "{from}");
+        assert!(!from.contains("node-a@fcp.local"), "{from}");
+        assert_eq!(
+            request.headers().get("To"),
+            Some("<sip:acct-4471@carrier.example>")
+        );
+        let contact = request.headers().get("Contact").unwrap();
+        assert!(
+            contact.contains("sip:node-a@192.168.1.100:5060"),
+            "{contact}"
+        );
+    }
+
+    /// Two accounts at one carrier are two registrations, not one: each
+    /// keeps its own Call-ID, `From` tag and CSeq, so a refresh of one
+    /// says nothing about the other.
+    #[test]
+    fn each_account_keeps_its_own_refresh_series() {
+        let local_uri = SipUri::parse("sip:node-a@fcp.local").unwrap();
+        let contact_uri = SipUri::parse("sip:node-a@192.168.1.100:5060").unwrap();
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+
+        let registrar = SipUri::parse("sip:carrier.example").unwrap();
+        let one = SipUri::parse("sip:acct-one@carrier.example").unwrap();
+        let two = SipUri::parse("sip:acct-two@carrier.example").unwrap();
+
+        let one_first = uac.create_register_as(&one, &registrar, 3600);
+        let two_first = uac.create_register_as(&two, &registrar, 3600);
+        let one_refresh = uac.create_register_as(&one, &registrar, 3600);
+
+        assert_ne!(
+            one_first.headers().get("Call-ID"),
+            two_first.headers().get("Call-ID")
+        );
+        assert_eq!(
+            one_first.headers().get("Call-ID"),
+            one_refresh.headers().get("Call-ID"),
+            "the account's refresh keeps its own Call-ID"
+        );
+        assert_eq!(one_first.headers().get("CSeq"), Some("1 REGISTER"));
+        assert_eq!(two_first.headers().get("CSeq"), Some("1 REGISTER"));
+        assert_eq!(one_refresh.headers().get("CSeq"), Some("2 REGISTER"));
+    }
+
+    /// The agent's own REGISTER is unchanged by the account-aware path it
+    /// now shares: it still binds the agent's own address of record.
+    #[test]
+    fn register_still_binds_the_agents_own_aor() {
+        let local_uri = SipUri::parse("sip:alice@example.com").unwrap();
+        let contact_uri = SipUri::parse("sip:alice@192.168.1.100:5060").unwrap();
+        let uac = UserAgentClient::new(local_uri, contact_uri);
+
+        let registrar = SipUri::parse("sip:registrar.example.com").unwrap();
+        let request = uac.create_register(&registrar, 3600);
+
+        assert_eq!(request.headers().get("To"), Some("<sip:alice@example.com>"));
+        assert!(request
+            .headers()
+            .get("From")
+            .unwrap()
+            .contains("sip:alice@example.com"));
     }
 
     /// CSeq counters are scoped per registrar so unrelated registrars don't
