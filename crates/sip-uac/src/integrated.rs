@@ -423,6 +423,25 @@ fn apply_tls_server_name(target: DnsTarget, tls_server_name: Option<&str>) -> Dn
     }
 }
 
+/// Append a caller's extra headers to an in-dialog request, leaving any
+/// header the request already carries as it is: the dialog owns Via, From,
+/// To, Call-ID, CSeq, Max-Forwards and Route, and a caller passing one of
+/// those would break the dialog rather than decorate it.
+fn append_extra_headers(request: &mut Request, headers: &[(&str, &str)]) {
+    for (name, value) in headers {
+        if request.headers().contains(name) {
+            warn!(header = %name, "Ignoring an extra header the request already carries");
+            continue;
+        }
+        if let Err(e) = request
+            .headers_mut()
+            .push(SmolStr::new(*name), SmolStr::new(*value))
+        {
+            warn!(header = %name, error = %e, "Could not add the header to the request");
+        }
+    }
+}
+
 fn prepare_in_dialog_request(dialog: &mut Dialog, request: &mut Request) -> SipUri {
     let method = request.method().clone();
     let body = request.body().clone();
@@ -1979,10 +1998,27 @@ impl IntegratedUAC {
     /// - Fills Via header with local transport address
     /// - Increments local CSeq
     pub async fn bye(&self, dialog: &Dialog) -> Result<Response> {
+        self.bye_with_headers(dialog, &[]).await
+    }
+
+    /// Sends a BYE carrying `headers` as well.
+    ///
+    /// The caller's headers are appended to the BYE the dialog produces —
+    /// an RFC 3326 `Reason` for a call the platform itself is ending, say,
+    /// so the far end can tell it from a user's hangup. A header the
+    /// request already carries is left alone: the dialog's own headers
+    /// (Via, From, To, Call-ID, CSeq, Max-Forwards, Route) are not
+    /// something a caller may rewrite here.
+    pub async fn bye_with_headers(
+        &self,
+        dialog: &Dialog,
+        headers: &[(&str, &str)],
+    ) -> Result<Response> {
         // Generate BYE using helper
         let helper = self.helper.lock().await;
         let mut request = helper.create_bye(dialog);
         drop(helper);
+        append_extra_headers(&mut request, headers);
 
         // Apply the dialog route set (RFC 3261 §12.2.1.1). Without this the
         // BYE carries no Route headers and its Request-URI is the peer's
@@ -2021,10 +2057,22 @@ impl IntegratedUAC {
     /// # Returns
     /// The final response (typically 200 OK)
     pub async fn bye_via_flow(&self, dialog: &Dialog, flow: Flow) -> Result<Response> {
+        self.bye_via_flow_with_headers(dialog, flow, &[]).await
+    }
+
+    /// [`bye_via_flow`](Self::bye_via_flow), carrying `headers` as well;
+    /// see [`bye_with_headers`](Self::bye_with_headers).
+    pub async fn bye_via_flow_with_headers(
+        &self,
+        dialog: &Dialog,
+        flow: Flow,
+        headers: &[(&str, &str)],
+    ) -> Result<Response> {
         // Generate BYE using helper
         let helper = self.helper.lock().await;
         let mut request = helper.create_bye(dialog);
         drop(helper);
+        append_extra_headers(&mut request, headers);
 
         // Apply the dialog route set (RFC 3261 §12.2.1.1). The BYE rides the
         // inbound flow either way, but a record-routing carrier edge still
@@ -4399,6 +4447,96 @@ mod tests {
     /// edge could not correlate it, answered 481, and the far leg sat in dead
     /// air until session-expires. The BYE must instead loose-route through the
     /// record-route proxy, exactly as every other in-dialog request does.
+    /// A BYE the platform itself sends can say why (RFC 3326), and the
+    /// dialog's own headers are not a caller's to rewrite.
+    #[tokio::test]
+    async fn bye_carries_the_callers_headers_and_keeps_the_dialogs_own() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = Arc::new(
+            IntegratedUAC::builder()
+                .local_uri("sip:siphon@127.0.0.1")
+                .unwrap()
+                .local_addr("127.0.0.1:5070")
+                .unwrap()
+                .transaction_manager(manager.clone())
+                .resolver(Arc::new(SipResolver::from_system().unwrap()))
+                .dispatcher(dispatcher.clone())
+                .build()
+                .unwrap(),
+        );
+
+        let dialog = Dialog::unchecked_new(
+            DialogId::unchecked_new("drain-call", "local-tag", "remote-tag"),
+            DialogStateType::Confirmed,
+            SipUri::parse("sip:agent@127.0.0.1:5070").unwrap(),
+            SipUri::parse("sip:caller@example.net").unwrap(),
+            SipUri::parse("sip:caller@198.51.100.20:5060;transport=udp").unwrap(),
+            1,
+            1,
+            None,
+            Vec::new(),
+            false,
+            None,
+            None,
+            true,
+        );
+
+        let task = {
+            let uac = uac.clone();
+            let dialog = dialog.clone();
+            tokio::spawn(async move {
+                uac.bye_with_headers(
+                    &dialog,
+                    &[
+                        ("Reason", "SIP;cause=200;text=\"node draining\""),
+                        // Refused: the dialog owns this one.
+                        ("CSeq", "99 BYE"),
+                    ],
+                )
+                .await
+            })
+        };
+
+        let request = loop {
+            if let Some((_, payload)) = dispatcher.sent.lock().await.first().cloned() {
+                break sip_parse::parse_request(&payload).expect("valid BYE on the wire");
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+
+        assert_eq!(request.method(), &Method::Bye);
+        assert_eq!(
+            request.headers().get("Reason"),
+            Some("SIP;cause=200;text=\"node draining\""),
+        );
+        let cseq = request.headers().get("CSeq").unwrap();
+        assert!(
+            cseq.ends_with("BYE") && !cseq.starts_with("99"),
+            "the dialog's CSeq must survive a caller's header, got: {cseq}"
+        );
+
+        let mut headers = Headers::new();
+        for name in ["Via", "From", "To", "Call-ID", "CSeq"] {
+            headers
+                .push(
+                    SmolStr::new(name),
+                    request.headers().get_smol(name).unwrap().clone(),
+                )
+                .unwrap();
+        }
+        let response = Response::new(
+            StatusLine::new(200, SmolStr::new("OK")).expect("valid status line"),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid response");
+        manager.receive_response(response).await;
+
+        let response = task.await.unwrap().expect("BYE completes on 200");
+        assert_eq!(response.code(), 200);
+    }
+
     #[tokio::test]
     async fn bye_via_flow_carries_route_set_and_dialog_local_uri() {
         let dispatcher = Arc::new(CapturingDispatcher::default());
