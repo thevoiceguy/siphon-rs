@@ -83,6 +83,32 @@ Available fuzz targets:
 - `parse_cpim` - CPIM message parsing (RFC 3862)
 - `parse_multipart` - multipart body parsing and re-writing (RFC 2046, RFC 5621)
 - `serialize_roundtrip` - Serialization round-trip testing
+- `dialog_from_message` - dialog identity, creation and route sets (RFC 3261 §12)
+- `registrar_bindings` - AOR normalisation and binding validation (RFC 3261 §10)
+- `transaction_key` - transaction matching (RFC 3261 §17.2.3)
+- `offer_answer` - SDP offer/answer negotiation (RFC 3264)
+
+### Seed corpora
+
+A fuzzer given no seeds spends its run failing to invent a valid SIP
+message and never reaches the code underneath. The seeds are *generated*,
+not committed, so they cannot go stale against the parser:
+
+```bash
+SIPHON_FUZZ_SEED_DIR="$PWD/fuzz/corpus" \
+  cargo test -p sip-parse -p sip-sdp --test fuzz_seeds
+```
+
+Those tests also assert on every ordinary `cargo test` run that each seed
+still parses, and are silent about the corpus unless the variable is set.
+
+### In CI
+
+`.github/workflows/fuzz.yml` runs every target for ten minutes a night and
+keeps the corpus between runs, so each night starts where the last left
+off. It can also be run by hand from the Actions tab, optionally for a
+single target. A crashing input is uploaded as an artifact and replayed
+with `cargo fuzz run <target> <file>`.
 
 ## Architecture Overview
 

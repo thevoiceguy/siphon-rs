@@ -1141,7 +1141,13 @@ fn validate_event_package(event: &str) -> Result<(), SubscriptionError> {
     }
     for param in parts {
         let trimmed = param.trim();
-        if trimmed.len() >= 3 && trimmed[..3].eq_ignore_ascii_case("id=") {
+        // As in `extract_tag` below: slicing to a fixed byte index panics
+        // when that index is inside a multi-byte character, and an `Event`
+        // header's parameters are written by the peer.
+        let Some(prefix) = trimmed.get(..3) else {
+            continue;
+        };
+        if prefix.eq_ignore_ascii_case("id=") {
             let id = trimmed[3..].trim().trim_matches('"');
             if id.len() > MAX_EVENT_ID_LENGTH {
                 return Err(SubscriptionError::EventTooLong {
@@ -1215,7 +1221,14 @@ fn validate_subscription_cseq(cseq: u32) -> Result<(), SubscriptionError> {
 pub fn extract_tag(value: &SmolStr) -> Option<SmolStr> {
     value.split(';').find_map(|segment| {
         let trimmed = segment.trim();
-        if trimmed.len() >= 4 && trimmed[..4].eq_ignore_ascii_case("tag=") {
+        // `trimmed[..4]` panics when the fourth byte is inside a
+        // multi-byte character — `;tag\u{c8}…` is four bytes long and
+        // splits in the middle of one — and this header is written by
+        // whoever sent the message. `get` asks for the same four bytes
+        // and answers `None` rather than panicking when they are not a
+        // whole prefix.
+        let prefix = trimmed.get(..4)?;
+        if prefix.eq_ignore_ascii_case("tag=") {
             Some(SmolStr::new(&trimmed[4..]))
         } else {
             None
@@ -2616,5 +2629,50 @@ mod tests {
             let v = mgr.next_rseq(&id);
             assert_eq!(v, first.saturating_add(n), "RSeq must increment by 1");
         }
+    }
+
+    // ── A header is text a peer wrote ──────────────────────────────────
+
+    #[test]
+    fn a_tag_parameter_cut_by_a_multi_byte_character_does_not_panic() {
+        // Found by `cargo fuzz run dialog_from_message`: `;tag\u{c8}efer1`
+        // is four bytes before the fourth, so slicing to byte four landed
+        // inside the character and panicked the dialog layer — on a From
+        // header, which is written by whoever sent the message.
+        let value = SmolStr::new("<sip:alice@example.com>;tag\u{c8}efer1");
+        assert_eq!(extract_tag(&value), None);
+
+        // A tag that happens to follow one still reads.
+        let value = SmolStr::new("<sip:alice@example.com>;x\u{c8}y;tag=real");
+        assert_eq!(extract_tag(&value).as_deref(), Some("real"));
+    }
+
+    #[test]
+    fn a_tag_is_still_found_however_it_is_spelled() {
+        let cases = [
+            ("<sip:a@b>;tag=abc", Some("abc")),
+            ("<sip:a@b>;TAG=abc", Some("abc")),
+            ("<sip:a@b> ; tag=abc", Some("abc")),
+            ("<sip:a@b>", None),
+            ("<sip:a@b>;tag=", Some("")),
+            ("tag", None),
+            ("ta", None),
+            ("", None),
+        ];
+        for (value, want) in cases {
+            assert_eq!(
+                extract_tag(&SmolStr::new(value)).as_deref(),
+                want,
+                "extract_tag({value:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn an_event_id_cut_by_a_multi_byte_character_does_not_panic() {
+        // The same shape on the Event header's parameters.
+        let _ = validate_event_package("presence;id\u{c8}x");
+        let _ = validate_event_package("presence;\u{c8}");
+        let _ = validate_event_package("\u{c8}");
     }
 }

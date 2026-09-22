@@ -16,14 +16,14 @@ fuzz_target!(|data: &[u8]| {
 
     // If we can successfully parse a request, we should be able to serialize it
     // and re-parse it without panic
-    if let Ok(request) = parse_request(&bytes) {
+    if let Some(request) = parse_request(&bytes) {
         let serialized = serialize_request(&request);
 
         // Re-parsing should not panic
         let _ = parse_request(&serialized);
 
         // If re-parsing succeeds, key fields should match
-        if let Ok(reparsed) = parse_request(&serialized) {
+        if let Some(reparsed) = parse_request(&serialized) {
             // Method should be preserved
             assert_eq!(request.method(), reparsed.method());
 

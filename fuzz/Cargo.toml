@@ -7,12 +7,107 @@ publish = false
 [package.metadata]
 cargo-fuzz = true
 
+# Versions are pinned here rather than inherited: this crate declares its
+# own `[workspace]` below, as cargo-fuzz wants, so it is not a member of
+# the stack's workspace and `{ workspace = true }` has nothing to inherit
+# from. It did, and so the fuzz crate did not build at all.
 [dependencies]
 libfuzzer-sys = "0.4"
 sip-parse = { path = "../crates/sip-parse" }
 sip-core = { path = "../crates/sip-core" }
-smol_str = { workspace = true }
-bytes = { workspace = true }
+sip-dialog = { path = "../crates/sip-dialog" }
+sip-registrar = { path = "../crates/sip-registrar" }
+sip-sdp = { path = "../crates/sip-sdp" }
+sip-transaction = { path = "../crates/sip-transaction" }
+smol_str = "0.3"
+bytes = "1"
+
+# One `[[bin]]` per target. cargo-fuzz writes these when it adds a target
+# and they were never written, which is the other reason this crate did
+# not build.
+[[bin]]
+name = "parse_request"
+path = "fuzz_targets/parse_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_response"
+path = "fuzz_targets/parse_response.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_headers"
+path = "fuzz_targets/parse_headers.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_uri"
+path = "fuzz_targets/parse_uri.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_via"
+path = "fuzz_targets/parse_via.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_cpim"
+path = "fuzz_targets/parse_cpim.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_multipart"
+path = "fuzz_targets/parse_multipart.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "serialize_roundtrip"
+path = "fuzz_targets/serialize_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dialog_from_message"
+path = "fuzz_targets/dialog_from_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "registrar_bindings"
+path = "fuzz_targets/registrar_bindings.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "transaction_key"
+path = "fuzz_targets/transaction_key.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "offer_answer"
+path = "fuzz_targets/offer_answer.rs"
+test = false
+doc = false
+bench = false
 
 [workspace]
 members = ["."]
