@@ -98,25 +98,33 @@ jobs:
           if [ -n "$ONLY" ]; then
             targets="$ONLY"
           fi
-          failed=""
+          # cargo-fuzz builds for the triple it was itself built for, and
+          # the prebuilt binary the install action fetches is a musl one:
+          # without --target every run went for x86_64-unknown-linux-musl,
+          # which the toolchain has no std for and which links libc
+          # statically (no sanitizer there). Name the host.
+          target_triple=x86_64-unknown-linux-gnu
+          # A target that does not build is not a target that crashed;
+          # keep the two apart, and keep going after either.
+          unbuilt=""
+          crashed=""
           for t in $targets; do
             echo "::group::$t"
-            # `-timeout` turns a single input that hangs into a finding rather
-            # than into a job that runs until the step's own deadline.
-            #
-            # Keep going after a failure: one target crashing should not hide
-            # whether the others do, and every artifact is collected below.
-            # The step still fails at the end.
-            if ! cargo fuzz run "$t" -- \
+            if ! cargo fuzz build --target "$target_triple" "$t"; then
+              unbuilt="$unbuilt $t"
+            elif ! cargo fuzz run --target "$target_triple" "$t" -- \
                 -max_total_time="$SECONDS_PER_TARGET" -timeout=25; then
-              failed="$failed $t"
+              crashed="$crashed $t"
             fi
             echo "::endgroup::"
           done
-          if [ -n "$failed" ]; then
-            echo "::error::fuzzing found crashes in:$failed"
-            exit 1
+          if [ -n "$unbuilt" ]; then
+            echo "::error::fuzz targets that did not build:$unbuilt"
           fi
+          if [ -n "$crashed" ]; then
+            echo "::error::fuzzing found crashes in:$crashed"
+          fi
+          [ -z "$unbuilt$crashed" ]
 
       # The crashing input itself, which is what makes a finding reproducible
       # (`cargo fuzz run <target> <file>`).
