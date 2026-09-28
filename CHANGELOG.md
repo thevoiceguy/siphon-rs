@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **sip-uac 0.7.6**: `IntegratedUAC::send_request` sends a non-INVITE request the
+  caller built and waits for its final response: its own headers kept, the `Via` and
+  `Contact` finished as every request's are, a challenge answered. For event packages
+  whose requests carry headers the helpers do not write (BroadSoft shared appearances:
+  `Call-Info` on `line-seize` SUBSCRIBEs and `call-info` NOTIFYs) and NOTIFYs inside a
+  subscription the caller keeps. An INVITE or ACK is refused.
+
 ## [2026-09-15] — workspace release
 
 Crate versions in this release: sip-core 0.7.8, sip-parse 0.4.0, sip-uac 0.7.2.
