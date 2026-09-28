@@ -1,6 +1,6 @@
 [package]
 name = "sip-uac"
-version = "0.7.5"
+version = "0.7.6"
 edition = "2021"
 license.workspace = true
 description = "User Agent Client helpers for SIP."

@@ -2291,6 +2291,36 @@ impl IntegratedUAC {
         self.send_non_invite_request(request, dns_target).await
     }
 
+    /// Sends a non-INVITE request the caller built, outside any dialog this
+    /// agent keeps, and waits for the final response.
+    ///
+    /// For what the helpers do not write: an event package whose requests
+    /// carry headers of their own (BroadSoft shared appearances put
+    /// `Call-Info` on `line-seize` SUBSCRIBEs and `call-info` NOTIFYs), or a
+    /// NOTIFY inside a subscription the caller keeps itself (its Call-ID,
+    /// tags and CSeq). The request is finished as every other one: a `Via`
+    /// whose host is `placeholder` is replaced (its branch kept) and a
+    /// `Contact` is pointed at the advertised address. A 401 or 407 is
+    /// answered with the agent's credentials when `auto_retry_auth` is on.
+    /// An INVITE or ACK is refused: they have transactions of their own.
+    pub async fn send_request(
+        &self,
+        mut request: Request,
+        target: impl Into<RequestTarget>,
+    ) -> Result<Response> {
+        if matches!(request.method(), Method::Invite | Method::Ack) {
+            return Err(anyhow!(
+                "send_request carries non-INVITE requests; use invite() for {:?}",
+                request.method()
+            ));
+        }
+        let target = target.into();
+        let dns_target = self.resolve_target(&target).await?;
+        self.auto_fill_headers(&mut request, Some(dns_target.transport()))
+            .await;
+        self.send_non_invite_request(request, dns_target).await
+    }
+
     /// Sends an OPTIONS ping for connectivity checks.
     pub async fn ping_options(&self, target: impl Into<RequestTarget>) -> Result<Response> {
         let target = target.into();
@@ -4892,6 +4922,80 @@ mod tests {
             register.headers().get("User-Agent"),
             Some(crate::DEFAULT_USER_AGENT),
         );
+    }
+
+    /// A request the caller built goes out as built — its own headers
+    /// kept — with the `Via` and `Contact` finished as every request's are.
+    #[tokio::test]
+    async fn send_request_keeps_the_callers_headers_and_fills_via() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let uac = Arc::new(
+            IntegratedUAC::builder()
+                .local_uri("sip:alice@127.0.0.1")
+                .unwrap()
+                .local_addr("127.0.0.1:5070")
+                .unwrap()
+                .transaction_manager(Arc::new(TransactionManager::new(dispatcher.clone())))
+                .resolver(Arc::new(SipResolver::from_system().unwrap()))
+                .dispatcher(dispatcher.clone())
+                .build()
+                .unwrap(),
+        );
+        let target = SipUri::parse("sip:+15551230000@127.0.0.1:5099").unwrap();
+        let mut request = uac
+            .helper
+            .lock()
+            .await
+            .create_subscribe(&target, "line-seize", 15);
+        request
+            .headers_mut()
+            .push("Call-Info", "<sip:127.0.0.1>;appearance-index=2")
+            .unwrap();
+
+        let sender = Arc::clone(&uac);
+        let sending = tokio::spawn(async move {
+            sender
+                .send_request(request, RequestTarget::Uri(target))
+                .await
+        });
+        let mut sent = None;
+        for _ in 0..50 {
+            if let Some((_, payload)) = dispatcher.sent.lock().await.first() {
+                sent = Some(String::from_utf8_lossy(payload).to_string());
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        sending.abort();
+        let sent = sent.expect("the SUBSCRIBE was sent");
+        assert!(
+            sent.starts_with("SUBSCRIBE sip:+15551230000@127.0.0.1:5099"),
+            "{sent}"
+        );
+        assert!(
+            sent.contains("Call-Info: <sip:127.0.0.1>;appearance-index=2"),
+            "{sent}"
+        );
+        assert!(sent.contains("Event: line-seize"), "{sent}");
+        assert!(!sent.contains("placeholder"), "the Via is filled: {sent}");
+    }
+
+    /// An INVITE has a transaction of its own; `send_request` refuses it.
+    #[tokio::test]
+    async fn send_request_refuses_an_invite() {
+        let uac = uac_with_optional_store(None);
+        let target = SipUri::parse("sip:bob@127.0.0.1:5099").unwrap();
+        let invite = Request::new(
+            RequestLine::new(Method::Invite, target.clone()),
+            Headers::new(),
+            Bytes::new(),
+        )
+        .unwrap();
+        let err = uac
+            .send_request(invite, RequestTarget::Uri(target))
+            .await
+            .expect_err("an INVITE is refused");
+        assert!(err.to_string().contains("non-INVITE"), "{err}");
     }
 
     /// An inbound in-dialog BYE as the peer would send it for a dialog we
