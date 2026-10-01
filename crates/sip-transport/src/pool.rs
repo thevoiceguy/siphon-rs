@@ -85,6 +85,9 @@ pub(crate) const CRLF_KEEPALIVE_PING: &[u8] = b"\r\n\r\n";
 /// Connection entry with activity tracking for eviction.
 #[derive(Debug)]
 struct PoolEntry {
+    /// Which connection this is: a key is reused when a connection is
+    /// replaced, so its tasks remove their own entry and no other.
+    id: u64,
     sender: Sender<Bytes>,
     last_used: Instant,
     /// Abort handles for spawned tasks (writer + reader) to clean up on eviction.
@@ -105,7 +108,9 @@ impl Drop for PoolEntry {
 
 impl PoolEntry {
     fn new(sender: Sender<Bytes>, permit: OwnedSemaphorePermit) -> Self {
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         Self {
+            id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             sender,
             last_used: Instant::now(),
             task_handles: Vec::new(),
@@ -253,6 +258,7 @@ fn spawn_writer_supervisor<K, F>(
     writer: tokio::task::JoinHandle<()>,
     map: Arc<DashMap<K, PoolEntry>>,
     key: K,
+    entry_id: u64,
     transport: &'static str,
     format_key: F,
     event_emitter: Option<WriterEventEmitter>,
@@ -290,7 +296,8 @@ fn spawn_writer_supervisor<K, F>(
                 event_reason = Some(format!("writer cancelled: {e}"));
             }
         }
-        map.remove(&key);
+        // This connection's entry only: a newer one may hold the key.
+        remove_entry(&map, &key, entry_id);
 
         // Emit a ConnectionEvent so observers (metrics, reconnect
         // policies) see the death without waiting for the next send
@@ -313,6 +320,16 @@ fn spawn_writer_supervisor<K, F>(
             let _ = emitter.tx.send(event);
         }
     });
+}
+
+/// Remove connection `entry_id` from the pool if it is still there, so
+/// the next send to that peer opens a fresh connection. Dropping the
+/// entry aborts its writer and reader.
+fn remove_entry<K>(map: &DashMap<K, PoolEntry>, key: &K, entry_id: u64)
+where
+    K: std::hash::Hash + Eq,
+{
+    map.remove_if(key, |_, entry| entry.id == entry_id);
 }
 
 /// Bundle of data needed for the supervisor to synthesise a
@@ -568,10 +585,12 @@ impl ConnectionPool {
         // instead of sending into a dead channel. Panics are surfaced
         // as a warning; previously they were silently dropped by
         // `tokio::spawn`.
+        let entry_id = entry.id;
         spawn_writer_supervisor(
             writer_handle,
             Arc::clone(&self.tcp),
             addr,
+            entry_id,
             "tcp",
             move |peer| format!("{peer}"),
             Some(WriterEventEmitter {
@@ -590,6 +609,7 @@ impl ConnectionPool {
             drop(inbound_tx_guard);
             let peer = addr;
             debug!(peer = %peer, "spawning TCP client reader task for outbound connection");
+            let pool = Arc::clone(&self.tcp);
             let reader_handle = tokio::spawn(async move {
                 let mut buf = BytesMut::with_capacity(4096);
                 debug!(peer = %peer, "TCP client reader task started");
@@ -672,6 +692,9 @@ impl ConnectionPool {
                         }
                     }
                 }
+                // The peer has gone: a send must not be written into the
+                // dead socket, where nothing answers it.
+                remove_entry(&pool, &peer, entry_id);
             });
             entry.task_handles.push(reader_handle.abort_handle());
         } else {
@@ -765,10 +788,12 @@ impl ConnectionPool {
             }
         });
         entry.task_handles.push(writer_handle.abort_handle());
+        let entry_id = entry.id;
         spawn_writer_supervisor(
             writer_handle,
             Arc::clone(&self.ws),
             key.clone(),
+            entry_id,
             "ws",
             |url| url.clone(),
             // WS connections are URL-keyed — no SocketAddr available
@@ -787,6 +812,7 @@ impl ConnectionPool {
             let peer_addr = parse_ws_peer_addr(&key);
             if let Some(peer) = peer_addr {
                 let reader_key = key.clone();
+                let pool = Arc::clone(&self.ws);
                 let reader_handle = tokio::spawn(async move {
                     while let Some(msg) = stream.next().await {
                         match msg {
@@ -828,6 +854,7 @@ impl ConnectionPool {
                             }
                         }
                     }
+                    remove_entry(&pool, &reader_key, entry_id);
                 });
                 entry.task_handles.push(reader_handle.abort_handle());
             }
@@ -1190,10 +1217,12 @@ impl TlsPool {
             let _ = writer.shutdown().await;
         });
         entry.task_handles.push(writer_handle.abort_handle());
+        let entry_id = entry.id;
         spawn_writer_supervisor(
             writer_handle,
             Arc::clone(&self.inner),
             key.clone(),
+            entry_id,
             "tls",
             |(peer, server_name)| format!("{peer} ({server_name})"),
             Some(WriterEventEmitter {
@@ -1211,9 +1240,11 @@ impl TlsPool {
         if let Some(inbound_tx) = inbound_tx_guard.clone() {
             drop(inbound_tx_guard);
             let peer = addr;
+            let pool = Arc::clone(&self.inner);
+            let reader_key = key.clone();
             let reader_handle = tokio::spawn(async move {
                 let mut buf = BytesMut::with_capacity(4096);
-                loop {
+                'read: loop {
                     if buf.len() >= MAX_BUFFER_SIZE {
                         warn!(
                             peer = %peer,
@@ -1245,7 +1276,7 @@ impl TlsPool {
                                     };
                                     if inbound_tx.send(packet).await.is_err() {
                                         warn!(peer = %peer, "tls client inbound_tx channel closed");
-                                        return;
+                                        break 'read;
                                     }
                                 }
                             }
@@ -1268,6 +1299,9 @@ impl TlsPool {
                         }
                     }
                 }
+                // The peer has gone: a send must not be written into the
+                // dead connection, where nothing answers it.
+                remove_entry(&pool, &reader_key, entry_id);
             });
             entry.task_handles.push(reader_handle.abort_handle());
         } else {
@@ -1329,7 +1363,9 @@ mod tests {
         let pool = Arc::new(ConnectionPool::with_limits(4, Duration::from_secs(60)));
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 5060);
         let (tx, _rx) = mpsc::channel::<Bytes>(1);
-        pool.tcp.insert(addr, PoolEntry::for_tests(tx));
+        let entry = PoolEntry::for_tests(tx);
+        let entry_id = entry.id;
+        pool.tcp.insert(addr, entry);
         assert_eq!(pool.len(), 1);
 
         // Spawn a writer that exits immediately. The supervisor should
@@ -1339,6 +1375,7 @@ mod tests {
             writer,
             Arc::clone(&pool.tcp),
             addr,
+            entry_id,
             "tcp",
             move |peer| format!("{peer}"),
             None,
@@ -1358,12 +1395,73 @@ mod tests {
         );
     }
 
+    /// Regression test: a peer that closes the connection takes the
+    /// entry with it, so the next send opens a fresh connection. Before,
+    /// only a failed write removed it: the next request was written into
+    /// the dead socket and never answered (a site's link REGISTER after
+    /// its link was cut and restored, in FCP's survivability test).
+    #[tokio::test]
+    async fn a_connection_the_peer_closes_leaves_the_pool() {
+        use tokio::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            // Accept, then hang up at once.
+            if let Ok((stream, _)) = listener.accept().await {
+                drop(stream);
+            }
+        });
+        let pool = ConnectionPool::with_limits(4, Duration::from_secs(60));
+        let (inbound_tx, _inbound_rx) = mpsc::channel(8);
+        pool.set_inbound_tx(inbound_tx).await;
+        pool.send_tcp(
+            addr,
+            Bytes::from_static(b"OPTIONS sip:a SIP/2.0\r\nContent-Length: 0\r\n\r\n"),
+        )
+        .await
+        .unwrap();
+        for _ in 0..100 {
+            if pool.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(pool.is_empty(), "the closed connection is still pooled");
+    }
+
+    /// The supervisor of a replaced connection must not remove the
+    /// connection that replaced it under the same key.
+    #[tokio::test]
+    async fn supervisor_leaves_a_newer_connection_alone() {
+        let pool = Arc::new(ConnectionPool::with_limits(4, Duration::from_secs(60)));
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 5062);
+        let (old_tx, _old_rx) = mpsc::channel::<Bytes>(1);
+        let old_id = PoolEntry::for_tests(old_tx).id;
+        let (new_tx, _new_rx) = mpsc::channel::<Bytes>(1);
+        pool.tcp.insert(addr, PoolEntry::for_tests(new_tx));
+
+        let writer = tokio::spawn(async {});
+        spawn_writer_supervisor(
+            writer,
+            Arc::clone(&pool.tcp),
+            addr,
+            old_id,
+            "tcp",
+            move |peer| format!("{peer}"),
+            None,
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(pool.len(), 1, "the newer connection was removed");
+    }
+
     #[tokio::test]
     async fn supervisor_removes_entry_when_writer_panics() {
         let pool = Arc::new(ConnectionPool::with_limits(4, Duration::from_secs(60)));
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 5061);
         let (tx, _rx) = mpsc::channel::<Bytes>(1);
-        pool.tcp.insert(addr, PoolEntry::for_tests(tx));
+        let entry = PoolEntry::for_tests(tx);
+        let entry_id = entry.id;
+        pool.tcp.insert(addr, entry);
 
         let writer = tokio::spawn(async {
             panic!("simulated writer crash");
@@ -1372,6 +1470,7 @@ mod tests {
             writer,
             Arc::clone(&pool.tcp),
             addr,
+            entry_id,
             "tcp",
             move |peer| format!("{peer}"),
             None,
