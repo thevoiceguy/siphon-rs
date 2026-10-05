@@ -2291,6 +2291,44 @@ impl IntegratedUAC {
         self.send_non_invite_request(request, dns_target).await
     }
 
+    /// [`send_unsolicited_notify_with_state`](Self::send_unsolicited_notify_with_state)
+    /// down an existing connection: an RFC 5626 flow the target registered
+    /// over (TCP or TLS behind NAT), which a new connection to its Contact
+    /// would not reach.
+    pub async fn send_unsolicited_notify_with_state_via_flow(
+        &self,
+        target: &SipUri,
+        event: &str,
+        content_type: &str,
+        body: &str,
+        subscription_state: &str,
+        flow: Flow,
+    ) -> Result<Response> {
+        let dns_target = self
+            .resolve_target(&RequestTarget::Uri(target.clone()))
+            .await?;
+
+        let helper = self.helper.lock().await;
+        let mut request = helper.create_unsolicited_notify_with_state(
+            target,
+            event,
+            content_type,
+            body,
+            subscription_state,
+        );
+        drop(helper);
+
+        self.auto_fill_headers_for_flow(
+            &mut request,
+            Some(dns_target.transport()),
+            flow.local_addr,
+        )
+        .await;
+
+        self.send_non_invite_via_flow(request, &dns_target, &flow)
+            .await
+    }
+
     /// Sends a non-INVITE request the caller built, outside any dialog this
     /// agent keeps, and waits for the final response.
     ///
@@ -4671,6 +4709,84 @@ mod tests {
         manager.receive_response(response).await;
 
         let response = task.await.unwrap().expect("BYE completes on 200");
+        assert_eq!(response.code(), 200);
+    }
+
+    #[tokio::test]
+    async fn an_unsolicited_notify_via_flow_rides_the_inbound_connection() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = Arc::new(
+            IntegratedUAC::builder()
+                .local_uri("sip:siphon@127.0.0.1")
+                .unwrap()
+                .local_addr("127.0.0.1:5070")
+                .unwrap()
+                .transaction_manager(manager.clone())
+                .resolver(Arc::new(SipResolver::from_system().unwrap()))
+                .dispatcher(dispatcher.clone())
+                .build()
+                .unwrap(),
+        );
+        // A phone that registered over TLS from behind NAT: its Contact is
+        // private, reachable only down its flow. IP literal: no DNS in CI.
+        let target = SipUri::parse("sip:alice@10.8.0.4:5061;transport=tls").unwrap();
+        let (flow_tx, _flow_rx) = mpsc::channel::<Bytes>(8);
+        let flow = Flow::new(flow_tx, "198.51.100.7:49152".parse().unwrap())
+            .with_local_addr("127.0.0.1:5061".parse().unwrap());
+
+        let task = {
+            let uac = uac.clone();
+            tokio::spawn(async move {
+                uac.send_unsolicited_notify_with_state_via_flow(
+                    &target,
+                    "check-sync;reboot=false",
+                    "application/simple-message-summary",
+                    "",
+                    "terminated",
+                    flow,
+                )
+                .await
+            })
+        };
+
+        let request = loop {
+            if let Some((ctx, payload)) = dispatcher.sent.lock().await.first().cloned() {
+                assert!(
+                    ctx.stream().is_some(),
+                    "the NOTIFY must reuse the inbound flow"
+                );
+                break sip_parse::parse_request(&payload).expect("valid NOTIFY on the wire");
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        assert_eq!(request.method(), &Method::Notify);
+        assert_eq!(
+            request.headers().get("Event"),
+            Some("check-sync;reboot=false")
+        );
+        assert_eq!(
+            request.headers().get("Subscription-State"),
+            Some("terminated")
+        );
+
+        let mut headers = Headers::new();
+        for name in ["Via", "From", "To", "Call-ID", "CSeq"] {
+            headers
+                .push(
+                    SmolStr::new(name),
+                    request.headers().get_smol(name).unwrap().clone(),
+                )
+                .unwrap();
+        }
+        let response = Response::new(
+            StatusLine::new(200, SmolStr::new("OK")).expect("valid status line"),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid response");
+        manager.receive_response(response).await;
+        let response = task.await.unwrap().expect("the NOTIFY completes on 200");
         assert_eq!(response.code(), 200);
     }
 
