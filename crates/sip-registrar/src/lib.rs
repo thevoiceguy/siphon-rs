@@ -49,7 +49,11 @@ const MAX_USER_AGENT_LENGTH: usize = 256;
 const MAX_BINDINGS_PER_AOR: usize = 20;
 const MAX_TOTAL_BINDINGS: usize = 100_000;
 const MAX_CSEQ_VALUE: u32 = 2_147_483_647; // i32::MAX
-const MIN_EXPIRES_SECS: u64 = 60;
+                                           // Sanity bounds on a binding's lifetime: a registrar applies its own
+                                           // configured floor (answering 423 below it) and ceiling (shortening above
+                                           // it) before a binding is made, so these must not be tighter than any
+                                           // registrar's — a binding of no lifetime is a removal, not a binding.
+const MIN_EXPIRES_SECS: u64 = 1;
 const MAX_EXPIRES_SECS: u64 = 86400; // 24 hours
 
 /// Registration validation errors
@@ -1058,13 +1062,17 @@ impl<S, A> BasicRegistrar<S, A> {
         self
     }
 
+    /// The shortest registration taken (a request below it gets 423 with
+    /// `Min-Expires`); at least a second.
     pub fn with_min_expires(mut self, expires: Duration) -> Self {
-        self.min_expires = expires;
+        self.min_expires = expires.max(Duration::from_secs(MIN_EXPIRES_SECS));
         self
     }
 
+    /// The longest registration granted (a request above it is granted
+    /// this); at most a day, the longest binding kept.
     pub fn with_max_expires(mut self, expires: Duration) -> Self {
-        self.max_expires = expires;
+        self.max_expires = expires.min(Duration::from_secs(MAX_EXPIRES_SECS));
         self
     }
 
@@ -1211,11 +1219,9 @@ impl<S, A> BasicRegistrar<S, A> {
         if seconds < min {
             return Err(ExpiresError::TooBrief(min));
         }
-        if seconds > max {
-            return Err(ExpiresError::TooLong(max));
-        }
-
-        Ok(Duration::from_secs(seconds))
+        // Longer than allowed: granted the longest (RFC 3261 §10.3 step 7,
+        // a registrar may shorten), and the 200 OK says so.
+        Ok(Duration::from_secs(seconds.min(max)))
     }
 
     fn parse_q_value(&self, contact_value: &str) -> Result<f32, ContactParamError> {
@@ -1434,7 +1440,6 @@ impl<S, A> BasicRegistrar<S, A> {
 #[derive(Debug)]
 enum ExpiresError {
     TooBrief(u64),
-    TooLong(u64),
     Invalid,
 }
 
@@ -1698,13 +1703,6 @@ impl<S: AsyncLocationStore, A: Authenticator> BasicRegistrar<S, A> {
                 Ok(expires) => expires,
                 Err(ExpiresError::TooBrief(min)) => {
                     return self.build_interval_too_brief(request, min);
-                }
-                Err(ExpiresError::TooLong(_max)) => {
-                    return self.build_error_response(
-                        request,
-                        400,
-                        "Bad Request - Expires too long",
-                    );
                 }
                 Err(ExpiresError::Invalid) => {
                     return self.build_error_response(
@@ -2057,13 +2055,6 @@ impl<S: LocationStore, A: Authenticator> Registrar for BasicRegistrar<S, A> {
                 Ok(expires) => expires,
                 Err(ExpiresError::TooBrief(min)) => {
                     return self.build_interval_too_brief(request, min);
-                }
-                Err(ExpiresError::TooLong(_max)) => {
-                    return self.build_error_response(
-                        request,
-                        400,
-                        "Bad Request - Expires too long",
-                    );
                 }
                 Err(ExpiresError::Invalid) => {
                     return self.build_error_response(
@@ -2824,6 +2815,33 @@ mod tests {
         assert_eq!(response.headers().get("Min-Expires"), Some("100"));
     }
 
+    /// A registrar configured below a minute takes a registration that
+    /// short: the binding's own bounds do not refuse what it granted.
+    #[test]
+    fn basic_registrar_takes_a_floor_below_a_minute() {
+        let store = MemoryLocationStore::new();
+        let registrar: BasicRegistrar<_, DigestAuthenticator<MemoryCredentialStore>> =
+            BasicRegistrar::new(store.clone(), None).with_min_expires(Duration::from_secs(5));
+
+        let mut headers = base_headers();
+        headers.push("To", "<sip:alice@example.com>").unwrap();
+        headers
+            .push("Contact", "<sip:ua.example.com>;expires=10")
+            .unwrap();
+        headers.push("Call-ID", "call123").unwrap();
+        headers.push("CSeq", "1 REGISTER").unwrap();
+        let request = Request::new(
+            RequestLine::new(Method::Register, SipUri::parse("sip:example.com").unwrap()),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid request");
+
+        let response = registrar.handle_register(&request).expect("response");
+        assert_eq!(response.code(), 200);
+        assert_eq!(store.lookup("sip:alice@example.com").unwrap().len(), 1);
+    }
+
     #[test]
     fn basic_registrar_respects_max_expires() {
         let store = MemoryLocationStore::new();
@@ -2845,9 +2863,13 @@ mod tests {
         )
         .expect("valid request");
 
+        // Granted the longest, not refused (RFC 3261 §10.3 step 7).
         let response = registrar.handle_register(&request).expect("response");
-        assert_eq!(response.code(), 400);
-        assert!(store.lookup("sip:alice@example.com").unwrap().is_empty());
+        assert_eq!(response.code(), 200);
+        let bindings = store.lookup("sip:alice@example.com").unwrap();
+        assert_eq!(bindings.len(), 1);
+        assert!(bindings[0].expires() <= Duration::from_secs(1000));
+        assert!(bindings[0].expires() > Duration::from_secs(990));
     }
 
     #[test]
@@ -4317,7 +4339,7 @@ mod tests {
         let result = Binding::new(
             SmolStr::new("sip:alice@example.com"),
             SmolStr::new("sip:contact@example.com"),
-            Duration::from_secs(30), // Less than MIN_EXPIRES_SECS (60)
+            Duration::from_secs(0), // No lifetime: a removal, not a binding
         );
         assert!(matches!(
             result,

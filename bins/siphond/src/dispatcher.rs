@@ -203,12 +203,24 @@ impl RequestDispatcher {
 
         match self.handlers.get(method) {
             Some(handler) => {
+                // Kept to answer with if the handler fails without answering:
+                // otherwise the client retransmits until its timer fires.
+                // (After a final response, the transaction takes no other.)
+                let fallback = handle.clone();
                 if let Err(e) = handler.handle(request, handle, ctx, &self.services).await {
                     warn!(
                         method = ?method,
                         error = %e,
                         "Handler failed to process request"
                     );
+                    if method != &Method::Ack {
+                        let response = sip_uas::UserAgentServer::create_response(
+                            request,
+                            500,
+                            "Server Internal Error",
+                        );
+                        fallback.send_final(response).await;
+                    }
                 }
             }
             None => {

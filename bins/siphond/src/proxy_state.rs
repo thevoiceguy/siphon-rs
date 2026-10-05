@@ -46,10 +46,25 @@ pub struct ProxyTransaction {
     pub created_at: Instant,
 }
 
+/// An INVITE this proxy forwarded and has not seen finish: what a CANCEL
+/// for it is built from and where it goes (RFC 3261 §16.10).
+#[derive(Clone, Debug)]
+pub struct ForwardedInvite {
+    /// The INVITE as sent, with this proxy's Via on top.
+    pub request: sip_core::Request,
+    pub target: SocketAddr,
+    pub transport: TransportKind,
+    /// The host a TLS connection names.
+    pub host: String,
+    pub created_at: Instant,
+}
+
 /// Proxy state manager for tracking transactions
 pub struct ProxyStateManager {
     /// Map branch ID → transaction info
     transactions: DashMap<String, ProxyTransaction>,
+    /// The caller's branch → the INVITE forwarded for it.
+    forwarded_invites: DashMap<String, ForwardedInvite>,
 }
 
 impl ProxyStateManager {
@@ -57,12 +72,25 @@ impl ProxyStateManager {
     pub fn new() -> Self {
         Self {
             transactions: DashMap::new(),
+            forwarded_invites: DashMap::new(),
         }
     }
 
     /// Store a proxy transaction for response correlation
     pub fn store_transaction(&self, tx: ProxyTransaction) {
         self.transactions.insert(tx.branch.clone(), tx);
+    }
+
+    /// Remember an INVITE forwarded for the caller's `branch`.
+    pub fn store_forwarded_invite(&self, branch: String, invite: ForwardedInvite) {
+        self.forwarded_invites.insert(branch, invite);
+    }
+
+    /// The INVITE forwarded for the caller's `branch`, once.
+    pub fn take_forwarded_invite(&self, branch: &str) -> Option<ForwardedInvite> {
+        self.forwarded_invites
+            .remove(branch)
+            .map(|(_, invite)| invite)
     }
 
     /// Look up a transaction by branch ID
@@ -80,6 +108,8 @@ impl ProxyStateManager {
     /// Clean up old transactions (older than 5 minutes)
     #[allow(dead_code)]
     pub fn cleanup_old(&self, max_age: Duration) {
+        self.forwarded_invites
+            .retain(|_, invite| invite.created_at.elapsed() < max_age);
         let now = Instant::now();
         self.transactions
             .retain(|_, tx| now.duration_since(tx.created_at) < max_age);

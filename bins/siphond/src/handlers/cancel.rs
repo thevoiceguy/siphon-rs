@@ -141,7 +141,7 @@ impl CancelHandler {
         let _ = new_headers.push("Content-Length", "0");
         *cancel_req.headers_mut() = new_headers;
 
-        // Send CANCEL via TCP to callee
+        // To the callee as its INVITE went.
         let callee_addr = format!(
             "{}:{}",
             call_leg.callee_contact.host(),
@@ -150,7 +150,8 @@ impl CancelHandler {
         .parse::<std::net::SocketAddr>()?;
 
         let payload = sip_parse::serialize_request(&cancel_req);
-        sip_transport::send_tcp(&callee_addr, &payload).await?;
+        proxy_utils::send_to_contact(services, &call_leg.callee_contact, callee_addr, payload)
+            .await?;
 
         info!(
             incoming_call_id,
@@ -178,17 +179,25 @@ impl RequestHandler for CancelHandler {
         info!(call_id, "Processing CANCEL request");
 
         if services.config.enable_proxy() {
-            proxy_utils::forward_request(
-                request,
-                services,
-                _ctx,
-                call_id,
-                proxy_utils::ProxyForwardOptions {
-                    add_record_route: false,
-                    rewrite_request_uri: false,
-                },
-            )
-            .await?;
+            // RFC 3261 §16.10: the proxy answers the CANCEL itself and
+            // cancels the INVITE it forwarded — down that branch, with that
+            // branch's Via — rather than forwarding the CANCEL by its
+            // Request-URI, which names this proxy.
+            let forwarded = proxy_utils::top_via_branch(request)
+                .and_then(|branch| services.proxy_state.take_forwarded_invite(&branch));
+            let Some(forwarded) = forwarded else {
+                let response = UserAgentServer::create_response(
+                    request,
+                    481,
+                    "Call/Transaction Does Not Exist",
+                );
+                handle.send_final(response).await;
+                return Ok(());
+            };
+            let ok = UserAgentServer::create_response(request, 200, "OK");
+            handle.send_final(ok).await;
+            proxy_utils::cancel_forwarded_invite(&forwarded, services).await?;
+            info!(call_id, target = %forwarded.target, "CANCEL sent down the forwarded branch");
             return Ok(());
         }
 

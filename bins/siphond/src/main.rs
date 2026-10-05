@@ -361,7 +361,7 @@ async fn main() -> Result<()> {
         client_cert: args.tls_client_cert.as_deref(),
         client_key: args.tls_client_key.as_deref(),
     };
-    let (transport_dispatcher, udp_socket) = start_transports(
+    let (transport_dispatcher, udp_socket, tcp_pool) = start_transports(
         &args.udp_bind,
         &args.tcp_bind,
         &args.sips_bind,
@@ -404,6 +404,7 @@ async fn main() -> Result<()> {
     {
         panic!("Failed to set transport dispatcher - already initialized");
     }
+    let _ = services.tcp_pool.set(tcp_pool);
     if services.set_udp_socket(udp_socket.clone()).is_err() {
         panic!("Failed to set UDP socket - already initialized");
     }

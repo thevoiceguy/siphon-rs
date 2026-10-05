@@ -73,6 +73,8 @@ pub struct ServiceRegistry {
 
     /// UDP socket for sending ACKs and other messages over UDP (set after initialization)
     pub udp_socket: OnceLock<Arc<UdpSocket>>,
+    /// Outbound TCP, its replies read into the inbound pipeline.
+    pub tcp_pool: OnceLock<Arc<sip_transport::pool::ConnectionPool>>,
 
     /// TLS client config for outbound TLS connections (set after initialization)
     pub tls_client_config: OnceLock<Arc<TlsClientConfig>>,
@@ -209,6 +211,7 @@ impl ServiceRegistry {
             transaction_mgr: OnceLock::new(),
             transport_dispatcher: OnceLock::new(),
             udp_socket: OnceLock::new(),
+            tcp_pool: OnceLock::new(),
             tls_client_config: OnceLock::new(),
             config,
             auth_rate_limiter,

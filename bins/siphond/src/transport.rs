@@ -64,13 +64,20 @@ pub async fn start_transports(
     #[cfg(feature = "ws")] ws_bind: Option<&str>,
     #[cfg(feature = "ws")] wss_bind: Option<&str>,
     tx: mpsc::Sender<InboundPacket>,
-) -> Result<(Arc<dyn TransportDispatcher>, Arc<UdpSocket>)> {
+) -> Result<(
+    Arc<dyn TransportDispatcher>,
+    Arc<UdpSocket>,
+    Arc<ConnectionPool>,
+)> {
     // Create UDP socket
     let udp_socket = Arc::new(UdpSocket::bind(udp_bind).await?);
     let recv_socket = Arc::clone(&udp_socket);
 
     // Create connection pools
     let tcp_pool = Arc::new(ConnectionPool::new());
+    // Replies on outbound TCP connections, back into the inbound pipeline,
+    // as for TLS below.
+    tcp_pool.set_inbound_tx(tx.clone()).await;
     let tls_pool = Arc::new(TlsPool::new());
     // Route responses on outbound TLS connections back into the inbound
     // pipeline. Without this the TLS pool opens a connection, sends the
@@ -86,7 +93,7 @@ pub async fn start_transports(
     let dispatcher = Arc::new(SiphonTransportDispatcher::new(
         Arc::clone(&udp_socket),
         Arc::new(DefaultTransportPolicy::default()),
-        tcp_pool,
+        Arc::clone(&tcp_pool),
         tls_pool,
         tls_client_config,
     ));
@@ -219,7 +226,7 @@ pub async fn start_transports(
         }
     }
 
-    Ok((dispatcher, udp_socket))
+    Ok((dispatcher, udp_socket, tcp_pool))
 }
 
 /// Builds a client TLS config using system roots, presenting

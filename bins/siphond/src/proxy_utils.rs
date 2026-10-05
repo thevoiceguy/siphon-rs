@@ -141,6 +141,130 @@ pub fn next_hop_from_request(request: &Request, local_uri: &SipUri) -> (SipUri, 
     )
 }
 
+/// Send to a registered contact over the transport it registered with: TCP
+/// (through the pool, whose replies are read) when its URI says
+/// `transport=tcp`, else UDP.
+pub async fn send_to_contact(
+    services: &ServiceRegistry,
+    contact: &sip_core::SipUri,
+    addr: std::net::SocketAddr,
+    payload: bytes::Bytes,
+) -> Result<()> {
+    let over_tcp = contact
+        .params()
+        .get(&smol_str::SmolStr::new("transport"))
+        .and_then(|v| v.as_ref())
+        .is_some_and(|t| t.eq_ignore_ascii_case("tcp"));
+    if over_tcp {
+        let pool = services
+            .tcp_pool
+            .get()
+            .ok_or_else(|| anyhow!("TCP pool not available"))?;
+        pool.send_tcp(addr, payload).await
+    } else {
+        let socket = services
+            .udp_socket
+            .get()
+            .ok_or_else(|| anyhow!("UDP socket not available"))?;
+        sip_transport::send_udp(socket.as_ref(), &addr, &payload).await
+    }
+}
+
+/// The branch of a request's top Via.
+pub fn top_via_branch(request: &Request) -> Option<String> {
+    let via = request.headers().get("Via")?;
+    via.split(',').next()?.split(';').skip(1).find_map(|param| {
+        let (name, value) = param.split_once('=')?;
+        name.trim()
+            .eq_ignore_ascii_case("branch")
+            .then(|| value.trim().to_string())
+    })
+}
+
+/// Cancel an INVITE this proxy forwarded (RFC 3261 §9.1, §16.10): the same
+/// Request-URI, Call-ID, From, To and CSeq number, and a single Via — the
+/// one the INVITE carried from this proxy — sent where the INVITE went.
+pub async fn cancel_forwarded_invite(
+    forwarded: &crate::proxy_state::ForwardedInvite,
+    services: &ServiceRegistry,
+) -> Result<()> {
+    let invite = &forwarded.request;
+    let mut headers = sip_core::Headers::new();
+    let copy = |headers: &mut sip_core::Headers, name: &str| -> Result<()> {
+        if let Some(value) = invite.headers().get(name) {
+            headers
+                .push(name, value)
+                .map_err(|e| anyhow!("{name}: {e:?}"))?;
+        }
+        Ok(())
+    };
+    let top_via = invite
+        .headers()
+        .get("Via")
+        .and_then(|v| v.split(',').next())
+        .ok_or_else(|| anyhow!("the forwarded INVITE has no Via"))?
+        .trim()
+        .to_string();
+    headers
+        .push("Via", top_via.as_str())
+        .map_err(|e| anyhow!("Via: {e:?}"))?;
+    headers
+        .push("Max-Forwards", "70")
+        .map_err(|e| anyhow!("Max-Forwards: {e:?}"))?;
+    copy(&mut headers, "From")?;
+    copy(&mut headers, "To")?;
+    copy(&mut headers, "Call-ID")?;
+    let cseq = invite
+        .headers()
+        .get("CSeq")
+        .and_then(|c| c.split_whitespace().next())
+        .ok_or_else(|| anyhow!("the forwarded INVITE has no CSeq"))?
+        .to_string();
+    headers
+        .push("CSeq", format!("{cseq} CANCEL").as_str())
+        .map_err(|e| anyhow!("CSeq: {e:?}"))?;
+    for route in invite.headers().get_all("Route") {
+        headers
+            .push("Route", route)
+            .map_err(|e| anyhow!("Route: {e:?}"))?;
+    }
+    headers
+        .push("Content-Length", "0")
+        .map_err(|e| anyhow!("Content-Length: {e:?}"))?;
+    let cancel = Request::new(
+        sip_core::RequestLine::new(sip_core::Method::Cancel, invite.uri().clone()),
+        headers,
+        bytes::Bytes::new(),
+    )
+    .map_err(|e| anyhow!("CANCEL: {e:?}"))?;
+    let payload = sip_parse::serialize_request(&cancel);
+    match forwarded.transport {
+        TransportKind::Udp => {
+            let socket = services
+                .udp_socket
+                .get()
+                .ok_or_else(|| anyhow!("UDP socket not available"))?;
+            sip_transport::send_udp(socket.as_ref(), &forwarded.target, &payload).await?;
+        }
+        TransportKind::Tcp => sip_transport::send_tcp(&forwarded.target, &payload).await?,
+        TransportKind::Tls => {
+            #[cfg(feature = "tls")]
+            {
+                let config = services
+                    .tls_client_config
+                    .get()
+                    .ok_or_else(|| anyhow!("TLS client config not available"))?;
+                let tls = sip_transport::TlsConfig::new(forwarded.host.clone(), config.clone());
+                sip_transport::send_tls(&forwarded.target, &payload, &tls).await?;
+            }
+            #[cfg(not(feature = "tls"))]
+            return Err(anyhow!("TLS support not enabled"));
+        }
+        other => return Err(anyhow!("cannot CANCEL over {other:?}")),
+    }
+    Ok(())
+}
+
 pub async fn forward_request(
     request: &Request,
     services: &ServiceRegistry,

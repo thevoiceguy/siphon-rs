@@ -510,7 +510,9 @@ impl InviteHandler {
 
         info!(call_id, "Sending outgoing INVITE to callee");
 
-        // Send INVITE to callee via TCP
+        // To the callee over the transport it registered with (UDP unless
+        // its contact says otherwise); TCP through the pool, whose replies
+        // come back to the call leg.
         let callee_addr = format!(
             "{}:{}",
             callee_contact.host(),
@@ -519,7 +521,8 @@ impl InviteHandler {
         .parse::<std::net::SocketAddr>()?;
 
         let payload = sip_parse::serialize_request(&outgoing_invite);
-        sip_transport::send_tcp(&callee_addr, &payload).await?;
+        crate::proxy_utils::send_to_contact(services, &callee_contact, callee_addr, payload)
+            .await?;
 
         info!(
             call_id,
@@ -1002,6 +1005,20 @@ impl InviteHandler {
             _ if contact_uri.is_sips() => sip_transaction::TransportKind::Tls,
             _ => sip_transaction::TransportKind::Udp,
         };
+
+        // Kept so a CANCEL from the caller can be sent down this branch.
+        if let Some(caller_branch) = crate::proxy_utils::top_via_branch(request) {
+            services.proxy_state.store_forwarded_invite(
+                caller_branch,
+                crate::proxy_state::ForwardedInvite {
+                    request: proxied_req.clone(),
+                    target: target_addr,
+                    transport,
+                    host: contact_uri.host().to_string(),
+                    created_at: std::time::Instant::now(),
+                },
+            );
+        }
 
         match transport {
             sip_transaction::TransportKind::Udp => {
