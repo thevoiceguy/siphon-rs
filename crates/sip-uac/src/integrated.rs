@@ -181,6 +181,10 @@ pub struct UACConfig {
     /// Enable RFC 5626 outbound behavior (adds ;ob/+sip.instance on REGISTER and Supported: outbound).
     pub enable_outbound: bool,
 
+    /// Outbound proxy (RFC 3261 §8.1.2): out-of-dialog requests are sent to
+    /// it with a Route naming it, their Request-URI left as the target.
+    pub outbound_proxy: Option<SipUri>,
+
     /// Optional instance-id (RFC 5626) used for +sip.instance on REGISTER.
     pub instance_id: Option<String>,
 
@@ -229,6 +233,7 @@ impl Default for UACConfig {
             ws_target_uri: None,
             ws_path: None,
             enable_outbound: false,
+            outbound_proxy: None,
             instance_id: None,
             flow_token_salt: None,
             outbound_reg_id: 1,
@@ -270,6 +275,21 @@ impl Default for KeepalivePolicy {
             enable_options: false,
             interval_secs: 30,
         }
+    }
+}
+
+/// The Route an outbound proxy is named in: its URI with `lr` (RFC 3261
+/// §19.1.1), added when the configured URI does not carry it.
+fn outbound_proxy_route(proxy: &SipUri) -> String {
+    let uri = proxy.as_str();
+    let has_lr = uri.split(';').skip(1).any(|param| {
+        param.trim().eq_ignore_ascii_case("lr")
+            || param.trim().to_ascii_lowercase().starts_with("lr=")
+    });
+    if has_lr {
+        format!("<{uri}>")
+    } else {
+        format!("<{uri};lr>")
     }
 }
 
@@ -1072,7 +1092,7 @@ impl IntegratedUAC {
         drop(helper);
 
         // Resolve target and fill transport-aware headers
-        let dns_target = self.resolve_target(&target).await?;
+        let dns_target = self.resolve_out_of_dialog(&mut request, &target).await?;
         self.auto_fill_headers(&mut request, Some(dns_target.transport()))
             .await;
 
@@ -1104,7 +1124,7 @@ impl IntegratedUAC {
         let mut request = helper.create_register_as(account, &registrar_uri, expires);
         drop(helper);
 
-        let dns_target = self.resolve_target(&target).await?;
+        let dns_target = self.resolve_out_of_dialog(&mut request, &target).await?;
         self.auto_fill_headers(&mut request, Some(dns_target.transport()))
             .await;
 
@@ -1113,6 +1133,34 @@ impl IntegratedUAC {
     }
 
     /// Helper to extract SipUri from RequestTarget
+    /// Resolve where an out-of-dialog request goes. With an outbound proxy
+    /// (RFC 3261 §8.1.2) it is the proxy, and the request carries a Route
+    /// naming it (loose routing, ahead of any Route already there) with its
+    /// Request-URI left as the target; without one, the target itself.
+    async fn resolve_out_of_dialog(
+        &self,
+        request: &mut Request,
+        target: &RequestTarget,
+    ) -> Result<DnsTarget> {
+        let Some(proxy) = self.config.outbound_proxy.clone() else {
+            return self.resolve_target(target).await;
+        };
+        let route = outbound_proxy_route(&proxy);
+        let existing: Vec<SmolStr> = request.headers().get_all_smol("Route").cloned().collect();
+        request.headers_mut().remove("Route");
+        request
+            .headers_mut()
+            .push(SmolStr::new("Route"), SmolStr::new(route))
+            .map_err(|e| anyhow!("Route header: {e:?}"))?;
+        for value in existing {
+            request
+                .headers_mut()
+                .push(SmolStr::new("Route"), value)
+                .map_err(|e| anyhow!("Route header: {e:?}"))?;
+        }
+        self.resolve_target(&RequestTarget::Uri(proxy)).await
+    }
+
     fn extract_uri(&self, target: &RequestTarget) -> Result<SipUri> {
         match target {
             RequestTarget::Uri(uri) => Ok(uri.clone()),
@@ -1856,7 +1904,13 @@ impl IntegratedUAC {
         flow: Option<Flow>,
         filter: Option<crate::RequestFilter>,
     ) -> Result<CallHandle> {
-        let dns_target = self.resolve_target(&target).await?;
+        // Down a flow the request goes where the flow does; otherwise
+        // through the outbound proxy, if there is one.
+        let dns_target = if flow.is_none() {
+            self.resolve_out_of_dialog(&mut request, &target).await?
+        } else {
+            self.resolve_target(&target).await?
+        };
 
         let via_flow = flow.is_some();
         let ctx = match flow {
@@ -2181,7 +2235,7 @@ impl IntegratedUAC {
         drop(helper);
 
         // Resolve target and send
-        let dns_target = self.resolve_target(&target).await?;
+        let dns_target = self.resolve_out_of_dialog(&mut request, &target).await?;
         self.auto_fill_headers(&mut request, Some(dns_target.transport()))
             .await;
         let response = self
@@ -2247,11 +2301,12 @@ impl IntegratedUAC {
         body: &str,
     ) -> Result<Response> {
         let request_target = RequestTarget::Uri(target.clone());
-        let dns_target = self.resolve_target(&request_target).await?;
-
         let helper = self.helper.lock().await;
         let mut request = helper.create_unsolicited_notify(target, event, content_type, body);
         drop(helper);
+        let dns_target = self
+            .resolve_out_of_dialog(&mut request, &request_target)
+            .await?;
 
         self.auto_fill_headers(&mut request, Some(dns_target.transport()))
             .await;
@@ -2273,8 +2328,6 @@ impl IntegratedUAC {
         subscription_state: &str,
     ) -> Result<Response> {
         let request_target = RequestTarget::Uri(target.clone());
-        let dns_target = self.resolve_target(&request_target).await?;
-
         let helper = self.helper.lock().await;
         let mut request = helper.create_unsolicited_notify_with_state(
             target,
@@ -2284,6 +2337,9 @@ impl IntegratedUAC {
             subscription_state,
         );
         drop(helper);
+        let dns_target = self
+            .resolve_out_of_dialog(&mut request, &request_target)
+            .await?;
 
         self.auto_fill_headers(&mut request, Some(dns_target.transport()))
             .await;
@@ -2353,7 +2409,7 @@ impl IntegratedUAC {
             ));
         }
         let target = target.into();
-        let dns_target = self.resolve_target(&target).await?;
+        let dns_target = self.resolve_out_of_dialog(&mut request, &target).await?;
         self.auto_fill_headers(&mut request, Some(dns_target.transport()))
             .await;
         self.send_non_invite_request(request, dns_target).await
@@ -2362,13 +2418,13 @@ impl IntegratedUAC {
     /// Sends an OPTIONS ping for connectivity checks.
     pub async fn ping_options(&self, target: impl Into<RequestTarget>) -> Result<Response> {
         let target = target.into();
-        let dns_target = self.resolve_target(&target).await?;
 
         // Build OPTIONS
         let helper = self.helper.lock().await;
         let uri = self.extract_uri(&target)?;
         let mut request = helper.create_options(&uri);
         drop(helper);
+        let dns_target = self.resolve_out_of_dialog(&mut request, &target).await?;
 
         // Auto-fill headers
         self.auto_fill_headers(&mut request, Some(dns_target.transport()))
@@ -3847,6 +3903,19 @@ impl IntegratedUACBuilder {
     }
 
     /// Enables RFC 5626 outbound support (adds ;ob and GRUU formation).
+    /// Send out-of-dialog requests (REGISTER, INVITE, SUBSCRIBE, OPTIONS,
+    /// unsolicited NOTIFY, [`IntegratedUAC::send_request`]) through an
+    /// outbound proxy: to it, with a `Route: <proxy;lr>` ahead of any other,
+    /// the Request-URI left as the target (RFC 3261 §8.1.2). In-dialog
+    /// requests follow the dialog's route set, and a request sent down a
+    /// flow goes where the flow does.
+    pub fn outbound_proxy(mut self, uri: impl AsRef<str>) -> Result<Self> {
+        let uri = SipUri::parse(uri.as_ref())
+            .map_err(|e| anyhow!("invalid outbound proxy {:?}: {e:?}", uri.as_ref()))?;
+        self.config.outbound_proxy = Some(uri);
+        Ok(self)
+    }
+
     pub fn enable_outbound(mut self, instance_id: impl AsRef<str>) -> Self {
         self.config.enable_outbound = true;
         self.config.instance_id = Some(instance_id.as_ref().to_string());
@@ -4603,6 +4672,146 @@ mod tests {
 
         let response = task.await.unwrap().expect("BYE completes on 200");
         assert_eq!(response.code(), 200);
+    }
+
+    /// Answer the first request the dispatcher saw with `code`, echoing
+    /// the headers a response needs.
+    async fn answer_first(
+        dispatcher: &CapturingDispatcher,
+        manager: &TransactionManager,
+        index: usize,
+        code: u16,
+    ) -> (TransportContext, Request) {
+        let (ctx, request) = loop {
+            if let Some((ctx, payload)) = dispatcher.sent.lock().await.get(index).cloned() {
+                break (
+                    ctx,
+                    sip_parse::parse_request(&payload).expect("a valid request"),
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        let mut headers = Headers::new();
+        for name in ["Via", "From", "To", "Call-ID", "CSeq"] {
+            headers
+                .push(
+                    SmolStr::new(name),
+                    request.headers().get_smol(name).unwrap().clone(),
+                )
+                .unwrap();
+        }
+        let response = Response::new(
+            StatusLine::new(code, SmolStr::new("OK")).expect("valid status line"),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid response");
+        manager.receive_response(response).await;
+        (ctx, request)
+    }
+
+    #[tokio::test]
+    async fn out_of_dialog_requests_go_through_the_outbound_proxy() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = Arc::new(
+            IntegratedUAC::builder()
+                .local_uri("sip:alice@example.com")
+                .unwrap()
+                .local_addr("127.0.0.1:5070")
+                .unwrap()
+                .outbound_proxy("sip:127.0.0.1:5999")
+                .unwrap()
+                .transaction_manager(manager.clone())
+                .resolver(Arc::new(SipResolver::from_system().unwrap()))
+                .dispatcher(dispatcher.clone())
+                .build()
+                .unwrap(),
+        );
+        let proxy: std::net::SocketAddr = "127.0.0.1:5999".parse().unwrap();
+
+        // REGISTER: to the proxy, the registrar still in the Request-URI.
+        // (A domain no resolver could reach: only the proxy is resolved.)
+        let task = {
+            let uac = uac.clone();
+            tokio::spawn(async move {
+                uac.register(SipUri::parse("sip:example.invalid").unwrap(), Some(600))
+                    .await
+            })
+        };
+        let (ctx, register) = answer_first(&dispatcher, &manager, 0, 200).await;
+        assert_eq!(ctx.peer(), proxy, "REGISTER goes to the outbound proxy");
+        assert_eq!(
+            register.uri(),
+            &SipUri::parse("sip:example.invalid").unwrap().into()
+        );
+        assert_eq!(
+            register.headers().get("Route"),
+            Some("<sip:127.0.0.1:5999;lr>")
+        );
+        assert_eq!(task.await.unwrap().unwrap().code(), 200);
+
+        // A request the caller routed already: the proxy's Route comes first.
+        let mut options = uac
+            .helper
+            .lock()
+            .await
+            .create_options(&SipUri::parse("sip:bob@example.invalid").unwrap());
+        options
+            .headers_mut()
+            .push(
+                SmolStr::new("Route"),
+                SmolStr::new("<sip:edge.example.invalid;lr>"),
+            )
+            .unwrap();
+        let task = {
+            let uac = uac.clone();
+            tokio::spawn(async move {
+                uac.send_request(options, SipUri::parse("sip:bob@example.invalid").unwrap())
+                    .await
+            })
+        };
+        let (ctx, sent) = answer_first(&dispatcher, &manager, 1, 200).await;
+        assert_eq!(ctx.peer(), proxy);
+        let routes: Vec<&str> = sent.headers().get_all("Route").collect();
+        assert_eq!(
+            routes,
+            vec!["<sip:127.0.0.1:5999;lr>", "<sip:edge.example.invalid;lr>"]
+        );
+        assert_eq!(task.await.unwrap().unwrap().code(), 200);
+
+        // INVITE: to the proxy too, with the callee in the Request-URI.
+        let invite = {
+            let uac = uac.clone();
+            tokio::spawn(async move {
+                uac.invite(SipUri::parse("sip:bob@example.invalid").unwrap(), None)
+                    .await
+            })
+        };
+        let (ctx, sent) = loop {
+            if let Some((ctx, payload)) = dispatcher.sent.lock().await.get(2).cloned() {
+                break (ctx, sip_parse::parse_request(&payload).unwrap());
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        assert_eq!(ctx.peer(), proxy, "INVITE goes to the outbound proxy");
+        assert_eq!(sent.method(), &Method::Invite);
+        assert_eq!(
+            sent.uri(),
+            &SipUri::parse("sip:bob@example.invalid").unwrap().into()
+        );
+        assert_eq!(sent.headers().get("Route"), Some("<sip:127.0.0.1:5999;lr>"));
+        invite.abort();
+    }
+
+    #[test]
+    fn an_outbound_proxys_route_is_loose() {
+        let route = |uri: &str| outbound_proxy_route(&SipUri::parse(uri).unwrap());
+        assert_eq!(route("sip:proxy.example.com"), "<sip:proxy.example.com;lr>");
+        assert_eq!(
+            route("sip:proxy.example.com:5061;transport=tls;lr"),
+            "<sip:proxy.example.com:5061;transport=tls;lr>"
+        );
     }
 
     #[tokio::test]
