@@ -587,6 +587,16 @@ impl ClientInviteFsm {
         current_state: crate::ClientInviteState,
         response: Response,
     ) -> Vec<ClientInviteAction> {
+        // A retransmission of the final while Completed: the ACK again, and
+        // nothing for the TU (RFC 3261 §17.1.1.2). Delivered again, a 401
+        // or 407 started another authenticated INVITE each time the server
+        // resent its challenge.
+        if matches!(current_state, crate::ClientInviteState::Completed) {
+            return vec![ClientInviteAction::GenerateAck {
+                response,
+                is_2xx: false,
+            }];
+        }
         self.state = crate::ClientInviteState::Completed;
         let mut actions = vec![
             ClientInviteAction::Cancel(TransactionTimer::A),
@@ -1305,6 +1315,34 @@ mod tests {
         assert!(actions
             .iter()
             .any(|a| matches!(a, ClientInviteAction::Cancel(TransactionTimer::D))));
+    }
+
+    /// A server that never hears the ACK resends its final (Timer G). The
+    /// client re-ACKs and tells the TU nothing (RFC 3261 §17.1.1.2): told
+    /// again, a TU that answers a 401 with an authenticated INVITE sent one
+    /// more for every retransmission.
+    #[test]
+    fn a_retransmitted_final_is_acked_again_and_not_delivered() {
+        use crate::timers::{Transport, TransportAwareTimers};
+        let mut fsm = ClientInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
+        fsm.on_event(ClientInviteEvent::SendInvite(sample_invite()));
+        let first = fsm.on_event(ClientInviteEvent::ReceiveFinal(sample_response(401)));
+        assert!(first
+            .iter()
+            .any(|a| matches!(a, ClientInviteAction::Deliver(_))));
+        assert!(matches!(fsm.state, crate::ClientInviteState::Completed));
+
+        let again = fsm.on_event(ClientInviteEvent::ReceiveFinal(sample_response(401)));
+        assert!(
+            !again
+                .iter()
+                .any(|a| matches!(a, ClientInviteAction::Deliver(_))),
+            "a retransmitted final is not the TU's: {again:?}"
+        );
+        assert!(again
+            .iter()
+            .any(|a| matches!(a, ClientInviteAction::GenerateAck { is_2xx: false, .. })));
+        assert!(matches!(fsm.state, crate::ClientInviteState::Completed));
     }
 
     #[test]
