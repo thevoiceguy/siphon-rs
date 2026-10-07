@@ -683,8 +683,17 @@ pub async fn send_udp(socket: &UdpSocket, to: &std::net::SocketAddr, data: &[u8]
     Ok(())
 }
 
-/// Accepts TCP connections, streaming frames to the supplied channel.
+/// Accepts TCP connections, streaming frames to the supplied channel:
+/// [`bind_tcp`] then [`serve_tcp`].
 pub async fn run_tcp(bind: &str, tx: mpsc::Sender<InboundPacket>) -> Result<()> {
+    serve_tcp(bind_tcp(bind)?, tx).await
+}
+
+/// Binds and listens on `bind` (`:0` for any port): the listener
+/// [`serve_tcp`] accepts on. Bound before anything is served, so a caller
+/// can return only once peers can connect — a spawned [`run_tcp`] binds
+/// whenever its task first runs, and a connection before that is refused.
+pub fn bind_tcp(bind: &str) -> Result<TcpListener> {
     let bind_addr: SocketAddr = bind
         .parse()
         .map_err(|e| anyhow!("Invalid bind address: {}", e))?;
@@ -705,10 +714,16 @@ pub async fn run_tcp(bind: &str, tx: mpsc::Sender<InboundPacket>) -> Result<()> 
         let std_listener: std::net::TcpListener = socket.into();
         TcpListener::from_std(std_listener)?
     };
+    Ok(listener)
+}
+
+/// Accepts TCP connections on `listener` (from [`bind_tcp`]), streaming
+/// frames to the supplied channel.
+pub async fn serve_tcp(listener: TcpListener, tx: mpsc::Sender<InboundPacket>) -> Result<()> {
     // Resolve once outside the accept loop — the bind address may
     // have been `:0`, so this reads the kernel-chosen port.
     let local_addr = listener.local_addr()?;
-    info!(%bind, "listening (tcp)");
+    info!(bind = %local_addr, "listening (tcp)");
     transport_metrics().on_accept(TransportLabel::Tcp);
     let limiter = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_SESSIONS));
     let per_ip: Arc<dashmap::DashMap<std::net::IpAddr, usize>> = Arc::new(dashmap::DashMap::new());
