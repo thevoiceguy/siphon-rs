@@ -1049,9 +1049,46 @@ pub struct IntegratedUAC {
     /// Subscription manager (shared with helper)
     #[allow(dead_code)]
     subscription_manager: Arc<SubscriptionManager>,
+
+    /// Parameters a REGISTER's Contact URI carries inside its brackets
+    /// (`;pn-provider=fcm;pn-param=…;pn-prid=…`, RFC 8599): set by
+    /// [`IntegratedUACBuilder::register_contact_params`], changed by
+    /// [`IntegratedUAC::set_register_contact_params`] when they do (a push
+    /// token is renewed).
+    register_contact_params: Arc<std::sync::RwLock<Option<String>>>,
+}
+
+/// Contact URI parameters as written: each `;name` or `;name=value`, with
+/// nothing that would end the URI or the header.
+fn checked_contact_params(params: &str) -> Result<String> {
+    let params = params.trim();
+    let params = if params.starts_with(';') || params.is_empty() {
+        params.to_string()
+    } else {
+        format!(";{params}")
+    };
+    if params
+        .chars()
+        .any(|c| matches!(c, '<' | '>' | ',' | '"') || c.is_whitespace() || c.is_control())
+    {
+        return Err(anyhow!("invalid Contact URI parameters {params:?}"));
+    }
+    Ok(params)
 }
 
 impl IntegratedUAC {
+    /// Change the parameters every REGISTER's Contact URI carries from now
+    /// on (`None` for none): a push token that was renewed, or push turned
+    /// off. The next REGISTER, refresh or not, says so.
+    pub fn set_register_contact_params(&self, params: Option<&str>) -> Result<()> {
+        let params = params.map(checked_contact_params).transpose()?;
+        *self
+            .register_contact_params
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = params.filter(|p| !p.is_empty());
+        Ok(())
+    }
+
     /// Creates a builder for IntegratedUAC.
     pub fn builder() -> IntegratedUACBuilder {
         IntegratedUACBuilder::new()
@@ -1279,11 +1316,23 @@ impl IntegratedUAC {
                     ""
                 };
 
+                // Parameters a REGISTER's Contact URI carries (RFC 8599's
+                // push address), inside the brackets: they are the URI's.
+                let uri_params = if request.method() == &Method::Register {
+                    self.register_contact_params
+                        .read()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .clone()
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
+
                 // Reconstruct Contact with actual address
                 let new_contact = if user_part.is_empty() {
-                    format!("<sip:{}>", contact_addr)
+                    format!("<sip:{}{}>", contact_addr, uri_params)
                 } else {
-                    format!("<sip:{}@{}>", user_part, contact_addr)
+                    format!("<sip:{}@{}{}>", user_part, contact_addr, uri_params)
                 };
 
                 let mut extra_params = String::new();
@@ -3851,6 +3900,7 @@ pub struct IntegratedUACBuilder {
     credentials: Option<(String, String)>,
     display_name: Option<String>,
     config: UACConfig,
+    register_contact_params: Option<String>,
 }
 
 impl IntegratedUACBuilder {
@@ -3869,6 +3919,7 @@ impl IntegratedUACBuilder {
             credentials: None,
             display_name: None,
             config: UACConfig::default(),
+            register_contact_params: None,
         }
     }
 
@@ -3913,6 +3964,17 @@ impl IntegratedUACBuilder {
         let uri = SipUri::parse(uri.as_ref())
             .map_err(|e| anyhow!("invalid outbound proxy {:?}: {e:?}", uri.as_ref()))?;
         self.config.outbound_proxy = Some(uri);
+        Ok(self)
+    }
+
+    /// Parameters every REGISTER's Contact URI carries, inside its
+    /// brackets: an app's push address (RFC 8599,
+    /// `;pn-provider=fcm;pn-param=<project>;pn-prid=<token>`). The
+    /// rewrite that puts the advertised address in the Contact keeps them;
+    /// other requests' Contacts do not carry them.
+    pub fn register_contact_params(mut self, params: impl AsRef<str>) -> Result<Self> {
+        let params = checked_contact_params(params.as_ref())?;
+        self.register_contact_params = (!params.is_empty()).then_some(params);
         Ok(self)
     }
 
@@ -4261,6 +4323,7 @@ impl IntegratedUACBuilder {
             config: self.config,
             dialog_manager,
             subscription_manager,
+            register_contact_params: Arc::new(std::sync::RwLock::new(self.register_contact_params)),
         })
     }
 }
@@ -4802,6 +4865,85 @@ mod tests {
         );
         assert_eq!(sent.headers().get("Route"), Some("<sip:127.0.0.1:5999;lr>"));
         invite.abort();
+    }
+
+    /// An app's push address (RFC 8599) rides in the REGISTER's Contact URI,
+    /// inside the brackets, through the rewrite that advertises the address;
+    /// a renewed token is sent from the next REGISTER; an INVITE's Contact
+    /// carries none of it.
+    #[tokio::test]
+    async fn a_register_carries_its_contact_uri_params() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = Arc::new(
+            IntegratedUAC::builder()
+                .local_uri("sip:alice@example.com")
+                .unwrap()
+                .local_addr("127.0.0.1:5070")
+                .unwrap()
+                .outbound_proxy("sip:127.0.0.1:5999")
+                .unwrap()
+                .enable_outbound("<urn:uuid:00000000-0000-0000-0000-0000000000a1>")
+                .register_contact_params("pn-provider=fcm;pn-param=anvil-12345;pn-prid=tok1")
+                .unwrap()
+                .transaction_manager(manager.clone())
+                .resolver(Arc::new(SipResolver::from_system().unwrap()))
+                .dispatcher(dispatcher.clone())
+                .build()
+                .unwrap(),
+        );
+        let register = |uac: Arc<IntegratedUAC>| {
+            tokio::spawn(async move {
+                uac.register(SipUri::parse("sip:example.invalid").unwrap(), Some(600))
+                    .await
+            })
+        };
+
+        let task = register(uac.clone());
+        let (_, sent) = answer_first(&dispatcher, &manager, 0, 200).await;
+        let contact = sent.headers().get("Contact").unwrap();
+        assert!(
+            contact.starts_with(
+                "<sip:alice@127.0.0.1:5070;pn-provider=fcm;pn-param=anvil-12345;pn-prid=tok1>"
+            ),
+            "{contact}"
+        );
+        assert!(contact.contains(";+sip.instance="), "{contact}");
+        task.await.unwrap().unwrap();
+
+        // The token renewed: the next REGISTER says so.
+        uac.set_register_contact_params(Some(";pn-provider=fcm;pn-param=anvil-12345;pn-prid=tok2"))
+            .unwrap();
+        let task = register(uac.clone());
+        let (_, sent) = answer_first(&dispatcher, &manager, 1, 200).await;
+        assert!(sent
+            .headers()
+            .get("Contact")
+            .unwrap()
+            .contains(";pn-prid=tok2>"));
+        task.await.unwrap().unwrap();
+
+        // Not on an INVITE.
+        let invite = {
+            let uac = uac.clone();
+            tokio::spawn(async move {
+                uac.invite(SipUri::parse("sip:bob@example.invalid").unwrap(), None)
+                    .await
+            })
+        };
+        let sent = loop {
+            if let Some((_, payload)) = dispatcher.sent.lock().await.get(2).cloned() {
+                break sip_parse::parse_request(&payload).unwrap();
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        assert!(!sent.headers().get("Contact").unwrap().contains("pn-"));
+        invite.abort();
+
+        // Nothing that would end the URI or the header.
+        assert!(uac.set_register_contact_params(Some(";a=b>")).is_err());
+        assert!(uac.set_register_contact_params(Some(";a=b c")).is_err());
+        uac.set_register_contact_params(None).unwrap();
     }
 
     #[test]
