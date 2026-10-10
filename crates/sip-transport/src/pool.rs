@@ -1088,6 +1088,19 @@ impl TlsPool {
         self.inner.is_empty()
     }
 
+    /// Close every connection: each entry's reader and writer tasks are
+    /// aborted, so its socket closes and the peer sees the connection end.
+    /// What a phone app does when it is put to sleep (its connections to
+    /// the server go, and its next request opens a new one). How many.
+    pub fn close_all(&self) -> usize {
+        let closed = self.inner.len();
+        self.inner.clear();
+        if closed > 0 {
+            debug!(closed, "closed every TLS connection");
+        }
+        closed
+    }
+
     /// Removes idle connections that exceed the idle timeout.
     pub fn cleanup_idle(&self) -> usize {
         let mut removed = 0;
@@ -1933,5 +1946,25 @@ mod tests {
             .await
             .expect("the in-dialog request must ride the reused connection");
         assert_eq!(got, payload, "the exact request bytes must be sent");
+    }
+
+    /// Closing every connection drops each entry: its tasks are aborted
+    /// (so its socket closes) and its writer channel ends.
+    #[cfg(feature = "tls")]
+    #[tokio::test]
+    async fn close_all_ends_every_connections_tasks() {
+        let pool = TlsPool::new();
+        let (tx, mut rx) = mpsc::channel::<Bytes>(4);
+        let task = tokio::spawn(std::future::pending::<()>());
+        let mut entry = PoolEntry::for_tests(tx);
+        entry.task_handles.push(task.abort_handle());
+        pool.inner
+            .insert(("127.0.0.1:5061".parse().unwrap(), "a".to_string()), entry);
+
+        assert_eq!(pool.close_all(), 1);
+        assert!(pool.is_empty());
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(rx.recv().await.is_none(), "the writer's channel ends");
+        assert_eq!(pool.close_all(), 0);
     }
 }
