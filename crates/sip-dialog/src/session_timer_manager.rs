@@ -114,7 +114,10 @@ impl SessionTimerManager {
     /// # Behavior
     ///
     /// - If `is_refresher` is `true`, emits `RefreshNeeded` at `session_expires / 2`
-    /// - Always emits `SessionExpired` at `session_expires` if not refreshed
+    ///   and `SessionExpired` at `session_expires` if not refreshed
+    /// - Otherwise emits `SessionExpired` slightly before the session
+    ///   expires, at `session_expires - min(32 s, session_expires / 3)`
+    ///   (RFC 4028 §10), so the BYE is sent while the session still stands
     /// - Replaces any existing timer for this dialog
     pub fn start_timer(&self, dialog_id: DialogId, session_expires: Duration, is_refresher: bool) {
         // Cancel existing timer if present
@@ -160,7 +163,7 @@ impl SessionTimerManager {
             let remaining = if is_refresher {
                 session_expires / 2
             } else {
-                session_expires
+                non_refresher_expiry(session_expires)
             };
 
             tokio::select! {
@@ -287,6 +290,12 @@ pub fn validate_session_expires(
     }
 }
 
+/// When the side that does not refresh gives a session up (RFC 4028 §10):
+/// the minimum of 32 seconds and a third of the interval before it expires.
+pub fn non_refresher_expiry(session_expires: Duration) -> Duration {
+    session_expires - (session_expires / 3).min(Duration::from_secs(32))
+}
+
 /// Calculates the refresh time for a given session expiration.
 ///
 /// Per RFC 4028, refresh should occur at Session-Expires / 2.
@@ -401,6 +410,19 @@ pub fn determine_refresher_role(refresher_param: Option<&str>, is_uac: bool) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_side_not_refreshing_gives_up_before_expiry() {
+        // A third of the interval, at most 32 s (RFC 4028 §10).
+        assert_eq!(
+            non_refresher_expiry(Duration::from_secs(90)),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            non_refresher_expiry(Duration::from_secs(1800)),
+            Duration::from_secs(1768)
+        );
+    }
 
     #[test]
     fn validate_session_expires_minimum() {
