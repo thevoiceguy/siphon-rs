@@ -19,7 +19,9 @@
 // Integrated UAC with full transaction/transport/DNS integration
 pub mod auth_utils;
 pub mod integrated;
-pub use integrated::{CredentialProvider, Flow, SessionTimerState, SessionTimerStop};
+pub use integrated::{
+    CredentialProvider, Flow, InviteOutcome, SessionTimerState, SessionTimerStop,
+};
 pub use sip_sdp::profiles::{MediaProfileBuilder, SdpProfile};
 
 use anyhow::{anyhow, Result};

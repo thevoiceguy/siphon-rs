@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **sip-uac 0.8.0**: `CallHandle::invite_outcome` (and `invite_outcome_now`) report how
+  the INVITE ended — `InviteOutcome::Final(code)` or `Terminated` — to anyone, any number
+  of times, without taking the response `await_final` hands out. A B2BUA that cancelled a
+  leg learns whether its callee answered anyway and must be sent a BYE (RFC 3261 §9.1).
+  A 2xx is reported after the dialog is confirmed and its ACK sent, so a BYE sent on it
+  never overtakes the ACK.
+
+### Fixed
+
+- **sip-uac 0.8.0**: `CallHandle::cancel` no longer sends a CANCEL for an INVITE that
+  has its final response (RFC 3261 §9.1); it returns an error and the caller ends an
+  answered call with BYE. A 2xx arriving while the CANCEL was being built no longer
+  puts a CANCEL on the wire after the ACK. Found by FCP's tests against SIPp.
+
 - **sip-uac 0.7.6**: `IntegratedUAC::send_request` sends a non-INVITE request the
   caller built and waits for its final response: its own headers kept, the `Via` and
   `Contact` finished as every request's are, a challenge answered. For event packages

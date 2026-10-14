@@ -671,6 +671,19 @@ pub enum SessionTimerStop {
     Cancelled,
 }
 
+/// How an INVITE sent through a [`CallHandle`] has ended so far.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InviteOutcome {
+    /// No final response yet.
+    Pending,
+    /// The final response's status code (an authenticated retry's, after
+    /// a 401 or 407).
+    Final(u16),
+    /// The transaction ended without a final response (timeout, transport
+    /// error).
+    Terminated,
+}
+
 /// Handle for an outgoing call with dialog state and response channels.
 pub struct CallHandle {
     /// The dialog for this call (updated to winning dialog when final response arrives)
@@ -684,6 +697,11 @@ pub struct CallHandle {
 
     /// Channel to receive the final response (200, 486, etc)
     final_rx: Arc<Mutex<Option<oneshot::Receiver<Response>>>>,
+
+    /// How the INVITE has ended so far, shared with its transaction user;
+    /// read by [`CallHandle::invite_outcome`] without taking the final
+    /// response [`CallHandle::await_final`] hands out.
+    outcome: Arc<watch::Sender<InviteOutcome>>,
 
     /// Termination reason if transaction failed
     termination_rx: Arc<Mutex<Option<oneshot::Receiver<String>>>>,
@@ -950,6 +968,27 @@ impl CallHandle {
     /// ```
     pub async fn get_early_dialogs(&self) -> Vec<Dialog> {
         self.early_dialogs.lock().await.values().cloned().collect()
+    }
+
+    /// How the INVITE has ended, waiting until it has: its final
+    /// response's status code, or [`InviteOutcome::Terminated`] when the
+    /// transaction ended without one. Unlike [`await_final`](Self::await_final)
+    /// it takes nothing and may be asked by anyone, any number of times:
+    /// a caller that has sent CANCEL learns whether the callee answered
+    /// anyway (RFC 3261 §9.1) and must be sent a BYE. A 2xx is reported
+    /// after [`dialog`](Self::dialog) is confirmed.
+    pub async fn invite_outcome(&self) -> InviteOutcome {
+        let mut rx = self.outcome.subscribe();
+        let outcome = rx
+            .wait_for(|o| *o != InviteOutcome::Pending)
+            .await
+            .map(|o| *o);
+        outcome.unwrap_or(InviteOutcome::Terminated)
+    }
+
+    /// [`invite_outcome`](Self::invite_outcome) as it is now, not waiting.
+    pub fn invite_outcome_now(&self) -> InviteOutcome {
+        *self.outcome.borrow()
     }
 
     /// Waits for the final response (200, 486, etc).
@@ -2037,9 +2076,11 @@ impl IntegratedUAC {
 
         // Create INVITE transaction user
         let live_request = Arc::new(RwLock::new(Arc::new(request.clone())));
+        let outcome = Arc::new(watch::channel(InviteOutcome::Pending).0);
         let tu = Arc::new(InviteTransactionUser {
             prov_tx,
             final_tx: Mutex::new(Some(final_tx)),
+            outcome: Mutex::new(Some(outcome.clone())),
             term_tx: Mutex::new(Some(term_tx)),
             dialog_manager: self.dialog_manager.clone(),
             helper: self.helper.clone(),
@@ -2075,6 +2116,7 @@ impl IntegratedUAC {
             transaction_key: key,
             provisional_rx: Arc::new(Mutex::new(prov_rx)),
             final_rx: Arc::new(Mutex::new(Some(final_rx))),
+            outcome,
             termination_rx: Arc::new(Mutex::new(Some(term_rx))),
             invite_request: live_request,
             transport_ctx: Arc::new(ctx),
@@ -2897,9 +2939,11 @@ impl IntegratedUAC {
         let shared_dialog = Arc::new(RwLock::new(dialog));
 
         let live_request = Arc::new(RwLock::new(Arc::new(request.clone())));
+        let outcome = Arc::new(watch::channel(InviteOutcome::Pending).0);
         let tu = Arc::new(InviteTransactionUser {
             prov_tx,
             final_tx: Mutex::new(Some(final_tx)),
+            outcome: Mutex::new(Some(outcome.clone())),
             term_tx: Mutex::new(Some(term_tx)),
             dialog_manager: self.dialog_manager.clone(),
             helper: self.helper.clone(),
@@ -2933,6 +2977,7 @@ impl IntegratedUAC {
             transaction_key: key,
             provisional_rx: Arc::new(Mutex::new(prov_rx)),
             final_rx: Arc::new(Mutex::new(Some(final_rx))),
+            outcome,
             termination_rx: Arc::new(Mutex::new(Some(term_rx))),
             invite_request: live_request,
             transport_ctx: Arc::new(ctx),
@@ -2980,9 +3025,11 @@ impl IntegratedUAC {
         let shared_dialog = Arc::new(RwLock::new(dialog));
 
         let live_request = Arc::new(RwLock::new(Arc::new(request.clone())));
+        let outcome = Arc::new(watch::channel(InviteOutcome::Pending).0);
         let tu = Arc::new(InviteTransactionUser {
             prov_tx,
             final_tx: Mutex::new(Some(final_tx)),
+            outcome: Mutex::new(Some(outcome.clone())),
             term_tx: Mutex::new(Some(term_tx)),
             dialog_manager: self.dialog_manager.clone(),
             helper: self.helper.clone(),
@@ -3016,6 +3063,7 @@ impl IntegratedUAC {
             transaction_key: key,
             provisional_rx: Arc::new(Mutex::new(prov_rx)),
             final_rx: Arc::new(Mutex::new(Some(final_rx))),
+            outcome,
             termination_rx: Arc::new(Mutex::new(Some(term_rx))),
             invite_request: live_request,
             transport_ctx: Arc::new(ctx),
@@ -3323,6 +3371,18 @@ impl CallHandle {
             cancel_request.headers().get("CSeq")
         );
 
+        // RFC 3261 §9.1: no CANCEL for a request that has its final
+        // response. Checked as late as possible, so a 2xx that arrived
+        // while this was built is not followed by a CANCEL after its ACK;
+        // the caller ends an answered call with BYE.
+        if self.dialog.read().await.state() == sip_dialog::DialogStateType::Confirmed
+            || *self.outcome.borrow() != InviteOutcome::Pending
+        {
+            return Err(anyhow!(
+                "the INVITE has its final response; CANCEL not sent (RFC 3261 §9.1)"
+            ));
+        }
+
         // Send CANCEL as a new non-INVITE transaction
         let (final_tx, final_rx) = oneshot::channel();
         let (term_tx, term_rx) = oneshot::channel();
@@ -3352,6 +3412,9 @@ impl CallHandle {
 struct InviteTransactionUser {
     prov_tx: mpsc::Sender<Response>,
     final_tx: Mutex<Option<oneshot::Sender<Response>>>,
+    /// The handle's outcome, set by whichever attempt concludes the INVITE
+    /// (handed to an authenticated retry as `final_tx` is).
+    outcome: Mutex<Option<Arc<watch::Sender<InviteOutcome>>>>,
     term_tx: Mutex<Option<oneshot::Sender<String>>>,
     #[allow(dead_code)]
     dialog_manager: Arc<DialogManager>,
@@ -3377,187 +3440,8 @@ struct InviteTransactionUser {
 }
 
 impl InviteTransactionUser {
-    /// Starts an authenticated re-INVITE after a 401/407 challenge
-    /// (issue #83).
-    ///
-    /// The transaction layer has already ACK'd the challenge, so the
-    /// authenticated request — same Call-ID and From tag, CSeq+1, fresh
-    /// branch, original body, built by `create_authenticated_request_with`
-    /// — goes out as a new client transaction. Its transaction user
-    /// inherits this attempt's response channels and shared dialog state,
-    /// so the caller's `CallHandle` transparently observes the retry.
-    async fn retry_invite_with_auth(&self, challenge: &Response) -> Result<()> {
-        let realm = extract_realm(challenge);
-        let creds = match (&self.config.credential_provider, realm.as_deref()) {
-            (Some(provider), Some(realm)) => provider.credentials(realm).await,
-            _ => None,
-        };
-
-        let mut helper = self.helper.lock().await;
-        let auth_request =
-            helper.create_authenticated_request_with(&self.request, challenge, creds)?;
-        drop(helper);
-
-        // Hand this attempt's channels to the retry: whatever it concludes
-        // with is the final the application sees.
-        let final_tx = self.final_tx.lock().await.take();
-        let term_tx = self.term_tx.lock().await.take();
-
-        let tu = Arc::new(InviteTransactionUser {
-            prov_tx: self.prov_tx.clone(),
-            final_tx: Mutex::new(final_tx),
-            term_tx: Mutex::new(term_tx),
-            dialog_manager: self.dialog_manager.clone(),
-            helper: self.helper.clone(),
-            request: auth_request.clone(),
-            config: self.config.clone(),
-            ctx: self.ctx.clone(),
-            auto_retry_auth: self.auto_retry_auth,
-            auth_attempt: self.auth_attempt + 1,
-            live_request: self.live_request.clone(),
-            transaction_manager: self.transaction_manager.clone(),
-            dispatcher: self.dispatcher.clone(),
-            early_dialogs: self.early_dialogs.clone(),
-            dialog: self.dialog.clone(),
-            local_addr: self.local_addr,
-            public_addr: self.public_addr,
-        });
-
-        match self
-            .transaction_manager
-            .start_client_transaction(auth_request.clone(), self.ctx.clone(), tu.clone())
-            .await
-        {
-            Ok(key) => {
-                // CANCEL must target the live attempt's Via branch.
-                *self.live_request.write().await = Arc::new(auth_request);
-                info!(
-                    "Started authenticated INVITE transaction {} (attempt {})",
-                    key.branch(),
-                    self.auth_attempt + 1
-                );
-                Ok(())
-            }
-            Err(e) => {
-                // The retry never launched: reclaim the channels so the
-                // challenge is surfaced as this attempt's final.
-                *self.final_tx.lock().await = tu.final_tx.lock().await.take();
-                *self.term_tx.lock().await = tu.term_tx.lock().await.take();
-                Err(e)
-            }
-        }
-    }
-}
-
-#[async_trait]
-impl ClientTransactionUser for InviteTransactionUser {
-    async fn on_provisional(&self, _key: &TransactionKey, response: &Response) {
-        info!("Received provisional response: {}", response.code());
-
-        // Create or update dialog from provisional (if it has To-tag)
-        // RFC 3261 §13.2.2.1: Provisional responses with To-tags create early dialogs
-        if response.code() > 100 {
-            let helper = self.helper.lock().await;
-            if let Some(dialog) = helper.process_invite_response(&self.request, response) {
-                let to_tag = SmolStr::new(dialog.id().remote_tag());
-
-                // Track early dialog for forking support
-                let mut early_dialogs = self.early_dialogs.lock().await;
-
-                if early_dialogs.contains_key(&to_tag) {
-                    // Update existing early dialog (no bounds check needed)
-                    debug!(
-                        "Updated existing early dialog from {}: to-tag={}",
-                        response.code(),
-                        to_tag
-                    );
-                    early_dialogs.insert(to_tag, dialog);
-                } else {
-                    // New early dialog - enforce forking limit
-                    if early_dialogs.len() >= crate::MAX_EARLY_DIALOGS {
-                        warn!(
-                            "Max early dialogs limit reached ({}), ignoring new early dialog: to-tag={}",
-                            crate::MAX_EARLY_DIALOGS,
-                            to_tag
-                        );
-                    } else {
-                        debug!(
-                            "Created new early dialog from {}: to-tag={} (forking detected: {} endpoints)",
-                            response.code(),
-                            to_tag,
-                            early_dialogs.len() + 1
-                        );
-                        early_dialogs.insert(to_tag, dialog);
-                    }
-                }
-            }
-        }
-
-        // Forward to application
-        let _ = self.prov_tx.send(response.clone()).await;
-    }
-
-    async fn on_final(&self, _key: &TransactionKey, response: &Response) {
-        debug!(code = response.code(), "received final response");
-
-        // 401/407: start an authenticated retry instead of surfacing the
-        // challenge (the transaction layer has already ACK'd this final).
-        // Mirrors the non-INVITE retry semantics: bounded by
-        // `max_auth_retries`, with the last challenge forwarded when the
-        // budget is exhausted or no retry can be built (issue #83).
-        if (response.code() == 401 || response.code() == 407) && self.auto_retry_auth {
-            if self.auth_attempt < self.config.max_auth_retries {
-                match self.retry_invite_with_auth(response).await {
-                    Ok(()) => return,
-                    Err(e) => warn!(
-                        code = response.code(),
-                        "INVITE auth retry not started ({}); surfacing challenge to caller", e
-                    ),
-                }
-            } else {
-                warn!(
-                    code = response.code(),
-                    attempts = self.auth_attempt,
-                    max = self.config.max_auth_retries,
-                    "auth retry limit reached; returning last challenge to caller"
-                );
-            }
-        }
-
-        // Create or confirm dialog from 2xx and update CallHandle's dialog
-        if response.code() >= 200 && response.code() < 300 {
-            let helper = self.helper.lock().await;
-            if let Some(confirmed_dialog) = helper.process_invite_response(&self.request, response)
-            {
-                info!(
-                    "Confirmed dialog from {}: {} (to-tag={})",
-                    response.code(),
-                    confirmed_dialog.id().call_id(),
-                    confirmed_dialog.id().remote_tag()
-                );
-
-                // Update the shared dialog (fixes the "pending" tag issue)
-                *self.dialog.write().await = confirmed_dialog;
-            }
-        }
-
-        // Forward to application
-        let mut tx = self.final_tx.lock().await;
-        if let Some(tx) = tx.take() {
-            let _ = tx.send(response.clone());
-        }
-    }
-
-    async fn on_terminated(&self, _key: &TransactionKey, reason: &str) {
-        warn!("INVITE transaction terminated: {}", reason);
-
-        let mut tx = self.term_tx.lock().await;
-        if let Some(tx) = tx.take() {
-            let _ = tx.send(reason.to_string());
-        }
-    }
-
-    async fn send_ack(
+    /// Send the ACK for a final response (RFC 3261 §13.2.2.4 for a 2xx).
+    async fn acknowledge(
         &self,
         _key: &TransactionKey,
         response: Response,
@@ -3735,6 +3619,224 @@ impl ClientTransactionUser for InviteTransactionUser {
         }
     }
 
+    /// Starts an authenticated re-INVITE after a 401/407 challenge
+    /// (issue #83).
+    ///
+    /// The transaction layer has already ACK'd the challenge, so the
+    /// authenticated request — same Call-ID and From tag, CSeq+1, fresh
+    /// branch, original body, built by `create_authenticated_request_with`
+    /// — goes out as a new client transaction. Its transaction user
+    /// inherits this attempt's response channels and shared dialog state,
+    /// so the caller's `CallHandle` transparently observes the retry.
+    async fn retry_invite_with_auth(&self, challenge: &Response) -> Result<()> {
+        let realm = extract_realm(challenge);
+        let creds = match (&self.config.credential_provider, realm.as_deref()) {
+            (Some(provider), Some(realm)) => provider.credentials(realm).await,
+            _ => None,
+        };
+
+        let mut helper = self.helper.lock().await;
+        let auth_request =
+            helper.create_authenticated_request_with(&self.request, challenge, creds)?;
+        drop(helper);
+
+        // Hand this attempt's channels to the retry: whatever it concludes
+        // with is the final the application sees.
+        let final_tx = self.final_tx.lock().await.take();
+        let term_tx = self.term_tx.lock().await.take();
+        let outcome = self.outcome.lock().await.take();
+
+        let tu = Arc::new(InviteTransactionUser {
+            prov_tx: self.prov_tx.clone(),
+            final_tx: Mutex::new(final_tx),
+            outcome: Mutex::new(outcome),
+            term_tx: Mutex::new(term_tx),
+            dialog_manager: self.dialog_manager.clone(),
+            helper: self.helper.clone(),
+            request: auth_request.clone(),
+            config: self.config.clone(),
+            ctx: self.ctx.clone(),
+            auto_retry_auth: self.auto_retry_auth,
+            auth_attempt: self.auth_attempt + 1,
+            live_request: self.live_request.clone(),
+            transaction_manager: self.transaction_manager.clone(),
+            dispatcher: self.dispatcher.clone(),
+            early_dialogs: self.early_dialogs.clone(),
+            dialog: self.dialog.clone(),
+            local_addr: self.local_addr,
+            public_addr: self.public_addr,
+        });
+
+        match self
+            .transaction_manager
+            .start_client_transaction(auth_request.clone(), self.ctx.clone(), tu.clone())
+            .await
+        {
+            Ok(key) => {
+                // CANCEL must target the live attempt's Via branch.
+                *self.live_request.write().await = Arc::new(auth_request);
+                info!(
+                    "Started authenticated INVITE transaction {} (attempt {})",
+                    key.branch(),
+                    self.auth_attempt + 1
+                );
+                Ok(())
+            }
+            Err(e) => {
+                // The retry never launched: reclaim the channels so the
+                // challenge is surfaced as this attempt's final.
+                *self.final_tx.lock().await = tu.final_tx.lock().await.take();
+                *self.term_tx.lock().await = tu.term_tx.lock().await.take();
+                *self.outcome.lock().await = tu.outcome.lock().await.take();
+                Err(e)
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl ClientTransactionUser for InviteTransactionUser {
+    async fn on_provisional(&self, _key: &TransactionKey, response: &Response) {
+        info!("Received provisional response: {}", response.code());
+
+        // Create or update dialog from provisional (if it has To-tag)
+        // RFC 3261 §13.2.2.1: Provisional responses with To-tags create early dialogs
+        if response.code() > 100 {
+            let helper = self.helper.lock().await;
+            if let Some(dialog) = helper.process_invite_response(&self.request, response) {
+                let to_tag = SmolStr::new(dialog.id().remote_tag());
+
+                // Track early dialog for forking support
+                let mut early_dialogs = self.early_dialogs.lock().await;
+
+                if early_dialogs.contains_key(&to_tag) {
+                    // Update existing early dialog (no bounds check needed)
+                    debug!(
+                        "Updated existing early dialog from {}: to-tag={}",
+                        response.code(),
+                        to_tag
+                    );
+                    early_dialogs.insert(to_tag, dialog);
+                } else {
+                    // New early dialog - enforce forking limit
+                    if early_dialogs.len() >= crate::MAX_EARLY_DIALOGS {
+                        warn!(
+                            "Max early dialogs limit reached ({}), ignoring new early dialog: to-tag={}",
+                            crate::MAX_EARLY_DIALOGS,
+                            to_tag
+                        );
+                    } else {
+                        debug!(
+                            "Created new early dialog from {}: to-tag={} (forking detected: {} endpoints)",
+                            response.code(),
+                            to_tag,
+                            early_dialogs.len() + 1
+                        );
+                        early_dialogs.insert(to_tag, dialog);
+                    }
+                }
+            }
+        }
+
+        // Forward to application
+        let _ = self.prov_tx.send(response.clone()).await;
+    }
+
+    async fn on_final(&self, _key: &TransactionKey, response: &Response) {
+        debug!(code = response.code(), "received final response");
+
+        // 401/407: start an authenticated retry instead of surfacing the
+        // challenge (the transaction layer has already ACK'd this final).
+        // Mirrors the non-INVITE retry semantics: bounded by
+        // `max_auth_retries`, with the last challenge forwarded when the
+        // budget is exhausted or no retry can be built (issue #83).
+        if (response.code() == 401 || response.code() == 407) && self.auto_retry_auth {
+            if self.auth_attempt < self.config.max_auth_retries {
+                match self.retry_invite_with_auth(response).await {
+                    Ok(()) => return,
+                    Err(e) => warn!(
+                        code = response.code(),
+                        "INVITE auth retry not started ({}); surfacing challenge to caller", e
+                    ),
+                }
+            } else {
+                warn!(
+                    code = response.code(),
+                    attempts = self.auth_attempt,
+                    max = self.config.max_auth_retries,
+                    "auth retry limit reached; returning last challenge to caller"
+                );
+            }
+        }
+
+        // Create or confirm dialog from 2xx and update CallHandle's dialog
+        if response.code() >= 200 && response.code() < 300 {
+            let helper = self.helper.lock().await;
+            if let Some(confirmed_dialog) = helper.process_invite_response(&self.request, response)
+            {
+                info!(
+                    "Confirmed dialog from {}: {} (to-tag={})",
+                    response.code(),
+                    confirmed_dialog.id().call_id(),
+                    confirmed_dialog.id().remote_tag()
+                );
+
+                // Update the shared dialog (fixes the "pending" tag issue)
+                *self.dialog.write().await = confirmed_dialog;
+            }
+        }
+
+        // A 2xx's outcome is set in `send_ack`, once it is acknowledged: a
+        // reader woken by it may send BYE at once, and the BYE must follow
+        // the ACK. Anything else is the outcome now.
+        if !(200..300).contains(&response.code()) {
+            if let Some(outcome) = self.outcome.lock().await.as_ref() {
+                outcome.send_replace(InviteOutcome::Final(response.code()));
+            }
+        }
+
+        // Forward to application
+        let mut tx = self.final_tx.lock().await;
+        if let Some(tx) = tx.take() {
+            let _ = tx.send(response.clone());
+        }
+    }
+
+    async fn on_terminated(&self, _key: &TransactionKey, reason: &str) {
+        warn!("INVITE transaction terminated: {}", reason);
+
+        if let Some(outcome) = self.outcome.lock().await.as_ref() {
+            outcome.send_if_modified(|o| {
+                let pending = *o == InviteOutcome::Pending;
+                if pending {
+                    *o = InviteOutcome::Terminated;
+                }
+                pending
+            });
+        }
+
+        let mut tx = self.term_tx.lock().await;
+        if let Some(tx) = tx.take() {
+            let _ = tx.send(reason.to_string());
+        }
+    }
+
+    async fn send_ack(
+        &self,
+        key: &TransactionKey,
+        response: Response,
+        ctx: &TransportContext,
+        is_2xx: bool,
+    ) {
+        let code = response.code();
+        self.acknowledge(key, response, ctx, is_2xx).await;
+        // Acknowledged: now the answer is the outcome (see `on_final`).
+        if is_2xx {
+            if let Some(outcome) = self.outcome.lock().await.as_ref() {
+                outcome.send_replace(InviteOutcome::Final(code));
+            }
+        }
+    }
     async fn send_prack(&self, _key: &TransactionKey, response: Response, ctx: &TransportContext) {
         info!("Sending PRACK for reliable provisional {}", response.code());
 
@@ -5726,6 +5828,78 @@ mod tests {
         assert_eq!(
             call.invite_request().await.headers().get("CSeq"),
             Some("2 INVITE")
+        );
+    }
+
+    /// The INVITE's outcome is for anyone to read, after another task has
+    /// taken the final response: what a B2BUA that cancelled needs to
+    /// learn the callee answered anyway. It is pending through a challenge,
+    /// names the authenticated attempt's final, and a 2xx is reported with
+    /// the dialog already confirmed and the ACK sent. An answered INVITE is
+    /// not cancelled.
+    #[tokio::test]
+    async fn the_invite_outcome_is_read_beside_await_final() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = auth_test_uac(dispatcher.clone(), manager.clone(), None);
+
+        let call = Arc::new(
+            uac.invite("sip:9196@127.0.0.1:5060", Some("v=0\r\n"))
+                .await
+                .unwrap(),
+        );
+        assert_eq!(call.invite_outcome_now(), InviteOutcome::Pending);
+
+        // Someone else waits for the final response, as a fork race does.
+        let racer = {
+            let call = Arc::clone(&call);
+            tokio::spawn(async move { call.await_final().await.map(|r| r.code()) })
+        };
+        let watcher = {
+            let call = Arc::clone(&call);
+            let dispatcher = dispatcher.clone();
+            tokio::spawn(async move {
+                let outcome = call.invite_outcome().await;
+                let confirmed =
+                    call.dialog.read().await.state() == sip_dialog::DialogStateType::Confirmed;
+                let acked = sent_requests(&dispatcher).await.iter().any(|r| {
+                    r.method() == &Method::Ack && r.headers().get("CSeq") == Some("2 ACK")
+                });
+                (outcome, confirmed, acked)
+            })
+        };
+
+        let invite1 = wait_for_request(&dispatcher, |r| r.method() == &Method::Invite).await;
+        manager
+            .receive_response(challenge_response(&invite1, 407))
+            .await;
+        let invite2 = wait_for_request(&dispatcher, |r| {
+            r.method() == &Method::Invite && r.headers().get("Proxy-Authorization").is_some()
+        })
+        .await;
+        assert_eq!(
+            call.invite_outcome_now(),
+            InviteOutcome::Pending,
+            "a challenge is not the outcome"
+        );
+
+        manager.receive_response(ok_response(&invite2)).await;
+
+        assert_eq!(racer.await.unwrap().unwrap(), 200);
+        let (outcome, confirmed, acked) = watcher.await.unwrap();
+        assert_eq!(outcome, InviteOutcome::Final(200));
+        assert!(
+            confirmed,
+            "a 2xx outcome comes after the dialog is confirmed"
+        );
+        assert!(
+            acked,
+            "a 2xx outcome comes after its ACK, so a BYE follows it"
+        );
+        assert_eq!(call.invite_outcome().await, InviteOutcome::Final(200));
+        assert!(
+            call.cancel().await.is_err(),
+            "an answered INVITE is not cancelled"
         );
     }
 
