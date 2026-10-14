@@ -1992,6 +1992,11 @@ impl IntegratedUAC {
         flow: Option<Flow>,
         filter: Option<crate::RequestFilter>,
     ) -> Result<CallHandle> {
+        // The INVITE's transaction PRACKs every reliable provisional
+        // (RFC 3262), so the INVITE says so: without it a callee may not
+        // send one, and one that needs to refuses the call (421).
+        supports_100rel(&mut request);
+
         // Down a flow the request goes where the flow does; otherwise
         // through the outbound proxy, if there is one.
         let dns_target = if flow.is_none() {
@@ -4430,6 +4435,25 @@ impl IntegratedUACBuilder {
     }
 }
 
+/// `100rel` added to the request's Supported header (RFC 3262 §3), once.
+fn supports_100rel(request: &mut Request) {
+    let current = request.headers().get("Supported").map(|v| v.to_string());
+    match current {
+        Some(value)
+            if value
+                .split(',')
+                .any(|t| t.trim().eq_ignore_ascii_case("100rel")) => {}
+        Some(value) if !value.trim().is_empty() => {
+            let _ = request
+                .headers_mut()
+                .set_or_push("Supported", format!("{}, 100rel", value.trim()));
+        }
+        _ => {
+            let _ = request.headers_mut().set_or_push("Supported", "100rel");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4455,6 +4479,42 @@ mod tests {
             None,                          // refresher
             true,                          // is_uac
         )
+    }
+
+    fn invite_supporting(supported: Option<&str>) -> Request {
+        let mut headers = Headers::new();
+        if let Some(value) = supported {
+            headers.push("Supported", value).unwrap();
+        }
+        Request::new(
+            RequestLine::new(
+                Method::Invite,
+                SipUri::parse("sip:bob@example.com").unwrap(),
+            ),
+            headers,
+            Bytes::new(),
+        )
+        .unwrap()
+    }
+
+    /// Every INVITE says it supports 100rel, which its transaction PRACKs,
+    /// once and alongside whatever else it supports.
+    #[test]
+    fn an_invite_supports_100rel() {
+        for (before, after) in [
+            (None, "100rel"),
+            (Some("timer"), "timer, 100rel"),
+            (Some("100rel, timer"), "100rel, timer"),
+            (Some("timer, 100REL"), "timer, 100REL"),
+        ] {
+            let mut request = invite_supporting(before);
+            supports_100rel(&mut request);
+            assert_eq!(
+                request.headers().get("Supported").map(|v| v.to_string()),
+                Some(after.to_string()),
+                "{before:?}"
+            );
+        }
     }
 
     /// Issue #76: a fresh TLS dial to an IP-literal route-set hop must

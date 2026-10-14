@@ -582,10 +582,15 @@ impl UserAgentServer {
         request: &Request,
         min_se: Option<Duration>,
     ) -> Result<(), Response> {
-        // Extract Session-Expires header
+        // The interval is read as it is: the typed parser refuses one under
+        // RFC 4028's 90 s floor, which is exactly what a 422 answers.
         if let Some(se_header) = header(request.headers(), "Session-Expires") {
-            if let Some(session_expires) = parse_session_expires(se_header) {
-                let duration = Duration::from_secs(session_expires.delta_seconds() as u64);
+            let delta = se_header
+                .split(';')
+                .next()
+                .and_then(|delta| delta.trim().parse::<u64>().ok());
+            if let Some(delta) = delta {
+                let duration = Duration::from_secs(delta);
 
                 // Validate against Min-SE
                 if let Err(required_min) = validate_session_expires(duration, min_se) {
@@ -2877,7 +2882,7 @@ mod tests {
 
     #[test]
     fn validates_session_expires_too_small() {
-        // Invalid Session-Expires (< 90s) - parser rejects, treated as not present
+        // Session-Expires under RFC 4028's 90 s floor: refused 422 with the floor
         let mut headers = Headers::new();
         headers
             .push(
@@ -2914,9 +2919,13 @@ mod tests {
         )
         .expect("valid request");
 
-        // Parser rejects Session-Expires below 90, so validation passes (no valid header)
-        let result = UserAgentServer::validate_session_timer(&request, None);
-        assert!(result.is_ok());
+        let response = UserAgentServer::validate_session_timer(&request, None)
+            .expect_err("a 60 s session is under the floor");
+        assert_eq!(response.start_line().code(), 422);
+        assert_eq!(
+            header(response.headers(), "Min-SE").map(|v| v.as_str()),
+            Some("90")
+        );
     }
 
     #[test]

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **sip-dialog 0.4.0**: `non_refresher_expiry`, when the side that does not refresh a
+  session gives it up: the minimum of 32 s and a third of the interval before it
+  expires (RFC 4028 §10). `SessionTimerManager` emits `SessionExpired` then for a
+  non-refresher, so its BYE goes while the session still stands; a refresher's is
+  unchanged.
+
 - **sip-uac 0.8.0**: `CallHandle::invite_outcome` (and `invite_outcome_now`) report how
   the INVITE ended — `InviteOutcome::Final(code)` or `Terminated` — to anyone, any number
   of times, without taking the response `await_final` hands out. A B2BUA that cancelled a
@@ -17,6 +23,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never overtakes the ACK.
 
 ### Fixed
+
+- **sip-uas 0.5.1**: `UserAgentServer::validate_session_timer` refuses with 422 an
+  INVITE whose Session-Expires is under the Min-SE. It read the header with the typed
+  parser, which refuses an interval under 90 s and returned nothing — taken for "no
+  header", so the one interval 422 exists for was accepted. Found by FCP's tests
+  against SIPp.
+
+- **sip-uac 0.8.1**: every INVITE `IntegratedUAC` sends says `Supported: 100rel`
+  (RFC 3262 §3). Its INVITE transaction PRACKs every reliable provisional, but without
+  the offer a callee never rings reliably, and one that requires it refuses the call
+  (421). Found by FCP's tests against SIPp.
 
 - **sip-uac 0.8.0**: `CallHandle::cancel` no longer sends a CANCEL for an INVITE that
   has its final response (RFC 3261 §9.1); it returns an error and the caller ends an
