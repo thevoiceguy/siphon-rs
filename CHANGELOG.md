@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **sip-transport 0.6.1**: `set_ingress_rate_exemption`, the sources the per-source
+  ingress limits (UDP packets, stream frames) do not apply to — an SBC in front of the
+  node, a carrier trunk, another node of a cluster, whose rate is many parties' and not
+  one device's. A predicate over the source address, replaceable at any time (the
+  limits themselves are set once), and asked only about a message that would be
+  dropped. Before it, a peer over 200 messages a second lost the rest silently, however
+  trusted. Found by FCP's tests against SIPp.
+
 - **sip-dialog 0.4.0**: `non_refresher_expiry`, when the side that does not refresh a
   session gives it up: the minimum of 32 s and a third of the interval before it
   expires (RFC 4028 §10). `SessionTimerManager` emits `SessionExpired` then for a

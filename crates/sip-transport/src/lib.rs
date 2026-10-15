@@ -66,7 +66,7 @@ pub use mtls::{
     load_client_ca_roots, load_private_key, load_rustls_server_config_with_client_auth,
     ClientAuthMode, ClientIdentity,
 };
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -520,6 +520,42 @@ pub fn set_stream_rate_limit(config: RateLimitConfig) -> bool {
     STREAM_RATE_LIMITER.set(RateLimiter::new(config)).is_ok()
 }
 
+/// Decides whether a source address is exempt from the per-source ingress
+/// limits: a peer that carries many parties' traffic by design (an SBC in
+/// front of this node, a carrier trunk, another node of a cluster), whose
+/// rate is not one device's.
+pub type IngressExemption = Arc<dyn Fn(IpAddr) -> bool + Send + Sync>;
+
+static INGRESS_EXEMPTION: std::sync::RwLock<Option<IngressExemption>> =
+    std::sync::RwLock::new(None);
+
+/// Sets which sources the per-source ingress limits (UDP and stream) do not
+/// apply to, replacing any earlier setting; `None` exempts nobody. Unlike
+/// the limits themselves this may be called at any time, so a caller can
+/// follow a set of peers that changes while it runs.
+///
+/// The predicate is asked only about a message the limiter would drop, so
+/// sources under their limit cost nothing extra.
+pub fn set_ingress_rate_exemption(exemption: Option<IngressExemption>) {
+    let mut slot = INGRESS_EXEMPTION
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *slot = exemption;
+}
+
+fn ingress_exempt(ip: IpAddr) -> bool {
+    let slot = INGRESS_EXEMPTION
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    slot.as_ref().is_some_and(|exempt| exempt(ip))
+}
+
+/// Whether a message from `peer` gets past `limiter`: under its rate, or
+/// from an exempt source.
+fn admit_by_rate(limiter: &RateLimiter, peer: SocketAddr) -> bool {
+    limiter.check_by_ip(peer.ip()) || ingress_exempt(peer.ip())
+}
+
 fn udp_rate_limiter() -> &'static RateLimiter {
     UDP_RATE_LIMITER
         .get_or_init(|| RateLimiter::new(default_ingress_rate_config(DEFAULT_UDP_RATE_LIMIT_PPS)))
@@ -563,7 +599,7 @@ fn note_rate_limited(peer: SocketAddr, label: TransportLabel, limiter: &RateLimi
 /// `false` — the drop has already been counted against `label`.
 pub(crate) fn check_stream_rate(peer: SocketAddr, label: TransportLabel) -> bool {
     let limiter = stream_rate_limiter();
-    if limiter.check_by_ip(peer.ip()) {
+    if admit_by_rate(limiter, peer) {
         return true;
     }
     note_rate_limited(peer, label, limiter);
@@ -585,7 +621,7 @@ pub async fn run_udp(socket: Arc<UdpSocket>, tx: mpsc::Sender<InboundPacket>) ->
                 // Per-source rate limiting. Dropped packets are counted
                 // via TransportMetrics::on_rate_limited before we bail.
                 let limiter = udp_rate_limiter();
-                if !limiter.check_by_ip(peer.ip()) {
+                if !admit_by_rate(limiter, peer) {
                     note_rate_limited(peer, TransportLabel::Udp, limiter);
                     continue;
                 }
@@ -2597,6 +2633,33 @@ mod tests {
 
         // Restore the default so other tests observe expected state.
         set_established_idle_timeout(DEFAULT_ESTABLISHED_IDLE_TIMEOUT_SECS);
+    }
+
+    #[test]
+    fn an_exempt_source_is_never_rate_limited() {
+        // Addresses no other test uses: the limiter and the exemption are
+        // process-wide.
+        let exempt: SocketAddr = "203.0.113.90:5060".parse().unwrap();
+        let other: SocketAddr = "203.0.113.91:5060".parse().unwrap();
+        set_ingress_rate_exemption(Some(Arc::new(move |ip| ip == exempt.ip())));
+        let burst = 3 * u64::from(DEFAULT_STREAM_RATE_LIMIT_FPS);
+        let admitted = |peer| {
+            (0..burst)
+                .filter(|_| check_stream_rate(peer, TransportLabel::Tcp))
+                .count() as u64
+        };
+        assert_eq!(admitted(exempt), burst, "an exempt source is limited");
+        assert!(
+            admitted(other) < burst,
+            "a source not exempt is not limited"
+        );
+
+        // Replaced at runtime: the exempt source is limited again.
+        set_ingress_rate_exemption(None);
+        assert!(
+            admitted(exempt) < burst,
+            "the exemption outlived its removal"
+        );
     }
 
     #[test]
