@@ -1895,6 +1895,12 @@ impl IntegratedUAC {
         let target_uri = self.extract_uri(&target)?;
         let request = helper.create_invite_with_options(&target_uri, &options)?;
         drop(helper);
+        // A destination the caller resolved is where the request goes; the
+        // Request-URI it was built from stays as it is.
+        let target = match options.destination {
+            Some(destination) => RequestTarget::Resolved(destination),
+            None => target,
+        };
         self.send_new_invite_filtered(target, target_uri, request, None, options.filter)
             .await
     }
@@ -5961,6 +5967,35 @@ mod tests {
             call.cancel().await.is_err(),
             "an answered INVITE is not cancelled"
         );
+    }
+
+    /// A destination the caller resolved is where the INVITE goes, and the
+    /// Request-URI keeps the name it was given: a carrier that knows its
+    /// trunks by domain refuses an INVITE addressed to its IP.
+    #[tokio::test]
+    async fn an_invite_goes_to_its_destination_and_keeps_the_name() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = auth_test_uac(dispatcher.clone(), manager.clone(), None);
+
+        let options = InviteOptions {
+            destination: Some(sip_dns::DnsTarget::unchecked_new(
+                "127.0.0.1",
+                5099,
+                sip_dns::Transport::Udp,
+            )),
+            ..InviteOptions::with_sdp(Some("v=0\r\n"))
+        };
+        let _call = uac
+            .invite_with_options("sip:+15185550100@carrier.invalid", options)
+            .await
+            .unwrap();
+
+        let invite = wait_for_request(&dispatcher, |r| r.method() == &Method::Invite).await;
+        assert_eq!(invite.uri().as_str(), "sip:+15185550100@carrier.invalid");
+        let sent = dispatcher.sent.lock().await;
+        let (ctx, _) = sent.first().unwrap();
+        assert_eq!(ctx.peer(), "127.0.0.1:5099".parse().unwrap());
     }
 
     /// Same retry for a 401 challenge: the retry carries Authorization
