@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **sip-uac 0.9.0**: `InviteOptions::destination`, where to send a new INVITE when the
+  caller resolved the Request-URI's host itself (RFC 3263) and chose among its addresses
+  — failing over between a carrier's addresses, say. The Request-URI keeps the name: a
+  carrier that knows its trunks by domain (Twilio's Elastic SIP Trunking) refuses an
+  INVITE addressed to its IP. A new public field, so a struct literal of `InviteOptions`
+  needs it (or `..Default::default()`). Found by FCP's real-world testing against Twilio.
+
 - **sip-transport 0.6.1**: `set_ingress_rate_exemption`, the sources the per-source
   ingress limits (UDP packets, stream frames) do not apply to — an SBC in front of the
   node, a carrier trunk, another node of a cluster, whose rate is many parties' and not

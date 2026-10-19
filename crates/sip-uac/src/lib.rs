@@ -281,6 +281,12 @@ pub struct InviteOptions {
     /// client, which sends the request, can honour this; the low-level
     /// builder leaves it alone.
     pub filter: Option<RequestFilter>,
+    /// Where to send the INVITE, when the caller has already resolved the
+    /// Request-URI's host (RFC 3263) and chosen among its addresses: the
+    /// Request-URI keeps the name, as a carrier that knows its trunks by
+    /// domain needs. Only the integrated client honours it, and not down a
+    /// flow, which goes where the flow does.
+    pub destination: Option<sip_dns::DnsTarget>,
 }
 
 impl InviteOptions {
@@ -3849,6 +3855,7 @@ mod tests {
             body: Some(InviteBody::multipart(&body)),
             extra_headers: extra,
             from: Some(SipUri::parse("sip:+15185550100@example.com").unwrap()),
+            destination: None,
         };
         let invite = uac.create_invite_with_options(&target, &options).unwrap();
         assert!(invite
