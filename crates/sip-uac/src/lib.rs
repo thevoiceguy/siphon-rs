@@ -2463,9 +2463,17 @@ impl UserAgentClient {
             .push(SmolStr::new("Call-ID"), dialog.id().call_id())
             .unwrap();
 
-        // CSeq (next local CSeq for PRACK)
-        let mut mutable_dialog = dialog.clone();
+        // CSeq (next local CSeq for PRACK). The PRACK spends a number in
+        // the dialog, so the stored dialog keeps it: from a clone, the
+        // dialog the 2xx confirms started again at the INVITE's CSeq and
+        // its BYE reused the PRACK's, which a phone refuses 500
+        // (RFC 3261 §12.2.1.1).
+        let mut mutable_dialog = self
+            .dialog_manager
+            .get(dialog.id())
+            .unwrap_or_else(|| dialog.clone());
         let prack_cseq = mutable_dialog.next_local_cseq();
+        let _ = self.dialog_manager.insert(mutable_dialog);
         headers
             .push(
                 SmolStr::new("CSeq"),
@@ -4550,6 +4558,44 @@ mod tests {
             dialog.local_uri().as_str(),
             "sip:1000@pbx.example.com",
             "dialog took the UAC's configured identity instead of the INVITE's From"
+        );
+    }
+
+    /// A PRACK spends a CSeq in the dialog: the dialog the 2xx confirms
+    /// goes on from it. Built from a clone, the PRACK's number was lost
+    /// and the BYE reused it, which a Poly VVX refuses 500 — a parked
+    /// call's parker kept the call on hold (FCP `docs/DEEP_TESTING.md` D8).
+    #[test]
+    fn a_bye_after_a_prack_takes_the_next_cseq() {
+        let uac = UserAgentClient::new(
+            SipUri::parse("sip:siphon@10.0.0.2").unwrap(),
+            SipUri::parse("sip:siphon@10.0.0.2:5060").unwrap(),
+        );
+        let (invite, ok) = invite_and_ok("<sip:1000@pbx.example.com>;tag=abc123");
+        let mut ringing_headers = ok.headers().clone();
+        ringing_headers
+            .push(SmolStr::new("Require"), SmolStr::new("100rel"))
+            .unwrap();
+        ringing_headers
+            .push(SmolStr::new("RSeq"), SmolStr::new("8193"))
+            .unwrap();
+        let ringing = Response::new(
+            StatusLine::new(180, "Ringing").expect("valid status line"),
+            ringing_headers,
+            Bytes::new(),
+        )
+        .expect("valid response");
+
+        let early = uac.process_invite_response(&invite, &ringing).unwrap();
+        let prack = uac.create_prack(&invite, &ringing, &early).unwrap();
+        assert_eq!(prack.headers().get("CSeq").unwrap(), "2 PRACK");
+
+        let confirmed = uac.process_invite_response(&invite, &ok).unwrap();
+        let bye = uac.create_bye(&confirmed);
+        assert_eq!(
+            bye.headers().get("CSeq").unwrap(),
+            "3 BYE",
+            "the BYE reused the PRACK's CSeq"
         );
     }
 
