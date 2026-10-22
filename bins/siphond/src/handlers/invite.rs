@@ -200,9 +200,16 @@ impl InviteHandler {
             "Forwarding re-INVITE to other leg"
         );
 
-        // Send the re-INVITE via TCP
+        // Over the transport the other party's contact names (UDP unless it
+        // says otherwise), as the call's INVITE went.
         let payload = sip_parse::serialize_request(&outgoing_reinvite);
-        sip_transport::send_tcp(&target_addr, &payload).await?;
+        crate::proxy_utils::send_to_contact(
+            services,
+            other_dialog.remote_target(),
+            target_addr,
+            payload,
+        )
+        .await?;
 
         info!(
             call_id,
@@ -1031,7 +1038,7 @@ impl InviteHandler {
                 info!(call_id, "INVITE forwarded via UDP successfully");
             }
             sip_transaction::TransportKind::Tcp => {
-                sip_transport::send_tcp(&target_addr, &payload).await?;
+                crate::proxy_utils::send_tcp_pooled(services, target_addr, payload).await?;
                 info!(call_id, "INVITE forwarded via TCP successfully");
             }
             sip_transaction::TransportKind::Tls => {

@@ -141,6 +141,24 @@ pub fn next_hop_from_request(request: &Request, local_uri: &SipUri) -> (SipUri, 
     )
 }
 
+/// Whether a contact's URI says `transport=tcp`.
+fn contact_over_tcp(contact: &sip_core::SipUri) -> bool {
+    contact
+        .params()
+        .get(&smol_str::SmolStr::new("transport"))
+        .and_then(|v| v.as_ref())
+        .is_some_and(|t| t.eq_ignore_ascii_case("tcp"))
+}
+
+/// The Via transport of a request [`send_to_contact`] sends to `contact`.
+pub fn contact_via_transport(contact: &sip_core::SipUri) -> &'static str {
+    if contact_over_tcp(contact) {
+        "TCP"
+    } else {
+        "UDP"
+    }
+}
+
 /// Send to a registered contact over the transport it registered with: TCP
 /// (through the pool, whose replies are read) when its URI says
 /// `transport=tcp`, else UDP.
@@ -150,17 +168,8 @@ pub async fn send_to_contact(
     addr: std::net::SocketAddr,
     payload: bytes::Bytes,
 ) -> Result<()> {
-    let over_tcp = contact
-        .params()
-        .get(&smol_str::SmolStr::new("transport"))
-        .and_then(|v| v.as_ref())
-        .is_some_and(|t| t.eq_ignore_ascii_case("tcp"));
-    if over_tcp {
-        let pool = services
-            .tcp_pool
-            .get()
-            .ok_or_else(|| anyhow!("TCP pool not available"))?;
-        pool.send_tcp(addr, payload).await
+    if contact_over_tcp(contact) {
+        send_tcp_pooled(services, addr, payload).await
     } else {
         let socket = services
             .udp_socket
@@ -168,6 +177,20 @@ pub async fn send_to_contact(
             .ok_or_else(|| anyhow!("UDP socket not available"))?;
         sip_transport::send_udp(socket.as_ref(), &addr, &payload).await
     }
+}
+
+/// Send over TCP through the pool, so what comes back on the connection is
+/// read into the inbound pipeline; an ad hoc connection's replies are lost.
+pub async fn send_tcp_pooled(
+    services: &ServiceRegistry,
+    addr: std::net::SocketAddr,
+    payload: bytes::Bytes,
+) -> Result<()> {
+    let pool = services
+        .tcp_pool
+        .get()
+        .ok_or_else(|| anyhow!("TCP pool not available"))?;
+    pool.send_tcp(addr, payload).await
 }
 
 /// The branch of a request's top Via.
@@ -246,7 +269,7 @@ pub async fn cancel_forwarded_invite(
                 .ok_or_else(|| anyhow!("UDP socket not available"))?;
             sip_transport::send_udp(socket.as_ref(), &forwarded.target, &payload).await?;
         }
-        TransportKind::Tcp => sip_transport::send_tcp(&forwarded.target, &payload).await?,
+        TransportKind::Tcp => send_tcp_pooled(services, forwarded.target, payload).await?,
         TransportKind::Tls => {
             #[cfg(feature = "tls")]
             {
@@ -366,7 +389,7 @@ pub async fn forward_request(
             sip_transport::send_udp(socket.as_ref(), &target_addr, &payload).await?;
         }
         TransportKind::Tcp => {
-            sip_transport::send_tcp(&target_addr, &payload).await?;
+            send_tcp_pooled(services, target_addr, payload).await?;
         }
         TransportKind::Tls => {
             #[cfg(feature = "tls")]
