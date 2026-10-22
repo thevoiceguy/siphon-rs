@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and no `Require` header — or with `Supported: 100rel` — was PRACKed, and the callee
   answered the unrequested PRACK with 481.
   ([#145](https://github.com/thevoiceguy/siphon-rs/issues/145), in part)
+
 - **sip-transport 0.7.1**: a connection the peer closes at once no longer stays
   pooled. A pooled connection's reader was spawned before its entry was inserted,
   so on a multi-thread runtime a reader that hit EOF first removed nothing and the
