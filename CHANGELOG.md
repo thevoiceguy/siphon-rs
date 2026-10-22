@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026-10-22.2] — workspace release
+
+Crate versions in this release: sip-transaction 0.7.3, sip-transport 0.7.1,
+sip-uac 0.9.3, siphond 0.7.2. (sip-core 0.7.8, sip-parse 0.4.0, sip-dialog 0.4.0,
+sip-uas 0.5.1, sip-registrar 0.3.2, sip-sdp 0.3.2, sip-dns 0.3.0, sip-auth 0.4.0,
+sip-observe 0.3.0, sip-ratelimit 0.3.0, sip-testkit 0.1.1, sip-proxy 0.3.0,
+sip-hep 0.0.1, and sip-identity 0.3.0 are unchanged.)
+
+This release fixes the findings of the review behind 2026-10-22.1
+([#144](https://github.com/thevoiceguy/siphon-rs/issues/144)–[#150](https://github.com/thevoiceguy/siphon-rs/issues/150)).
+CI now also lints feature-gated code (`clippy --all-features`).
+
+Breaking changes: none. Every bump is a patch, and no public signature or field
+changed. A consumer takes this release by bumping its tag alone. Two behavior
+changes are worth knowing:
+- A server INVITE transaction now drops a second final response from its TU,
+  where it used to send it (RFC 3261 Fig. 7). One example is a 200 racing the 487
+  for a CANCEL.
+- The automatic PRACK now goes only to a provisional that carries both an RSeq and
+  `Require: 100rel` (RFC 3262 §4). Before, an RSeq alone, or `Supported: 100rel`,
+  drew a PRACK.
+
 ### Fixed
 
 - **sip-transaction 0.7.3**: a client INVITE transaction delivers one final. After a
