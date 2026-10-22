@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -88,6 +89,8 @@ struct PoolEntry {
     /// Which connection this is: a key is reused when a connection is
     /// replaced, so its tasks remove their own entry and no other.
     id: u64,
+    /// Shared with this connection's tasks; see [`EntryState`].
+    state: Arc<EntryState>,
     sender: Sender<Bytes>,
     last_used: Instant,
     /// Abort handles for spawned tasks (writer + reader) to clean up on eviction.
@@ -96,6 +99,38 @@ struct PoolEntry {
     /// the PoolEntry releases the permit, which is what enforces the cap
     /// atomically across concurrent inserts.
     _permit: OwnedSemaphorePermit,
+}
+
+/// What a connection's tasks and the pool know about its entry.
+#[derive(Debug, Default)]
+struct EntryState {
+    /// Set by a task that ends the connection, before it removes the
+    /// entry. The tasks start before the entry is inserted, so that
+    /// removal can come first and miss; the insert then sees this and
+    /// undoes itself (see [`insert_entry`]).
+    ended: AtomicBool,
+    /// Set by `TlsPool::close_all`: the writer was cancelled by the
+    /// application, not by a dead peer, so no event reports it.
+    closed_locally: AtomicBool,
+}
+
+/// One connection's entry, as its tasks name it.
+#[derive(Debug, Clone)]
+struct EntryHandle {
+    id: u64,
+    state: Arc<EntryState>,
+}
+
+impl EntryHandle {
+    /// The connection has ended: remove its entry, now or when it is
+    /// inserted.
+    fn end<K>(&self, map: &DashMap<K, PoolEntry>, key: &K)
+    where
+        K: std::hash::Hash + Eq,
+    {
+        self.state.ended.store(true, Ordering::SeqCst);
+        remove_entry(map, key, self.id);
+    }
 }
 
 impl Drop for PoolEntry {
@@ -110,7 +145,8 @@ impl PoolEntry {
     fn new(sender: Sender<Bytes>, permit: OwnedSemaphorePermit) -> Self {
         static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         Self {
-            id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            state: Arc::default(),
             sender,
             last_used: Instant::now(),
             task_handles: Vec::new(),
@@ -126,6 +162,13 @@ impl PoolEntry {
         let sema = Arc::new(Semaphore::new(1));
         let permit = sema.try_acquire_owned().expect("permit available");
         Self::new(sender, permit)
+    }
+
+    fn handle(&self) -> EntryHandle {
+        EntryHandle {
+            id: self.id,
+            state: Arc::clone(&self.state),
+        }
     }
 
     fn touch(&mut self) {
@@ -258,7 +301,7 @@ fn spawn_writer_supervisor<K, F>(
     writer: tokio::task::JoinHandle<()>,
     map: Arc<DashMap<K, PoolEntry>>,
     key: K,
-    entry_id: u64,
+    entry: EntryHandle,
     transport: &'static str,
     format_key: F,
     event_emitter: Option<WriterEventEmitter>,
@@ -270,6 +313,7 @@ fn spawn_writer_supervisor<K, F>(
         let outcome = writer.await;
         let key_label = format_key(&key);
         let mut event_reason: Option<String> = None;
+        let mut report = true;
         match outcome {
             Ok(()) => {
                 debug!(
@@ -294,16 +338,18 @@ fn spawn_writer_supervisor<K, F>(
                     "pool writer task cancelled, removing entry"
                 );
                 event_reason = Some(format!("writer cancelled: {e}"));
+                // Closed by the application: not a death to redial on.
+                report = !entry.state.closed_locally.load(Ordering::SeqCst);
             }
         }
         // This connection's entry only: a newer one may hold the key.
-        remove_entry(&map, &key, entry_id);
+        entry.end(&map, &key);
 
         // Emit a ConnectionEvent so observers (metrics, reconnect
         // policies) see the death without waiting for the next send
         // attempt. The emitter knows the peer SocketAddr; WS
         // supervisors don't provide one (URL-keyed).
-        if let Some(emitter) = event_emitter {
+        if let Some(emitter) = event_emitter.filter(|_| report) {
             let event = match event_reason {
                 Some(reason) => ConnectionEvent::Failed {
                     transport: emitter.transport,
@@ -330,6 +376,36 @@ where
     K: std::hash::Hash + Eq,
 {
     map.remove_if(key, |_, entry| entry.id == entry_id);
+}
+
+/// Pool `entry` under `key`. Its tasks are already running, and one that
+/// ended the connection before this insert removed nothing; the entry is
+/// then removed again here rather than left pooled with a dead peer.
+fn insert_entry<K>(map: &DashMap<K, PoolEntry>, key: K, entry: PoolEntry)
+where
+    K: std::hash::Hash + Eq + Clone,
+{
+    let handle = entry.handle();
+    map.insert(key.clone(), entry);
+    // A task's removal and this insert both take the key's shard lock,
+    // so a removal that came first set the flag before this reads it.
+    if handle.state.ended.load(Ordering::SeqCst) {
+        remove_entry(map, &key, handle.id);
+    }
+}
+
+/// The sender of the connection pooled under `key`, and its id, touched
+/// as used. The shard guard is dropped before returning: held across a
+/// send parked on a full channel (a peer that stopped reading), it
+/// blocks every other access to the shard — readers' and supervisors'
+/// removals, sweeps — meanwhile.
+fn reuse<K>(map: &DashMap<K, PoolEntry>, key: &K) -> Option<(u64, Sender<Bytes>)>
+where
+    K: std::hash::Hash + Eq,
+{
+    let mut entry = map.get_mut(key)?;
+    entry.touch();
+    Some((entry.id, entry.sender.clone()))
 }
 
 /// Bundle of data needed for the supervisor to synthesise a
@@ -528,17 +604,15 @@ impl ConnectionPool {
         debug!(peer = %addr, "send_tcp called");
 
         // Try to use existing connection
-        if let Some(mut entry) = self.tcp.get_mut(&addr) {
+        if let Some((id, sender)) = reuse(&self.tcp, &addr) {
             debug!(peer = %addr, "found existing TCP connection, reusing");
-            entry.touch(); // Update last activity time
-            if entry.sender.send(payload.clone()).await.is_ok() {
+            if sender.send(payload.clone()).await.is_ok() {
                 debug!(peer = %addr, "reused existing TCP connection successfully");
                 return Ok(());
             }
-            // Connection failed, remove it
+            // Connection failed, remove it (and not one that replaced it)
             debug!(peer = %addr, "existing TCP connection failed, removing");
-            drop(entry);
-            self.tcp.remove(&addr);
+            remove_entry(&self.tcp, &addr, id);
         }
 
         debug!(peer = %addr, "no existing connection found, creating new TCP connection");
@@ -585,12 +659,12 @@ impl ConnectionPool {
         // instead of sending into a dead channel. Panics are surfaced
         // as a warning; previously they were silently dropped by
         // `tokio::spawn`.
-        let entry_id = entry.id;
+        let entry_ref = entry.handle();
         spawn_writer_supervisor(
             writer_handle,
             Arc::clone(&self.tcp),
             addr,
-            entry_id,
+            entry_ref.clone(),
             "tcp",
             move |peer| format!("{peer}"),
             Some(WriterEventEmitter {
@@ -694,7 +768,7 @@ impl ConnectionPool {
                 }
                 // The peer has gone: a send must not be written into the
                 // dead socket, where nothing answers it.
-                remove_entry(&pool, &peer, entry_id);
+                entry_ref.end(&pool, &peer);
             });
             entry.task_handles.push(reader_handle.abort_handle());
         } else {
@@ -702,7 +776,8 @@ impl ConnectionPool {
             debug!(peer = %addr, "inbound_tx is None, skipping TCP client reader task");
         }
 
-        self.tcp.insert(addr, entry);
+        let entry_id = entry.id;
+        insert_entry(&self.tcp, addr, entry);
         debug!(peer = %addr, "inserted connection into pool");
 
         let result = tx
@@ -710,7 +785,7 @@ impl ConnectionPool {
             .await
             .map_err(|_| anyhow!("connection writer closed"));
         if result.is_err() {
-            self.tcp.remove(&addr);
+            remove_entry(&self.tcp, &addr, entry_id);
         }
         result
     }
@@ -738,14 +813,12 @@ impl ConnectionPool {
         debug!(url = %key, "send_ws called");
 
         // Try to use existing connection
-        if let Some(mut entry) = self.ws.get_mut(&key) {
-            entry.touch();
-            if entry.sender.send(payload.clone()).await.is_ok() {
+        if let Some((id, sender)) = reuse(&self.ws, &key) {
+            if sender.send(payload.clone()).await.is_ok() {
                 debug!(url = %key, "reused existing WS connection successfully");
                 return Ok(());
             }
-            drop(entry);
-            self.ws.remove(&key);
+            remove_entry(&self.ws, &key, id);
             debug!(url = %key, "existing WS connection failed, removed");
         }
 
@@ -788,12 +861,12 @@ impl ConnectionPool {
             }
         });
         entry.task_handles.push(writer_handle.abort_handle());
-        let entry_id = entry.id;
+        let entry_ref = entry.handle();
         spawn_writer_supervisor(
             writer_handle,
             Arc::clone(&self.ws),
             key.clone(),
-            entry_id,
+            entry_ref.clone(),
             "ws",
             |url| url.clone(),
             // WS connections are URL-keyed — no SocketAddr available
@@ -854,7 +927,7 @@ impl ConnectionPool {
                             }
                         }
                     }
-                    remove_entry(&pool, &reader_key, entry_id);
+                    entry_ref.end(&pool, &reader_key);
                 });
                 entry.task_handles.push(reader_handle.abort_handle());
             }
@@ -862,14 +935,15 @@ impl ConnectionPool {
             drop(inbound_tx_guard);
         }
 
-        self.ws.insert(key.clone(), entry);
+        let entry_id = entry.id;
+        insert_entry(&self.ws, key.clone(), entry);
 
         let result = tx
             .send(payload)
             .await
             .map_err(|_| anyhow!("WS connection writer closed"));
         if result.is_err() {
-            self.ws.remove(&key);
+            remove_entry(&self.ws, &key, entry_id);
         }
         result
     }
@@ -1092,9 +1166,16 @@ impl TlsPool {
     /// aborted, so its socket closes and the peer sees the connection end.
     /// What a phone app does when it is put to sleep (its connections to
     /// the server go, and its next request opens a new one). How many.
+    ///
+    /// The closes are the caller's own, so no [`ConnectionEvent`] reports
+    /// them: a reconnect policy would take one for a death and redial.
     pub fn close_all(&self) -> usize {
-        let closed = self.inner.len();
-        self.inner.clear();
+        let mut closed = 0;
+        self.inner.retain(|_, entry| {
+            entry.state.closed_locally.store(true, Ordering::SeqCst);
+            closed += 1;
+            false
+        });
         if closed > 0 {
             debug!(closed, "closed every TLS connection");
         }
@@ -1147,14 +1228,12 @@ impl TlsPool {
         let key = (addr, server_name.clone());
 
         // Try to use existing connection (same peer + SNI).
-        if let Some(mut entry) = self.inner.get_mut(&key) {
-            entry.touch(); // Update last activity time
-            if entry.sender.send(payload.clone()).await.is_ok() {
+        if let Some((id, sender)) = reuse(&self.inner, &key) {
+            if sender.send(payload.clone()).await.is_ok() {
                 return Ok(());
             }
-            // Connection failed, remove it
-            drop(entry);
-            self.inner.remove(&key);
+            // Connection failed, remove it (and not one that replaced it)
+            remove_entry(&self.inner, &key, id);
         }
 
         // RFC 5923 connection reuse: fall back to any live connection to the
@@ -1177,13 +1256,11 @@ impl TlsPool {
             .find(|e| e.key().0 == addr)
             .map(|e| e.key().clone());
         if let Some(k) = addr_match {
-            if let Some(mut entry) = self.inner.get_mut(&k) {
-                entry.touch();
-                if entry.sender.send(payload.clone()).await.is_ok() {
+            if let Some((id, sender)) = reuse(&self.inner, &k) {
+                if sender.send(payload.clone()).await.is_ok() {
                     return Ok(());
                 }
-                drop(entry);
-                self.inner.remove(&k);
+                remove_entry(&self.inner, &k, id);
             }
         }
 
@@ -1230,12 +1307,12 @@ impl TlsPool {
             let _ = writer.shutdown().await;
         });
         entry.task_handles.push(writer_handle.abort_handle());
-        let entry_id = entry.id;
+        let entry_ref = entry.handle();
         spawn_writer_supervisor(
             writer_handle,
             Arc::clone(&self.inner),
             key.clone(),
-            entry_id,
+            entry_ref.clone(),
             "tls",
             |(peer, server_name)| format!("{peer} ({server_name})"),
             Some(WriterEventEmitter {
@@ -1314,21 +1391,22 @@ impl TlsPool {
                 }
                 // The peer has gone: a send must not be written into the
                 // dead connection, where nothing answers it.
-                remove_entry(&pool, &reader_key, entry_id);
+                entry_ref.end(&pool, &reader_key);
             });
             entry.task_handles.push(reader_handle.abort_handle());
         } else {
             drop(inbound_tx_guard);
         }
 
-        self.inner.insert(key.clone(), entry);
+        let entry_id = entry.id;
+        insert_entry(&self.inner, key.clone(), entry);
 
         let result = tx
             .send(payload)
             .await
             .map_err(|_| anyhow!("tls connection writer closed"));
         if result.is_err() {
-            self.inner.remove(&key);
+            remove_entry(&self.inner, &key, entry_id);
         }
         result
     }
@@ -1377,7 +1455,7 @@ mod tests {
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 5060);
         let (tx, _rx) = mpsc::channel::<Bytes>(1);
         let entry = PoolEntry::for_tests(tx);
-        let entry_id = entry.id;
+        let entry_ref = entry.handle();
         pool.tcp.insert(addr, entry);
         assert_eq!(pool.len(), 1);
 
@@ -1388,7 +1466,7 @@ mod tests {
             writer,
             Arc::clone(&pool.tcp),
             addr,
-            entry_id,
+            entry_ref,
             "tcp",
             move |peer| format!("{peer}"),
             None,
@@ -1449,7 +1527,7 @@ mod tests {
         let pool = Arc::new(ConnectionPool::with_limits(4, Duration::from_secs(60)));
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 5062);
         let (old_tx, _old_rx) = mpsc::channel::<Bytes>(1);
-        let old_id = PoolEntry::for_tests(old_tx).id;
+        let old = PoolEntry::for_tests(old_tx).handle();
         let (new_tx, _new_rx) = mpsc::channel::<Bytes>(1);
         pool.tcp.insert(addr, PoolEntry::for_tests(new_tx));
 
@@ -1458,7 +1536,7 @@ mod tests {
             writer,
             Arc::clone(&pool.tcp),
             addr,
-            old_id,
+            old,
             "tcp",
             move |peer| format!("{peer}"),
             None,
@@ -1473,7 +1551,7 @@ mod tests {
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 5061);
         let (tx, _rx) = mpsc::channel::<Bytes>(1);
         let entry = PoolEntry::for_tests(tx);
-        let entry_id = entry.id;
+        let entry_ref = entry.handle();
         pool.tcp.insert(addr, entry);
 
         let writer = tokio::spawn(async {
@@ -1483,7 +1561,7 @@ mod tests {
             writer,
             Arc::clone(&pool.tcp),
             addr,
-            entry_id,
+            entry_ref,
             "tcp",
             move |peer| format!("{peer}"),
             None,
@@ -1966,5 +2044,178 @@ mod tests {
         assert!(task.await.unwrap_err().is_cancelled());
         assert!(rx.recv().await.is_none(), "the writer's channel ends");
         assert_eq!(pool.close_all(), 0);
+    }
+
+    /// A connection's reader can hit EOF and remove its entry before the
+    /// send that opened it has inserted the entry. The insert must not
+    /// then pool the dead connection (#144).
+    #[test]
+    fn an_entry_ended_before_its_insert_is_not_pooled() {
+        let map = DashMap::new();
+        let addr: SocketAddr = "127.0.0.1:5063".parse().unwrap();
+        let (tx, _rx) = mpsc::channel::<Bytes>(1);
+        let entry = PoolEntry::for_tests(tx);
+        // The reader ran first: its removal finds nothing.
+        entry.handle().end(&map, &addr);
+        insert_entry(&map, addr, entry);
+        assert!(map.is_empty(), "the ended connection was pooled");
+    }
+
+    /// The same race end to end, on a runtime where the reader runs
+    /// beside the send that spawned it: a peer that accepts and hangs up
+    /// at once never leaves its connection pooled.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_connection_closed_at_once_never_stays_pooled() {
+        use tokio::net::TcpListener;
+        let frame = Bytes::from_static(b"OPTIONS sip:a SIP/2.0\r\nContent-Length: 0\r\n\r\n");
+        for _ in 0..50 {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(async move {
+                if let Ok((stream, _)) = listener.accept().await {
+                    drop(stream);
+                }
+            });
+            let pool = ConnectionPool::with_limits(4, Duration::from_secs(60))
+                .with_keepalive_interval(None);
+            let (inbound_tx, _inbound_rx) = mpsc::channel(8);
+            pool.set_inbound_tx(inbound_tx).await;
+            let _ = pool.send_tcp(addr, frame.clone()).await;
+            for _ in 0..200 {
+                if pool.is_empty() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            assert!(pool.is_empty(), "the closed connection is still pooled");
+        }
+    }
+
+    /// Open a pooled connection whose peer has stopped reading: its send
+    /// channel is full, so a send on it parks. Returns that send's task
+    /// and the channel's receiving end (the stalled writer).
+    async fn park_a_send(
+        pool: &Arc<ConnectionPool>,
+        addr: SocketAddr,
+    ) -> (
+        u64,
+        tokio::task::JoinHandle<Result<()>>,
+        mpsc::Receiver<Bytes>,
+    ) {
+        let (tx, rx) = mpsc::channel::<Bytes>(1);
+        tx.try_send(Bytes::new()).unwrap();
+        let entry = PoolEntry::for_tests(tx);
+        let id = entry.id;
+        pool.tcp.insert(addr, entry);
+        let send = tokio::spawn({
+            let pool = Arc::clone(pool);
+            async move { pool.send_tcp(addr, Bytes::from_static(b"x")).await }
+        });
+        // On this single-threaded runtime the send runs to its park.
+        tokio::task::yield_now().await;
+        assert!(!send.is_finished());
+        (id, send, rx)
+    }
+
+    /// A send parked on a full connection holds no lock on the pool:
+    /// the connection's reader or supervisor can still remove it (#144).
+    #[tokio::test]
+    async fn a_parked_send_does_not_lock_the_pool() {
+        let pool = Arc::new(ConnectionPool::with_limits(4, Duration::from_secs(60)));
+        // Nothing listens here, so the send's redial fails fast.
+        let addr: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let (_, send, rx) = park_a_send(&pool, addr).await;
+
+        // Another thread, as a reader on another worker would be.
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let map = Arc::clone(&pool.tcp);
+        std::thread::spawn(move || {
+            map.remove(&addr);
+            let _ = done_tx.send(());
+        });
+        let removed = done_rx.recv_timeout(Duration::from_secs(2)).is_ok();
+        assert!(removed, "a parked send blocked a removal");
+
+        drop(rx);
+        let _ = send.await;
+    }
+
+    /// A send that finds its connection dead removes that connection,
+    /// not a newer one a concurrent send pooled under the same peer.
+    #[tokio::test]
+    async fn a_failed_send_removes_only_its_own_connection() {
+        let pool = Arc::new(ConnectionPool::with_limits(4, Duration::from_secs(60)));
+        let addr: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let (old_id, send, old_rx) = park_a_send(&pool, addr).await;
+
+        // A concurrent send replaced the connection meanwhile (from
+        // another thread, so a lock held by the parked send fails the
+        // test rather than hanging it).
+        let (new_tx, _new_rx) = mpsc::channel::<Bytes>(1);
+        let newer = PoolEntry::for_tests(new_tx);
+        let new_id = newer.id;
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let map = Arc::clone(&pool.tcp);
+        std::thread::spawn(move || {
+            let _ = done_tx.send(map.insert(addr, newer).map(|e| e.id));
+        });
+        let replaced = done_rx.recv_timeout(Duration::from_secs(2));
+        assert_eq!(replaced, Ok(Some(old_id)), "the replacement didn't happen");
+
+        // The old connection's writer dies; the parked send fails over.
+        drop(old_rx);
+        assert!(send.await.unwrap().is_err(), "nothing listens to redial");
+        assert_eq!(
+            pool.tcp.get(&addr).map(|e| e.id),
+            Some(new_id),
+            "the newer connection was removed"
+        );
+    }
+
+    /// Connections the application closes with `close_all` are not
+    /// reported as failures: a reconnect policy would redial them (#144).
+    #[cfg(feature = "tls")]
+    #[tokio::test]
+    async fn close_all_reports_no_connection_event() {
+        let pool = TlsPool::new();
+        let mut events = pool.subscribe_events();
+        let key: (SocketAddr, String) = ("127.0.0.1:5061".parse().unwrap(), "a".to_string());
+        let (tx, _rx) = mpsc::channel::<Bytes>(4);
+        let mut entry = PoolEntry::for_tests(tx);
+        let handle = entry.handle();
+        let writer = tokio::spawn(std::future::pending::<()>());
+        entry.task_handles.push(writer.abort_handle());
+        spawn_writer_supervisor(
+            writer,
+            Arc::clone(&pool.inner),
+            key.clone(),
+            handle.clone(),
+            "tls",
+            |(peer, _)| format!("{peer}"),
+            Some(WriterEventEmitter {
+                transport: TransportKind::Tls,
+                peer: key.0,
+                tx: pool.events_tx.clone(),
+            }),
+        );
+        pool.inner.insert(key, entry);
+
+        assert_eq!(pool.close_all(), 1);
+        // The supervisor marks the entry ended before it would report.
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !handle.state.ended.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the supervisor saw the writer end");
+        tokio::task::yield_now().await;
+        assert!(
+            matches!(
+                events.try_recv(),
+                Err(broadcast::error::TryRecvError::Empty)
+            ),
+            "close_all reported a connection death"
+        );
     }
 }

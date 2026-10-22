@@ -544,10 +544,12 @@ pub fn set_ingress_rate_exemption(exemption: Option<IngressExemption>) {
 }
 
 fn ingress_exempt(ip: IpAddr) -> bool {
-    let slot = INGRESS_EXEMPTION
+    // Asked outside the lock: a predicate may itself set the exemption.
+    let exemption = INGRESS_EXEMPTION
         .read()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    slot.as_ref().is_some_and(|exempt| exempt(ip))
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    exemption.is_some_and(|exempt| exempt(ip))
 }
 
 /// Whether a message from `peer` gets past `limiter`: under its rate, or
@@ -729,6 +731,9 @@ pub async fn run_tcp(bind: &str, tx: mpsc::Sender<InboundPacket>) -> Result<()> 
 /// [`serve_tcp`] accepts on. Bound before anything is served, so a caller
 /// can return only once peers can connect — a spawned [`run_tcp`] binds
 /// whenever its task first runs, and a connection before that is refused.
+///
+/// Must be called within a tokio runtime (it registers the listener with
+/// the runtime's reactor); it panics otherwise.
 pub fn bind_tcp(bind: &str) -> Result<TcpListener> {
     let bind_addr: SocketAddr = bind
         .parse()
@@ -1031,6 +1036,9 @@ impl WsAcceptPolicy {
 }
 
 #[cfg(feature = "ws")]
+// The upgrade callback's `Err` is tungstenite's `ErrorResponse`, a type its
+// `Callback` trait fixes, so it can't be boxed.
+#[allow(clippy::result_large_err)]
 async fn handle_ws_connection<S>(
     peer: SocketAddr,
     local: SocketAddr,
@@ -2635,8 +2643,35 @@ mod tests {
         set_established_idle_timeout(DEFAULT_ESTABLISHED_IDLE_TIMEOUT_SECS);
     }
 
+    /// Held by tests that set the process-wide ingress exemption.
+    static EXEMPTION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A predicate that changes the exemption doesn't deadlock: it is
+    /// asked outside the lock (#144).
+    #[test]
+    fn an_exemption_predicate_may_set_the_exemption() {
+        let _serial = EXEMPTION_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        set_ingress_rate_exemption(Some(Arc::new(|_| {
+            set_ingress_rate_exemption(None);
+            true
+        })));
+        // On another thread, so a deadlock fails the test.
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = done_tx.send(ingress_exempt("203.0.113.92".parse().unwrap()));
+        });
+        let asked = done_rx.recv_timeout(std::time::Duration::from_secs(2));
+        assert_eq!(asked, Ok(true), "the predicate deadlocked");
+        assert!(!ingress_exempt("203.0.113.92".parse().unwrap()));
+    }
+
     #[test]
     fn an_exempt_source_is_never_rate_limited() {
+        let _serial = EXEMPTION_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         // Addresses no other test uses: the limiter and the exemption are
         // process-wide.
         let exempt: SocketAddr = "203.0.113.90:5060".parse().unwrap();

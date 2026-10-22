@@ -35,6 +35,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answered the unrequested PRACK with 481.
   ([#145](https://github.com/thevoiceguy/siphon-rs/issues/145), in part)
 
+- **sip-transport 0.7.1**: a connection the peer closes at once no longer stays
+  pooled. A pooled connection's reader was spawned before its entry was inserted,
+  so on a multi-thread runtime a reader that hit EOF first removed nothing and the
+  dead entry was then pooled with a live writer; later sends went into the dead
+  socket. The insert now sees that the connection has ended and removes the entry
+  again (TCP, TLS and WS). Regression tests: `an_entry_ended_before_its_insert_is_not_pooled`,
+  `a_connection_closed_at_once_never_stays_pooled`
+  ([#144](https://github.com/thevoiceguy/siphon-rs/issues/144)).
+
+- **sip-transport 0.7.1**: a send that finds its pooled connection dead, or whose
+  first send on a new one fails, removes that connection only. It removed whatever
+  was pooled under the peer's key, which could be a newer connection a concurrent
+  send had just opened. Regression test: `a_failed_send_removes_only_its_own_connection`
+  ([#144](https://github.com/thevoiceguy/siphon-rs/issues/144)).
+
+- **sip-transport 0.7.1**: a send parked on a full connection (a peer that stopped
+  reading) no longer holds the pool's shard lock while it waits. Readers' and
+  supervisors' removals, the idle sweep and `TlsPool::close_all` blocked worker
+  threads on it meanwhile. Regression test: `a_parked_send_does_not_lock_the_pool`
+  ([#144](https://github.com/thevoiceguy/siphon-rs/issues/144)).
+
+- **sip-transport 0.7.1**: `TlsPool::close_all` no longer reports each connection it
+  closes as a `ConnectionEvent::Failed` ("writer cancelled"), which a reconnect
+  policy would take for a death and redial; it reports none. The
+  `set_ingress_rate_exemption` predicate is now asked outside the exemption's
+  lock, so a predicate that sets the exemption no longer deadlocks. `bind_tcp`
+  documents that it must be called within a tokio runtime
+  ([#144](https://github.com/thevoiceguy/siphon-rs/issues/144)).
+
+- **sip-transport 0.7.1**: `cargo clippy --all-features -- -D warnings` passes again;
+  the WS upgrade callback's large `Err` (`clippy::result_large_err`) is a type
+  tungstenite fixes, so the lint is allowed there
+  ([#150](https://github.com/thevoiceguy/siphon-rs/issues/150)).
+
 - **siphond 0.7.2**: in B2BUA mode, the ACK, the BYE and a bridged re-INVITE reach the
   callee over the transport it registered with, as its INVITE has since 7d24265 (UDP
   unless its contact says `transport=tcp`). They always went over a fresh TCP
