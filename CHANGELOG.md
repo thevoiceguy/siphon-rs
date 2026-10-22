@@ -39,6 +39,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **sip-uac 0.9.2**: `CallHandle::cancel` cancels a pending re-INVITE again (RFC 3261
+  §14.1). Since 0.8.0 it refused whenever the dialog was confirmed, which a
+  re-INVITE's dialog always is, so a B2BUA relaying a CANCEL for a re-INVITE sent
+  nothing. A re-INVITE is now judged by its outcome alone; an initial INVITE keeps
+  the dialog check that stops a CANCEL going out after the ACK.
+
 - **sip-uas 0.5.1**: `UserAgentServer::validate_session_timer` refuses with 422 an
   INVITE whose Session-Expires is under the Min-SE. It read the header with the typed
   parser, which refuses an interval under 90 s and returned nothing — taken for "no
