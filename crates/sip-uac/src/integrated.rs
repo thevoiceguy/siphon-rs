@@ -2226,6 +2226,7 @@ impl IntegratedUAC {
             dialog: shared_dialog.clone(),
             local_addr: self.local_addr,
             public_addr: self.public_addr,
+            pracked_rseqs: Mutex::new(std::collections::HashMap::new()),
         });
 
         // Start client transaction
@@ -3110,6 +3111,7 @@ impl IntegratedUAC {
             dialog: shared_dialog.clone(),
             local_addr: self.local_addr,
             public_addr: self.public_addr,
+            pracked_rseqs: Mutex::new(std::collections::HashMap::new()),
         });
 
         let key = self
@@ -3197,6 +3199,7 @@ impl IntegratedUAC {
             dialog: shared_dialog.clone(),
             local_addr: self.local_addr,
             public_addr: self.public_addr,
+            pracked_rseqs: Mutex::new(std::collections::HashMap::new()),
         });
 
         let key = self
@@ -3572,7 +3575,6 @@ struct InviteTransactionUser {
     /// (handed to an authenticated retry as `final_tx` is).
     outcome: Mutex<Option<Arc<watch::Sender<InviteOutcome>>>>,
     term_tx: Mutex<Option<oneshot::Sender<String>>>,
-    #[allow(dead_code)]
     dialog_manager: Arc<DialogManager>,
     helper: Arc<Mutex<UserAgentClient>>,
     request: Request,
@@ -3593,6 +3595,21 @@ struct InviteTransactionUser {
     dialog: Arc<RwLock<Dialog>>,
     local_addr: SocketAddr,
     public_addr: Option<SocketAddr>,
+    /// The last RSeq PRACKed in each early dialog (by To tag) of this
+    /// attempt: a retransmitted reliable provisional is not PRACKed again
+    /// (RFC 3262 §4).
+    pracked_rseqs: Mutex<std::collections::HashMap<SmolStr, u32>>,
+}
+
+/// Whether a reliable provisional with `rseq` is the next one to PRACK
+/// after `last` (RFC 3262 §4): the first of an early dialog may carry any
+/// RSeq, each after it exactly one more. A retransmission (the same RSeq)
+/// or one out of order is not.
+fn is_next_rseq(last: Option<u32>, rseq: u32) -> bool {
+    match last {
+        None => true,
+        Some(last) => last.checked_add(1) == Some(rseq),
+    }
 }
 
 impl InviteTransactionUser {
@@ -3821,6 +3838,7 @@ impl InviteTransactionUser {
             dialog: self.dialog.clone(),
             local_addr: self.local_addr,
             public_addr: self.public_addr,
+            pracked_rseqs: Mutex::new(std::collections::HashMap::new()),
         });
 
         match self
@@ -3994,6 +4012,33 @@ impl ClientTransactionUser for InviteTransactionUser {
         }
     }
     async fn send_prack(&self, _key: &TransactionKey, response: Response, ctx: &TransportContext) {
+        // Over UDP a callee retransmits a reliable provisional until our
+        // PRACK's 200 reaches it. Only an RSeq one more than the last
+        // PRACKed in its early dialog is PRACKed (RFC 3262 §4); another
+        // PRACK for a retransmission spends a CSeq and draws a 481.
+        let rseq = response
+            .headers()
+            .get("RSeq")
+            .and_then(|rseq| rseq.trim().parse::<u32>().ok());
+        let to_tag = response
+            .headers()
+            .get_smol("To")
+            .and_then(sip_dialog::extract_tag)
+            .unwrap_or_default();
+        let mut pracked = self.pracked_rseqs.lock().await;
+        if let Some(rseq) = rseq {
+            let last = pracked.get(&to_tag).copied();
+            if !is_next_rseq(last, rseq) {
+                debug!(
+                    rseq,
+                    last = ?last,
+                    to_tag = %to_tag,
+                    "Not PRACKing a retransmitted or out-of-order reliable provisional"
+                );
+                return;
+            }
+        }
+
         info!("Sending PRACK for reliable provisional {}", response.code());
 
         // Find dialog for this response
@@ -4005,6 +4050,21 @@ impl ClientTransactionUser for InviteTransactionUser {
             match helper.create_prack(&self.request, &response, &dialog) {
                 Ok(mut prack) => {
                     drop(helper);
+                    if let Some(rseq) = rseq {
+                        pracked.insert(to_tag.clone(), rseq);
+                    }
+                    drop(pracked);
+
+                    // The PRACK spent a CSeq in the stored dialog; the early
+                    // dialog `on_provisional` kept is a copy from before it,
+                    // and a request built on it (an UPDATE, an early BYE)
+                    // would reuse the PRACK's number (RFC 3261 §12.2.1.1).
+                    if let Some(spent) = self.dialog_manager.get(dialog.id()) {
+                        let mut early_dialogs = self.early_dialogs.lock().await;
+                        if let Some(early) = early_dialogs.get_mut(dialog.id().remote_tag()) {
+                            *early = spent;
+                        }
+                    }
                     // The helper's Via names `placeholder`. The INVITE's, sent
                     // already, names this agent: the PRACK takes it with its
                     // own branch. Left as it was, the callee answered the
@@ -6457,6 +6517,107 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
+    }
+
+    /// A reliable provisional (RFC 3262) to `invite`, in the early dialog
+    /// `uas-early`.
+    fn reliable_provisional(invite: &Request, code: u16, rseq: u32) -> Response {
+        let mut headers = Headers::new();
+        for name in ["Via", "From", "Call-ID", "CSeq"] {
+            headers
+                .push(
+                    SmolStr::new(name),
+                    invite.headers().get_smol(name).unwrap().clone(),
+                )
+                .unwrap();
+        }
+        let to = format!("{};tag=uas-early", invite.headers().get("To").unwrap());
+        for (name, value) in [
+            ("To", to.as_str()),
+            ("Contact", "<sip:9196@127.0.0.1:5060>"),
+            ("Require", "100rel"),
+            ("RSeq", &rseq.to_string()),
+        ] {
+            headers
+                .push(SmolStr::new(name), SmolStr::new(value))
+                .unwrap();
+        }
+        Response::new(
+            StatusLine::new(code, SmolStr::new("Ringing")).expect("valid status line"),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid response")
+    }
+
+    /// A retransmitted reliable provisional, or one out of order, is not
+    /// PRACKed again: only an RSeq one more than the last (RFC 3262 §4).
+    /// The early dialog the handle keeps has the PRACKs' CSeqs spent, so a
+    /// request built on it goes higher (issue #145).
+    #[tokio::test]
+    async fn only_the_next_reliable_provisional_is_pracked() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = auth_test_uac(dispatcher.clone(), manager.clone(), None);
+        let call = uac
+            .invite("sip:9196@127.0.0.1:5060", Some("v=0\r\n"))
+            .await
+            .unwrap();
+        let invite = wait_for_request(&dispatcher, |r| r.method() == &Method::Invite).await;
+        let pracks = || async {
+            sent_requests(&dispatcher)
+                .await
+                .into_iter()
+                .filter(|r| r.method() == &Method::Prack)
+                .map(|r| {
+                    (
+                        r.headers().get("CSeq").unwrap().to_string(),
+                        r.headers().get("RAck").unwrap().to_string(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+
+        manager
+            .receive_response(reliable_provisional(&invite, 180, 1))
+            .await;
+        wait_for_request(&dispatcher, |r| r.method() == &Method::Prack).await;
+        // Its retransmission, and one that skips an RSeq.
+        manager
+            .receive_response(reliable_provisional(&invite, 180, 1))
+            .await;
+        manager
+            .receive_response(reliable_provisional(&invite, 180, 3))
+            .await;
+        manager
+            .receive_response(reliable_provisional(&invite, 183, 2))
+            .await;
+        wait_for_request(&dispatcher, |r| {
+            r.headers().get("RAck") == Some("2 1 INVITE")
+        })
+        .await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        assert_eq!(
+            pracks().await,
+            vec![
+                ("2 PRACK".to_string(), "1 1 INVITE".to_string()),
+                ("3 PRACK".to_string(), "2 1 INVITE".to_string()),
+            ]
+        );
+        let early = call.get_early_dialogs().await;
+        assert_eq!(early.len(), 1);
+        assert_eq!(early[0].local_cseq(), 3, "the PRACKs' CSeqs are spent");
+    }
+
+    #[test]
+    fn the_next_rseq_is_one_more_than_the_last() {
+        assert!(is_next_rseq(None, 7));
+        assert!(is_next_rseq(Some(7), 8));
+        assert!(!is_next_rseq(Some(7), 7));
+        assert!(!is_next_rseq(Some(7), 9));
+        assert!(!is_next_rseq(Some(7), 6));
+        assert!(!is_next_rseq(Some(u32::MAX), 0));
     }
 
     /// A destination reached by IP over TLS is verified against the name
