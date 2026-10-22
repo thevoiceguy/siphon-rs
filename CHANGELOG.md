@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026-10-22.1] — workspace release
+
+Crate versions in this release: sip-uac 0.9.2, sip-transport 0.7.0,
+sip-transaction 0.7.2, sip-dialog 0.4.0, sip-uas 0.5.1, sip-registrar 0.3.2,
+siphond 0.7.1. (sip-core 0.7.8, sip-parse 0.4.0, sip-sdp 0.3.2, sip-dns 0.3.0,
+sip-auth 0.4.0, sip-observe 0.3.0, sip-ratelimit 0.3.0, sip-testkit 0.1.1,
+sip-proxy 0.3.0, sip-hep 0.0.1, and sip-identity 0.3.0 are unchanged.)
+
+This is the first workspace release since 2026-09-15. The tags pushed in
+between (`v2026.09.17` through `v2026.10.22`) each name a merge commit, but
+went out without a changelog section or a full crate-version audit. This
+release collects everything they carried and sets two crate versions
+straight:
+- **sip-transport** goes from 0.6.0 to 0.7.0, not 0.6.1, because
+  `bind_tcp`, `serve_tcp`, `TlsPool::close_all` and
+  `set_ingress_rate_exemption` are new public API.
+- **sip-transaction** goes to 0.7.2. 4e29931 changed it after its 0.7.1
+  release (2026-09-14) without a bump, so tags from `v2026.10.06` on carry
+  different behavior under the same number.
+
+Every existing tag is unchanged. A consumer pinned to one of them gets this
+release by bumping to `v2026.10.22.1`.
+
+**Breaking changes** (since 2026-09-15), all in sip-uac, which goes from
+0.7.2 to 0.9.2:
+- **New public fields.** `UACConfig::outbound_proxy`, `InviteOptions::filter`
+  and `InviteOptions::destination` are new public fields. A struct literal
+  of either type must name them or end with `..Default::default()`.
+  (`filter` went out as the patch release 0.7.3, which was mis-versioned.)
+- **`CallHandle::cancel` refuses once the INVITE has its final response.**
+  It returns `Err` and sends nothing (RFC 3261 §9.1). Code that cancelled
+  after a 2xx must send BYE instead, and `invite_outcome` tells it when.
+
+Behavior changes that need no code change but are worth knowing:
+- sip-uas answers 422 to a Session-Expires under Min-SE (it used to accept
+  it).
+- sip-registrar grants an over-long Expires the ceiling (it used to refuse
+  with 400).
+- sip-dialog's `SessionTimerManager` ends a non-refresher's session before
+  expiry, as RFC 4028 §10 says.
+- An `IntegratedUAC` INVITE with an SDP offer says `Supported: 100rel`.
+
+### Security
+
+- **sip-dialog 0.4.0**: a remote peer could panic the process with one
+  malformed header (found by the new `dialog_from_message` fuzz target,
+  7472567). `extract_tag` sliced `trimmed[..4]` to test for a `tag=` prefix,
+  which panics when the fourth byte falls inside a multi-byte character:
+  `From: <sip:alice@example.com>;tag\u{c8}efer1` is enough. Every in-dialog
+  request is matched through it. `validate_event_package` had the same shape
+  at `[..3]` on an `Event` header's parameters. Both now use `get`, and both
+  have regression tests. **Every deployment that accepts SIP from untrusted
+  peers should take this release.**
+
 ### Added
 
 - **sip-uac 0.9.0**: `InviteOptions::destination`, where to send a new INVITE when the
@@ -16,7 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   INVITE addressed to its IP. A new public field, so a struct literal of `InviteOptions`
   needs it (or `..Default::default()`). Found by FCP's real-world testing against Twilio.
 
-- **sip-transport 0.6.1**: `set_ingress_rate_exemption`, the sources the per-source
+- **sip-transport 0.7.0**: `set_ingress_rate_exemption`, the sources the per-source
   ingress limits (UDP packets, stream frames) do not apply to — an SBC in front of the
   node, a carrier trunk, another node of a cluster, whose rate is many parties' and not
   one device's. A predicate over the source address, replaceable at any time (the
@@ -36,6 +90,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   leg learns whether its callee answered anyway and must be sent a BYE (RFC 3261 §9.1).
   A 2xx is reported after the dialog is confirmed and its ACK sent, so a BYE sent on it
   never overtakes the ACK.
+
+- **sip-transport 0.7.0**: `TlsPool::close_all` drops every pooled TLS connection, so
+  its reader and writer tasks are aborted and the server sees the connection end — what
+  a phone app put to sleep needs. (Dropping the pool did not: each writer's supervisor
+  holds the map.)
+
+- **sip-uac 0.8.0**: `IntegratedUACBuilder::register_contact_params` and
+  `IntegratedUAC::set_register_contact_params`: parameters every REGISTER's Contact URI
+  carries inside its brackets (an RFC 8599 push address), kept through the rewrite that
+  puts the advertised address there. Other requests' Contacts do not carry them; a
+  renewed push token goes out with the next REGISTER.
+
+- **sip-transport 0.7.0**: `bind_tcp` and `serve_tcp`, so a TCP listener is bound before
+  its accept loop is spawned. A caller that spawned `run_tcp` and returned could take a
+  call before the listener existed and refuse it. `run_tcp` is the two together,
+  unchanged for its callers.
+
+- **sip-uac 0.8.0**: `IntegratedUACBuilder::outbound_proxy` (`UACConfig::outbound_proxy`):
+  REGISTER, `register_as`, a new INVITE (not one down a flow), SUBSCRIBE, unsolicited
+  NOTIFY, OPTIONS and `send_request` go to the proxy with a Route naming it (loose
+  routing, ahead of any Route the caller set), the Request-URI left as the target (RFC
+  3261 §8.1.2). A CANCEL follows its INVITE. A new public field on `UACConfig`.
+
+- **sip-uac 0.8.0**: `send_unsolicited_notify_with_state_via_flow`, the unsolicited
+  NOTIFY (check-sync and the like) down the RFC 5626 flow the target registered over, for
+  a phone on TCP or TLS behind NAT that a new connection to its Contact would not reach.
+
+- **sip-uac 0.7.6**: `IntegratedUAC::send_request` sends a non-INVITE request the
+  caller built and waits for its final response: its own headers kept, the `Via` and
+  `Contact` finished as every request's are, a challenge answered. For event packages
+  whose requests carry headers the helpers do not write (BroadSoft shared appearances:
+  `Call-Info` on `line-seize` SUBSCRIBEs and `call-info` NOTIFYs) and NOTIFYs inside a
+  subscription the caller keeps. An INVITE or ACK is refused.
+
+- **sip-uac 0.7.5**: `bye_with_headers` / `bye_via_flow_with_headers` append the
+  caller's headers to the BYE the dialog produces — an RFC 3326 `Reason` for a call the
+  platform itself is ending. A header the dialog owns (Via, From, To, Call-ID, CSeq,
+  Max-Forwards, Route) is left alone and logged.
+
+- **sip-uac 0.7.4**: `create_register_as` / `register_as` REGISTER an account other than
+  the agent's own: the account in `From` and `To`, `Contact` left as this agent (RFC 3261
+  §10.2), a challenge answered with the credentials passed. The refresh series (Call-ID,
+  `From` tag, CSeq) is now kept per account and registrar, not per registrar — two
+  accounts at one carrier were sharing one.
+
+- **sip-uac 0.7.3**: `InviteOptions::filter` takes a `RequestFilter` that the integrated
+  client runs on the finished INVITE — after the Via, Contact and Content-Length it
+  fills in, before the transaction starts — for a B2BUA's header manipulation rules or an
+  identity it must assert. A new public field on `InviteOptions`.
+
+- **fuzz**: four targets for the stateful surfaces — `dialog_from_message`,
+  `registrar_bindings`, `transaction_key`, `offer_answer` (RFC 3264 §6 invariants). The
+  fuzz crate itself did not build before (it inherited workspace
+  dependencies while declaring its own workspace, and had no `[[bin]]` entries); it
+  does now, with generated seed corpora (`fuzz_seeds` tests) and a nightly CI run that
+  tells a target that did not build apart from one that crashed.
 
 ### Fixed
 
@@ -67,18 +177,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (RFC 3262 §3). Its INVITE transaction PRACKs every reliable provisional, but without
   the offer a callee never rings reliably, and one that requires it refuses the call
   (421). Found by FCP's tests against SIPp.
+  (Narrowed in 0.9.2 to an INVITE that carries an SDP offer.)
 
 - **sip-uac 0.8.0**: `CallHandle::cancel` no longer sends a CANCEL for an INVITE that
   has its final response (RFC 3261 §9.1); it returns an error and the caller ends an
   answered call with BYE. A 2xx arriving while the CANCEL was being built no longer
   puts a CANCEL on the wire after the ACK. Found by FCP's tests against SIPp.
 
-- **sip-uac 0.7.6**: `IntegratedUAC::send_request` sends a non-INVITE request the
-  caller built and waits for its final response: its own headers kept, the `Via` and
-  `Contact` finished as every request's are, a challenge answered. For event packages
-  whose requests carry headers the helpers do not write (BroadSoft shared appearances:
-  `Call-Info` on `line-seize` SUBSCRIBEs and `call-info` NOTIFYs) and NOTIFYs inside a
-  subscription the caller keeps. An INVITE or ACK is refused.
+- **sip-uac 0.9.1**: an automatic PRACK's CSeq stays spent in its dialog. It was taken
+  from a clone of the dialog and never written back, so the dialog the 2xx confirmed
+  restarted at the INVITE's CSeq and the next request in it (a BYE) reused the PRACK's
+  number (RFC 3261 §12.2.1.1); a Poly VVX refused that BYE 500 and kept the call. Two
+  reliable provisionals also went out with one CSeq. And the PRACK names this agent in
+  its Via: it carried the helper's `SIP/2.0/UDP placeholder`, which a VVX answered to
+  a host that does not exist, so the PRACK ran to Timer F.
+
+- **sip-transaction 0.7.2**: a retransmitted 3xx–6xx final response in Completed is
+  ACKed again and not passed up (RFC 3261 §17.1.1.2). The client INVITE FSM delivered
+  it again, so a UAC answering a 401/407 (IntegratedUAC's auto-retry) sent another
+  authenticated INVITE every time the server resent its challenge (Timer G, UDP).
+
+- **sip-transport 0.7.0**: a pooled TCP, TLS or WebSocket connection the peer closes
+  leaves the pool. Its reader stopped but the entry stayed, so the next request was
+  written into the dead socket and timed out (a site's REGISTER went unanswered after
+  its link was cut and restored). The reader now removes its own entry; entries carry
+  an id, so a reader or writer supervisor never removes a newer connection under the
+  same key.
+
+- **sip-registrar 0.3.2**: `Binding::new` refused anything under 60 s whatever the
+  registrar's configured floor, so a REGISTER `BasicRegistrar` granted (e.g. a floor of
+  5 s and an ask of 10 s) failed after it was accepted. A binding's own bounds are now
+  sanity bounds (1 s to a day), and `with_min_expires` / `with_max_expires` are clamped
+  to them. An over-long ask is granted the ceiling (RFC 3261 §10.3 step 7) rather than
+  refused with 400.
+
+- **siphond 0.7.1**: three fixes found by a softphone's tests:
+  - a handler that fails without answering now answers 500, instead of leaving the
+    client retransmitting until its timer fires;
+  - the proxy answers a CANCEL itself and sends its own CANCEL down the branch the
+    INVITE was forwarded on, with that branch's Via (RFC 3261 §16.10). It used to
+    forward the CANCEL by its Request-URI (siphond itself) and loop. A CANCEL for
+    nothing forwarded gets 481;
+  - the B2BUA sends the INVITE (and CANCEL) to the callee over the transport the callee
+    registered with: UDP unless its contact says `transport=tcp`, and TCP through a
+    pool whose replies are read. It always opened a TCP connection nobody read. (The
+    ACK, BYE and re-INVITE toward a UDP callee still go over TCP: #148.)
 
 ## [2026-09-15] — workspace release
 
