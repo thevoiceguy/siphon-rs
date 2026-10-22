@@ -39,6 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **sip-uac 0.9.2**: an INVITE says `Supported: 100rel` only when it carries an SDP
+  offer (alone or as a part of a multipart body). Since 0.8.1 a late-offer INVITE
+  said it too, and a callee that then put its offer in a reliable 183 got a PRACK
+  with no answer (RFC 3262 §5) — the call came up with no negotiated media.
+
 - **sip-uac 0.9.2**: `CallHandle::cancel` cancels a pending re-INVITE again (RFC 3261
   §14.1). Since 0.8.0 it refused whenever the dialog was confirmed, which a
   re-INVITE's dialog always is, so a B2BUA relaying a CANCEL for a re-INVITE sent
