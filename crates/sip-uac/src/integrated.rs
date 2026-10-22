@@ -2016,8 +2016,12 @@ impl IntegratedUAC {
     ) -> Result<CallHandle> {
         // The INVITE's transaction PRACKs every reliable provisional
         // (RFC 3262), so the INVITE says so: without it a callee may not
-        // send one, and one that needs to refuses the call (421).
-        supports_100rel(&mut request);
+        // send one, and one that needs to refuses the call (421). Not for a
+        // late offer: the callee's offer would come in a reliable
+        // provisional, and the automatic PRACK carries no answer (§5).
+        if carries_sdp_offer(&request) {
+            supports_100rel(&mut request);
+        }
 
         // Down a flow the request goes where the flow does; otherwise
         // through the outbound proxy, if there is one.
@@ -4481,6 +4485,31 @@ impl IntegratedUACBuilder {
     }
 }
 
+/// Whether the request's body is (or, multipart, includes) an SDP offer.
+fn carries_sdp_offer(request: &Request) -> bool {
+    if request.body().is_empty() {
+        return false;
+    }
+    let Some(content_type) = request.headers().get("Content-Type") else {
+        return false;
+    };
+    let media_type = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    match media_type.as_str() {
+        "application/sdp" => true,
+        m if m.starts_with("multipart/") => {
+            sip_core::MultipartBody::parse(content_type, request.body())
+                .map(|body| body.part_by_type("application/sdp").is_some())
+                .unwrap_or(false)
+        }
+        _ => false,
+    }
+}
+
 /// `100rel` added to the request's Supported header (RFC 3262 §3), once.
 fn supports_100rel(request: &mut Request) {
     let current = request.headers().get("Supported").map(|v| v.to_string());
@@ -4556,6 +4585,88 @@ mod tests {
             Bytes::new(),
         )
         .unwrap()
+    }
+
+    /// An offer is SDP, alone or as a part of a multipart body; no body, or
+    /// a body with no SDP (a location by value on its own), is a late offer.
+    #[test]
+    fn an_sdp_offer_is_found_alone_or_in_a_multipart_body() {
+        let with_body = |content_type: &str, body: Bytes| {
+            let mut headers = Headers::new();
+            headers.push("Content-Type", content_type).unwrap();
+            Request::new(
+                RequestLine::new(
+                    Method::Invite,
+                    SipUri::parse("sip:bob@example.com").unwrap(),
+                ),
+                headers,
+                body,
+            )
+            .unwrap()
+        };
+        let sdp = Bytes::from_static(b"v=0\r\n");
+        let pidf = || sip_core::BodyPart::new("application/pidf+xml", "<presence/>").unwrap();
+
+        assert!(!carries_sdp_offer(&invite_supporting(None)));
+        assert!(carries_sdp_offer(&with_body(
+            "application/sdp",
+            sdp.clone()
+        )));
+        assert!(carries_sdp_offer(&with_body(
+            "Application/SDP; charset=utf-8",
+            sdp.clone()
+        )));
+        assert!(!carries_sdp_offer(&with_body(
+            "application/sdp",
+            Bytes::new()
+        )));
+
+        let both = sip_core::MultipartBody::mixed()
+            .with_part(sip_core::BodyPart::new("application/sdp", sdp.clone()).unwrap())
+            .with_part(pidf());
+        assert!(carries_sdp_offer(&with_body(
+            &both.content_type(),
+            both.to_bytes()
+        )));
+        let location_only = sip_core::MultipartBody::mixed().with_part(pidf());
+        assert!(!carries_sdp_offer(&with_body(
+            &location_only.content_type(),
+            location_only.to_bytes()
+        )));
+    }
+
+    /// The automatic PRACK carries no answer, so 100rel is offered with an
+    /// SDP offer and not without one: a callee's offer in a reliable 183
+    /// would go unanswered (RFC 3262 §5) and the call would have no media.
+    #[tokio::test]
+    async fn a_late_offer_invite_does_not_offer_100rel() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = auth_test_uac(dispatcher.clone(), manager.clone(), None);
+
+        let _late = uac.invite("sip:9196@127.0.0.1:5060", None).await.unwrap();
+        let late = wait_for_request(&dispatcher, |r| r.method() == &Method::Invite).await;
+        assert!(late.body().is_empty());
+        assert!(
+            !late
+                .headers()
+                .get("Supported")
+                .is_some_and(|v| v.to_ascii_lowercase().contains("100rel")),
+            "a late offer does not offer 100rel"
+        );
+
+        let _early = uac
+            .invite("sip:9197@127.0.0.1:5060", Some("v=0\r\n"))
+            .await
+            .unwrap();
+        let early = wait_for_request(&dispatcher, |r| {
+            r.method() == &Method::Invite && !r.body().is_empty()
+        })
+        .await;
+        assert!(early
+            .headers()
+            .get("Supported")
+            .is_some_and(|v| v.contains("100rel")));
     }
 
     /// Every INVITE says it supports 100rel, which its transaction PRACKs,
