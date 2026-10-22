@@ -715,6 +715,10 @@ pub struct CallHandle {
     /// response [`CallHandle::await_final`] hands out.
     outcome: Arc<watch::Sender<InviteOutcome>>,
 
+    /// A re-INVITE: its dialog was confirmed before it was sent, so a
+    /// confirmed dialog says nothing about whether it has its final.
+    in_dialog: bool,
+
     /// Termination reason if transaction failed
     termination_rx: Arc<Mutex<Option<oneshot::Receiver<String>>>>,
 
@@ -2140,6 +2144,7 @@ impl IntegratedUAC {
             provisional_rx: Arc::new(Mutex::new(prov_rx)),
             final_rx: Arc::new(Mutex::new(Some(final_rx))),
             outcome,
+            in_dialog: false,
             termination_rx: Arc::new(Mutex::new(Some(term_rx))),
             invite_request: live_request,
             transport_ctx: Arc::new(ctx),
@@ -3001,6 +3006,7 @@ impl IntegratedUAC {
             provisional_rx: Arc::new(Mutex::new(prov_rx)),
             final_rx: Arc::new(Mutex::new(Some(final_rx))),
             outcome,
+            in_dialog: true,
             termination_rx: Arc::new(Mutex::new(Some(term_rx))),
             invite_request: live_request,
             transport_ctx: Arc::new(ctx),
@@ -3087,6 +3093,7 @@ impl IntegratedUAC {
             provisional_rx: Arc::new(Mutex::new(prov_rx)),
             final_rx: Arc::new(Mutex::new(Some(final_rx))),
             outcome,
+            in_dialog: true,
             termination_rx: Arc::new(Mutex::new(Some(term_rx))),
             invite_request: live_request,
             transport_ctx: Arc::new(ctx),
@@ -3397,8 +3404,11 @@ impl CallHandle {
         // RFC 3261 §9.1: no CANCEL for a request that has its final
         // response. Checked as late as possible, so a 2xx that arrived
         // while this was built is not followed by a CANCEL after its ACK;
-        // the caller ends an answered call with BYE.
-        if self.dialog.read().await.state() == sip_dialog::DialogStateType::Confirmed
+        // the caller ends an answered call with BYE. A re-INVITE's dialog
+        // is confirmed from the start (RFC 3261 §14.1 lets it be
+        // cancelled), so only its outcome answers for it.
+        if (!self.in_dialog
+            && self.dialog.read().await.state() == sip_dialog::DialogStateType::Confirmed)
             || *self.outcome.borrow() != InviteOutcome::Pending
         {
             return Err(anyhow!(
@@ -6264,6 +6274,48 @@ mod tests {
             Bytes::new(),
         )
         .expect("valid response")
+    }
+
+    /// A re-INVITE's dialog is confirmed before it is sent, so a confirmed
+    /// dialog does not mean it has its final: a pending re-INVITE is
+    /// cancelled (RFC 3261 §14.1), and one that has its final is not.
+    #[tokio::test]
+    async fn a_pending_reinvite_is_cancelled() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = refresh_uac(dispatcher.clone(), manager.clone());
+        let mut dialog = refresh_dialog();
+
+        let call = uac.reinvite(&mut dialog, Some("v=0\r\n")).await.unwrap();
+        let reinvite = await_cseq(&dispatcher, "2 INVITE").await;
+
+        let canceller = {
+            let manager = manager.clone();
+            let dispatcher = dispatcher.clone();
+            tokio::spawn(async move {
+                let cancel = await_cseq(&dispatcher, "2 CANCEL").await;
+                manager
+                    .receive_response(in_dialog_response(&cancel, 200, "OK"))
+                    .await;
+                cancel
+            })
+        };
+        let response = call
+            .cancel()
+            .await
+            .expect("a pending re-INVITE is cancelled");
+        assert_eq!(response.code(), 200);
+        let cancel = canceller.await.unwrap();
+        assert_eq!(via_branch(&cancel), via_branch(&reinvite));
+
+        manager
+            .receive_response(in_dialog_response(&reinvite, 487, "Request Terminated"))
+            .await;
+        assert_eq!(call.invite_outcome().await, InviteOutcome::Final(487));
+        assert!(
+            call.cancel().await.is_err(),
+            "a re-INVITE with its final is not cancelled"
+        );
     }
 
     /// The defect: refreshes advanced a CSeq only the timer task could see,
