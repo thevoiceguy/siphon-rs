@@ -1115,7 +1115,49 @@ impl UserAgentClient {
             original_request.body().clone(),
         )?;
 
+        // A REGISTER's retry spends the next CSeq of its refresh series; the
+        // next refresh must go higher (RFC 3261 §10.2), not reuse it.
+        if new_request.method() == &Method::Register {
+            self.note_register_cseq_spent(&new_request);
+        }
+
         Ok(new_request)
+    }
+
+    /// Records a REGISTER's CSeq as spent in its refresh series (the
+    /// account in its To, at the registrar in its Request-URI), when the
+    /// series is one this helper keeps and has not gone past it.
+    fn note_register_cseq_spent(&self, request: &Request) {
+        let Some(registrar) = request.uri().as_sip() else {
+            return;
+        };
+        let Some(account) = request
+            .headers()
+            .get("To")
+            .and_then(|to| to.split_once('<'))
+            .and_then(|(_, rest)| rest.split_once('>'))
+            .and_then(|(uri, _)| SipUri::parse(uri.trim()).ok())
+        else {
+            return;
+        };
+        let Some(cseq) = request
+            .headers()
+            .get("CSeq")
+            .and_then(|cseq| cseq.split_whitespace().next())
+            .and_then(|num| num.parse::<u32>().ok())
+        else {
+            return;
+        };
+        let series = register_series_key(&account, registrar);
+        let mut map = self
+            .register_cseqs
+            .lock()
+            .expect("register_cseqs lock poisoned");
+        if let Some(current) = map.get_mut(&series) {
+            if *current < cseq {
+                *current = cseq;
+            }
+        }
     }
 
     /// Creates an INVITE request to establish a call.

@@ -53,6 +53,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CANCEL to a TCP contact go through the connection pool, whose replies are read; on
   the ad hoc connections they used, the callee's responses were lost
   ([#148](https://github.com/thevoiceguy/siphon-rs/issues/148)).
+- **sip-uac 0.9.3**: `IntegratedUAC::send_request` keeps a request in a dialog (its To
+  has a tag) off the outbound proxy: it goes to its target with the caller's Routes, the
+  dialog's route set (RFC 3261 §12.2.1.1), where a NOTIFY for a subscription
+  record-routed through another edge had taken an extra hop and drawn a 403 or 481. It
+  refuses a CANCEL, whose Route set must be its INVITE's (§9.1). Also: an extra header
+  given in compact form (`i`, `t`, …) can no longer add a second Call-ID or To to an
+  in-dialog request; a `RequestFilter` that removes an INVITE's Call-ID is an error, not
+  a panic; a REGISTER's authenticated retry advances its refresh series, so the next
+  refresh does not reuse its CSeq (§10.2). `send_request` documents that a challenged
+  retry spends CSeq+1, which the returned response's CSeq shows.
+  ([#147](https://github.com/thevoiceguy/siphon-rs/issues/147))
 
 ## [2026-10-22.1] — workspace release
 

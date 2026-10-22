@@ -485,20 +485,62 @@ fn destination_with_tls_name(
 /// Append a caller's extra headers to an in-dialog request, leaving any
 /// header the request already carries as it is: the dialog owns Via, From,
 /// To, Call-ID, CSeq, Max-Forwards and Route, and a caller passing one of
-/// those would break the dialog rather than decorate it.
+/// those would break the dialog rather than decorate it. A compact name
+/// (`i`, `t`, …) is read as its full one, so it cannot slip a second
+/// Call-ID or To past the check.
 fn append_extra_headers(request: &mut Request, headers: &[(&str, &str)]) {
     for (name, value) in headers {
+        let name = full_header_name(name);
         if request.headers().contains(name) {
             warn!(header = %name, "Ignoring an extra header the request already carries");
             continue;
         }
         if let Err(e) = request
             .headers_mut()
-            .push(SmolStr::new(*name), SmolStr::new(*value))
+            .push(SmolStr::new(name), SmolStr::new(*value))
         {
             warn!(header = %name, error = %e, "Could not add the header to the request");
         }
     }
+}
+
+/// The full name of a header given in its compact form (RFC 3261 §7.3.3
+/// and the extensions that define one); any other name as it is.
+fn full_header_name(name: &str) -> &str {
+    if name.len() != 1 {
+        return name;
+    }
+    match name.to_ascii_lowercase().as_str() {
+        "i" => "Call-ID",
+        "f" => "From",
+        "t" => "To",
+        "v" => "Via",
+        "m" => "Contact",
+        "l" => "Content-Length",
+        "c" => "Content-Type",
+        "e" => "Content-Encoding",
+        "s" => "Subject",
+        "k" => "Supported",
+        "o" => "Event",
+        "u" => "Allow-Events",
+        "r" => "Refer-To",
+        "b" => "Referred-By",
+        "x" => "Session-Expires",
+        "a" => "Accept-Contact",
+        "d" => "Request-Disposition",
+        _ => name,
+    }
+}
+
+/// Whether a request belongs to a dialog: its To carries a tag
+/// (RFC 3261 §12.2).
+fn request_has_to_tag(request: &Request) -> bool {
+    let to = request
+        .headers()
+        .get_smol("To")
+        .or_else(|| request.headers().get_smol("t"));
+    to.and_then(sip_dialog::extract_tag)
+        .is_some_and(|tag| !tag.is_empty())
 }
 
 fn prepare_in_dialog_request(dialog: &mut Dialog, request: &mut Request) -> SipUri {
@@ -2123,9 +2165,16 @@ impl IntegratedUAC {
         let early_dialogs = Arc::new(Mutex::new(std::collections::HashMap::new()));
 
         // Create placeholder dialog (will be updated when 2xx arrives)
+        // A filter may have taken the Call-ID away; no transaction or
+        // dialog can be made without one.
+        let call_id = request
+            .headers()
+            .get_smol("Call-ID")
+            .cloned()
+            .ok_or_else(|| anyhow!("the INVITE has no Call-ID; a RequestFilter removed it?"))?;
         let helper = self.helper.lock().await;
         let dialog_id = sip_dialog::DialogId::unchecked_new(
-            request.headers().get_smol("Call-ID").unwrap().clone(),
+            call_id,
             request_from_tag(&request),
             SmolStr::new("pending"),
         );
@@ -2565,24 +2614,44 @@ impl IntegratedUAC {
     /// carry headers of their own (BroadSoft shared appearances put
     /// `Call-Info` on `line-seize` SUBSCRIBEs and `call-info` NOTIFYs), or a
     /// NOTIFY inside a subscription the caller keeps itself (its Call-ID,
-    /// tags and CSeq). The request is finished as every other one: a `Via`
-    /// whose host is `placeholder` is replaced (its branch kept) and a
-    /// `Contact` is pointed at the advertised address. A 401 or 407 is
-    /// answered with the agent's credentials when `auto_retry_auth` is on.
-    /// An INVITE or ACK is refused: they have transactions of their own.
+    /// tags and CSeq). The request is finished as every other one: its
+    /// `Via` is rewritten to this agent's transport and advertised address
+    /// (its branch kept, a new one when it has none) and a `Contact` is
+    /// pointed at the advertised address.
+    ///
+    /// An out-of-dialog request goes through the outbound proxy, if there
+    /// is one. A request in a dialog (its To has a tag) does not: it
+    /// belongs on the dialog's route set (RFC 3261 §12.2.1.1), so it goes
+    /// to `target` with the Route headers the caller gave it.
+    ///
+    /// A 401 or 407 is answered with the agent's credentials when
+    /// `auto_retry_auth` is on, and the retry spends the next CSeq
+    /// (RFC 3261 §22.2): a caller keeping the CSeq of a subscription reads
+    /// the one used from the returned response's CSeq. An INVITE or ACK is
+    /// refused, as they have transactions of their own, and so is a CANCEL,
+    /// whose Route set and branch must be its INVITE's (§9.1;
+    /// [`CallHandle::cancel`]).
     pub async fn send_request(
         &self,
         mut request: Request,
         target: impl Into<RequestTarget>,
     ) -> Result<Response> {
-        if matches!(request.method(), Method::Invite | Method::Ack) {
+        if matches!(
+            request.method(),
+            Method::Invite | Method::Ack | Method::Cancel
+        ) {
             return Err(anyhow!(
-                "send_request carries non-INVITE requests; use invite() for {:?}",
+                "send_request carries non-INVITE requests other than CANCEL; \
+                 use invite() or CallHandle::cancel() for {:?}",
                 request.method()
             ));
         }
         let target = target.into();
-        let dns_target = self.resolve_out_of_dialog(&mut request, &target).await?;
+        let dns_target = if request_has_to_tag(&request) {
+            self.resolve_target(&target).await?
+        } else {
+            self.resolve_out_of_dialog(&mut request, &target).await?
+        };
         self.auto_fill_headers(&mut request, Some(dns_target.transport()))
             .await;
         self.send_non_invite_request(request, dns_target).await
@@ -5847,6 +5916,155 @@ mod tests {
             .await
             .expect_err("an INVITE is refused");
         assert!(err.to_string().contains("non-INVITE"), "{err}");
+    }
+
+    /// A CANCEL's Route set and branch must be its INVITE's (RFC 3261
+    /// §9.1); `send_request` refuses it (issue #147).
+    #[tokio::test]
+    async fn send_request_refuses_a_cancel() {
+        let uac = uac_with_optional_store(None);
+        let target = SipUri::parse("sip:bob@127.0.0.1:5099").unwrap();
+        let cancel = Request::new(
+            RequestLine::new(Method::Cancel, target.clone()),
+            Headers::new(),
+            Bytes::new(),
+        )
+        .unwrap();
+        let err = uac
+            .send_request(cancel, RequestTarget::Uri(target))
+            .await
+            .expect_err("a CANCEL is refused");
+        assert!(err.to_string().contains("CANCEL"), "{err}");
+    }
+
+    /// A request in a dialog (its To has a tag) keeps to the dialog's
+    /// route set: it goes to its target with the caller's Routes, not
+    /// through the outbound proxy (RFC 3261 §12.2.1.1, issue #147).
+    #[tokio::test]
+    async fn send_request_keeps_an_in_dialog_request_off_the_outbound_proxy() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let config = UACConfig {
+            outbound_proxy: Some(SipUri::parse("sip:127.0.0.1:5999").unwrap()),
+            ..Default::default()
+        };
+        let uac = auth_test_uac(dispatcher.clone(), manager.clone(), Some(config));
+        let edge = SipUri::parse("sip:127.0.0.1:5098;lr").unwrap();
+        let mut notify = uac
+            .helper
+            .lock()
+            .await
+            .create_options(&SipUri::parse("sip:bob@192.0.2.7").unwrap());
+        notify
+            .headers_mut()
+            .set_or_push("To", "<sip:bob@192.0.2.7>;tag=theirs")
+            .unwrap();
+        notify
+            .headers_mut()
+            .push(
+                SmolStr::new("Route"),
+                SmolStr::new(format!("<{}>", edge.as_str())),
+            )
+            .unwrap();
+
+        let sending = {
+            let uac = uac.clone();
+            tokio::spawn(async move { uac.send_request(notify, edge).await })
+        };
+        let (ctx, sent) = wait_for_sent(&dispatcher, |r| r.method() == &Method::Options).await;
+        sending.abort();
+        assert_eq!(ctx.peer(), "127.0.0.1:5098".parse().unwrap());
+        let routes: Vec<&str> = sent.headers().get_all("Route").collect();
+        assert_eq!(routes, vec!["<sip:127.0.0.1:5098;lr>"]);
+    }
+
+    /// A caller's extra header in compact form is the header it stands
+    /// for: it adds no second Call-ID or To to an in-dialog request
+    /// (issue #147).
+    #[test]
+    fn a_compact_extra_header_is_read_as_its_full_name() {
+        let mut request = inbound_bye("call-1", "ours", "theirs");
+        append_extra_headers(
+            &mut request,
+            &[("i", "other-call"), ("t", "<sip:x@y>"), ("X-Note", "kept")],
+        );
+        assert_eq!(request.headers().get_all("Call-ID").count(), 1);
+        assert_eq!(request.headers().get("Call-ID"), Some("call-1"));
+        assert_eq!(request.headers().get_all("To").count(), 1);
+        assert!(!request.headers().contains("i"));
+        assert!(!request.headers().contains("t"));
+        assert_eq!(request.headers().get("X-Note"), Some("kept"));
+    }
+
+    /// A filter that takes the Call-ID away is an error, not a panic
+    /// (issue #147).
+    #[tokio::test]
+    async fn an_invite_whose_filter_removes_the_call_id_is_refused() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = auth_test_uac(dispatcher.clone(), manager.clone(), None);
+        let options = InviteOptions {
+            filter: Some(crate::RequestFilter::new(|request| {
+                request.headers_mut().remove("Call-ID");
+            })),
+            ..InviteOptions::with_sdp(Some("v=0\r\n"))
+        };
+        let err = uac
+            .invite_with_options("sip:bob@127.0.0.1:5099", options)
+            .await
+            .err()
+            .expect("no INVITE without a Call-ID");
+        assert!(err.to_string().contains("Call-ID"), "{err}");
+    }
+
+    /// A challenged REGISTER's retry spends the next CSeq of its series,
+    /// and the next refresh goes past it (RFC 3261 §10.2, issue #147).
+    #[tokio::test]
+    async fn a_register_retry_advances_the_series_cseq() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = auth_test_uac(dispatcher.clone(), manager.clone(), None);
+        let account = SipUri::parse("sip:trunk@127.0.0.1").unwrap();
+        let registrar = SipUri::parse("sip:127.0.0.1:5099").unwrap();
+
+        let task = {
+            let (uac, account, registrar) = (uac.clone(), account.clone(), registrar.clone());
+            tokio::spawn(async move {
+                uac.register_as(
+                    &account,
+                    registrar,
+                    Some(600),
+                    Some(("trunk".into(), "pw".into())),
+                )
+                .await
+            })
+        };
+        let first = wait_for_request(&dispatcher, |r| {
+            r.headers().get("CSeq") == Some("1 REGISTER")
+        })
+        .await;
+        manager
+            .receive_response(challenge_response(&first, 401))
+            .await;
+        let retry = wait_for_request(&dispatcher, |r| {
+            r.headers().get("CSeq") == Some("2 REGISTER")
+        })
+        .await;
+        manager.receive_response(ok_response(&retry)).await;
+        assert_eq!(task.await.unwrap().unwrap().code(), 200);
+
+        let task = {
+            let uac = uac.clone();
+            tokio::spawn(async move { uac.register_as(&account, registrar, Some(600), None).await })
+        };
+        let refresh = wait_for_request(&dispatcher, |r| {
+            r.method() == &Method::Register
+                && r.headers().get("Authorization").is_none()
+                && r.headers().get("CSeq") != Some("1 REGISTER")
+        })
+        .await;
+        task.abort();
+        assert_eq!(refresh.headers().get("CSeq"), Some("3 REGISTER"));
     }
 
     /// An inbound in-dialog BYE as the peer would send it for a dialog we
