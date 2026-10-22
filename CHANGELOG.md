@@ -80,6 +80,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the ad hoc connections they used, the callee's responses were lost
   ([#148](https://github.com/thevoiceguy/siphon-rs/issues/148)).
 
+- **sip-uac 0.9.3**: an INVITE's `InviteOptions::destination` is honoured beside an
+  outbound proxy, and over TLS is verified against a name. With an outbound proxy
+  configured the destination was dropped for the proxy; it now wins — the INVITE, its
+  CANCEL and any authenticated retry go to it, without the proxy's Route. A destination
+  given as an IP with no TLS name of its own was dialled with the IP as SNI and failed a
+  carrier's hostname-only certificate; it now takes `tls_server_name` when configured,
+  else the Request-URI's host (RFC 5922 §4).
+  ([#146](https://github.com/thevoiceguy/siphon-rs/issues/146))
+
+- **sip-uac 0.9.3**: `IntegratedUAC::send_request` keeps a request in a dialog (its To
+  has a tag) off the outbound proxy: it goes to its target with the caller's Routes, the
+  dialog's route set (RFC 3261 §12.2.1.1), where a NOTIFY for a subscription
+  record-routed through another edge had taken an extra hop and drawn a 403 or 481. It
+  refuses a CANCEL, whose Route set must be its INVITE's (§9.1). Also: an extra header
+  given in compact form (`i`, `t`, …) can no longer add a second Call-ID or To to an
+  in-dialog request; a `RequestFilter` that removes an INVITE's Call-ID is an error, not
+  a panic; a REGISTER's authenticated retry advances its refresh series, so the next
+  refresh does not reuse its CSeq (§10.2). `send_request` documents that a challenged
+  retry spends CSeq+1, which the returned response's CSeq shows.
+  ([#147](https://github.com/thevoiceguy/siphon-rs/issues/147))
+
+- **sip-uac 0.9.3**: an INVITE's transaction PRACKs a reliable provisional only when its
+  RSeq is one more than the last it PRACKed in that early dialog — any for the first
+  (RFC 3262 §4). Over UDP a callee retransmits a reliable 180/183 until our PRACK's 200
+  reaches it, and each retransmission drew a new PRACK with a new CSeq, answered 481.
+  The early dialogs a `CallHandle` keeps now carry the CSeq a PRACK spent, so an UPDATE
+  or early BYE built from `get_early_dialogs()` goes higher than the PRACK's.
+  ([#145](https://github.com/thevoiceguy/siphon-rs/issues/145))
+
 ## [2026-10-22.1] — workspace release
 
 Crate versions in this release: sip-uac 0.9.2, sip-transport 0.7.0,
