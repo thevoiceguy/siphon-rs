@@ -139,6 +139,26 @@ impl Phone {
         None
     }
 
+    /// A response to `request`, sent back to where it came from: every Via,
+    /// From, To (tagged), Call-ID and CSeq copied from it.
+    fn respond(&self, request: &str, code: u16, reason: &str, to: SocketAddr) {
+        let mut msg = format!("SIP/2.0 {code} {reason}\r\n");
+        for line in request.lines() {
+            let name = line.split(':').next().unwrap_or("").trim();
+            if ["Via", "From", "Call-ID", "CSeq"]
+                .iter()
+                .any(|h| h.eq_ignore_ascii_case(name))
+            {
+                msg.push_str(line);
+                msg.push_str("\r\n");
+            } else if name.eq_ignore_ascii_case("To") {
+                msg.push_str(&format!("{line};tag={}-tag\r\n", self.user));
+            }
+        }
+        msg.push_str("Content-Length: 0\r\n\r\n");
+        self.send(&msg, to);
+    }
+
     fn register(&self, server: SocketAddr, expires: u32) -> String {
         let msg = self.request(
             "REGISTER",
@@ -223,6 +243,26 @@ fn the_proxy_cancels_down_the_branch_it_forwarded() {
     assert_eq!(header(&cancelled, "Via"), Some(forwarded_via.as_str()));
     assert_eq!(header(&cancelled, "CSeq"), Some("1 CANCEL"));
     assert_eq!(header(&cancelled, "Call-ID"), Some("cancel-1"));
+
+    // Bob does as a UAS does: 200 to the CANCEL, then 487 to the INVITE.
+    // The 200 is the proxy's own hop (it answered Alice already); the 487
+    // is Alice's, and is what ends her INVITE.
+    bob.respond(&cancelled, 200, "OK", server.addr);
+    bob.respond(&forwarded, 487, "Request Terminated", server.addr);
+    let ended = alice
+        .recv_until(Duration::from_secs(3), |m| {
+            m.starts_with("SIP/2.0")
+                && header(m, "Call-ID") == Some("cancel-1")
+                && !m.starts_with("SIP/2.0 100")
+        })
+        .expect("the 487 reaches Alice");
+    assert!(ended.starts_with("SIP/2.0 487"), "{ended}");
+    assert_eq!(header(&ended, "CSeq"), Some("1 INVITE"));
+    assert_eq!(
+        header(&ended, "Via").map(|v| v.contains("z9hG4bKalice1")),
+        Some(true),
+        "{ended}"
+    );
 
     // A CANCEL for nothing the proxy forwarded: 481.
     let stray = alice.request("CANCEL", uri, "cancel-2", 1, "z9hG4bKnothing", &[]);

@@ -771,6 +771,24 @@ async fn handle_packet(
             if let Some(via) = header(response.headers(), "Via") {
                 if let Some(branch) = branch_from_via(via.as_str()) {
                     if let Some(tx) = services.proxy_state.find_transaction(branch) {
+                        // The answer to a CANCEL this proxy sent down the
+                        // branch: the caller's CANCEL was answered here
+                        // (RFC 3261 §16.10), and the INVITE's final is still
+                        // to come, so it is neither relayed nor the end.
+                        let cseq_method = header(response.headers(), "CSeq")
+                            .and_then(|c| c.split_whitespace().nth(1).map(str::to_string));
+                        if cseq_method
+                            .as_deref()
+                            .is_some_and(|m| !m.eq_ignore_ascii_case(tx.method.as_str()))
+                        {
+                            tracing::debug!(
+                                branch,
+                                code = response.code(),
+                                "proxy: absorbed the answer to its own CANCEL"
+                            );
+                            return;
+                        }
+
                         let mut forwarded = response.clone();
                         sip_proxy::ProxyHelpers::remove_top_via(forwarded.headers_mut());
 
