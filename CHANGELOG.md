@@ -35,6 +35,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answered the unrequested PRACK with 481.
   ([#145](https://github.com/thevoiceguy/siphon-rs/issues/145), in part)
 
+- **siphond 0.7.2**: in B2BUA mode, the ACK, the BYE and a bridged re-INVITE reach the
+  callee over the transport it registered with, as its INVITE has since 7d24265 (UDP
+  unless its contact says `transport=tcp`). They always went over a fresh TCP
+  connection, so a UDP-registered callee never got the ACK — it retransmitted its 200
+  and dropped the call — and missed hangups and re-INVITEs. A BYE to the caller, when
+  the callee hangs up, goes the same way from siphond's own socket rather than a
+  throwaway UDP one with a TCP fallback. In proxy mode, a forwarded INVITE and its
+  CANCEL to a TCP contact go through the connection pool, whose replies are read; on
+  the ad hoc connections they used, the callee's responses were lost
+  ([#148](https://github.com/thevoiceguy/siphon-rs/issues/148)).
+
 ## [2026-10-22.1] — workspace release
 
 Crate versions in this release: sip-uac 0.9.2, sip-transport 0.7.0,

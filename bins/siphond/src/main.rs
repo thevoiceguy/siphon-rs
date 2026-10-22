@@ -519,7 +519,11 @@ async fn create_b2bua_ack(
     let branch = generate_branch_id();
     let _ = headers.push(
         SmolStr::new("Via"),
-        SmolStr::new(format!("SIP/2.0/TCP placeholder;branch={}", branch)),
+        SmolStr::new(format!(
+            "SIP/2.0/{} placeholder;branch={}",
+            proxy_utils::contact_via_transport(&call_leg.callee_contact),
+            branch
+        )),
     );
 
     // From - same as our outgoing INVITE
@@ -674,9 +678,18 @@ async fn handle_packet(
                             call_leg.callee_contact.port().unwrap_or(5060)
                         );
 
+                        // As the INVITE went: over the transport the callee
+                        // registered with.
                         if let Ok(addr) = callee_addr.parse::<std::net::SocketAddr>() {
                             let payload = sip_parse::serialize_request(&callee_ack);
-                            if let Err(e) = sip_transport::send_tcp(&addr, &payload).await {
+                            if let Err(e) = proxy_utils::send_to_contact(
+                                services,
+                                &call_leg.callee_contact,
+                                addr,
+                                payload,
+                            )
+                            .await
+                            {
                                 tracing::error!(
                                     error = %e,
                                     callee = %callee_addr,
