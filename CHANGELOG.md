@@ -39,6 +39,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **siphond 0.7.1**: in proxy mode, a cancelled call's 487 reaches the caller. The
+  CANCEL siphond sends down the forwarded branch carries that branch's Via (RFC 3261
+  §16.10, since 7d24265), so the callee's 200 for it matched the INVITE's relay
+  context, was passed to the caller and closed the context; the 487 that followed
+  was dropped and the caller's INVITE ran to Timer B. A response for another method
+  than the one forwarded on its branch is now kept, not relayed.
+
 - **sip-uac 0.9.2**: an INVITE says `Supported: 100rel` only when it carries an SDP
   offer (alone or as a part of a multipart body). Since 0.8.1 a late-offer INVITE
   said it too, and a callee that then put its offer in a reliable 183 got a PRACK

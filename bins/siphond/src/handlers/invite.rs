@@ -891,6 +891,7 @@ impl InviteHandler {
             .proxy_state
             .store_transaction(crate::proxy_state::ProxyTransaction {
                 branch: branch.clone(),
+                method: proxied_req.method().clone(),
                 sender_addr: ctx.peer(),
                 sender_transport: ctx.transport(),
                 sender_stream: ctx.stream().cloned(),

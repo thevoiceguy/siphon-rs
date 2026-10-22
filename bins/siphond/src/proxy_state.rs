@@ -20,6 +20,10 @@ use tokio::sync::mpsc;
 pub struct ProxyTransaction {
     /// Branch ID we added in our Via header
     pub branch: String,
+    /// The forwarded request's method. A response on this branch for
+    /// another method answers a CANCEL this proxy sent down it (RFC 3261
+    /// §16.10), and is this proxy's, not the caller's.
+    pub method: sip_core::Method,
 
     /// Original sender's address (where to forward responses)
     #[allow(dead_code)]
