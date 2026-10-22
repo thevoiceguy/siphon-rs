@@ -285,6 +285,7 @@ use bytes::Bytes;
 use sip_core::{Request, Response};
 use sip_parse::{serialize_request, serialize_response};
 use smol_str::SmolStr;
+use tracing::debug;
 
 use crate::timers::TransportAwareTimers;
 use crate::{ClientNonInviteState, ServerNonInviteState, TransactionTimer};
@@ -407,23 +408,19 @@ pub enum ServerInviteAction {
     },
 }
 
+/// A provisional is reliable only when it carries both `Require: 100rel`
+/// and an RSeq, and a 100 never is (RFC 3262 §3, §4). An RSeq alone, or
+/// beside `Supported: 100rel`, used to draw a PRACK the callee never asked
+/// for and answered with 481.
 fn response_requires_prack(response: &Response) -> bool {
-    let has_rseq = response.headers().get("RSeq").is_some();
-    if !has_rseq {
+    if response.code() == 100 || response.headers().get("RSeq").is_none() {
         return false;
     }
-    let has_require = response.headers().get("Require").is_some();
-    let has_require_100rel = response
+    response
         .headers()
         .get_all_smol("Require")
         .flat_map(|value| value.split(','))
-        .any(|token| token.trim().eq_ignore_ascii_case("100rel"));
-    let has_supported_100rel = response
-        .headers()
-        .get_all_smol("Supported")
-        .flat_map(|value| value.split(','))
-        .any(|token| token.trim().eq_ignore_ascii_case("100rel"));
-    has_require_100rel || has_supported_100rel || !has_require
+        .any(|token| token.trim().eq_ignore_ascii_case("100rel"))
 }
 
 /// Implements RFC 3261 Figure 7 for non-INVITE client transactions.
@@ -463,6 +460,10 @@ pub struct ClientInviteFsm {
     timers: TransportAwareTimers,
     a_interval: Duration,
     last_invite: Option<Bytes>,
+    /// Whether the final this transaction delivered was a 2xx: only then
+    /// is a 2xx arriving once `Terminated` one of its retransmissions or
+    /// forks, rather than a second final.
+    answered: bool,
 }
 
 impl ClientInviteFsm {
@@ -481,6 +482,7 @@ impl ClientInviteFsm {
             timers,
             a_interval: a_initial,
             last_invite: None,
+            answered: false,
         }
     }
 
@@ -497,7 +499,7 @@ impl ClientInviteFsm {
                 ClientInviteEvent::ReceiveFinal(response),
             ) => self.handle_final(*state, response),
             (Terminated, ClientInviteEvent::ReceiveFinal(response)) => {
-                if (200..=299).contains(&response.code()) {
+                if self.answered && (200..=299).contains(&response.code()) {
                     self.handle_final_2xx(response)
                 } else {
                     Vec::new()
@@ -562,15 +564,21 @@ impl ClientInviteFsm {
         response: Response,
     ) -> Vec<ClientInviteAction> {
         let code = response.code();
-        if (200..=299).contains(&code) {
-            self.handle_final_2xx(response)
-        } else {
-            self.handle_final_non_2xx(current_state, response)
+        if !(200..=299).contains(&code) {
+            return self.handle_final_non_2xx(current_state, response);
         }
+        // Completed takes only 300-699 (RFC 3261 Figure 5): the TU already
+        // has this transaction's final, and a 2xx after it would be a second.
+        if matches!(current_state, crate::ClientInviteState::Completed) {
+            debug!(code, "dropping a 2xx received after a non-2xx final");
+            return Vec::new();
+        }
+        self.handle_final_2xx(response)
     }
 
     fn handle_final_2xx(&mut self, response: Response) -> Vec<ClientInviteAction> {
         self.state = crate::ClientInviteState::Terminated;
+        self.answered = true;
         vec![
             ClientInviteAction::Cancel(TransactionTimer::A),
             ClientInviteAction::Cancel(TransactionTimer::B),
@@ -664,6 +672,11 @@ impl ClientInviteFsm {
     }
 
     fn handle_transport_error(&mut self) -> Vec<ClientInviteAction> {
+        // Already ended, and the TU already told (§17.1.1.2): a second
+        // error, e.g. from a retransmission in flight, ends nothing.
+        if matches!(self.state, crate::ClientInviteState::Terminated) {
+            return Vec::new();
+        }
         self.state = crate::ClientInviteState::Terminated;
         vec![ClientInviteAction::Terminate {
             reason: SmolStr::new("transport error"),
@@ -825,6 +838,9 @@ impl ClientNonInviteFsm {
     }
 
     fn handle_transport_error(&mut self) -> Vec<ClientAction> {
+        if self.state == ClientNonInviteState::Terminated {
+            return Vec::new();
+        }
         self.state = ClientNonInviteState::Terminated;
         vec![ClientAction::Terminate {
             reason: SmolStr::new("transport error"),
@@ -969,6 +985,9 @@ impl ServerNonInviteFsm {
     }
 
     fn handle_transport_error(&mut self) -> Vec<ServerAction> {
+        if self.state == ServerNonInviteState::Terminated {
+            return Vec::new();
+        }
         self.state = ServerNonInviteState::Terminated;
         vec![ServerAction::Terminate {
             reason: SmolStr::new("transport error"),
@@ -1026,9 +1045,17 @@ impl ServerInviteFsm {
             (Proceeding, ServerInviteEvent::ReceiveInvite(_)) => self.handle_receive_invite(),
             (Proceeding | Completed, ServerInviteEvent::ReceiveCancel) => self.handle_cancel(),
             (Proceeding, ServerInviteEvent::SendProvisional(resp)) => self.send_provisional(resp),
-            (Proceeding, ServerInviteEvent::SendFinal(resp))
-            | (Confirmed, ServerInviteEvent::SendFinal(resp))
-            | (Completed, ServerInviteEvent::SendFinal(resp)) => self.send_final(resp),
+            (Proceeding, ServerInviteEvent::SendFinal(resp)) => self.send_final(resp),
+            // One final per transaction (RFC 3261 Figure 7): once a 3xx-6xx
+            // has gone out, only Timer G resends it. A second final from the
+            // TU, e.g. a 200 racing the 487 for a CANCEL, is not sent.
+            (Completed | Confirmed, ServerInviteEvent::SendFinal(resp)) => {
+                debug!(
+                    code = resp.code(),
+                    "dropping a final sent after this transaction's final"
+                );
+                Vec::new()
+            }
             (Completed, ServerInviteEvent::ReceiveAck) => self.handle_ack(),
             (Completed, ServerInviteEvent::TimerFired(TransactionTimer::G)) => {
                 self.handle_timer_g()
@@ -1189,6 +1216,9 @@ impl ServerInviteFsm {
     }
 
     fn handle_transport_error(&mut self) -> Vec<ServerInviteAction> {
+        if self.state == crate::ServerInviteState::Terminated {
+            return Vec::new();
+        }
         self.state = crate::ServerInviteState::Terminated;
         vec![ServerInviteAction::Terminate {
             reason: SmolStr::new("transport error"),
@@ -1343,6 +1373,146 @@ mod tests {
             .iter()
             .any(|a| matches!(a, ClientInviteAction::GenerateAck { is_2xx: false, .. })));
         assert!(matches!(fsm.state, crate::ClientInviteState::Completed));
+    }
+
+    /// After a 3xx-6xx the TU has the transaction's final. A 2xx that
+    /// follows, in Completed or after Timer D, is not delivered as a
+    /// second one (RFC 3261 Figure 5).
+    #[test]
+    fn a_2xx_after_a_non_2xx_final_is_not_delivered() {
+        use crate::timers::{Transport, TransportAwareTimers};
+        let mut fsm = ClientInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
+        fsm.on_event(ClientInviteEvent::SendInvite(sample_invite()));
+        fsm.on_event(ClientInviteEvent::ReceiveFinal(sample_response(486)));
+        assert!(matches!(fsm.state, crate::ClientInviteState::Completed));
+
+        let actions = fsm.on_event(ClientInviteEvent::ReceiveFinal(sample_response(200)));
+        assert!(actions.is_empty(), "a 2xx in Completed: {actions:?}");
+        assert!(matches!(fsm.state, crate::ClientInviteState::Completed));
+
+        fsm.on_event(ClientInviteEvent::TimerFired(TransactionTimer::D));
+        assert!(matches!(fsm.state, crate::ClientInviteState::Terminated));
+        let actions = fsm.on_event(ClientInviteEvent::ReceiveFinal(sample_response(200)));
+        assert!(actions.is_empty(), "a 2xx after Timer D: {actions:?}");
+    }
+
+    /// A 2xx retransmission still reaches the TU after the 2xx that ended
+    /// the transaction, so it can re-ACK (RFC 3261 §13.2.2.4).
+    #[test]
+    fn a_retransmitted_2xx_is_still_delivered() {
+        use crate::timers::{Transport, TransportAwareTimers};
+        let mut fsm = ClientInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
+        fsm.on_event(ClientInviteEvent::SendInvite(sample_invite()));
+        fsm.on_event(ClientInviteEvent::ReceiveFinal(sample_response(200)));
+        let again = fsm.on_event(ClientInviteEvent::ReceiveFinal(sample_response(200)));
+        assert!(again
+            .iter()
+            .any(|a| matches!(a, ClientInviteAction::Deliver(_))));
+    }
+
+    /// A server transaction that sent a 3xx-6xx sends no other final: a
+    /// 200 racing the 487 for a CANCEL would give the caller two.
+    #[test]
+    fn a_server_invite_sends_one_final() {
+        use crate::timers::{Transport, TransportAwareTimers};
+        let mut fsm = ServerInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
+        fsm.on_event(ServerInviteEvent::ReceiveInvite(sample_invite()));
+        fsm.on_event(ServerInviteEvent::SendFinal(sample_response(487)));
+        let actions = fsm.on_event(ServerInviteEvent::SendFinal(sample_response(200)));
+        assert!(
+            actions.is_empty(),
+            "a second final in Completed: {actions:?}"
+        );
+        assert!(matches!(fsm.state, crate::ServerInviteState::Completed));
+
+        fsm.on_event(ServerInviteEvent::ReceiveAck);
+        let actions = fsm.on_event(ServerInviteEvent::SendFinal(sample_response(486)));
+        assert!(
+            actions.is_empty(),
+            "a second final in Confirmed: {actions:?}"
+        );
+        assert!(matches!(fsm.state, crate::ServerInviteState::Confirmed));
+    }
+
+    /// A transport error ends a transaction once. The second of two (two
+    /// failed sends in flight) produces no `Terminate`, so the TU is not
+    /// told twice.
+    #[test]
+    fn a_second_transport_error_ends_nothing() {
+        use crate::timers::{Transport, TransportAwareTimers};
+        let timers = || TransportAwareTimers::new(Transport::Udp);
+
+        let mut fsm = ClientInviteFsm::new(timers());
+        fsm.on_event(ClientInviteEvent::SendInvite(sample_invite()));
+        assert!(!fsm.on_event(ClientInviteEvent::TransportError).is_empty());
+        assert!(fsm.on_event(ClientInviteEvent::TransportError).is_empty());
+
+        let mut fsm = ClientNonInviteFsm::new(timers());
+        fsm.on_event(ClientNonInviteEvent::SendRequest(sample_request()));
+        assert!(!fsm
+            .on_event(ClientNonInviteEvent::TransportError)
+            .is_empty());
+        assert!(fsm
+            .on_event(ClientNonInviteEvent::TransportError)
+            .is_empty());
+
+        let mut fsm = ServerInviteFsm::new(timers());
+        fsm.on_event(ServerInviteEvent::ReceiveInvite(sample_invite()));
+        assert!(!fsm.on_event(ServerInviteEvent::TransportError).is_empty());
+        assert!(fsm.on_event(ServerInviteEvent::TransportError).is_empty());
+
+        let mut fsm = ServerNonInviteFsm::new(timers());
+        fsm.on_event(ServerNonInviteEvent::ReceiveRequest(sample_request()));
+        assert!(!fsm
+            .on_event(ServerNonInviteEvent::TransportError)
+            .is_empty());
+        assert!(fsm
+            .on_event(ServerNonInviteEvent::TransportError)
+            .is_empty());
+    }
+
+    fn provisional_with(code: u16, headers: &[(&str, &str)]) -> Response {
+        let mut response = sample_response(code);
+        for (name, value) in headers {
+            response
+                .headers_mut()
+                .push(SmolStr::new(*name), SmolStr::new(*value))
+                .unwrap();
+        }
+        response
+    }
+
+    /// RFC 3262 §4: reliable means `Require: 100rel` and an RSeq, and a
+    /// 100 is never reliable (§3).
+    #[test]
+    fn only_a_provisional_that_requires_100rel_is_pracked() {
+        let reliable = [
+            vec![("Require", "100rel"), ("RSeq", "1")],
+            vec![("Require", "timer, 100REL"), ("RSeq", "1")],
+            vec![("Require", "timer"), ("Require", "100rel"), ("RSeq", "1")],
+        ];
+        for headers in &reliable {
+            assert!(
+                response_requires_prack(&provisional_with(183, headers)),
+                "{headers:?}"
+            );
+        }
+        let unreliable = [
+            vec![("RSeq", "1")],
+            vec![("Supported", "100rel"), ("RSeq", "1")],
+            vec![("Require", "timer"), ("RSeq", "1")],
+            vec![("Require", "100rel")],
+        ];
+        for headers in &unreliable {
+            assert!(
+                !response_requires_prack(&provisional_with(183, headers)),
+                "{headers:?}"
+            );
+        }
+        assert!(!response_requires_prack(&provisional_with(
+            100,
+            &[("Require", "100rel"), ("RSeq", "1")]
+        )));
     }
 
     #[test]

@@ -5,7 +5,11 @@
 use std::{
     collections::HashMap,
     net::SocketAddr,
-    sync::Arc,
+    ops::Deref,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 
@@ -363,10 +367,46 @@ enum ServerKind {
     NonInvite(ServerNonInviteFsm),
 }
 
+/// A client transaction's TU, with the flag that keeps `on_terminated` to
+/// one call per transaction. The paths that end a transaction (an FSM
+/// `Terminate`, eviction at the limit) run on different tasks and may
+/// find the entry already gone (see
+/// [`apply_client_actions`](TransactionManager::apply_client_actions)), so
+/// whether the entry was removed cannot decide who notifies.
+#[derive(Clone)]
+struct ClientTu {
+    tu: Arc<dyn ClientTransactionUser>,
+    terminated: Arc<AtomicBool>,
+}
+
+impl ClientTu {
+    fn new(tu: Arc<dyn ClientTransactionUser>) -> Self {
+        Self {
+            tu,
+            terminated: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Calls the TU's `on_terminated` unless this transaction already has.
+    async fn on_terminated(&self, key: &TransactionKey, reason: &str) {
+        if !self.terminated.swap(true, Ordering::AcqRel) {
+            self.tu.on_terminated(key, reason).await;
+        }
+    }
+}
+
+impl Deref for ClientTu {
+    type Target = dyn ClientTransactionUser;
+
+    fn deref(&self) -> &Self::Target {
+        self.tu.as_ref()
+    }
+}
+
 struct ClientEntry {
     kind: ClientKind,
     ctx: TransportContext,
-    tu: Arc<dyn ClientTransactionUser>,
+    tu: ClientTu,
     timers: HashMap<TransactionTimer, oneshot::Sender<()>>,
     start_time: Instant,
     method: Method,
@@ -385,6 +425,15 @@ enum ClientKind {
 enum ClientRuntimeActions {
     Invite(Vec<ClientInviteAction>),
     NonInvite(Vec<ClientAction>),
+}
+
+impl ClientRuntimeActions {
+    fn is_empty(&self) -> bool {
+        match self {
+            Self::Invite(actions) => actions.is_empty(),
+            Self::NonInvite(actions) => actions.is_empty(),
+        }
+    }
 }
 
 fn map_server_actions(actions: Vec<ServerAction>) -> Vec<ServerInviteAction> {
@@ -979,14 +1028,14 @@ impl TransactionManager {
         let entry = ClientEntry {
             kind,
             ctx: ctx.clone(),
-            tu,
+            tu: ClientTu::new(tu),
             timers: HashMap::new(),
             start_time: Instant::now(),
             method: key.method.clone(),
             remaining_targets,
         };
 
-        let tu_for_actions = Arc::clone(&entry.tu);
+        let tu_for_actions = entry.tu.clone();
         let ctx_for_actions = entry.ctx.clone();
         self.inner.client.insert(key.clone(), entry);
         self.inner.metrics.record_start(
@@ -1142,11 +1191,7 @@ impl TransactionManager {
     async fn client_transport_error_actions(
         &self,
         key: &TransactionKey,
-    ) -> Option<(
-        ClientRuntimeActions,
-        Arc<dyn ClientTransactionUser>,
-        TransportContext,
-    )> {
+    ) -> Option<(ClientRuntimeActions, ClientTu, TransportContext)> {
         if let Some(mut entry) = self.inner.client.get_mut(key) {
             let actions = match &mut entry.kind {
                 ClientKind::Invite(fsm) => {
@@ -1159,6 +1204,11 @@ impl TransactionManager {
             let tu = entry.tu.clone();
             let ctx = entry.ctx.clone();
             drop(entry);
+            // An FSM already terminated yields nothing, and its TU has
+            // already heard of the error that ended it.
+            if actions.is_empty() {
+                return None;
+            }
             tu.on_transport_error(key).await;
             Some((actions, tu, ctx))
         } else {
@@ -1270,7 +1320,7 @@ impl TransactionManager {
         &self,
         key: &TransactionKey,
         actions: ClientRuntimeActions,
-        tu: Arc<dyn ClientTransactionUser>,
+        tu: ClientTu,
         ctx: TransportContext,
     ) {
         match actions {
@@ -1339,7 +1389,7 @@ impl TransactionManager {
         &self,
         key: &TransactionKey,
         actions: Vec<ClientInviteAction>,
-        tu: Arc<dyn ClientTransactionUser>,
+        tu: ClientTu,
         ctx: TransportContext,
     ) {
         debug!(
@@ -1408,7 +1458,7 @@ impl TransactionManager {
         &self,
         key: &TransactionKey,
         actions: Vec<ClientAction>,
-        tu: Arc<dyn ClientTransactionUser>,
+        tu: ClientTu,
         ctx: TransportContext,
     ) {
         for action in actions {
@@ -1435,6 +1485,8 @@ impl TransactionManager {
                     }
                 }
                 ClientAction::Terminate { reason } => {
+                    // The TU hears of the ending even when another task
+                    // reaped the entry first, as for INVITE.
                     if let Some((_, entry)) = self.inner.client.remove(key) {
                         let duration = entry.start_time.elapsed();
                         let transport =
@@ -1462,9 +1514,8 @@ impl TransactionManager {
                             &format!("{:?}", entry.method),
                             TransactionRole::Client,
                         );
-
-                        entry.tu.on_terminated(key, reason.as_str()).await;
                     }
+                    tu.on_terminated(key, reason.as_str()).await;
                 }
             }
         }
@@ -2253,6 +2304,92 @@ mod tests {
                 "round {round}: the ACK was generated"
             );
         }
+    }
+
+    /// Two transport errors for one transaction (two failed sends in
+    /// flight) can each take the entry before either's actions run. The
+    /// TU hears of the error, and of the ending, once.
+    #[tokio::test]
+    async fn concurrent_transport_errors_terminate_once() {
+        for method in [Method::Invite, Method::Options] {
+            let dispatcher = Arc::new(TestDispatcher::default());
+            let manager = TransactionManager::new(dispatcher);
+            let ctx =
+                TransportContext::new(TransportKind::Udp, "127.0.0.1:5062".parse().unwrap(), None);
+            let tu = Arc::new(TestClientTu::default());
+            let branch = format!("z9hG4bKtwo-errors-{}", method.as_str());
+            let key = manager
+                .start_client_transaction(
+                    build_client_request(method.clone(), &branch),
+                    ctx,
+                    tu.clone(),
+                )
+                .await
+                .unwrap();
+
+            let first = manager.client_transport_error_actions(&key).await;
+            let second = manager.client_transport_error_actions(&key).await;
+            for (actions, tu, ctx) in [first, second].into_iter().flatten() {
+                manager.apply_client_actions(&key, actions, tu, ctx).await;
+            }
+
+            assert_eq!(*tu.transport_errors.lock().await, 1, "{method:?}");
+            assert_eq!(
+                tu.terminated.lock().await.as_slice(),
+                &["transport error".to_owned()],
+                "{method:?}"
+            );
+            assert!(!manager.inner.client.contains_key(&key), "{method:?}");
+        }
+    }
+
+    /// Eviction at the limit and the FSM's own `Terminate` each notify the
+    /// TU; whichever comes second must not.
+    #[tokio::test]
+    async fn an_evicted_transaction_is_terminated_once() {
+        let dispatcher = Arc::new(TestDispatcher::default());
+        let manager = TransactionManager::with_limits(dispatcher, TransactionLimits::new(10, 1));
+        let ctx =
+            TransportContext::new(TransportKind::Udp, "127.0.0.1:5063".parse().unwrap(), None);
+        let tu = Arc::new(TestClientTu::default());
+        let key = manager
+            .start_client_transaction(
+                build_client_request(Method::Invite, "z9hG4bKevicted"),
+                ctx.clone(),
+                tu.clone(),
+            )
+            .await
+            .unwrap();
+
+        // The transport error is taken before the eviction removes the
+        // entry, and its actions run after.
+        let pending = manager.client_transport_error_actions(&key).await;
+        manager
+            .start_client_transaction(
+                build_client_request(Method::Invite, "z9hG4bKevictor"),
+                ctx,
+                Arc::new(TestClientTu::default()),
+            )
+            .await
+            .unwrap();
+        let (actions, entry_tu, entry_ctx) = pending.expect("the error ended the transaction");
+        manager
+            .apply_client_actions(&key, actions, entry_tu, entry_ctx)
+            .await;
+
+        let tu_done = tu.clone();
+        wait_until(
+            || {
+                let tu = tu_done.clone();
+                async move { !tu.terminated.lock().await.is_empty() }
+            },
+            Duration::from_millis(10),
+            Duration::from_secs(1),
+        )
+        .await;
+        // Let the eviction's spawned notification run, if it would.
+        time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(tu.terminated.lock().await.len(), 1);
     }
 
     #[tokio::test]
