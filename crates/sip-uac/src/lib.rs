@@ -286,6 +286,13 @@ pub struct InviteOptions {
     /// Request-URI keeps the name, as a carrier that knows its trunks by
     /// domain needs. Only the integrated client honours it, and not down a
     /// flow, which goes where the flow does.
+    ///
+    /// It wins over a configured outbound proxy: the INVITE goes to the
+    /// destination without the proxy's Route, and its CANCEL and any
+    /// authenticated retry go the same way. Over TLS, a destination with
+    /// no TLS name of its own is verified against the configured
+    /// `tls_server_name` or, failing that, the Request-URI's host
+    /// (RFC 5922 §4), not its IP.
     pub destination: Option<sip_dns::DnsTarget>,
 }
 

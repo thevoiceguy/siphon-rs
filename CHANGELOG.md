@@ -34,6 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and no `Require` header — or with `Supported: 100rel` — was PRACKed, and the callee
   answered the unrequested PRACK with 481.
   ([#145](https://github.com/thevoiceguy/siphon-rs/issues/145), in part)
+- **sip-uac 0.9.3**: an INVITE's `InviteOptions::destination` is honoured beside an
+  outbound proxy, and over TLS is verified against a name. With an outbound proxy
+  configured the destination was dropped for the proxy; it now wins — the INVITE, its
+  CANCEL and any authenticated retry go to it, without the proxy's Route. A destination
+  given as an IP with no TLS name of its own was dialled with the IP as SNI and failed a
+  carrier's hostname-only certificate; it now takes `tls_server_name` when configured,
+  else the Request-URI's host (RFC 5922 §4).
+  ([#146](https://github.com/thevoiceguy/siphon-rs/issues/146))
 
 - **siphond 0.7.2**: in B2BUA mode, the ACK, the BYE and a bridged re-INVITE reach the
   callee over the transport it registered with, as its INVITE has since 7d24265 (UDP

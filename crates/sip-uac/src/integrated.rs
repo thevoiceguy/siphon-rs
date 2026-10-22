@@ -183,6 +183,9 @@ pub struct UACConfig {
 
     /// Outbound proxy (RFC 3261 §8.1.2): out-of-dialog requests are sent to
     /// it with a Route naming it, their Request-URI left as the target.
+    /// Not an INVITE given an [`InviteOptions::destination`]: the caller
+    /// chose where that one goes, and it goes there without the proxy's
+    /// Route.
     pub outbound_proxy: Option<SipUri>,
 
     /// Optional instance-id (RFC 5626) used for +sip.instance on REGISTER.
@@ -453,6 +456,30 @@ fn apply_tls_server_name(target: DnsTarget, tls_server_name: Option<&str>) -> Dn
     } else {
         target
     }
+}
+
+/// The TLS name an INVITE's [`InviteOptions::destination`] is dialled
+/// with. The caller resolved the Request-URI's host to the destination, so
+/// when the destination names no reference identity of its own and the
+/// configured [`UACConfig::tls_server_name`] does not apply, it is that
+/// host (RFC 5922 §4): an IP's SNI fails a carrier's hostname-only
+/// certificate (issue #146).
+fn destination_with_tls_name(
+    destination: DnsTarget,
+    tls_server_name: Option<&str>,
+    request_uri: &SipUri,
+) -> DnsTarget {
+    let destination = apply_tls_server_name(destination, tls_server_name);
+    let host = request_uri.host();
+    if host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<std::net::IpAddr>()
+        .is_ok()
+    {
+        return destination;
+    }
+    apply_tls_server_name(destination, Some(host))
 }
 
 /// Append a caller's extra headers to an in-dialog request, leaving any
@@ -1911,14 +1938,25 @@ impl IntegratedUAC {
         let target_uri = self.extract_uri(&target)?;
         let request = helper.create_invite_with_options(&target_uri, &options)?;
         drop(helper);
-        // A destination the caller resolved is where the request goes; the
-        // Request-URI it was built from stays as it is.
-        let target = match options.destination {
-            Some(destination) => RequestTarget::Resolved(destination),
-            None => target,
-        };
-        self.send_new_invite_filtered(target, target_uri, request, None, options.filter)
-            .await
+        // A destination the caller resolved is where the request goes,
+        // past any outbound proxy; the Request-URI it was built from stays
+        // as it is, and names the destination's TLS peer.
+        let destination = options.destination.map(|destination| {
+            destination_with_tls_name(
+                destination,
+                self.config.tls_server_name.as_deref(),
+                &target_uri,
+            )
+        });
+        self.send_new_invite_filtered(
+            target,
+            target_uri,
+            request,
+            None,
+            options.filter,
+            destination,
+        )
+        .await
     }
 
     /// Send an INVITE using an existing connection (RFC 5626 flow support).
@@ -1961,8 +1999,15 @@ impl IntegratedUAC {
         let target_uri = self.extract_uri(&target)?;
         let request = helper.create_invite_with_options(&target_uri, &options)?;
         drop(helper);
-        self.send_new_invite_filtered(target, target_uri, request, Some(flow), options.filter)
-            .await
+        self.send_new_invite_filtered(
+            target,
+            target_uri,
+            request,
+            Some(flow),
+            options.filter,
+            None,
+        )
+        .await
     }
 
     /// Send an INVITE with custom body and Content-Type.
@@ -1999,13 +2044,14 @@ impl IntegratedUAC {
         request: Request,
         flow: Option<Flow>,
     ) -> Result<CallHandle> {
-        self.send_new_invite_filtered(target, target_uri, request, flow, None)
+        self.send_new_invite_filtered(target, target_uri, request, flow, None, None)
             .await
     }
 
     /// As [`IntegratedUAC::send_new_invite`], giving `filter` the finished
     /// request — Via, Contact and Content-Length filled in — before the
-    /// transaction starts.
+    /// transaction starts, and sending it to `destination` when the caller
+    /// chose one ([`InviteOptions::destination`]).
     async fn send_new_invite_filtered(
         &self,
         target: RequestTarget,
@@ -2013,6 +2059,7 @@ impl IntegratedUAC {
         mut request: Request,
         flow: Option<Flow>,
         filter: Option<crate::RequestFilter>,
+        destination: Option<DnsTarget>,
     ) -> Result<CallHandle> {
         // The INVITE's transaction PRACKs every reliable provisional
         // (RFC 3262), so the INVITE says so: without it a callee may not
@@ -2023,12 +2070,15 @@ impl IntegratedUAC {
             supports_100rel(&mut request);
         }
 
-        // Down a flow the request goes where the flow does; otherwise
-        // through the outbound proxy, if there is one.
-        let dns_target = if flow.is_none() {
-            self.resolve_out_of_dialog(&mut request, &target).await?
-        } else {
-            self.resolve_target(&target).await?
+        // Down a flow the request goes where the flow does; to a
+        // destination the caller chose, there and not through the outbound
+        // proxy (the caller routed it); otherwise through the outbound
+        // proxy, if there is one. A CANCEL and an authenticated retry take
+        // the INVITE's transport and Route, so they go the same way.
+        let dns_target = match (&flow, destination) {
+            (None, Some(destination)) => destination,
+            (None, None) => self.resolve_out_of_dialog(&mut request, &target).await?,
+            (Some(_), _) => self.resolve_target(&target).await?,
         };
 
         let via_flow = flow.is_some();
@@ -6162,6 +6212,140 @@ mod tests {
         let sent = dispatcher.sent.lock().await;
         let (ctx, _) = sent.first().unwrap();
         assert_eq!(ctx.peer(), "127.0.0.1:5099".parse().unwrap());
+    }
+
+    /// The first request the dispatcher saw that `pred` accepts, with the
+    /// context it was sent in.
+    async fn wait_for_sent<F>(
+        dispatcher: &CapturingDispatcher,
+        pred: F,
+    ) -> (TransportContext, Request)
+    where
+        F: Fn(&Request) -> bool,
+    {
+        loop {
+            let found = dispatcher
+                .sent
+                .lock()
+                .await
+                .iter()
+                .find_map(|(ctx, payload)| {
+                    sip_parse::parse_request(payload)
+                        .filter(|r| pred(r))
+                        .map(|r| (ctx.clone(), r))
+                });
+            if let Some(found) = found {
+                return found;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    /// A destination reached by IP over TLS is verified against the name
+    /// the caller resolved it from, not the IP (issue #146).
+    #[tokio::test]
+    async fn a_tls_destination_is_verified_against_the_request_uri_host() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = auth_test_uac(dispatcher.clone(), manager.clone(), None);
+
+        let options = InviteOptions {
+            destination: Some(sip_dns::DnsTarget::unchecked_new(
+                "127.0.0.1",
+                5061,
+                sip_dns::Transport::Tls,
+            )),
+            ..InviteOptions::with_sdp(Some("v=0\r\n"))
+        };
+        let _call = uac
+            .invite_with_options("sip:+15185550100@carrier.invalid", options)
+            .await
+            .unwrap();
+
+        let (ctx, _) = wait_for_sent(&dispatcher, |r| r.method() == &Method::Invite).await;
+        assert_eq!(ctx.peer(), "127.0.0.1:5061".parse().unwrap());
+        assert_eq!(ctx.server_name(), Some("carrier.invalid"));
+    }
+
+    /// The configured certificate name and the destination's own still
+    /// come first; a Request-URI naming an IP gives no name.
+    #[test]
+    fn a_destinations_tls_name_keeps_its_precedence() {
+        let uri = SipUri::parse("sip:+15185550100@carrier.invalid").unwrap();
+        let ip = || sip_dns::DnsTarget::unchecked_new("192.0.2.1", 5061, sip_dns::Transport::Tls);
+        assert_eq!(
+            destination_with_tls_name(ip(), Some("trunk.example.com"), &uri).sni(),
+            "trunk.example.com"
+        );
+        assert_eq!(
+            destination_with_tls_name(ip().with_tls_name("own.example.com"), None, &uri).sni(),
+            "own.example.com"
+        );
+        assert_eq!(
+            destination_with_tls_name(ip(), None, &uri).sni(),
+            "carrier.invalid"
+        );
+        let ip_uri = SipUri::parse("sip:bob@192.0.2.9").unwrap();
+        assert_eq!(
+            destination_with_tls_name(ip(), None, &ip_uri).sni(),
+            "192.0.2.1"
+        );
+    }
+
+    /// An explicit destination wins over the outbound proxy: the INVITE,
+    /// its authenticated retry and its CANCEL all go there, with no Route
+    /// naming the proxy (issue #146).
+    #[tokio::test]
+    async fn a_destination_wins_over_the_outbound_proxy() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let config = UACConfig {
+            outbound_proxy: Some(SipUri::parse("sip:127.0.0.1:5999").unwrap()),
+            ..Default::default()
+        };
+        let uac = auth_test_uac(dispatcher.clone(), manager.clone(), Some(config));
+        let destination: SocketAddr = "127.0.0.1:5099".parse().unwrap();
+
+        let options = InviteOptions {
+            destination: Some(sip_dns::DnsTarget::unchecked_new(
+                "127.0.0.1",
+                5099,
+                sip_dns::Transport::Udp,
+            )),
+            ..InviteOptions::with_sdp(Some("v=0\r\n"))
+        };
+        let call = Arc::new(
+            uac.invite_with_options("sip:+15185550100@carrier.invalid", options)
+                .await
+                .unwrap(),
+        );
+
+        let (ctx, invite1) = wait_for_sent(&dispatcher, |r| r.method() == &Method::Invite).await;
+        assert_eq!(
+            ctx.peer(),
+            destination,
+            "the INVITE goes to its destination"
+        );
+        assert_eq!(invite1.headers().get("Route"), None);
+
+        manager
+            .receive_response(challenge_response(&invite1, 407))
+            .await;
+        let (ctx, invite2) = wait_for_sent(&dispatcher, |r| {
+            r.method() == &Method::Invite && r.headers().get("Proxy-Authorization").is_some()
+        })
+        .await;
+        assert_eq!(ctx.peer(), destination, "so does its authenticated retry");
+        assert_eq!(invite2.headers().get("Route"), None);
+
+        let cancel = {
+            let call = Arc::clone(&call);
+            tokio::spawn(async move { call.cancel().await })
+        };
+        let (ctx, sent) = wait_for_sent(&dispatcher, |r| r.method() == &Method::Cancel).await;
+        assert_eq!(ctx.peer(), destination, "and its CANCEL");
+        assert_eq!(sent.headers().get("Route"), None);
+        cancel.abort();
     }
 
     /// Same retry for a 401 challenge: the retry carries Authorization
