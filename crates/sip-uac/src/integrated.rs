@@ -391,6 +391,18 @@ fn build_via_value(
     format!("SIP/2.0/{} {};branch={};rport", transport, addr, branch)
 }
 
+/// `via` with its branch parameter replaced by `branch` (added when it has
+/// none): another request from the same sent-by.
+fn via_with_branch(via: &str, branch: &str) -> String {
+    let mut parts: Vec<String> = via
+        .split(';')
+        .filter(|p| !p.trim().starts_with("branch="))
+        .map(str::to_string)
+        .collect();
+    parts.insert(1.min(parts.len()), format!("branch={branch}"));
+    parts.join(";")
+}
+
 /// From tag of an outbound request, for seeding the early-dialog
 /// placeholder `DialogId` so it agrees with the on-wire From header.
 /// The helper generates a fresh tag per dialog-forming request
@@ -3858,8 +3870,26 @@ impl ClientTransactionUser for InviteTransactionUser {
         if let Some(dialog) = dialog {
             // Create PRACK
             match helper.create_prack(&self.request, &response, &dialog) {
-                Ok(prack) => {
+                Ok(mut prack) => {
                     drop(helper);
+                    // The helper's Via names `placeholder`. The INVITE's, sent
+                    // already, names this agent: the PRACK takes it with its
+                    // own branch. Left as it was, the callee answered the
+                    // PRACK to a host that does not exist, and the PRACK went
+                    // unanswered until Timer F (fcp `docs/DEEP_TESTING.md` D8).
+                    if let Some(via) = self.request.headers().get("Via") {
+                        let branch = prack
+                            .headers()
+                            .get("Via")
+                            .and_then(|v| v.split("branch=").nth(1))
+                            .and_then(|b| b.split(';').next())
+                            .map(str::trim)
+                            .filter(|b| !b.is_empty())
+                            .map(str::to_string)
+                            .unwrap_or_else(crate::generate_branch);
+                        let via = via_with_branch(via, &branch);
+                        let _ = prack.headers_mut().set_or_push("Via", via);
+                    }
 
                     // PRACK is a non-INVITE client transaction (RFC 3262)
                     let tu = Arc::new(PrackTransactionUser);
@@ -4463,6 +4493,21 @@ fn supports_100rel(request: &mut Request) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_prack_takes_the_invites_sent_by_with_its_own_branch() {
+        assert_eq!(
+            via_with_branch(
+                "SIP/2.0/UDP 34.16.92.157:5060;branch=z9hG4bKinvite;rport",
+                "z9hG4bKprack"
+            ),
+            "SIP/2.0/UDP 34.16.92.157:5060;branch=z9hG4bKprack;rport"
+        );
+        assert_eq!(
+            via_with_branch("SIP/2.0/TCP 10.0.0.1:5060", "z9hG4bKprack"),
+            "SIP/2.0/TCP 10.0.0.1:5060;branch=z9hG4bKprack"
+        );
+    }
     use bytes::Bytes;
     use sip_core::{Headers, RequestLine, StatusLine};
     use sip_dialog::{DialogId, DialogStateType};
