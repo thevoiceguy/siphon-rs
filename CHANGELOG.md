@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **sip-transaction 0.7.3**: a client INVITE transaction delivers one final. After a
+  3xx–6xx, a 2xx arriving in Completed was passed to the transaction user and moved
+  the FSM to Terminated, so the TU saw two finals; RFC 3261 Figure 5 takes only
+  300–699 in Completed, and the 2xx is now dropped (and logged at debug). Once
+  Terminated, a 2xx is passed up only when the transaction's own final was a 2xx
+  (its retransmissions and forks). The server INVITE transaction likewise sends one
+  final: a second final from the TU in Completed or Confirmed, e.g. a 200 racing the
+  487 for a CANCEL, is no longer sent. ([#149](https://github.com/thevoiceguy/siphon-rs/issues/149))
+
+- **sip-transaction 0.7.3**: a client transaction's `on_terminated` is called at most
+  once. Since 0.7.1 an INVITE's `Terminate` notifies the TU even when another task
+  already reaped the entry, and nothing kept a transaction from ending twice: two
+  transport errors processed at once each terminated it, and an eviction at the
+  `max_client_transactions` limit notified the TU beside the FSM's own `Terminate`. A
+  transport error now ends only a transaction that has not ended (and only then
+  reaches `on_transport_error`), and the TU's `on_terminated` sits behind a
+  per-transaction once-flag. A non-INVITE `Terminate` now also reaches the TU when the
+  entry was already reaped, as an INVITE's does.
+  ([#149](https://github.com/thevoiceguy/siphon-rs/issues/149))
+
+- **sip-transaction 0.7.3**: only a provisional that carries `Require: 100rel` and an
+  RSeq draws a PRACK (RFC 3262 §4), and a 100 never does (§3). Any 1xx with an RSeq
+  and no `Require` header — or with `Supported: 100rel` — was PRACKed, and the callee
+  answered the unrequested PRACK with 481.
+  ([#145](https://github.com/thevoiceguy/siphon-rs/issues/145), in part)
+
 ## [2026-10-22.1] — workspace release
 
 Crate versions in this release: sip-uac 0.9.2, sip-transport 0.7.0,
