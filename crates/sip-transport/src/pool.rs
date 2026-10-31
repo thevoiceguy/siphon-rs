@@ -28,7 +28,7 @@ use tracing::{debug, warn};
 /// metrics, or a per-application reconnect policy.
 ///
 /// RFC 3261 §18.4 requires transport errors to surface to the
-/// transaction layer. The existing `dispatch_with_pool` path does
+/// transaction layer. The transaction manager's dispatch path does
 /// that reactively — on the next send the transaction notices the
 /// failure and fires `TransportError` on its FSM. This event stream
 /// is complementary: it gives proactive visibility so operators can

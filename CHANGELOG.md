@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Breaking changes: the transaction manager now sends TCP with no stream (a new
+outbound connection) through the application's `TransportDispatcher`, where it
+used to bypass it for the manager's own `ConnectionPool`. A dispatcher must now
+send these itself, for example with `pool.send_tcp(ctx.peer(), payload)`. A
+dispatcher that rejects stream-less TCP will start failing those sends. No public
+signature changed.
+([#158](https://github.com/thevoiceguy/siphon-rs/issues/158))
+
+### Fixed
+
+- **sip-transaction 0.8.0**: the `TransportDispatcher` sees every message the
+  transaction manager sends. TCP with no stream went straight to the manager's
+  pool, so a dispatcher that logs, captures or rewrites outbound SIP missed every
+  message that opened a new TCP connection. Responses on those connections reach
+  the manager through the inbound channel of the pool the dispatcher sends
+  through. To get them, share that pool via `TransactionManager::new_with_pool`
+  and call `set_inbound_tx`, or set the channel on the dispatcher's pool. siphond
+  already does the latter.
+  ([#158](https://github.com/thevoiceguy/siphon-rs/issues/158))
+
 ## [2026-10-22.2] — workspace release
 
 Crate versions in this release: sip-transaction 0.7.3, sip-transport 0.7.1,

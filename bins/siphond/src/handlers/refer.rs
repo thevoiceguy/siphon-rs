@@ -659,14 +659,12 @@ impl RequestHandler for ReferHandler {
                             );
                         }
                         via_replaced = true;
-                    } else {
-                        if let Err(e) = new_headers.push(header.name(), header.value()) {
-                            warn!(
-                                header = %header.name(),
-                                error = %e,
-                                "Failed to push header to REFER INVITE, skipping"
-                            );
-                        }
+                    } else if let Err(e) = new_headers.push(header.name(), header.value()) {
+                        warn!(
+                            header = %header.name(),
+                            error = %e,
+                            "Failed to push header to REFER INVITE, skipping"
+                        );
                     }
                 }
                 *invite.headers_mut() = new_headers;
