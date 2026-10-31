@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026-10-31] — workspace release
+
+Crate versions in this release: sip-transaction 0.8.0. (sip-core 0.7.8,
+sip-parse 0.4.0, sip-dialog 0.4.0, sip-transport 0.7.1, sip-uac 0.9.3,
+sip-uas 0.5.1, sip-registrar 0.3.2, sip-sdp 0.3.2, sip-dns 0.3.0, sip-auth 0.4.0,
+sip-observe 0.3.0, sip-ratelimit 0.3.0, sip-testkit 0.1.1, sip-proxy 0.3.0,
+sip-hep 0.0.1, sip-identity 0.3.0, and siphond 0.7.2 are unchanged.)
+
+This release routes every message the transaction manager sends through the
+application's `TransportDispatcher`
+([#158](https://github.com/thevoiceguy/siphon-rs/issues/158)).
+
 Breaking changes: the transaction manager now sends TCP with no stream (a new
 outbound connection) through the application's `TransportDispatcher`, where it
 used to bypass it for the manager's own `ConnectionPool`. A dispatcher must now
