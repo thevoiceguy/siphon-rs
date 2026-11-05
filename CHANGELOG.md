@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026-11-05] — workspace release
+
+Crate versions in this release: sip-transaction 0.8.1, sip-uac 0.9.4.
+(sip-core 0.7.8, sip-parse 0.4.0, sip-dialog 0.4.0, sip-transport 0.7.1,
+sip-uas 0.5.1, sip-registrar 0.3.2, sip-sdp 0.3.2, sip-dns 0.3.0, sip-auth 0.4.0,
+sip-observe 0.3.0, sip-ratelimit 0.3.0, sip-testkit 0.1.1, sip-proxy 0.3.0,
+sip-hep 0.0.1, sip-identity 0.3.0, and siphond 0.7.2 are unchanged.)
+
+This release fixes two places where a long-running endpoint kept memory for
+every call it ever carried, found by a heap profile of FCP's call manager
+([FCP #344](https://github.com/thevoiceguy/fcp/issues/344)).
+
+### Fixed
+
+- **sip-transaction 0.8.1**: `TransactionMetrics::record_via_transport`
+  counts by transport (`UDP`, `TCP`, `TLS`, `WS`, …; `OTHER` for anything
+  else). It was given the whole top Via value, which carries the sender's
+  address and a branch unique to each transaction, so `via_transport_counts`
+  gained an entry for every request the manager received and never lost one.
+- **sip-uac 0.9.4**: a dialog the UAC hangs up is taken out of its
+  `DialogManager`. `IntegratedUAC` stores a dialog when its INVITE is answered,
+  and nothing removed it, so a UAC that placed calls kept each one's dialog
+  forever. `bye`, `bye_with_headers`, `bye_via_flow` and
+  `bye_via_flow_with_headers` now remove it once the BYE is sent, whatever the
+  answer (RFC 3261 §15.1.1). An application that shares the store with its UAS
+  (`IntegratedUACBuilder::dialog_manager`) should still remove a dialog the far
+  end hangs up.
+
 ## [2026-10-31] — workspace release
 
 Crate versions in this release: sip-transaction 0.8.0. (sip-core 0.7.8,

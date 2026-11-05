@@ -2317,7 +2317,17 @@ impl IntegratedUAC {
             .await;
 
         // Send and wait for response
-        self.send_non_invite_request(request, dns_target).await
+        let response = self.send_non_invite_request(request, dns_target).await;
+        self.forget_dialog(dialog);
+        response
+    }
+
+    /// Takes a dialog this UAC hung up out of its store. RFC 3261 §15.1.1:
+    /// the session is over once the BYE is sent, whatever comes back. The
+    /// store took the dialog when the INVITE was answered and nothing else
+    /// removes it, so a UAC that placed calls kept every one (FCP #344).
+    fn forget_dialog(&self, dialog: &Dialog) {
+        self.dialog_manager.remove(dialog.id());
     }
 
     /// Sends a BYE request using an existing connection (RFC 5626 flow support).
@@ -2373,8 +2383,11 @@ impl IntegratedUAC {
         .await;
 
         info!("Sending BYE via flow for dialog {:?}", dialog.id());
-        self.send_non_invite_via_flow(request, &dns_target, &flow)
-            .await
+        let response = self
+            .send_non_invite_via_flow(request, &dns_target, &flow)
+            .await;
+        self.forget_dialog(dialog);
+        response
     }
 
     /// Sends a non-INVITE request through an existing connection and waits
@@ -5194,6 +5207,9 @@ mod tests {
             None,
             true,
         );
+        // As the INVITE's answer left it: the dialog in the UAC's store.
+        let store = uac.dialog_manager().unwrap().clone();
+        let _ = store.insert(dialog.clone());
 
         let task = {
             let uac = uac.clone();
@@ -5248,6 +5264,11 @@ mod tests {
 
         let response = task.await.unwrap().expect("BYE completes on 200");
         assert_eq!(response.code(), 200);
+        // A dialog hung up is no longer kept (FCP #344).
+        assert!(
+            store.get(dialog.id()).is_none(),
+            "the BYE left its dialog in the store"
+        );
     }
 
     /// Answer the first request the dispatcher saw with `code`, echoing

@@ -365,13 +365,22 @@ impl TransactionMetrics {
         data.auth_retries += 1;
     }
 
-    /// Records Via transport usage.
-    pub fn record_via_transport(&self, via_transport: &str) {
+    /// Records Via transport usage: the transport a top Via names
+    /// (`UDP`, `TCP`, `TLS`, `WS`, …), given the Via header's value or the
+    /// transport alone.
+    ///
+    /// Counted by transport only. A Via value carries the sender's address
+    /// and a branch unique to each transaction, so keying by the whole value
+    /// kept an entry for every request ever received.
+    pub fn record_via_transport(&self, via: &str) {
+        let transport = via_transport_of(via);
         let mut data = self.data.write();
-        *data
-            .via_transport_counts
-            .entry(via_transport.to_string())
-            .or_insert(0) += 1;
+        match data.via_transport_counts.get_mut(transport) {
+            Some(count) => *count += 1,
+            None => {
+                data.via_transport_counts.insert(transport.to_string(), 1);
+            }
+        }
     }
 
     /// Records a server transaction rejection due to transaction limits.
@@ -540,9 +549,42 @@ impl TransactionTracker {
     }
 }
 
+/// The transport a Via value names, upper-cased: `SIP/2.0/UDP host;…` is
+/// `UDP`, a bare `tls` is `TLS`. A value that names none counts as `OTHER`,
+/// so the map stays as small as the set of transports.
+fn via_transport_of(via: &str) -> &'static str {
+    const KNOWN: [&str; 7] = ["UDP", "TCP", "TLS", "SCTP", "TLS-SCTP", "WS", "WSS"];
+    let sent_protocol = via.split_whitespace().next().unwrap_or("");
+    let transport = sent_protocol.rsplit('/').next().unwrap_or("");
+    KNOWN
+        .into_iter()
+        .find(|t| t.eq_ignore_ascii_case(transport))
+        .unwrap_or("OTHER")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn via_counts_are_kept_by_transport_not_by_value() {
+        let metrics = TransactionMetrics::new();
+        for i in 0..100 {
+            metrics.record_via_transport(&format!(
+                "SIP/2.0/UDP 10.0.0.{};branch=z9hG4bK{i};rport",
+                i % 7
+            ));
+        }
+        metrics.record_via_transport("SIP/2.0/tls proxy.example.com:5061;branch=z9hG4bKx");
+        metrics.record_via_transport("TCP");
+        metrics.record_via_transport("garbage");
+        let counts = metrics.snapshot().via_transport_counts;
+        assert_eq!(counts.len(), 4, "{counts:?}");
+        assert_eq!(counts["UDP"], 100);
+        assert_eq!(counts["TLS"], 1);
+        assert_eq!(counts["TCP"], 1);
+        assert_eq!(counts["OTHER"], 1);
+    }
 
     #[test]
     fn records_transaction_duration() {
