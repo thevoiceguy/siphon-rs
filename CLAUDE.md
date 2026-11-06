@@ -312,7 +312,7 @@ The stack provides complete support for reliable provisional responses:
 
 **Protocol Features:**
 - RSeq sequence space separate from CSeq
-- Reliable provisional retransmission until PRACK received
+- Reliable provisional retransmission until PRACK received, by the INVITE server transaction (`TransactionManager::prack_received` matches a PRACK by Call-ID and RAck); an INVITE that requires 100rel has every provisional but a 100 made reliable
 - Duplicate detection via RSeq numbers
 - 100 Trying never sent reliably per RFC 3262 §3
 

@@ -253,6 +253,11 @@ impl TransportAwareTimers {
                 // Proxy INVITE transaction timeout - 3 minutes
                 Duration::from_secs(180)
             }
+
+            // Reliable provisionals (RFC 3262 §3): the UAS sends them again
+            // whatever the transport, so neither is zero on TCP.
+            TransactionTimer::ReliableProvisional => self.defaults.t1,
+            TransactionTimer::ReliableProvisionalTimeout => self.defaults.t1.saturating_mul(64),
         }
     }
 

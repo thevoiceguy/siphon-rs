@@ -502,6 +502,9 @@ struct ManagerInner {
     dispatcher: Arc<dyn TransportDispatcher>,
     server: DashMap<TransactionKey, ServerEntry>,
     client: DashMap<TransactionKey, ClientEntry>,
+    /// INVITE server transactions that sent a reliable provisional, by
+    /// Call-ID: where a PRACK is matched (RFC 3262 §3).
+    prack_calls: DashMap<SmolStr, Vec<TransactionKey>>,
     // Removed client_index - build TransactionKey directly from response
     timer_defaults: TimerDefaults,
     pool: Arc<ConnectionPool>,
@@ -712,6 +715,7 @@ impl TransactionManager {
             inner: Arc::new(ManagerInner {
                 dispatcher,
                 server: DashMap::new(),
+                prack_calls: DashMap::new(),
                 client: DashMap::new(),
                 timer_defaults: TimerDefaults { t1, t2, t4 },
                 pool,
@@ -754,7 +758,7 @@ impl TransactionManager {
                     limit = self.inner.limits.max_server_transactions,
                     "Server transaction limit reached, evicting oldest transaction"
                 );
-                if let Some((_, mut entry)) = self.inner.server.remove(&oldest_key) {
+                if let Some(mut entry) = self.remove_server_entry(&oldest_key) {
                     entry.cancel_all();
                 }
                 return true;
@@ -1180,7 +1184,7 @@ impl TransactionManager {
     async fn process_server_transport_error(&self, key: TransactionKey) {
         if let Some(actions) = self.server_transport_error_actions(&key) {
             self.apply_server_actions(&key, actions).await;
-        } else if let Some((_, entry)) = self.inner.server.remove(&key) {
+        } else if let Some(entry) = self.remove_server_entry(&key) {
             // If no actions, still record outcome for metrics.
             let duration = entry.start_time.elapsed();
             let transport = TransportType::from(transport_kind_to_transport(entry.ctx.transport));
@@ -1293,7 +1297,7 @@ impl TransactionManager {
                     }
                 }
                 ServerInviteAction::Terminate { .. } => {
-                    if let Some((_, mut entry)) = self.inner.server.remove(key) {
+                    if let Some(mut entry) = self.remove_server_entry(key) {
                         entry.cancel_all();
                         let duration = entry.start_time.elapsed();
                         let transport =
@@ -1616,17 +1620,118 @@ impl TransactionManager {
 
     pub async fn send_provisional(&self, key: &TransactionKey, response: Response) {
         if let Some(mut entry) = self.inner.server.get_mut(key) {
+            let mut prack_call = None;
             let actions = match &mut entry.kind {
                 ServerKind::Invite(fsm) => {
-                    fsm.on_event(ServerInviteEvent::SendProvisional(response))
+                    let actions = fsm.on_event(ServerInviteEvent::SendProvisional(response));
+                    prack_call = fsm.prack_call_id().cloned();
+                    actions
                 }
                 ServerKind::NonInvite(fsm) => map_server_actions(
                     fsm.on_event(ServerNonInviteEvent::SendProvisional(response)),
                 ),
             };
             drop(entry);
+            if let Some(call_id) = prack_call {
+                let mut keys = self.inner.prack_calls.entry(call_id).or_default();
+                if !keys.contains(key) {
+                    keys.push(key.clone());
+                }
+            }
             self.apply_server_actions(key, actions).await;
         }
+    }
+
+    /// A PRACK (RFC 3262 §3) for one of this node's reliable provisionals,
+    /// matched by its Call-ID and RAck. `true` when it acknowledges one
+    /// (answer it 200); `false` when it matches none (answer it 481). An
+    /// acknowledged provisional is no longer sent again, and what waited
+    /// for it, the next provisional or a 2xx, goes out.
+    pub async fn prack_received(&self, prack: &Request) -> bool {
+        let Some(rack) = prack.headers().get("RAck") else {
+            return false;
+        };
+        let mut parts = rack.split_whitespace();
+        let (Some(rseq), Some(cseq), Some(method)) = (
+            parts.next().and_then(|v| v.parse::<u32>().ok()),
+            parts.next().and_then(|v| v.parse::<u32>().ok()),
+            parts.next(),
+        ) else {
+            return false;
+        };
+        if !method.eq_ignore_ascii_case("INVITE") {
+            return false;
+        }
+        let Some(call_id) = sip_parse::header(prack.headers(), "Call-ID") else {
+            return false;
+        };
+        let keys = match self.inner.prack_calls.get(call_id.as_str()) {
+            Some(keys) => keys.clone(),
+            None => return false,
+        };
+        for key in keys {
+            let Some(mut entry) = self.inner.server.get_mut(&key) else {
+                continue;
+            };
+            let ServerKind::Invite(fsm) = &mut entry.kind else {
+                continue;
+            };
+            if let Some(actions) = fsm.on_prack(rseq, cseq) {
+                drop(entry);
+                self.apply_server_actions(&key, actions).await;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Sends a final response once and forgets the transaction: no Timer G
+    /// resends, no Timer H wait for an ACK (RFC 3261 §8.2.7, a stateless
+    /// UAS). For a refusal at the edge, where a flood from a spoofed source
+    /// never ACKs and a stateful answer was sent about eleven times. A
+    /// retransmitted request then starts a new transaction and is answered
+    /// again, and the ACK to this response matches nothing.
+    pub async fn send_final_stateless(&self, key: &TransactionKey, response: Response) {
+        let Some(mut entry) = self.remove_server_entry(key) else {
+            return;
+        };
+        entry.cancel_all();
+        let transport = TransportType::from(transport_kind_to_transport(entry.ctx.transport));
+        self.inner.metrics.record_transaction_duration(
+            transport,
+            &format!("{:?}", entry.method),
+            entry.start_time.elapsed(),
+        );
+        self.inner
+            .metrics
+            .record_transaction_outcome(transport, TransactionOutcome::Completed);
+        self.inner.metrics.record_complete(
+            transport,
+            &format!("{:?}", entry.method),
+            TransactionRole::Server,
+        );
+        if let Err(e) = self
+            .send_via_dispatcher(&entry.ctx, serialize_response(&response))
+            .await
+        {
+            debug!(%e, key = ?key, "a stateless final could not be sent");
+        }
+    }
+
+    /// Removes a server transaction, and its PRACK index entry if it has one.
+    fn remove_server_entry(&self, key: &TransactionKey) -> Option<ServerEntry> {
+        let (_, entry) = self.inner.server.remove(key)?;
+        if let ServerKind::Invite(fsm) = &entry.kind {
+            if let Some(call_id) = fsm.prack_call_id() {
+                self.inner
+                    .prack_calls
+                    .remove_if_mut(call_id.as_str(), |_, keys| {
+                        keys.retain(|k| k != key);
+                        keys.is_empty()
+                    });
+            }
+        }
+        Some(entry)
     }
 
     pub async fn send_final(&self, key: &TransactionKey, response: Response) {
@@ -1739,6 +1844,11 @@ impl ServerTransactionHandle {
 
     pub async fn send_provisional(&self, response: Response) {
         self.manager.send_provisional(&self.key, response).await;
+    }
+
+    /// See [`TransactionManager::send_final_stateless`].
+    pub async fn send_final_stateless(&self, response: Response) {
+        self.manager.send_final_stateless(&self.key, response).await;
     }
 
     pub fn key(&self) -> &TransactionKey {
@@ -2895,5 +3005,113 @@ mod tests {
 
         // Should have all 100 transactions
         assert_eq!(manager.inner.server.len(), 100);
+    }
+
+    fn invite_with(branch: &str, call_id: &str, require_100rel: bool) -> Request {
+        let mut request = build_client_request(Method::Invite, branch);
+        let headers = request.headers_mut();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new(call_id))
+            .unwrap();
+        headers
+            .push(SmolStr::new("CSeq"), SmolStr::new("1 INVITE"))
+            .unwrap();
+        if require_100rel {
+            headers
+                .push(SmolStr::new("Require"), SmolStr::new("100rel"))
+                .unwrap();
+        }
+        request
+    }
+
+    fn prack(call_id: &str, rack: &str) -> Request {
+        let mut request = build_client_request(Method::Prack, "z9hG4bKprack");
+        let headers = request.headers_mut();
+        headers
+            .push(SmolStr::new("Call-ID"), SmolStr::new(call_id))
+            .unwrap();
+        headers
+            .push(SmolStr::new("RAck"), SmolStr::new(rack))
+            .unwrap();
+        request
+    }
+
+    async fn last_sent(dispatcher: &TestDispatcher) -> String {
+        let sent = dispatcher.sent.lock().await;
+        String::from_utf8_lossy(&sent.last().expect("something sent").1).into_owned()
+    }
+
+    /// A PRACK finds the INVITE transaction by Call-ID and RAck; it is
+    /// answered only while that transaction lasts.
+    #[tokio::test]
+    async fn a_prack_is_matched_to_its_reliable_provisional() {
+        let dispatcher = Arc::new(TestDispatcher::default());
+        let manager = TransactionManager::new(dispatcher.clone());
+        let ctx =
+            TransportContext::new(TransportKind::Udp, "127.0.0.1:5060".parse().unwrap(), None);
+        let handle = manager
+            .receive_request(invite_with("z9hG4bKrel", "rel@h", true), ctx)
+            .await;
+        handle.send_provisional(build_response(180)).await;
+        let ringing = last_sent(&dispatcher).await;
+        let rseq: u32 = ringing
+            .lines()
+            .find_map(|l| l.strip_prefix("RSeq: "))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+
+        assert!(
+            !manager
+                .prack_received(&prack("other@h", &format!("{rseq} 1 INVITE")))
+                .await
+        );
+        assert!(
+            !manager
+                .prack_received(&prack("rel@h", &format!("{rseq} 1 BYE")))
+                .await
+        );
+        assert!(!manager.prack_received(&prack("rel@h", "x 1 INVITE")).await);
+        assert!(
+            manager
+                .prack_received(&prack("rel@h", &format!("{rseq} 1 INVITE")))
+                .await
+        );
+
+        handle.send_final(build_response(200)).await;
+        assert!(
+            manager.inner.prack_calls.is_empty(),
+            "let go with the transaction"
+        );
+        assert!(
+            !manager
+                .prack_received(&prack("rel@h", &format!("{rseq} 1 INVITE")))
+                .await
+        );
+    }
+
+    /// A refusal sent statelessly goes out once and leaves no transaction:
+    /// a retransmission of the request is a new one.
+    #[tokio::test]
+    async fn a_stateless_final_is_sent_once_and_forgotten() {
+        let dispatcher = Arc::new(TestDispatcher::default());
+        let manager = TransactionManager::new(dispatcher.clone());
+        let ctx =
+            TransportContext::new(TransportKind::Udp, "127.0.0.1:5060".parse().unwrap(), None);
+        let handle = manager
+            .receive_request(invite_with("z9hG4bKflood", "flood@h", false), ctx.clone())
+            .await;
+        handle.send_final_stateless(build_response(503)).await;
+        assert!(manager.inner.server.is_empty());
+        assert_eq!(dispatcher.sent.lock().await.len(), 1);
+        assert!(last_sent(&dispatcher).await.starts_with("SIP/2.0 503"));
+
+        let again = manager
+            .receive_request(invite_with("z9hG4bKflood", "flood@h", false), ctx)
+            .await;
+        assert_eq!(manager.inner.server.len(), 1, "a new transaction");
+        again.send_final_stateless(build_response(503)).await;
+        assert_eq!(dispatcher.sent.lock().await.len(), 2);
     }
 }

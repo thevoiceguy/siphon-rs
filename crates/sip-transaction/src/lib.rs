@@ -166,6 +166,12 @@ pub enum TransactionTimer {
     T1,
     T2,
     T4,
+    /// RFC 3262 §3: a reliable provisional is sent again from T1, doubling
+    /// to T2, until it is PRACKed, on every transport.
+    ReliableProvisional,
+    /// RFC 3262 §3: 64·T1 after a reliable provisional, it is no longer
+    /// sent again.
+    ReliableProvisionalTimeout,
 }
 
 /// Client INVITE transaction states (RFC 3261 Figure 5).

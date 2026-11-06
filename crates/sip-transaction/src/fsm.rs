@@ -279,13 +279,14 @@
 //!
 //! Timer adjustments for reliable transports follow RFC 3261 §17.1.2.2 exactly.
 
+use std::collections::VecDeque;
 use std::time::Duration;
 
 use bytes::Bytes;
 use sip_core::{Request, Response};
 use sip_parse::{serialize_request, serialize_response};
 use smol_str::SmolStr;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::timers::TransportAwareTimers;
 use crate::{ClientNonInviteState, ServerNonInviteState, TransactionTimer};
@@ -1010,12 +1011,69 @@ pub enum TransportKind {
 }
 
 /// Implements the server INVITE transaction state machine.
+///
+/// It also sends the UAS's reliable provisionals (RFC 3262 §3): a
+/// provisional carrying `Require: 100rel` and an RSeq, or any non-100
+/// provisional when the INVITE itself requires 100rel (the RSeq is then
+/// this transaction's), is sent again from T1, doubling to T2, until
+/// [`on_prack`](Self::on_prack) acknowledges it. One is outstanding at a
+/// time: a provisional sent meanwhile waits its turn, and a 2xx waits for
+/// the PRACK of an outstanding provisional that carried a session
+/// description. After 64·T1 without a PRACK the provisional is no longer
+/// sent and whatever waits behind it goes out; the request is not
+/// rejected, as RFC 3262 suggests, because the transaction user is
+/// relaying a call that may still be answered.
 pub struct ServerInviteFsm {
     state: crate::ServerInviteState,
     timers: TransportAwareTimers,
     g_interval: Duration,
     last_response: Option<Bytes>,
     last_final: Option<Bytes>,
+    /// The INVITE carried `Require: 100rel`.
+    requires_100rel: bool,
+    call_id: Option<SmolStr>,
+    invite_cseq: Option<u32>,
+    /// The RSeq this transaction gives its next reliable provisional.
+    next_rseq: u32,
+    /// The highest RSeq PRACKed, so that a repeated PRACK is answered too.
+    last_pracked: Option<u32>,
+    sent_reliable: bool,
+    reliable: Option<OutstandingProvisional>,
+    /// Provisionals sent while one was outstanding, in order.
+    waiting: VecDeque<Response>,
+    /// A 2xx held for the PRACK of a provisional with a session description.
+    held_final: Option<Box<Response>>,
+}
+
+/// A reliable provisional sent and not yet PRACKed.
+struct OutstandingProvisional {
+    rseq: u32,
+    bytes: Bytes,
+    interval: Duration,
+    has_body: bool,
+}
+
+/// An RSeq's first value (RFC 3262 §3: between 1 and 2**31 - 1), with
+/// room left to count up.
+fn first_rseq() -> u32 {
+    use rand::RngExt;
+    rand::rng().random_range(1..=(1u32 << 30))
+}
+
+fn rseq_of(response: &Response) -> Option<u32> {
+    response.headers().get("RSeq")?.trim().parse().ok()
+}
+
+fn cseq_number(value: &str) -> Option<u32> {
+    value.split_whitespace().next()?.parse().ok()
+}
+
+fn requires_100rel(request: &Request) -> bool {
+    request
+        .headers()
+        .get_all_smol("Require")
+        .flat_map(|value| value.split(','))
+        .any(|token| token.trim().eq_ignore_ascii_case("100rel"))
 }
 
 impl ServerInviteFsm {
@@ -1035,6 +1093,50 @@ impl ServerInviteFsm {
             g_interval: g_initial,
             last_response: None,
             last_final: None,
+            requires_100rel: false,
+            call_id: None,
+            invite_cseq: None,
+            next_rseq: first_rseq(),
+            last_pracked: None,
+            sent_reliable: false,
+            reliable: None,
+            waiting: VecDeque::new(),
+            held_final: None,
+        }
+    }
+
+    /// The INVITE's Call-ID once it has sent a reliable provisional: the
+    /// key a PRACK is matched by, for as long as the transaction lasts.
+    pub fn prack_call_id(&self) -> Option<&SmolStr> {
+        if self.sent_reliable {
+            self.call_id.as_ref()
+        } else {
+            None
+        }
+    }
+
+    /// A PRACK's RAck (RFC 3262 §7.2), its method already checked to be
+    /// INVITE. `None` when it acknowledges nothing this transaction sent,
+    /// to be answered 481 (§3); otherwise the actions it releases (the next
+    /// provisional, a held 2xx), and the PRACK is answered 200.
+    pub fn on_prack(&mut self, rseq: u32, cseq: u32) -> Option<Vec<ServerInviteAction>> {
+        if self.state != crate::ServerInviteState::Proceeding || self.invite_cseq != Some(cseq) {
+            return None;
+        }
+        match &self.reliable {
+            Some(outstanding) if outstanding.rseq == rseq => {
+                self.reliable = None;
+                self.last_pracked = Some(rseq);
+                let mut actions = vec![
+                    ServerInviteAction::Cancel(TransactionTimer::ReliableProvisional),
+                    ServerInviteAction::Cancel(TransactionTimer::ReliableProvisionalTimeout),
+                ];
+                actions.extend(self.release_waiting());
+                Some(actions)
+            }
+            // A PRACK repeated on a new transaction: already acknowledged.
+            _ if self.last_pracked.is_some_and(|last| rseq <= last) => Some(Vec::new()),
+            _ => None,
         }
     }
 
@@ -1042,10 +1144,19 @@ impl ServerInviteFsm {
     pub fn on_event(&mut self, event: ServerInviteEvent) -> Vec<ServerInviteAction> {
         use crate::ServerInviteState::*;
         match (&self.state, event) {
-            (Proceeding, ServerInviteEvent::ReceiveInvite(_)) => self.handle_receive_invite(),
+            (Proceeding, ServerInviteEvent::ReceiveInvite(invite)) => {
+                self.handle_receive_invite(&invite)
+            }
             (Proceeding | Completed, ServerInviteEvent::ReceiveCancel) => self.handle_cancel(),
             (Proceeding, ServerInviteEvent::SendProvisional(resp)) => self.send_provisional(resp),
             (Proceeding, ServerInviteEvent::SendFinal(resp)) => self.send_final(resp),
+            (Proceeding, ServerInviteEvent::TimerFired(TransactionTimer::ReliableProvisional)) => {
+                self.resend_reliable()
+            }
+            (
+                Proceeding,
+                ServerInviteEvent::TimerFired(TransactionTimer::ReliableProvisionalTimeout),
+            ) => self.reliable_timed_out(),
             // One final per transaction (RFC 3261 Figure 7): once a 3xx-6xx
             // has gone out, only Timer G resends it. A second final from the
             // TU, e.g. a 200 racing the 487 for a CANCEL, is not sent.
@@ -1073,8 +1184,13 @@ impl ServerInviteFsm {
         }
     }
 
-    fn handle_receive_invite(&mut self) -> Vec<ServerInviteAction> {
+    fn handle_receive_invite(&mut self, invite: &Request) -> Vec<ServerInviteAction> {
         // 100 Trying is TU responsibility; just remain in Proceeding.
+        if self.call_id.is_none() {
+            self.requires_100rel = requires_100rel(invite);
+            self.call_id = sip_parse::header(invite.headers(), "Call-ID").cloned();
+            self.invite_cseq = invite.headers().get("CSeq").and_then(cseq_number);
+        }
         Vec::new()
     }
 
@@ -1099,15 +1215,152 @@ impl ServerInviteFsm {
     }
 
     fn send_provisional(&mut self, response: Response) -> Vec<ServerInviteAction> {
+        // The outstanding one again, from a TU that resends it itself: the
+        // transaction already does.
+        if let Some(outstanding) = &self.reliable {
+            if response_requires_prack(&response) && rseq_of(&response) == Some(outstanding.rseq) {
+                return Vec::new();
+            }
+        }
+        // Behind an outstanding reliable provisional, in order (RFC 3262 §3).
+        if self.reliable.is_some() || !self.waiting.is_empty() {
+            if self.held_final.is_none() {
+                self.waiting.push_back(response);
+            }
+            return Vec::new();
+        }
+        self.transmit_provisional(response)
+    }
+
+    /// Sends a provisional now: reliably when it asks to be, or when the
+    /// INVITE requires it of every provisional but a 100.
+    fn transmit_provisional(&mut self, mut response: Response) -> Vec<ServerInviteAction> {
+        if self.requires_100rel && response.code() != 100 && !response_requires_prack(&response) {
+            response.headers_mut().remove("RSeq");
+            let _ = response
+                .headers_mut()
+                .push(SmolStr::new("Require"), SmolStr::new("100rel"));
+            let _ = response.headers_mut().push(
+                SmolStr::new("RSeq"),
+                SmolStr::new(self.next_rseq.to_string()),
+            );
+        }
         let bytes = serialize_response(&response);
         self.last_response = Some(bytes.clone());
-        vec![ServerInviteAction::Transmit {
-            bytes,
+        let mut actions = vec![ServerInviteAction::Transmit {
+            bytes: bytes.clone(),
             transport: TransportKind::Udp,
-        }]
+        }];
+        if response_requires_prack(&response) {
+            if let Some(rseq) = rseq_of(&response) {
+                self.next_rseq = rseq.wrapping_add(1).max(1);
+                self.sent_reliable = true;
+                let interval = self.timers.duration(TransactionTimer::ReliableProvisional);
+                self.reliable = Some(OutstandingProvisional {
+                    rseq,
+                    bytes,
+                    interval,
+                    has_body: !response.body().is_empty(),
+                });
+                actions.push(ServerInviteAction::Schedule {
+                    timer: TransactionTimer::ReliableProvisional,
+                    duration: interval,
+                });
+                actions.push(ServerInviteAction::Schedule {
+                    timer: TransactionTimer::ReliableProvisionalTimeout,
+                    duration: self
+                        .timers
+                        .duration(TransactionTimer::ReliableProvisionalTimeout),
+                });
+            }
+        }
+        actions
+    }
+
+    /// What waited behind a reliable provisional now that it is done: the
+    /// provisionals up to the next reliable one, then a held 2xx.
+    fn release_waiting(&mut self) -> Vec<ServerInviteAction> {
+        let mut actions = Vec::new();
+        while self.reliable.is_none() {
+            match self.waiting.pop_front() {
+                Some(response) => actions.extend(self.transmit_provisional(response)),
+                None => break,
+            }
+        }
+        if self.reliable.is_none() {
+            if let Some(response) = self.held_final.take() {
+                actions.extend(self.send_final(*response));
+            }
+        }
+        actions
+    }
+
+    fn resend_reliable(&mut self) -> Vec<ServerInviteAction> {
+        let t2 = self.timers.duration(TransactionTimer::T2);
+        let Some(outstanding) = &mut self.reliable else {
+            return Vec::new();
+        };
+        outstanding.interval = (outstanding.interval * 2).min(t2);
+        vec![
+            ServerInviteAction::Transmit {
+                bytes: outstanding.bytes.clone(),
+                transport: TransportKind::Udp,
+            },
+            ServerInviteAction::Schedule {
+                timer: TransactionTimer::ReliableProvisional,
+                duration: outstanding.interval,
+            },
+        ]
+    }
+
+    fn reliable_timed_out(&mut self) -> Vec<ServerInviteAction> {
+        let Some(outstanding) = self.reliable.take() else {
+            return Vec::new();
+        };
+        warn!(
+            call_id = ?self.call_id,
+            rseq = outstanding.rseq,
+            "a reliable provisional was never PRACKed; no longer sending it"
+        );
+        let mut actions = vec![ServerInviteAction::Cancel(
+            TransactionTimer::ReliableProvisional,
+        )];
+        actions.extend(self.release_waiting());
+        actions
     }
 
     fn send_final(&mut self, response: Response) -> Vec<ServerInviteAction> {
+        if self.held_final.is_some() {
+            debug!(
+                code = response.code(),
+                "dropping a final sent after a 2xx held for a PRACK"
+            );
+            return Vec::new();
+        }
+        // RFC 3262 §3: no 2xx while a provisional with a session
+        // description is unacknowledged.
+        if (200..=299).contains(&response.code())
+            && self.reliable.as_ref().is_some_and(|r| r.has_body)
+        {
+            self.held_final = Some(Box::new(response));
+            self.waiting.clear();
+            return Vec::new();
+        }
+        let mut actions = Vec::new();
+        if self.reliable.take().is_some() {
+            actions.push(ServerInviteAction::Cancel(
+                TransactionTimer::ReliableProvisional,
+            ));
+            actions.push(ServerInviteAction::Cancel(
+                TransactionTimer::ReliableProvisionalTimeout,
+            ));
+        }
+        self.waiting.clear();
+        actions.extend(self.send_final_now(response));
+        actions
+    }
+
+    fn send_final_now(&mut self, response: Response) -> Vec<ServerInviteAction> {
         let code = response.code();
         let bytes = serialize_response(&response);
         self.last_response = Some(bytes.clone());
@@ -1646,5 +1899,226 @@ mod tests {
         assert!(actions
             .iter()
             .any(|a| matches!(a, ServerAction::Transmit { .. })));
+    }
+
+    /// An INVITE carrying `Require: 100rel`, Call-ID and CSeq.
+    fn invite_requiring_100rel() -> Request {
+        let mut invite = sample_invite();
+        for (name, value) in [
+            ("Call-ID", "rel@example.com"),
+            ("CSeq", "7 INVITE"),
+            ("Require", "100rel"),
+        ] {
+            let _ = invite
+                .headers_mut()
+                .push(SmolStr::new(name), SmolStr::new(value));
+        }
+        invite
+    }
+
+    fn sent(actions: &[ServerInviteAction]) -> Vec<String> {
+        actions
+            .iter()
+            .filter_map(|a| match a {
+                ServerInviteAction::Transmit { bytes, .. } => {
+                    Some(String::from_utf8_lossy(bytes).into_owned())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn rseq_in(text: &str) -> u32 {
+        text.lines()
+            .find_map(|l| l.strip_prefix("RSeq: "))
+            .expect("an RSeq")
+            .trim()
+            .parse()
+            .unwrap()
+    }
+
+    fn schedules(actions: &[ServerInviteAction], timer: TransactionTimer) -> Option<Duration> {
+        actions.iter().find_map(|a| match a {
+            ServerInviteAction::Schedule { timer: t, duration } if *t == timer => Some(*duration),
+            _ => None,
+        })
+    }
+
+    fn with_body(response: Response) -> Response {
+        Response::new(
+            response.start_line().clone(),
+            response.headers().clone(),
+            Bytes::from_static(b"v=0\r\n"),
+        )
+        .unwrap()
+    }
+
+    /// RFC 3262 §3: the INVITE requires 100rel, so every provisional but a
+    /// 100 goes out reliably, sent again from T1 doubling to T2, one at a
+    /// time, until its PRACK.
+    #[test]
+    fn a_caller_requiring_100rel_gets_every_provisional_reliably() {
+        use crate::timers::{Transport, TransportAwareTimers};
+        let mut fsm = ServerInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
+        fsm.on_event(ServerInviteEvent::ReceiveInvite(invite_requiring_100rel()));
+
+        let trying = sent(&fsm.on_event(ServerInviteEvent::SendProvisional(sample_response(100))));
+        assert!(!trying[0].contains("RSeq"), "a 100 is never reliable");
+        assert_eq!(fsm.prack_call_id(), None);
+
+        let actions = fsm.on_event(ServerInviteEvent::SendProvisional(sample_response(180)));
+        let ringing = &sent(&actions)[0];
+        assert!(ringing.contains("Require: 100rel"), "{ringing}");
+        let first = rseq_in(ringing);
+        assert!((1..=1 << 30).contains(&first));
+        assert_eq!(
+            schedules(&actions, TransactionTimer::ReliableProvisional),
+            Some(Duration::from_millis(500))
+        );
+        assert_eq!(
+            schedules(&actions, TransactionTimer::ReliableProvisionalTimeout),
+            Some(Duration::from_secs(32))
+        );
+        assert_eq!(
+            fsm.prack_call_id().map(|c| c.as_str()),
+            Some("rel@example.com")
+        );
+
+        // Sent again, the interval doubling to T2.
+        let mut intervals = Vec::new();
+        for _ in 0..5 {
+            let actions = fsm.on_event(ServerInviteEvent::TimerFired(
+                TransactionTimer::ReliableProvisional,
+            ));
+            assert_eq!(rseq_in(&sent(&actions)[0]), first);
+            intervals.push(schedules(&actions, TransactionTimer::ReliableProvisional).unwrap());
+        }
+        assert_eq!(
+            intervals,
+            [1000, 2000, 4000, 4000, 4000].map(Duration::from_millis)
+        );
+
+        // A 183 meanwhile waits its turn.
+        assert!(fsm
+            .on_event(ServerInviteEvent::SendProvisional(sample_response(183)))
+            .is_empty());
+
+        // Neither another RSeq nor another INVITE's CSeq is a PRACK for it.
+        assert!(fsm.on_prack(first + 1, 7).is_none());
+        assert!(fsm.on_prack(first, 8).is_none());
+
+        let actions = fsm.on_prack(first, 7).expect("the PRACK matches");
+        assert!(actions.contains(&ServerInviteAction::Cancel(
+            TransactionTimer::ReliableProvisional
+        )));
+        let progress = &sent(&actions)[0];
+        assert!(progress.starts_with("SIP/2.0 183"), "{progress}");
+        assert_eq!(rseq_in(progress), first + 1);
+
+        // The same PRACK again is answered, and releases nothing.
+        assert_eq!(fsm.on_prack(first, 7), Some(Vec::new()));
+        // Once acknowledged, a provisional is not sent again.
+        fsm.on_prack(first + 1, 7).expect("the 183's PRACK");
+        assert!(fsm
+            .on_event(ServerInviteEvent::TimerFired(
+                TransactionTimer::ReliableProvisional
+            ))
+            .is_empty());
+    }
+
+    /// RFC 3262 §3: no 2xx while a provisional with a session description
+    /// is unacknowledged; its PRACK lets the 2xx out.
+    #[test]
+    fn a_2xx_waits_for_the_prack_of_early_media() {
+        use crate::timers::{Transport, TransportAwareTimers};
+        let mut fsm = ServerInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
+        fsm.on_event(ServerInviteEvent::ReceiveInvite(invite_requiring_100rel()));
+        let progress = sent(&fsm.on_event(ServerInviteEvent::SendProvisional(with_body(
+            sample_response(183),
+        ))));
+        let rseq = rseq_in(&progress[0]);
+
+        assert!(fsm
+            .on_event(ServerInviteEvent::SendFinal(sample_response(200)))
+            .is_empty());
+        assert_eq!(fsm.state(), crate::ServerInviteState::Proceeding);
+        // A final after it (a 487 racing the answer) is not sent.
+        assert!(fsm
+            .on_event(ServerInviteEvent::SendFinal(sample_response(487)))
+            .is_empty());
+
+        let actions = fsm.on_prack(rseq, 7).unwrap();
+        assert!(sent(&actions)[0].starts_with("SIP/2.0 200"));
+        assert_eq!(fsm.state(), crate::ServerInviteState::Terminated);
+    }
+
+    /// A provisional without a session description does not hold the 2xx;
+    /// the 2xx stops it being sent again.
+    #[test]
+    fn a_2xx_after_ringing_goes_at_once() {
+        use crate::timers::{Transport, TransportAwareTimers};
+        let mut fsm = ServerInviteFsm::new(TransportAwareTimers::new(Transport::Tcp));
+        fsm.on_event(ServerInviteEvent::ReceiveInvite(invite_requiring_100rel()));
+        let actions = fsm.on_event(ServerInviteEvent::SendProvisional(sample_response(180)));
+        // Sent again on a reliable transport too: it is the UAS's to resend.
+        assert_eq!(
+            schedules(&actions, TransactionTimer::ReliableProvisional),
+            Some(Duration::from_millis(500))
+        );
+        let actions = fsm.on_event(ServerInviteEvent::SendFinal(sample_response(200)));
+        assert!(actions.contains(&ServerInviteAction::Cancel(
+            TransactionTimer::ReliableProvisional
+        )));
+        assert!(sent(&actions)[0].starts_with("SIP/2.0 200"));
+    }
+
+    /// 64·T1 without a PRACK: the provisional is no longer sent and what
+    /// waited behind it goes out; the call is not refused.
+    #[test]
+    fn a_provisional_never_pracked_stops_and_lets_the_rest_go() {
+        use crate::timers::{Transport, TransportAwareTimers};
+        let mut fsm = ServerInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
+        fsm.on_event(ServerInviteEvent::ReceiveInvite(invite_requiring_100rel()));
+        fsm.on_event(ServerInviteEvent::SendProvisional(with_body(
+            sample_response(183),
+        )));
+        fsm.on_event(ServerInviteEvent::SendFinal(sample_response(200)));
+        let actions = fsm.on_event(ServerInviteEvent::TimerFired(
+            TransactionTimer::ReliableProvisionalTimeout,
+        ));
+        assert!(actions.contains(&ServerInviteAction::Cancel(
+            TransactionTimer::ReliableProvisional
+        )));
+        assert!(sent(&actions)[0].starts_with("SIP/2.0 200"));
+    }
+
+    /// Without `Require: 100rel` a provisional is sent as it is, and one the
+    /// transaction user made reliable is kept to its own RSeq.
+    #[test]
+    fn a_caller_not_requiring_100rel_gets_what_the_tu_sends() {
+        use crate::timers::{Transport, TransportAwareTimers};
+        let mut fsm = ServerInviteFsm::new(TransportAwareTimers::new(Transport::Udp));
+        let mut invite = invite_requiring_100rel();
+        invite.headers_mut().remove("Require");
+        fsm.on_event(ServerInviteEvent::ReceiveInvite(invite));
+
+        let actions = fsm.on_event(ServerInviteEvent::SendProvisional(sample_response(180)));
+        assert!(!sent(&actions)[0].contains("RSeq"));
+        assert_eq!(
+            schedules(&actions, TransactionTimer::ReliableProvisional),
+            None
+        );
+
+        let actions = fsm.on_event(ServerInviteEvent::SendProvisional(reliable_provisional(
+            183,
+        )));
+        assert_eq!(rseq_in(&sent(&actions)[0]), 1);
+        // The TU resending it is left to the transaction, not queued.
+        assert!(fsm
+            .on_event(ServerInviteEvent::SendProvisional(reliable_provisional(
+                183
+            )))
+            .is_empty());
+        assert!(fsm.on_prack(1, 7).is_some());
     }
 }
