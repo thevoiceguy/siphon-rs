@@ -84,6 +84,10 @@ impl RequestHandler for PrackHandler {
         uas.prack_validator = services.prack_validator.clone();
 
         let response = uas.handle_prack(request, &dialog)?;
+        // The INVITE transaction resends the provisional until its PRACK.
+        if let Some(transaction_mgr) = services.transaction_mgr.get() {
+            transaction_mgr.prack_received(request).await;
+        }
         handle.send_final(response).await;
         Ok(())
     }

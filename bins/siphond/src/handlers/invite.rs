@@ -36,45 +36,6 @@ impl InviteHandler {
         format!("{}:{}:{}", id.call_id(), id.local_tag(), id.remote_tag())
     }
 
-    fn schedule_reliable_retransmit(
-        services: &ServiceRegistry,
-        key: sip_transaction::TransactionKey,
-        response: sip_core::Response,
-        dialog_key: String,
-        rseq: u32,
-    ) {
-        let Some(transaction_mgr) = services.transaction_mgr.get().cloned() else {
-            return;
-        };
-        let prack_validator = services.prack_validator.clone();
-
-        tokio::spawn(async move {
-            let mut interval = Duration::from_millis(500);
-            let max_interval = Duration::from_secs(4);
-            let max_total = Duration::from_secs(32);
-            let mut elapsed = Duration::from_millis(0);
-
-            loop {
-                tokio::time::sleep(interval).await;
-                elapsed += interval;
-
-                if prack_validator.is_pracked(&dialog_key, rseq) {
-                    break;
-                }
-
-                transaction_mgr
-                    .send_provisional(&key, response.clone())
-                    .await;
-
-                if elapsed >= max_total {
-                    break;
-                }
-
-                interval = std::cmp::min(interval * 2, max_interval);
-            }
-        });
-    }
-
     /// Check if this is an in-dialog request (re-INVITE)
     fn is_in_dialog(&self, request: &Request, services: &ServiceRegistry) -> bool {
         services.dialog_mgr.find_by_request(request).is_some()
@@ -1390,7 +1351,6 @@ impl RequestHandler for InviteHandler {
                 .unwrap_or(false)
         {
             let mut ringing = uas.create_ringing(request);
-            let mut reliable_info: Option<(String, u32)> = None;
 
             let remote_uri = header(request.headers(), "From")
                 .and_then(|from| sdp_utils::parse_name_addr_uri(from.as_str()));
@@ -1402,7 +1362,6 @@ impl RequestHandler for InviteHandler {
                     let _ = services.dialog_mgr.insert(early_dialog.clone());
 
                     let rseq = services.rseq_mgr.next_rseq(early_dialog.id());
-                    reliable_info = Some((Self::dialog_id_key(early_dialog.id()), rseq));
                     let _ = ringing.headers_mut().push("RSeq", rseq.to_string());
                     let _ = ringing.headers_mut().push("Require", "100rel");
                     let _ = ringing
@@ -1424,22 +1383,11 @@ impl RequestHandler for InviteHandler {
                 }
             }
 
-            let ringing_for_retransmit = ringing.clone();
             if let (Some(key), Some(to)) = (pending_key.as_deref(), header(ringing.headers(), "To"))
             {
                 services.invite_state.update_to_header(key, to.clone());
             }
             handle.send_provisional(ringing).await;
-
-            if let Some((dialog_key, rseq)) = reliable_info {
-                Self::schedule_reliable_retransmit(
-                    services,
-                    handle.key().clone(),
-                    ringing_for_retransmit,
-                    dialog_key,
-                    rseq,
-                );
-            }
         } else {
             let ringing = uas.create_ringing(request);
             if let (Some(key), Some(to)) = (pending_key.as_deref(), header(ringing.headers(), "To"))

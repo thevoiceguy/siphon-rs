@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026-11-06] — workspace release
+
+Crate versions in this release: sip-transaction 0.9.0, siphond 0.7.3.
+(sip-core 0.7.8, sip-parse 0.4.0, sip-dialog 0.4.0, sip-transport 0.7.1,
+sip-uac 0.9.4, sip-uas 0.5.1, sip-registrar 0.3.2, sip-sdp 0.3.2, sip-dns 0.3.0,
+sip-auth 0.4.0, sip-observe 0.3.0, sip-ratelimit 0.3.0, sip-testkit 0.1.1,
+sip-proxy 0.3.0, sip-hep 0.0.1, and sip-identity 0.3.0 are unchanged.)
+
+The INVITE server transaction now sends reliable provisionals (RFC 3262) for a
+UAS, and a final can be sent statelessly. Both were found by FCP's deep
+testing ([FCP #310](https://github.com/thevoiceguy/fcp/issues/310),
+[FCP #315](https://github.com/thevoiceguy/fcp/issues/315)).
+
+### Breaking changes
+
+- **sip-transaction 0.9.0**: `TransactionTimer` gains `ReliableProvisional`
+  and `ReliableProvisionalTimeout`; a `match` over it needs the two arms.
+
+### Added
+
+- **sip-transaction 0.9.0**: reliable provisionals (RFC 3262 §3) in
+  `ServerInviteFsm`. A provisional carrying `Require: 100rel` and an RSeq is
+  sent again from T1, doubling to T2, on every transport, until it is
+  PRACKed. When the INVITE itself requires 100rel, every provisional but a 100
+  is made reliable, with an RSeq of the transaction's own (a random start,
+  counted up). One is outstanding at a time: a provisional sent meanwhile
+  waits its turn, and a 2xx waits for the PRACK of an outstanding provisional
+  with a session description. After 64·T1 without a PRACK the provisional is
+  no longer sent and what waited behind it goes out; the request is not
+  rejected 5xx, as §3 suggests, since a B2BUA relaying the call may still be
+  answered. A TU resending the outstanding provisional itself is ignored.
+- **sip-transaction 0.9.0**: `TransactionManager::prack_received` (and
+  `ServerInviteFsm::on_prack`): a PRACK matched to its INVITE transaction by
+  Call-ID and RAck; `true` to answer it 200, `false` for 481.
+- **sip-transaction 0.9.0**: `TransactionManager::send_final_stateless` and
+  `ServerTransactionHandle::send_final_stateless`: a final sent once and the
+  transaction forgotten (no Timer G resends, no Timer H wait), for a refusal
+  at the edge that a spoofed source will never ACK.
+
+### Changed
+
+- **siphond 0.7.3**: the reliable 180 is resent by its transaction, not by a
+  loop of its own, and a PRACK is passed to `prack_received`.
+
 ## [2026-11-05] — workspace release
 
 Crate versions in this release: sip-transaction 0.8.1, sip-uac 0.9.4.
