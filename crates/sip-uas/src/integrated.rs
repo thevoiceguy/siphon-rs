@@ -50,7 +50,7 @@
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use sip_auth::Authenticator;
-use sip_core::{Method, Request, Response, SipUri, ViaHeader};
+use sip_core::{Method, Request, Response, SipUri};
 use sip_dialog::{Dialog, DialogManager, SubscriptionManager};
 use sip_sdp::profiles::MediaProfileBuilder;
 use sip_transaction::{
@@ -772,74 +772,12 @@ impl IntegratedUAS {
     }
 }
 
-/// Apply RFC 3261 §18.2.1 / RFC 3581 §4 mutations to the topmost
-/// Via header of `response`. The topmost Via was copied verbatim
-/// from the request; this fills `rport=<src_port>` when it was
-/// present without a value and adds `received=<src_ip>` whenever
-/// the sent-by host differs from the actual packet source OR the
-/// bare `rport` triggered a rewrite.
-///
-/// The unconditional `received=` on `rport` rewrites follows the
-/// RFC 3581 §4 RECOMMENDATION: clients implementing symmetric
-/// response routing want a single place to read the public
-/// reflection of their address back from, even when the sent-by
-/// IP happens to match the packet source. Adding it costs nothing
-/// and short-circuits a class of NAT-tracking bugs in clients
-/// that only inspect `received`.
-///
-/// Silently no-ops if the Via doesn't parse — we never want a
-/// malformed inbound Via to abort the response.
+/// The topmost Via of `response`, as RFC 3261 §18.2.1 and RFC 3581 §4
+/// have a server fill it ([`sip_transaction::stamp_via`]). The server
+/// transaction does it to every response it sends; this keeps the
+/// response the handler inspects the one that goes out.
 fn apply_via_rport_received(response: &mut Response, source: SocketAddr) {
-    let Some(top_via) = response.headers().get("Via") else {
-        return;
-    };
-    let top_via = top_via.to_string();
-    let Ok(mut via) = ViaHeader::parse(&top_via) else {
-        return;
-    };
-
-    let mut changed = false;
-    let mut rport_filled = false;
-
-    // RFC 3581 §4: an inbound request with a bare `;rport` must
-    // have it rewritten to the actual source port on the response.
-    if matches!(via.param("rport"), Some(None))
-        && via
-            .set_param("rport", Some(source.port().to_string()))
-            .is_ok()
-    {
-        changed = true;
-        rport_filled = true;
-    }
-
-    // RFC 3261 §18.2.1: when the sent-by host doesn't match the
-    // packet source IP, the server MUST add `received=<src_ip>`.
-    // Extract the host portion from the sent-by ("host" or
-    // "host:port", with IPv6 bracketed); compare against the
-    // source IP. Done as strings to sidestep DNS — the requirement
-    // is exact-bytes comparison per the RFC, not name resolution.
-    //
-    // RFC 3581 §4 additionally RECOMMENDS adding `received=` even
-    // when sent-by matches src IP, provided we're also filling
-    // `rport`. We honour that recommendation by piggy-backing on
-    // `rport_filled` — the client asked for symmetric response
-    // routing, so it gets the full pair.
-    let sent_by_host = sent_by_host(via.sent_by());
-    let src_ip = source.ip().to_string();
-    if (sent_by_host != src_ip || rport_filled)
-        && via.param("received").is_none()
-        && via.set_param("received", Some(src_ip.as_str())).is_ok()
-    {
-        changed = true;
-    }
-
-    if changed {
-        // `set_or_push` replaces just the first occurrence — exactly
-        // the topmost Via, which is what we want. Subsequent Via
-        // headers (if any) are response-routing artefacts and
-        // mustn't be touched.
-        let _ = response.headers_mut().set_or_push("Via", via.to_string());
-    }
+    sip_transaction::stamp_via(response, source);
 }
 
 /// Lowercase transport token for a SIP URI `transport=` parameter
@@ -892,18 +830,6 @@ fn build_contact_value(
         port,
         transport_param_for(transport),
     )
-}
-
-/// Strip the optional `:port` from a `sent-by` value, leaving the
-/// host. Handles bracketed IPv6 (`[2001:db8::1]:5060` → `2001:db8::1`).
-fn sent_by_host(sent_by: &str) -> &str {
-    let s = sent_by.trim();
-    if let Some(stripped) = s.strip_prefix('[') {
-        if let Some(end) = stripped.find(']') {
-            return &stripped[..end];
-        }
-    }
-    s.rsplit_once(':').map(|(host, _)| host).unwrap_or(s)
 }
 
 /// Builder for constructing IntegratedUAS instances.
@@ -1088,7 +1014,7 @@ impl IntegratedUASBuilder {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_via_rport_received, build_contact_value, method_not_allowed_response, sent_by_host,
+        apply_via_rport_received, build_contact_value, method_not_allowed_response,
         UasRequestHandler, DEFAULT_SUPPORTED_METHODS,
     };
     use bytes::Bytes;
@@ -1167,15 +1093,6 @@ mod tests {
             .push(SmolStr::new("Content-Length"), SmolStr::new("0"))
             .unwrap();
         Response::new(StatusLine::new(200, "OK").unwrap(), headers, Bytes::new()).unwrap()
-    }
-
-    #[test]
-    fn sent_by_host_strips_port() {
-        assert_eq!(sent_by_host("194.195.208.34:5080"), "194.195.208.34");
-        assert_eq!(sent_by_host("194.195.208.34"), "194.195.208.34");
-        assert_eq!(sent_by_host("example.com:5060"), "example.com");
-        assert_eq!(sent_by_host("[2001:db8::1]:5060"), "2001:db8::1");
-        assert_eq!(sent_by_host("[::1]"), "::1");
     }
 
     #[test]
