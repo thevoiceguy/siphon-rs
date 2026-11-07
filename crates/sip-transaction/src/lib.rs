@@ -324,6 +324,8 @@ pub mod fsm;
 pub mod manager;
 pub mod metrics;
 pub mod timers;
+pub mod via;
+pub use via::stamp_via;
 
 pub use fsm::{
     ClientAction, ClientInviteAction, ClientInviteEvent, ClientInviteFsm, ClientNonInviteEvent,

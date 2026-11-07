@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026-11-07] — workspace release
+
+Crate versions in this release: sip-transaction 0.9.1, sip-uac 0.9.5,
+sip-uas 0.5.2. (Every other crate is unchanged.)
+
+Two leaks of what a call leaves behind, found by FCP's weekly soak and a trace
+of a call between a Polycom and Anvil
+([FCP #372](https://github.com/thevoiceguy/fcp/issues/372)).
+
+### Added
+
+- **sip-transaction 0.9.1**: `stamp_via(response, source)` fills a response's
+  topmost Via as a server does (RFC 3261 §18.2.1, RFC 3581 §4): `rport=` for
+  a bare `;rport`, and `received=`. It is what `IntegratedUAS` applied, moved
+  here from `sip-uas`.
+
+### Fixed
+
+- **sip-transaction 0.9.1**: every response a server transaction sends —
+  `send_provisional`, `send_final`, `send_final_stateless` — has its Via
+  stamped with the request's source. A UA answering through the handle with
+  a response it built (`UserAgentServer::create_response`) echoed a bare
+  `;rport` with no `received`, which a caller behind NAT needs (#164).
+  Stamping is idempotent, so `IntegratedUAS`, which still applies it, is
+  unchanged.
+- **sip-uac 0.9.5**: an INVITE's early dialogs leave the `DialogManager` once
+  it has its outcome (RFC 3261 §13.2.2.4): on its final response, or when its
+  transaction ends without one. Each tagged provisional put one there and
+  nothing took them out, so a callee that rang under one To tag and answered
+  under another, a fork that rang and was cancelled, or an INVITE that rang
+  and failed left a dialog in the store for every call. A dialog a 2xx
+  confirmed stays; `CallHandle::get_early_dialogs` still lists them (#163).
+- **sip-uas 0.5.2**: `IntegratedUAS` stamps responses with
+  `sip_transaction::stamp_via`.
+
 ## [2026-11-06] — workspace release
 
 Crate versions in this release: sip-transaction 0.9.0, siphond 0.7.3.

@@ -1618,8 +1618,9 @@ impl TransactionManager {
         }
     }
 
-    pub async fn send_provisional(&self, key: &TransactionKey, response: Response) {
+    pub async fn send_provisional(&self, key: &TransactionKey, mut response: Response) {
         if let Some(mut entry) = self.inner.server.get_mut(key) {
+            crate::via::stamp_via(&mut response, entry.ctx.peer());
             let mut prack_call = None;
             let actions = match &mut entry.kind {
                 ServerKind::Invite(fsm) => {
@@ -1691,10 +1692,11 @@ impl TransactionManager {
     /// never ACKs and a stateful answer was sent about eleven times. A
     /// retransmitted request then starts a new transaction and is answered
     /// again, and the ACK to this response matches nothing.
-    pub async fn send_final_stateless(&self, key: &TransactionKey, response: Response) {
+    pub async fn send_final_stateless(&self, key: &TransactionKey, mut response: Response) {
         let Some(mut entry) = self.remove_server_entry(key) else {
             return;
         };
+        crate::via::stamp_via(&mut response, entry.ctx.peer());
         entry.cancel_all();
         let transport = TransportType::from(transport_kind_to_transport(entry.ctx.transport));
         self.inner.metrics.record_transaction_duration(
@@ -1734,7 +1736,7 @@ impl TransactionManager {
         Some(entry)
     }
 
-    pub async fn send_final(&self, key: &TransactionKey, response: Response) {
+    pub async fn send_final(&self, key: &TransactionKey, mut response: Response) {
         // Extract first line for logging
         let first_line = {
             let bytes = serialize_response(&response);
@@ -1753,6 +1755,7 @@ impl TransactionManager {
         );
 
         if let Some(mut entry) = self.inner.server.get_mut(key) {
+            crate::via::stamp_via(&mut response, entry.ctx.peer());
             let actions = match &mut entry.kind {
                 ServerKind::Invite(fsm) => fsm.on_event(ServerInviteEvent::SendFinal(response)),
                 ServerKind::NonInvite(fsm) => {
@@ -2098,6 +2101,55 @@ mod tests {
         let sent = dispatcher.sent.lock().await;
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].0, TransportKind::Udp);
+    }
+
+    /// Every response a server transaction sends has its Via filled as
+    /// RFC 3261 §18.2.1 and RFC 3581 §4 say, whoever built it: a UA that
+    /// answers through the handle with its own response used to echo a
+    /// bare `;rport` and no `received` (#164).
+    #[tokio::test]
+    async fn a_response_sent_through_the_handle_names_its_source_in_the_via() {
+        let dispatcher = Arc::new(TestDispatcher::default());
+        let manager = TransactionManager::new(dispatcher.clone());
+        let source: std::net::SocketAddr = "198.51.100.4:61185".parse().unwrap();
+        let ctx = TransportContext::new(TransportKind::Udp, source, None);
+        let via = "SIP/2.0/UDP 10.0.0.2:5060;branch=z9hG4bKstamp;rport";
+        let mut headers = Headers::new();
+        headers
+            .push(SmolStr::new("Via"), SmolStr::new(via))
+            .unwrap();
+        let request = Request::new(
+            RequestLine::new(
+                Method::Invite,
+                SipUri::parse("sip:bob@example.com").unwrap(),
+            ),
+            headers.clone(),
+            Bytes::new(),
+        )
+        .unwrap();
+        let handle = manager.receive_request(request, ctx).await;
+        let response = |code| {
+            Response::new(
+                StatusLine::new(code, SmolStr::new("Reason")).unwrap(),
+                headers.clone(),
+                Bytes::new(),
+            )
+            .unwrap()
+        };
+        handle.send_provisional(response(180)).await;
+        handle.send_final(response(486)).await;
+
+        let sent = dispatcher.sent.lock().await;
+        assert_eq!(sent.len(), 2);
+        for (_, bytes) in sent.iter() {
+            let text = String::from_utf8_lossy(bytes);
+            let via = text
+                .lines()
+                .find(|l| l.starts_with("Via:"))
+                .unwrap_or_else(|| panic!("a Via in\n{text}"));
+            assert!(via.contains("rport=61185"), "{via}");
+            assert!(via.contains("received=198.51.100.4"), "{via}");
+        }
     }
 
     /// TCP with no stream (a new outbound connection) goes through the

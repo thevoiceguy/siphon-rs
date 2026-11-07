@@ -3881,6 +3881,38 @@ impl InviteTransactionUser {
     }
 }
 
+impl InviteTransactionUser {
+    /// Take this INVITE's early dialogs out of the dialog store once it has
+    /// its outcome (RFC 3261 §13.2.2.4): each tagged provisional put one
+    /// there (`process_invite_response`) and nothing took them out. One a
+    /// 2xx confirmed is no longer early and stays. A callee that rang under
+    /// one To tag and answered under another, a fork that rang and was
+    /// cancelled, or an INVITE that rang and failed left a dialog in the
+    /// store for every call (FCP #372). The handle's own record of them
+    /// (`CallHandle::get_early_dialogs`) is kept.
+    async fn forget_early_dialogs(&self) {
+        let early: Vec<sip_dialog::DialogId> = self
+            .early_dialogs
+            .lock()
+            .await
+            .values()
+            .map(|d| d.id().clone())
+            .collect();
+        if early.is_empty() {
+            return;
+        }
+        let store = Arc::clone(&self.helper.lock().await.dialog_manager);
+        for id in early {
+            if store
+                .get(&id)
+                .is_some_and(|d| d.state() == sip_dialog::DialogStateType::Early)
+            {
+                store.remove(&id);
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl ClientTransactionUser for InviteTransactionUser {
     async fn on_provisional(&self, _key: &TransactionKey, response: &Response) {
@@ -3973,6 +4005,8 @@ impl ClientTransactionUser for InviteTransactionUser {
             }
         }
 
+        self.forget_early_dialogs().await;
+
         // A 2xx's outcome is set in `send_ack`, once it is acknowledged: a
         // reader woken by it may send BYE at once, and the BYE must follow
         // the ACK. Anything else is the outcome now.
@@ -3991,6 +4025,7 @@ impl ClientTransactionUser for InviteTransactionUser {
 
     async fn on_terminated(&self, _key: &TransactionKey, reason: &str) {
         warn!("INVITE transaction terminated: {}", reason);
+        self.forget_early_dialogs().await;
 
         if let Some(outcome) = self.outcome.lock().await.as_ref() {
             outcome.send_if_modified(|o| {
@@ -6481,6 +6516,94 @@ mod tests {
         assert!(
             call.cancel().await.is_err(),
             "an answered INVITE is not cancelled"
+        );
+    }
+
+    /// `code` to `invite` in the early dialog `tag`.
+    fn tagged_response(invite: &Request, code: u16, tag: &str) -> Response {
+        let mut headers = Headers::new();
+        for name in ["Via", "From", "Call-ID", "CSeq"] {
+            headers
+                .push(
+                    SmolStr::new(name),
+                    invite.headers().get_smol(name).unwrap().clone(),
+                )
+                .unwrap();
+        }
+        let to = format!("{};tag={tag}", invite.headers().get("To").unwrap());
+        for (name, value) in [
+            ("To", to.as_str()),
+            ("Contact", "<sip:9196@127.0.0.1:5060>"),
+        ] {
+            headers
+                .push(SmolStr::new(name), SmolStr::new(value))
+                .unwrap();
+        }
+        Response::new(
+            StatusLine::new(code, SmolStr::new("Reason")).expect("valid status line"),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid response")
+    }
+
+    /// An INVITE's early dialogs leave the dialog store when it has its
+    /// outcome (RFC 3261 §13.2.2.4): rung under one To tag and answered
+    /// under another, only the answer's dialog is kept; rung and refused,
+    /// none is (FCP #372).
+    #[tokio::test]
+    async fn an_invite_leaves_only_the_dialog_it_was_answered_on() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = auth_test_uac(dispatcher.clone(), manager.clone(), None);
+        let store = uac.dialog_manager().unwrap().clone();
+
+        // Rung under `ring`, answered under `answer`.
+        let call = uac
+            .invite("sip:9196@127.0.0.1:5060", Some("v=0\r\n"))
+            .await
+            .unwrap();
+        let invite = wait_for_request(&dispatcher, |r| r.method() == &Method::Invite).await;
+        manager
+            .receive_response(tagged_response(&invite, 180, "ring"))
+            .await;
+        call.await_provisional().await.expect("the 180");
+        assert_eq!(store.count(), 1, "the 180 made an early dialog");
+        manager
+            .receive_response(tagged_response(&invite, 200, "answer"))
+            .await;
+        assert_eq!(call.await_final().await.unwrap().code(), 200);
+        assert_eq!(call.invite_outcome().await, InviteOutcome::Final(200));
+        assert_eq!(store.count(), 1, "only the answered dialog is kept");
+        let kept = call.dialog.read().await.clone();
+        assert_eq!(kept.id().remote_tag(), "answer");
+        assert!(store.get(kept.id()).is_some());
+
+        // Rung, then refused: nothing.
+        store.remove(kept.id());
+        let call = uac
+            .invite("sip:9196@127.0.0.1:5060", Some("v=0\r\n"))
+            .await
+            .unwrap();
+        let invite = wait_for_request(&dispatcher, |r| {
+            r.method() == &Method::Invite
+                && r.headers().get("Call-ID") != invite.headers().get("Call-ID")
+        })
+        .await;
+        manager
+            .receive_response(tagged_response(&invite, 180, "ring"))
+            .await;
+        call.await_provisional().await.expect("the 180");
+        assert_eq!(store.count(), 1);
+        manager
+            .receive_response(tagged_response(&invite, 486, "ring"))
+            .await;
+        assert_eq!(call.await_final().await.unwrap().code(), 486);
+        assert_eq!(store.count(), 0, "a refused INVITE leaves no dialog");
+        assert_eq!(
+            call.get_early_dialogs().await.len(),
+            1,
+            "the handle keeps its record"
         );
     }
 
