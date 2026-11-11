@@ -2884,6 +2884,39 @@ impl IntegratedUAC {
         Ok(response)
     }
 
+    /// Sends a request other than INVITE inside an existing dialog through
+    /// an existing connection (RFC 5626 flow support).
+    ///
+    /// The flow counterpart of [`Self::send_in_dialog_non_invite`], for a
+    /// request the caller built itself (an INFO, a NOTIFY, a SUBSCRIBE with
+    /// headers of its own) toward a peer reached over an inbound TCP/TLS
+    /// connection, as [`Self::send_refer_via_flow`] does for REFER: the
+    /// peer's Contact names an ephemeral port nothing listens on.
+    pub async fn send_in_dialog_non_invite_via_flow(
+        &self,
+        dialog: &mut Dialog,
+        mut request: Request,
+        flow: Flow,
+    ) -> Result<Response> {
+        let target_uri = prepare_in_dialog_request(dialog, &mut request);
+        let _ = self.dialog_manager.insert(dialog.clone());
+
+        // Resolved only for the Via transport token; routing follows the flow
+        let dns_target = self.resolve_target(&RequestTarget::Uri(target_uri)).await?;
+        self.auto_fill_headers_for_flow(
+            &mut request,
+            Some(dns_target.transport()),
+            flow.local_addr,
+        )
+        .await;
+
+        let response = self
+            .send_non_invite_via_flow(request, &dns_target, &flow)
+            .await?;
+        self.handle_in_dialog_response(dialog, &response)?;
+        Ok(response)
+    }
+
     /// Sends an INVITE inside an existing dialog (e.g., re-INVITE).
     pub async fn send_in_dialog_invite(
         &self,
@@ -5210,6 +5243,101 @@ mod tests {
     /// record-route proxy, exactly as every other in-dialog request does.
     /// A BYE the platform itself sends can say why (RFC 3326), and the
     /// dialog's own headers are not a caller's to rewrite.
+
+    #[tokio::test]
+    async fn send_in_dialog_non_invite_via_flow_rides_the_connection() {
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let manager = Arc::new(TransactionManager::new(dispatcher.clone()));
+        let uac = Arc::new(
+            IntegratedUAC::builder()
+                .local_uri("sip:siphon@127.0.0.1")
+                .unwrap()
+                .local_addr("127.0.0.1:5070")
+                .unwrap()
+                .transaction_manager(manager.clone())
+                .resolver(Arc::new(SipResolver::from_system().unwrap()))
+                .dispatcher(dispatcher.clone())
+                .build()
+                .unwrap(),
+        );
+        let dialog = Dialog::unchecked_new(
+            DialogId::unchecked_new("flow-info", "local-tag", "remote-tag"),
+            DialogStateType::Confirmed,
+            SipUri::parse("sip:siphon@127.0.0.1").unwrap(),
+            SipUri::parse("sip:tester@192.0.2.10").unwrap(),
+            SipUri::parse("sip:tester@192.0.2.10:49152;transport=tls").unwrap(),
+            4,
+            1,
+            None,
+            vec![],
+            false,
+            None,
+            None,
+            false,
+        );
+        let (flow_tx, _flow_rx) = mpsc::channel::<Bytes>(8);
+        let flow = Flow::new(flow_tx, "192.0.2.10:49152".parse().unwrap())
+            .with_local_addr("127.0.0.1:5071".parse().unwrap());
+
+        // A request built by the caller, with a header the helpers do not add.
+        let request = {
+            let helper = uac.helper.lock().await;
+            let mut request = helper
+                .create_info(&dialog, "application/example+json", "{}")
+                .unwrap();
+            request
+                .headers_mut()
+                .push(SmolStr::new("Info-Package"), SmolStr::new("example"))
+                .unwrap();
+            request
+        };
+
+        let task = {
+            let uac = uac.clone();
+            tokio::spawn(async move {
+                let mut dialog = dialog;
+                let result = uac
+                    .send_in_dialog_non_invite_via_flow(&mut dialog, request, flow)
+                    .await;
+                (result, dialog)
+            })
+        };
+
+        let request = loop {
+            if let Some((ctx, payload)) = dispatcher.sent.lock().await.first().cloned() {
+                assert!(ctx.stream().is_some(), "INFO must carry the flow stream");
+                assert_eq!(ctx.peer(), "192.0.2.10:49152".parse().unwrap());
+                break sip_parse::parse_request(&payload).expect("valid INFO on the wire");
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        assert_eq!(request.method(), &Method::Info);
+        assert_eq!(request.headers().get("CSeq"), Some("5 INFO"));
+        assert_eq!(request.headers().get("Info-Package"), Some("example"));
+        let via = request.headers().get("Via").unwrap();
+        assert!(via.starts_with("SIP/2.0/TLS 127.0.0.1:5071;"), "{via}");
+
+        let mut headers = Headers::new();
+        for name in ["Via", "From", "To", "Call-ID", "CSeq"] {
+            headers
+                .push(
+                    SmolStr::new(name),
+                    request.headers().get_smol(name).unwrap().clone(),
+                )
+                .unwrap();
+        }
+        let response = Response::new(
+            StatusLine::new(200, SmolStr::new("OK")).expect("valid status line"),
+            headers,
+            Bytes::new(),
+        )
+        .expect("valid response");
+        manager.receive_response(response).await;
+
+        let (result, dialog) = task.await.unwrap();
+        assert_eq!(result.unwrap().code(), 200);
+        assert_eq!(dialog.local_cseq(), 5);
+    }
     #[tokio::test]
     async fn bye_carries_the_callers_headers_and_keeps_the_dialogs_own() {
         let dispatcher = Arc::new(CapturingDispatcher::default());

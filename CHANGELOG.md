@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026-11-10] — workspace release
+
+Crate versions in this release: sip-uac 0.9.6. (Every other crate is unchanged.)
+
+### Added
+
+- **sip-uac 0.9.6**: `IntegratedUAC::send_in_dialog_non_invite_via_flow` sends
+  a request the caller built (an INFO, NOTIFY or SUBSCRIBE with headers of its
+  own) inside a dialog down an existing connection (RFC 5626), as
+  `send_refer_via_flow` does for REFER. FCP relays a conference's roster and
+  floor notices to a phone registered over TLS with it.
+
 ## [2026-11-07] — workspace release
 
 Crate versions in this release: sip-transaction 0.9.1, sip-uac 0.9.5,
